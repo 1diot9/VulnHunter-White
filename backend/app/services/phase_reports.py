@@ -41,6 +41,7 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/code-map.md", "recon", "map", "代码地图"),
     ("docs/auth.md", "recon", "map", "鉴权说明"),
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
+    ("docs/lab.md", "reviewer", "reviewer", "动态环境搭建"),
 )
 
 

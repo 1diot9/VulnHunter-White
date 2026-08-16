@@ -6,14 +6,19 @@ import json
 import shutil
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .paths import env_dir
+from .paths import docs_dir, env_dir
 
 
 def env_json_path(project_id: int) -> Path:
     return env_dir(project_id) / "env.json"
+
+
+def lab_doc_path(project_id: int) -> Path:
+    return docs_dir(project_id) / "lab.md"
 
 
 def load_env(project_id: int) -> dict[str, Any]:
@@ -32,6 +37,93 @@ def save_env(project_id: int, data: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def lab_ready(env: dict[str, Any]) -> bool:
+    status = str(env.get("status") or "").strip().lower()
+    return bool(env.get("accepted") and env.get("target_url") and status == "running")
+
+
+def _markdown_value(value: Any) -> str:
+    if value is None or value == "":
+        return "未记录"
+    return str(value)
+
+
+def _json_block(value: Any) -> str:
+    if value is None or value == "":
+        return "未记录"
+    return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2, default=str) + "\n```"
+
+
+def _port_lines(env: dict[str, Any]) -> list[str]:
+    pairs = [
+        ("业务端口", "container_port", "host_port"),
+        ("Java JDWP", "jdwp_container_port", "jdwp_host_port"),
+        ("Node inspect", "inspect_container_port", "inspect_host_port"),
+        ("Python debugpy", "debugpy_container_port", "debugpy_host_port"),
+    ]
+    lines: list[str] = []
+    for label, container_key, host_key in pairs:
+        container_port = env.get(container_key)
+        host_port = env.get(host_key)
+        if container_port or host_port:
+            lines.append(
+                f"- {label}：容器 `{_markdown_value(container_port)}` -> 宿主机 `{_markdown_value(host_port)}`"
+            )
+    return lines or ["- 未记录端口映射"]
+
+
+def render_lab_doc(env: dict[str, Any], *, via: str | None = None) -> str:
+    updated_at = datetime.now(timezone.utc).isoformat()
+    container = env.get("container_name") or env.get("container_id")
+    start_hint = f"docker start {container}" if container else "参考 env/env.json 或 env/docker-compose.yml 启动"
+    compose_hint = "docker compose -f env/docker-compose.yml up -d"
+    via_line = f"- 启动来源：{via}" if via else "- 启动来源：未记录"
+    notes = str(env.get("notes") or "").strip() or "未记录"
+    port_lines = "\n".join(_port_lines(env))
+    return f"""# 动态环境搭建
+
+## 环境状态
+- 文档更新时间：{updated_at}
+- 访问地址：{_markdown_value(env.get("target_url"))}
+- 运行时：{_markdown_value(env.get("runtime"))}
+- lab_state：{_markdown_value(env.get("lab_state"))}
+- 状态：{_markdown_value(env.get("status"))}
+{via_line}
+
+## Docker 信息
+- 镜像：{_markdown_value(env.get("image"))}
+- 容器名：{_markdown_value(env.get("container_name"))}
+- 容器 ID：{_markdown_value(env.get("container_id"))}
+
+## 端口映射
+{port_lines}
+
+## 复用方式
+- 环境元数据：`env/env.json`
+- 若存在 compose 文件：`{compose_hint}`
+- 若已记录容器：`{start_hint}`
+
+## 凭据
+{_json_block(env.get("credentials"))}
+
+## 备注
+{notes}
+"""
+
+
+def write_lab_doc(project_id: int, env: dict[str, Any], *, via: str | None = None) -> Path:
+    path = lab_doc_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_lab_doc(env, via=via), encoding="utf-8")
+    return path
+
+
+def write_lab_doc_if_ready(project_id: int, env: dict[str, Any], *, via: str | None = None) -> Path | None:
+    if not lab_ready(env):
+        return None
+    return write_lab_doc(project_id, env, via=via)
 
 
 def docker_available() -> bool:
@@ -96,6 +188,7 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
                 return {"ok": False, "error": proc.stderr or proc.stdout, "env": env}
             env["status"] = "running"
             save_env(project_id, env)
+            write_lab_doc_if_ready(project_id, env, via="compose")
             return {"ok": True, "env": env, "via": "compose"}
         image = env.get("image")
         name = env.get("container_name") or f"vulnhunter-{project_id}"
@@ -103,6 +196,7 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
             subprocess.run(["docker", "start", name], capture_output=True, text=True, timeout=60)
             env["status"] = "running"
             save_env(project_id, env)
+            write_lab_doc_if_ready(project_id, env, via="start")
             return {"ok": True, "env": env, "via": "start"}
         return {"ok": False, "error": "无 compose 且无 image", "env": env}
     except Exception as e:  # noqa: BLE001
@@ -129,6 +223,7 @@ ENV_BUILDER_HINT = """
 - 优先已有镜像 / docker-compose
 - 写出 env.json，字段包括：accepted, runtime, image, container_name, host_port, container_port,
   target_url, lab_state(setup|ready), credentials, status, notes
+- 当 Docker 靶场可访问且 env.json accepted=true/status=running 后，写出 docs/lab.md 环境搭建文档
 - runtime 可为任意 Web 语言；仅 java/nodejs/python 时填写 jdwp_* / inspect_* / debugpy_*
 - 业务端口与调试端口分离；调试端口绑定 127.0.0.1
 """

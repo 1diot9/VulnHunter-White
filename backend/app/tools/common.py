@@ -19,7 +19,8 @@ from ..config import settings
 from ..services.ghsa_service import search_advisories
 from ..services.http_client import http_client
 from ..services.ingest import IGNORE_DIR_NAMES
-from ..services.paths import old_vulns_dir, project_root, src_dir, vuln_dir
+from ..services.lab import write_lab_doc_if_ready
+from ..services.paths import env_dir, old_vulns_dir, project_root, src_dir, vuln_dir
 from . import ToolSpec, registry
 from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell
 
@@ -237,7 +238,17 @@ def _write_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         target = assert_writable(ctx.project_id, path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(content), encoding="utf-8")
-        return {"ok": True, "path": path, "bytes": len(str(content).encode("utf-8"))}
+        out = {"ok": True, "path": path, "bytes": len(str(content).encode("utf-8"))}
+        if target.resolve() == (env_dir(ctx.project_id) / "env.json").resolve():
+            try:
+                env = json.loads(str(content))
+            except json.JSONDecodeError:
+                env = None
+            if isinstance(env, dict):
+                doc = write_lab_doc_if_ready(ctx.project_id, env, via="manual")
+                if doc:
+                    out["lab_doc_path"] = doc.relative_to(project_root(ctx.project_id)).as_posix()
+        return out
     except SandboxError as e:
         return local_fail(str(e))
     except OSError as e:

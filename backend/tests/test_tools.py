@@ -645,6 +645,43 @@ def test_recon_old_vuln_cannot_write(tmp_env, project):
     assert "无权" in out["error"]
 
 
+def test_write_ready_env_json_generates_lab_doc(tmp_env, project):
+    from app.services.phase_reports import reports_by_phase
+
+    env = {
+        "accepted": True,
+        "runtime": "java",
+        "image": "demo:latest",
+        "container_name": f"vulnhunter-{project}",
+        "container_port": 8080,
+        "host_port": 18080,
+        "jdwp_container_port": 5005,
+        "jdwp_host_port": 15005,
+        "target_url": "http://127.0.0.1:18080",
+        "lab_state": "ready",
+        "credentials": {"username": "admin", "password": "admin123"},
+        "status": "running",
+        "notes": "seeded test data",
+    }
+
+    out = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "Write",
+        {"path": "env/env.json", "content": json.dumps(env, ensure_ascii=False)},
+    )
+
+    assert out["ok"] is True
+    assert out["lab_doc_path"] == "docs/lab.md"
+    doc = (docs_dir(project) / "lab.md").read_text(encoding="utf-8")
+    assert "# 动态环境搭建" in doc
+    assert "http://127.0.0.1:18080" in doc
+    assert "demo:latest" in doc
+    assert "seeded test data" in doc
+    phase_reports = reports_by_phase(project)
+    reviewer_reports = next(p for p in phase_reports["phases"] if p["phase"] == "reviewer")
+    assert any(item["id"] == "docs/lab.md" for item in reviewer_reports["reports"])
+
+
 def test_recon_mark_cannot_read(tmp_env, project):
     out = registry.dispatch(_ctx(project, "recon_mark"), "Read", {"path": "app/Main.java"})
     assert out["ok"] is False
