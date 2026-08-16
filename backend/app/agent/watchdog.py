@@ -26,7 +26,7 @@ NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。纯文字回复无法读取代码、执行命令或落盘结果，对任务没有进展。"
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
     "挖掘轮次：非入口文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的入口已完整分析后才 FinishRound；"
-    "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态；后台再标普通权限或管理员） / ReturnToWorker；修复请 FinishFix。"
+    "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、提交分层；后台再标普通权限或管理员） / ReturnToWorker；修复请 FinishFix。"
 )
 
 IDENTICAL_TOOL_NUDGE = (
@@ -47,7 +47,9 @@ RECON_PERSIST_NUDGE = (
 RECON_OLD_VULN_PERSIST_NUDGE = (
     "看门狗提醒：侦察（历史漏洞）已连续 {n} 轮未调用 WriteOldVuln。"
     "请立刻把已确认的条目落盘，不要等全部检索完再写——"
-    "每确认一条立刻 WriteOldVuln；若无公开历史漏洞立刻 WriteOldVuln(no_findings=true)。"
+    "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
+    "若无公开历史漏洞立刻 WriteOldVuln(no_findings=true)；"
+    "检索已全部完成再 WriteOldVuln(done=true)。"
     "不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
 )
 

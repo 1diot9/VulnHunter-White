@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api, type PhaseReport, type PhaseReportDetail } from '../api'
 import { formatDateTime } from '../lib/utils'
+import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -79,22 +80,24 @@ export default function PhaseReportsPanel({
         })
         .catch(() => undefined)
     }
-    load()
-    const t = setInterval(load, 5000)
+    const stop = startVisibilityPoll(load, 5000)
     return () => {
       alive = false
-      clearInterval(t)
+      stop()
     }
   }, [projectId])
 
+  // Keep selection only if still in the filtered list; do not auto-fetch first report.
   useEffect(() => {
     if (!filtered.length) {
       setSelectedId(null)
       setDetail(null)
       return
     }
-    if (selectedId && filtered.some((r) => r.id === selectedId)) return
-    setSelectedId(filtered[0].id)
+    if (selectedId && !filtered.some((r) => r.id === selectedId)) {
+      setSelectedId(null)
+      setDetail(null)
+    }
   }, [filtered, selectedId])
 
   useEffect(() => {

@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy.exc import OperationalError
+
 from ..agent.checkpoint import (
     LoopCheckpoint,
     clear_checkpoint,
@@ -30,6 +32,7 @@ from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
 from ..services.paths import ensure_project_dirs, src_dir
+from ..services.vuln_followup import archive_reviewer_checkpoint
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
     apply_recon_done,
@@ -57,6 +60,7 @@ _reviewer_threads: dict[int, threading.Thread] = {}
 _reviewer_inflight: dict[int, bool] = {}
 _fix_inflight: dict[int, set[int]] = {}
 _adopted_phase_runs: set[tuple[int, int]] = set()
+_DB_LOCK_RETRY_SECONDS = 1.0
 
 # Role pools: Recon 1 / Worker 2 (mine 1 + fix 1) / Reviewer 1
 RECON_POOL = 1
@@ -71,6 +75,10 @@ CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "reviewer": ("reviewer",),
 }
 CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核"}
+
+
+def _is_sqlite_locked(exc: BaseException) -> bool:
+    return "database is locked" in str(exc).lower()
 
 
 class CombinedEvent:
@@ -541,15 +549,19 @@ def _new_phase_run(
 
 def _finish_phase_run(run_id: int, status: str, error: str | None = None) -> None:
     project_id: int | None = None
+    phase: str | None = None
     with SessionLocal() as db:
         pr = db.get(PhaseRun, run_id)
         if pr:
             project_id = pr.project_id
+            phase = pr.phase
             pr.status = status
             pr.error = error
             pr.finished_at = utcnow()
             db.commit()
     if project_id is not None:
+        if phase == "reviewer" and status == "completed":
+            archive_reviewer_checkpoint(project_id, run_id)
         clear_checkpoint(project_id, run_id)
 
 
@@ -1038,15 +1050,21 @@ def _run_reviewer_loop(project_id: int) -> None:
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "reviewer"), "reviewer"):
                 break
-            with SessionLocal() as db:
-                proj = db.get(Project, project_id)
-                if not proj or proj.status in ("completed", "cancelled", "error"):
-                    return
-                pending = (
-                    db.query(Vuln)
-                    .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
-                    .count()
-                )
+            try:
+                with SessionLocal() as db:
+                    proj = db.get(Project, project_id)
+                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                        return
+                    pending = (
+                        db.query(Vuln)
+                        .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
+                        .count()
+                    )
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
             if pending <= 0 and not list_resumable_runs(project_id, "reviewer") and not _should_skip_checkpoint(project_id, "reviewer"):
                 cancel.wait(timeout=5.0)
                 continue
@@ -1285,7 +1303,7 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-old-vuln-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-retry-timeout.md",
         retry_other_doc="recon-old-vuln-retry-other.md",
-        done_log="历史漏洞索引已就绪，进入盖章轮",
+        done_log="历史漏洞检索已结束，进入盖章轮",
         fail_error="recon 历史漏洞会话未在重试上限内完成",
         fail_status="Recon 历史漏洞未完成，将自动再拉起",
         fail_log="Recon 历史漏洞会话重试用尽，等待调度器再拉起",

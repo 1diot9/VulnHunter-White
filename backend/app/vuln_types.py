@@ -6,28 +6,29 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
-VULN_TYPE_SEVERITY: dict[str, str] = {
-    "rce": "critical",
-    "ssti": "critical",
-    "deserialization": "critical",
-    "jndi_injection": "critical",
-    "jdbc_attack": "critical",
-    "file_read": "high",
-    "file_upload": "high",
-    "file_delete": "high",
-    "auth_bypass": "high",
-    "sqli": "high",
-    "xxe": "high",
-    "path_traversal": "high",
-    "ssrf": "medium",
-    "privilege_escalation": "medium",
-    "dos": "low",
-    "xss": "low",
-    "info_disclosure": "low",
-    "other": "low",
-}
+VULN_TYPES: tuple[str, ...] = (
+    "rce",
+    "ssti",
+    "deserialization",
+    "jndi_injection",
+    "jdbc_attack",
+    "file_read",
+    "file_upload",
+    "file_delete",
+    "auth_bypass",
+    "sqli",
+    "xxe",
+    "path_traversal",
+    "ssrf",
+    "privilege_escalation",
+    "dos",
+    "xss",
+    "info_disclosure",
+    "other",
+)
 
-ALLOWED_VULN_TYPES = frozenset(VULN_TYPE_SEVERITY)
+ALLOWED_VULN_TYPES = frozenset(VULN_TYPES)
+PENDING_SEVERITY = "pending"
 
 VULN_TYPE_LABELS: dict[str, str] = {
     "rce": "RCE",
@@ -55,23 +56,63 @@ SEVERITY_LABELS: dict[str, str] = {
     "high": "高危",
     "medium": "中危",
     "low": "低危",
+    "pending": "待校准",
+}
+
+SUBMISSION_TIERS: dict[str, str] = {
+    "cve_candidate": "CVE 候选",
+    "advisory_only": "仅公告/合并公告",
+    "hardening": "加固建议",
+    "duplicate_grouped": "同根因重复",
+    "needs_more_evidence": "证据不足",
+}
+
+ALLOWED_SUBMISSION_TIERS = frozenset(SUBMISSION_TIERS)
+
+_SUBMISSION_TIER_ALIASES: dict[str, str] = {
+    "cve_candidate": "cve_candidate",
+    "cve": "cve_candidate",
+    "candidate": "cve_candidate",
+    "cve候选": "cve_candidate",
+    "cve 候选": "cve_candidate",
+    "可提交cve": "cve_candidate",
+    "可提交": "cve_candidate",
+    "advisory_only": "advisory_only",
+    "advisory": "advisory_only",
+    "公告": "advisory_only",
+    "仅公告": "advisory_only",
+    "合并公告": "advisory_only",
+    "hardening": "hardening",
+    "harderning": "hardening",
+    "加固": "hardening",
+    "加固建议": "hardening",
+    "duplicate_grouped": "duplicate_grouped",
+    "duplicate": "duplicate_grouped",
+    "dup": "duplicate_grouped",
+    "同根因": "duplicate_grouped",
+    "同根因重复": "duplicate_grouped",
+    "重复": "duplicate_grouped",
+    "needs_more_evidence": "needs_more_evidence",
+    "needs_evidence": "needs_more_evidence",
+    "evidence": "needs_more_evidence",
+    "证据不足": "needs_more_evidence",
 }
 
 _REACHABILITY_SCORES: dict[str, int] = {
-    "unauthenticated": 2,
-    "low_privilege": 1,
-    "admin": 0,
+    "unauthenticated": 1,
+    "low_privilege": 0,
+    "admin": -1,
 }
 
 _IMPACT_SCORES: dict[str, int] = {
-    "rce_or_full_data": 3,
+    "rce_or_full_data": 4,
     "sensitive_data_or_privilege": 2,
     "limited_info": 1,
 }
 
 _COMPLEXITY_SCORES: dict[str, int] = {
     "single_request": 0,
-    "multi_step": -1,
+    "multi_step": 0,
     "specific_environment": -2,
 }
 
@@ -193,6 +234,17 @@ class SeverityCalibration:
         return SEVERITY_LABELS[self.severity]
 
 
+@dataclass(frozen=True)
+class SubmissionTierDecision:
+    tier: str
+    reason: str
+    root_cause_key: str | None = None
+
+    @property
+    def tier_label(self) -> str:
+        return SUBMISSION_TIERS[self.tier]
+
+
 _ALIAS_MAP: dict[str, str] = {
     "rce": "rce",
     "remote_code_execution": "rce",
@@ -281,10 +333,6 @@ def normalize_vuln_type(raw: str | None) -> str:
     return infer_vuln_type_from_text(s)
 
 
-def severity_for_type(vuln_type: str) -> str:
-    return VULN_TYPE_SEVERITY.get(normalize_vuln_type(vuln_type), "low")
-
-
 def _factor_key(raw: Any) -> str:
     s = str(raw or "").strip()
     return re.sub(r"[\s\-]+", "_", s.lower()) if s.isascii() else s
@@ -352,6 +400,74 @@ def calibrate_review_severity(
     )
 
 
+def normalize_submission_tier(raw: Any) -> str:
+    key = _factor_key(raw)
+    if not key:
+        raise ValueError("缺少 submission_tier")
+    candidates = [key]
+    lowered = key.lower()
+    if lowered not in candidates:
+        candidates.append(lowered)
+    compact = re.sub(r"[\s_\-]+", "", lowered)
+    if compact and compact not in candidates:
+        candidates.append(compact)
+    normalized = None
+    for candidate in candidates:
+        normalized = _SUBMISSION_TIER_ALIASES.get(candidate)
+        if not normalized and candidate in ALLOWED_SUBMISSION_TIERS:
+            normalized = candidate
+        if normalized:
+            break
+    if not normalized:
+        allowed = "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
+        raise ValueError(f"submission_tier 无效，可选: {allowed}")
+    return normalized
+
+
+def normalize_root_cause_key(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    # Keep short, stable keys for grouping.
+    s = re.sub(r"\s+", " ", s)
+    return s[:256]
+
+
+def normalize_submission_decision(
+    *,
+    submission_tier: Any,
+    submission_reason: Any,
+    root_cause_key: Any = None,
+) -> SubmissionTierDecision:
+    tier = normalize_submission_tier(submission_tier)
+    reason = str(submission_reason or "").strip()
+    if not reason:
+        raise ValueError("缺少 submission_reason（须说明为何进入该提交分层）")
+    root = normalize_root_cause_key(root_cause_key)
+    if tier == "duplicate_grouped" and not root:
+        raise ValueError("submission_tier=duplicate_grouped 时必须提供 root_cause_key")
+    return SubmissionTierDecision(tier=tier, reason=reason, root_cause_key=root)
+
+
+def suggest_submission_tier(
+    *,
+    calibration: SeverityCalibration,
+    evidence_level: str | None = None,
+) -> str:
+    """Heuristic hint for tests/docs; Reviewer still must choose explicitly."""
+    if evidence_level == "static_only" and calibration.score < 3:
+        return "needs_more_evidence"
+    if calibration.reachability == "admin" and calibration.impact == "limited_info":
+        return "hardening"
+    if calibration.score >= 3 and calibration.reachability in ("unauthenticated", "low_privilege"):
+        return "cve_candidate"
+    if calibration.score >= 1:
+        return "advisory_only"
+    return "hardening"
+
+
 def infer_vuln_type_from_text(*parts: str | None) -> str:
     text = " ".join(p for p in parts if p)
     if not text.strip():
@@ -362,18 +478,16 @@ def infer_vuln_type_from_text(*parts: str | None) -> str:
     return "other"
 
 
-def resolve_vuln_type_and_severity(item: dict[str, Any]) -> tuple[str, str]:
+def resolve_vuln_type(item: dict[str, Any]) -> str:
     raw_type = item.get("vuln_type") or item.get("type") or item.get("category")
     if raw_type:
-        vtype = normalize_vuln_type(str(raw_type))
-    else:
-        vtype = infer_vuln_type_from_text(
-            item.get("identifier"),
-            item.get("title"),
-            item.get("summary"),
-        )
-    return vtype, severity_for_type(vtype)
+        return normalize_vuln_type(str(raw_type))
+    return infer_vuln_type_from_text(
+        item.get("identifier"),
+        item.get("title"),
+        item.get("summary"),
+    )
 
 
 def prompt_type_enum() -> str:
-    return "|".join(sorted(ALLOWED_VULN_TYPES, key=lambda t: list(VULN_TYPE_SEVERITY).index(t)))
+    return "|".join(VULN_TYPES)

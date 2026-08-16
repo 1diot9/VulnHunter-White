@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.services.live_log import format_tool_command, format_tool_output, live_log
 
 
@@ -32,6 +34,29 @@ def test_tool_event_written(tmp_env, project, monkeypatch, tmp_path):
     assert "src/A.java" in ev["output"]
     assert ev["phase"] == "recon"
     assert ev["role"] == "recon"
+
+
+def test_events_are_written_by_phase_and_session(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+
+    live_log.agent(project, "round-1", phase="worker", role="worker")
+    live_log.begin_session(project, "worker")
+    live_log.system(project, "挖掘阶段新跑，新开对话", phase="worker", session_start=True)
+    live_log.agent(project, "round-2", phase="worker", role="worker")
+
+    assert not path.exists()
+    first = tmp_path / "live-events" / "worker" / "round-1.jsonl"
+    second = tmp_path / "live-events" / "worker" / "round-2.jsonl"
+    assert first.exists()
+    assert second.exists()
+
+    first_events = [json.loads(line) for line in first.read_text(encoding="utf-8").splitlines()]
+    second_events = [json.loads(line) for line in second.read_text(encoding="utf-8").splitlines()]
+    assert [e["text"] for e in first_events] == ["round-1"]
+    assert [e["text"] for e in second_events] == ["挖掘阶段新跑，新开对话", "round-2"]
+    assert first_events[0]["seq"] < second_events[0]["seq"] < second_events[1]["seq"]
 
 
 def test_event_matches_phase_groups_fix_under_worker():

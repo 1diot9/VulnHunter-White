@@ -84,6 +84,11 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "impact" in review
     assert "exploit_complexity" in review
     assert "defense_status" in review
+    assert "submission_tier" in review
+    assert "submission_reason" in review
+    assert "CVE" in review
+    assert "互联网资产证明" in review
+    assert "docs/lab.md" in review
 
 
 def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
@@ -93,8 +98,36 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "impact" in text
     assert "exploit_complexity" in text
     assert "defense_status" in text
+    assert "submission_tier" in text
+    assert "submission_reason" in text
+    assert "root_cause_key" in text
+    assert "cve_candidate" in text
+    assert "hardening" in text
+    assert "双层审核" in text
     assert "前台" in text
     assert "后台" in text
+    assert "互联网资产证明" in text
+    assert "FOFA" in text
+    assert "X 情报社区" in text
+    assert "成立性否决" in text
+    assert "docker exec" in text
+    assert "specific_environment" in text
+    assert "不要按漏洞类型" in text
+    assert "默认密码" in text
+    assert "弱口令" in text
+    assert "默认可利用" in load_prompt("initial/reviewer.md")
+    assert "默认密码" in load_prompt("initial/reviewer.md")
+
+
+def test_worker_prompt_requires_default_exploitability():
+    worker = load_prompt("worker.md")
+    assert "什么算漏洞" in worker
+    assert "默认/官方部署" in worker
+    assert "不要按漏洞类型填写或推断严重度" in worker
+    assert "发现漏洞立即 SubmitVuln" not in worker
+    assert "仅当满足上方提交闸门时 SubmitVuln" in worker
+    assert "默认密码" in worker
+    assert "弱口令" in worker
 
 
 def test_worker_prompts_decouple_finish_file_and_round():
@@ -108,6 +141,17 @@ def test_worker_prompts_decouple_finish_file_and_round():
     assert "然后 FinishRound" not in initial
 
 
+def test_worker_prompt_requires_asset_search_fingerprints():
+    worker = load_prompt("worker.md")
+    assert "## 互联网资产证明规则" in worker
+    assert "FOFA" in worker
+    assert "X 情报社区" in worker
+    assert "icon_hash" in worker
+    assert "cert.subject" in worker
+    assert "docs/lab.md" in worker
+    assert "不允许出现「或」" in worker
+
+
 def test_pipeline_source_has_no_inline_initial_prompts():
     src = Path(pipeline.__file__).read_text(encoding="utf-8")
     for needle in (
@@ -118,3 +162,13 @@ def test_pipeline_source_has_no_inline_initial_prompts():
         "审核漏洞 ID=",
     ):
         assert needle not in src, needle
+
+
+def test_old_vuln_prompt_persist_is_not_completion():
+    text = load_prompt("recon-old-vuln.md")
+    assert "只落盘，不会结束本会话" in text
+    assert "WriteOldVuln(done=true)" in text
+    assert "索引齐全后系统会结束" not in text
+    initial = load_prompt("initial/recon-old-vuln.md")
+    assert "落盘不会结束本会话" in initial
+    assert "WriteOldVuln(done=true)" in initial

@@ -84,7 +84,7 @@ def test_projects_list_empty(tmp_env):
 
 def test_project_file_progress_counts(tmp_env, project):
     from app.main import app
-    from app.models import FileWeight, SessionLocal
+    from app.models import FileWeight, PhaseRun, SessionLocal
 
     with SessionLocal() as db:
         db.add_all(
@@ -93,6 +93,9 @@ def test_project_file_progress_counts(tmp_env, project):
                 FileWeight(project_id=project, path="b.java", weight=0, skipped=True, audited=False),
                 FileWeight(project_id=project, path="c.java", weight=50, skipped=False, audited=False),
                 FileWeight(project_id=project, path="d.java", weight=100, skipped=False, audited=True),
+                PhaseRun(project_id=project, phase="worker", role="worker"),
+                PhaseRun(project_id=project, phase="worker", role="worker"),
+                PhaseRun(project_id=project, phase="fix", role="fix"),
             ]
         )
         db.commit()
@@ -103,6 +106,7 @@ def test_project_file_progress_counts(tmp_env, project):
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
         assert body["files_audited"] == 1
+        assert body["worker_rounds"] == 2
         subs = body["recon_subphases"]
         assert [s["id"] for s in subs] == ["map", "old_vulns", "mark"]
         assert all("label" in s and "done" in s for s in subs)
@@ -185,11 +189,194 @@ def test_vulns_list_and_download(tmp_env, project):
         assert body["created_at"]
         assert body["attack_surface"] is None
         assert body["required_account"] is None
+        assert body["submission_tier"] is None
+        assert body["submission_reason"] is None
+        assert body["root_cause_key"] is None
         assert "**产出时间**：" in (body.get("report_md") or "")
         dl = client.post("/api/vulns/download", json={"ids": [vid]})
         assert dl.status_code == 200
         assert dl.headers["content-type"].startswith("application/zip")
         assert len(dl.content) > 20
+
+
+def test_vuln_followups_continue_archived_reviewer_context(tmp_env, project, monkeypatch):
+    from app.agent.checkpoint import LoopCheckpoint, checkpoint_exists, save_checkpoint
+    from app.main import app
+    from app.models import PhaseRun, SessionLocal, Vuln
+    from app.services import pipeline
+    from app.services.paths import vuln_dir
+
+    with SessionLocal() as db:
+        vuln = Vuln(
+            project_id=project,
+            title="IDOR demo",
+            vuln_type="idor",
+            severity="high",
+            status="confirmed",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        vuln.report_path = f"vulns/{vuln.id}/report.md"
+        run = PhaseRun(project_id=project, phase="reviewer", role="reviewer", vuln_id=vuln.id)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        vid = vuln.id
+        run_id = run.id
+
+    (vuln_dir(project, vid) / "report.md").write_text("# IDOR demo\n\nReviewer 已确认。\n", encoding="utf-8")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt="Reviewer system",
+            user_prompt="请审核漏洞",
+            messages=[
+                {"role": "system", "content": "Reviewer system"},
+                {"role": "user", "content": "请审核漏洞"},
+                {"role": "assistant", "content": "Reviewer 原始判断：可越权读取订单。"},
+            ],
+            state={"review_done": True},
+            vuln_id=vid,
+        )
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_llm(project_id: int, messages: list[dict[str, str]]) -> str:
+        seen["project_id"] = project_id
+        seen["messages"] = messages
+        return "追问答复：应重点说明对象归属校验缺失。"
+
+    monkeypatch.setattr("app.services.vuln_followup._call_reviewer_llm", fake_llm)
+    pipeline._finish_phase_run(run_id, "completed")
+    assert not checkpoint_exists(project, run_id)
+    assert (vuln_dir(project, vid) / f"reviewer-context-{run_id}.json").is_file()
+
+    with TestClient(app) as client:
+        initial = client.get(f"/api/vulns/{vid}/follow-ups")
+        assert initial.status_code == 200
+        assert initial.json()["reviewer_context_available"] is True
+        assert initial.json()["reviewer_phase_run_id"] == run_id
+        assert initial.json()["messages"] == []
+
+        asked = client.post(f"/api/vulns/{vid}/follow-ups", json={"question": "根因是什么？"})
+        assert asked.status_code == 200
+        body = asked.json()
+        assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+        assert body["messages"][1]["content"].startswith("追问答复")
+
+        messages = seen["messages"]
+        assert isinstance(messages, list)
+        context = messages[1]["content"]
+        assert "Reviewer 轮次上下文" in context
+        assert "Reviewer 原始判断" in context
+        assert "IDOR demo" in context
+
+        persisted = client.get(f"/api/vulns/{vid}/follow-ups").json()
+        assert len(persisted["messages"]) == 2
+
+
+def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
+    from app.main import app
+    from app.models import SessionLocal, Vuln
+    from app.services.paths import vuln_dir
+
+    with SessionLocal() as db:
+        front = Vuln(
+            project_id=project,
+            title="Frontend SQLI",
+            vuln_type="sqli",
+            severity="high",
+            severity_score=4,
+            status="confirmed",
+            attack_surface="frontend",
+            submission_tier="cve_candidate",
+            submission_reason="未认证 SQLI",
+        )
+        back = Vuln(
+            project_id=project,
+            title="Backend IDOR",
+            vuln_type="idor",
+            severity="medium",
+            severity_score=2,
+            status="confirmed",
+            attack_surface="backend",
+            required_account="user",
+            submission_tier="advisory_only",
+            submission_reason="低权限 IDOR，合并公告",
+            root_cause_key="idor:UserController",
+        )
+        legacy = Vuln(
+            project_id=project,
+            title="Legacy Report Score",
+            vuln_type="xss",
+            severity="low",
+            status="confirmed",
+            attack_surface="frontend",
+        )
+        hard = Vuln(
+            project_id=project,
+            title="CORS hardening",
+            vuln_type="other",
+            severity="low",
+            severity_score=0,
+            status="confirmed",
+            attack_surface="frontend",
+            submission_tier="hardening",
+            submission_reason="CORS 加固建议",
+        )
+        db.add_all([front, back, legacy, hard])
+        db.commit()
+        db.refresh(front)
+        db.refresh(back)
+        db.refresh(legacy)
+        db.refresh(hard)
+        legacy.report_path = f"vulns/{legacy.id}/report.md"
+        db.commit()
+        front_id = front.id
+        back_id = back.id
+        legacy_id = legacy.id
+        hard_id = hard.id
+
+    (vuln_dir(project, legacy_id) / "report.md").write_text(
+        "## 审核标注\n- 校准得分：-1\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(app) as client:
+        front_rows = client.get(f"/api/vulns?project_id={project}&attack_surface=frontend").json()
+        front_ids = {v["id"] for v in front_rows}
+        assert front_id in front_ids
+        assert legacy_id in front_ids
+        assert hard_id in front_ids
+        assert back_id not in front_ids
+        assert next(v for v in front_rows if v["id"] == front_id)["severity_score"] == 4
+        assert next(v for v in front_rows if v["id"] == legacy_id)["severity_score"] == -1
+
+        back_rows = client.get(f"/api/vulns?project_id={project}&attack_surface=backend").json()
+        assert [v["id"] for v in back_rows] == [back_id]
+
+        bad = client.get(f"/api/vulns?project_id={project}&attack_surface=internal")
+        assert bad.status_code == 400
+
+        cve_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=cve_candidate").json()
+        assert [v["id"] for v in cve_rows] == [front_id]
+        assert cve_rows[0]["submission_reason"] == "未认证 SQLI"
+
+        untiered = client.get(f"/api/vulns?project_id={project}&submission_tier=untiered").json()
+        assert [v["id"] for v in untiered] == [legacy_id]
+
+        grouped = client.get(
+            f"/api/vulns?project_id={project}&root_cause_key=idor:UserController"
+        ).json()
+        assert [v["id"] for v in grouped] == [back_id]
+
+        bad_tier = client.get(f"/api/vulns?project_id={project}&submission_tier=nope")
+        assert bad_tier.status_code == 400
 
 
 def test_phase_control_endpoints(tmp_env, project, monkeypatch):
@@ -228,6 +415,7 @@ def test_project_phase_reports(tmp_env, project):
     (rounds / "round-1.md").write_text("## 第1轮审计报告\n\n审计了 Main.java。\n", encoding="utf-8")
     summaries = summaries_dir(project)
     (summaries / "worker-round-1.md").write_text("压缩：Main.java 已审完。\n", encoding="utf-8")
+    (summaries / "fix-1.md").write_text("修复上下文压缩。\n", encoding="utf-8")
     (summaries / "recon-mark-rescue-1.md").write_text("盖章超时抢救。\n", encoding="utf-8")
     (summaries / "reviewer-rescue-1.md").write_text("审核抢救摘要。\n", encoding="utf-8")
     (summaries / "ignored.txt").write_text("nope", encoding="utf-8")
@@ -236,23 +424,20 @@ def test_project_phase_reports(tmp_env, project):
         missing = client.get("/api/projects/99999/reports")
         assert missing.status_code == 404
         body = client.get(f"/api/projects/{project}/reports").json()
-        assert body["count"] == 7
+        assert body["count"] == 6
         by_phase = {g["phase"]: g for g in body["phases"]}
         assert by_phase["recon"]["count"] == 4
-        assert by_phase["worker"]["count"] == 2
+        assert by_phase["worker"]["count"] == 1
         assert by_phase["reviewer"]["count"] == 1
         ids = {item["id"] for g in body["phases"] for item in g["reports"]}
         assert "workspace/rounds/round-1.md" in ids
-        assert "docs/summaries/worker-round-1.md" in ids
+        assert "docs/summaries/worker-round-1.md" not in ids
+        assert "docs/summaries/fix-1.md" not in ids
         assert "docs/summaries/recon-mark-rescue-1.md" in ids
         round_item = next(i for i in by_phase["worker"]["reports"] if i["id"] == "workspace/rounds/round-1.md")
         assert round_item["kind"] == "round"
         assert round_item["title"] == "第1轮审计报告"
         assert round_item["round"] == 1
-        summary_item = next(
-            i for i in by_phase["worker"]["reports"] if i["id"] == "docs/summaries/worker-round-1.md"
-        )
-        assert summary_item["kind"] == "summary"
         mark = next(i for i in by_phase["recon"]["reports"] if i["kind"] == "rescue")
         assert mark["subphase"] == "mark"
         assert mark["kind_label"] == "抢救"

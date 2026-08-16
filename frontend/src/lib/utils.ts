@@ -18,6 +18,23 @@ export function formatAttackSurface(
   return null
 }
 
+export function formatSubmissionTier(value: string | null | undefined): string {
+  switch (value) {
+    case 'cve_candidate':
+      return 'CVE 候选'
+    case 'advisory_only':
+      return '仅公告'
+    case 'hardening':
+      return '加固建议'
+    case 'duplicate_grouped':
+      return '同根因重复'
+    case 'needs_more_evidence':
+      return '证据不足'
+    default:
+      return '未分层'
+  }
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   let s = value.trim()
@@ -27,6 +44,36 @@ export function formatDateTime(value: string | null | undefined): string {
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+}
+
+export function formatSeverity(value: string | null | undefined): string {
+  switch (value) {
+    case 'critical':
+      return '严重'
+    case 'high':
+      return '高危'
+    case 'medium':
+      return '中危'
+    case 'low':
+      return '低危'
+    case 'pending':
+      return '待校准'
+    default:
+      return value || ''
+  }
+}
+
+export function formatSeverityScore(value: number | null | undefined): string | null {
+  if (value == null || Number.isNaN(value)) return null
+  return `校准 ${value > 0 ? `+${value}` : value}`
+}
+
+export function severityScoreBadgeClass(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return ''
+  if (value >= 5) return 'bg-red-500/20 text-red-100 ring-1 ring-red-500/30'
+  if (value >= 3) return 'bg-orange-500/20 text-orange-100 ring-1 ring-orange-500/30'
+  if (value >= 1) return 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/25'
+  return 'bg-slate-500/15 text-slate-200 ring-1 ring-slate-500/20'
 }
 
 export function formatFileProgress(p: {

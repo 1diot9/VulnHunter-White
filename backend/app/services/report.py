@@ -9,6 +9,71 @@ from pathlib import Path
 _CST = timezone(timedelta(hours=8))
 _PRODUCED_LINE_RE = re.compile(r"(?m)^\*\*产出时间\*\*[：:].+$")
 _H1_RE = re.compile(r"(?m)^(# .+)\n")
+ASSET_PROOF_HEADING = "## 互联网资产证明"
+SEARCH_FINGERPRINT_HEADING = ASSET_PROOF_HEADING
+_ASSET_PROOF_HEADING_RE = re.compile(r"(?m)^##\s+(互联网资产证明|应用搜索指纹)\s*$")
+_ASSET_PROOF_INSERT_MARKERS = (
+    "\n## 漏洞技术细节\n",
+    "\n## 复现证明\n",
+    "\n## 修复方案\n",
+    "\n## 备注\n",
+    "\n## PoC\n",
+    "\n## 环境\n",
+    "\n## 结论\n",
+)
+
+
+def _fingerprint_value(raw: object, fallback: str) -> str:
+    value = str(raw or "").strip()
+    return value or fallback
+
+
+def search_fingerprint_section(
+    *,
+    fofa: object = None,
+    x: object = None,
+    basis: object = None,
+) -> str:
+    """Build the required internet-asset proof section (FOFA + X queries)."""
+    del basis  # kept for call-site compatibility; no longer rendered
+    fofa_query = _fingerprint_value(fofa, "待根据应用标题、稳定 body/header 特征、favicon hash 等确认")
+    x_query = _fingerprint_value(x, "待根据 app/title/body/cert/icon_hash 等资产测绘字段确认")
+    return f"""{ASSET_PROOF_HEADING}
+> 用于在公开资产测绘平台定位同类应用资产；优先使用应用自身稳定特征，不把漏洞路径、PoC 参数或一次性业务数据当作唯一指纹。测绘语句不允许出现「或」关系。
+
+### 精准测绘语法
+
+#### FOFA
+```text
+{fofa_query}
+```
+
+#### X 情报社区
+```text
+{x_query}
+```
+"""
+
+
+def ensure_search_fingerprint_section(
+    text: str,
+    *,
+    fofa: object = None,
+    x: object = None,
+    basis: object = None,
+) -> str:
+    """Ensure vulnerability reports carry FOFA and X asset search fingerprints."""
+    body = text or ""
+    if _ASSET_PROOF_HEADING_RE.search(body):
+        return body
+    section = search_fingerprint_section(fofa=fofa, x=x, basis=basis).strip()
+    for marker in _ASSET_PROOF_INSERT_MARKERS:
+        idx = body.find(marker)
+        if idx != -1:
+            return body[:idx].rstrip() + "\n\n" + section + "\n" + body[idx:]
+    if not body.strip():
+        return section + "\n"
+    return body.rstrip() + "\n\n" + section + "\n"
 
 
 def format_produced_at(dt: datetime | None = None) -> str:

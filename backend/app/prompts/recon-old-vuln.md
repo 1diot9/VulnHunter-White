@@ -6,6 +6,8 @@
 
 上下文会被压缩。每用 WebSearch / SearchGHSA 确认一条，立刻 `WriteOldVuln`（一条一调）。禁止用 Write 或 shell 工具写 `docs/old-vulns/`。延迟写入会导致历史漏洞永远补不完。
 
+逐条 `WriteOldVuln` **只落盘，不会结束本会话**。看门狗催你写，是为了先保住已确认的条目，不是让你写完一条就收工。
+
 若确认无公开历史漏洞，立刻 `WriteOldVuln(no_findings=true)`。
 
 已落盘的历史漏洞用 `SearchOldVuln` 核对（只处理 `kind=old`），不要重写已有文档；缺正文的条目补 `WriteOldVuln`。不要把 `kind=found` 的本项目已提交报告写入 `docs/old-vulns/`。
@@ -14,7 +16,7 @@
 
 1. 结合知识库、WebSearch / SearchGHSA / SearchOldVuln 与公开情报，整理本项目 / 关键组件的历史漏洞。
 2. 为每个漏洞调用 `WriteOldVuln` 写入 `docs/old-vulns/`（自动写 yaml 元数据 `title` / `summary` 并更新 `docs/old-vulns/index.md`）。
-3. 索引齐全后系统会结束本会话，无需调用结束工具。
+3. 检索全部结束后调用 `WriteOldVuln(done=true)`（无公开历史漏洞则 `no_findings=true`）。系统据此结束本会话，无需调用结束工具。
 
 ## 规则
 

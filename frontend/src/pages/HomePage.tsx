@@ -8,6 +8,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatDateTime, formatFileProgress, formatTokenUsage } from '../lib/utils'
+import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -17,11 +18,7 @@ export default function HomePage() {
 
   const refresh = () => api.listProjects().then(setProjects).catch((e) => setError(String(e)))
 
-  useEffect(() => {
-    refresh()
-    const t = setInterval(refresh, 4000)
-    return () => clearInterval(t)
-  }, [])
+  useEffect(() => startVisibilityPoll(refresh, 4000), [])
 
   async function createGithub() {
     if (!url.trim()) return
@@ -53,16 +50,17 @@ export default function HomePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
         <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。</p>
       </div>
 
-      <Card>
-        <CardContent>
-        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+      <Card className="w-full">
+        <CardContent className="w-full">
+        <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
           <Input
+            className="w-full"
             placeholder="https://github.com/owner/repo"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
@@ -84,7 +82,7 @@ export default function HomePage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid w-full gap-4 md:grid-cols-2">
         {projects.map((p) => (
           <Card key={p.id}>
             <CardHeader>
@@ -123,6 +121,7 @@ export default function HomePage() {
                 filesAudited={p.files_audited}
                 filesSkipped={p.files_skipped}
                 filesTotal={p.files_total}
+                workerRounds={p.worker_rounds}
                 vulnPending={p.vuln_pending}
                 reconSubphases={p.recon_subphases}
               />
@@ -139,7 +138,7 @@ export default function HomePage() {
           </Card>
         ))}
         {projects.length === 0 ? (
-          <Card className="md:col-span-2">
+          <Card className="w-full md:col-span-2">
             <CardContent className="text-sm text-muted-foreground">暂无项目，先导入一个 Web 源码仓。</CardContent>
           </Card>
         ) : null}

@@ -6,7 +6,7 @@ import time
 
 from app.services.ingest import build_file_index
 from app.services.paths import docs_dir, old_vulns_dir, vuln_dir, workspace_dir
-from app.tools import ROLE_ACL, SHELL_TOOLS, ToolContext, native_shell_tool, registry
+from app.tools import ROLE_ACL, SHELL_TOOLS, ToolContext, ToolSpec, native_shell_tool, registry
 from app.tools.common import todo_relpath
 
 
@@ -18,6 +18,8 @@ SEVERITY_FACTORS = {
     "impact": "sensitive_data_or_privilege",
     "exploit_complexity": "single_request",
     "defense_status": "none",
+    "submission_tier": "cve_candidate",
+    "submission_reason": "未认证可达且可造成敏感数据/权限影响，适合 CVE 候选",
 }
 
 
@@ -52,7 +54,13 @@ def test_mark_source_sets_weight_100(tmp_env, project):
 
 
 def test_recon_gates_requires_docs_and_weights(tmp_env, project):
-    from app.tools.phase_recon import apply_recon_done, recon_docs_ready, recon_gates_met, recon_gates_status
+    from app.tools.phase_recon import (
+        apply_recon_done,
+        recon_docs_ready,
+        recon_gates_met,
+        recon_gates_status,
+        recon_old_vulns_ready,
+    )
 
     build_file_index(project)
     status = recon_gates_status(project)
@@ -65,7 +73,17 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     old = old_vulns_dir(project)
     old.mkdir(parents=True, exist_ok=True)
     (old / "index.md").write_text("# index\n", encoding="utf-8")
+    assert recon_docs_ready(project) is False
+    assert recon_old_vulns_ready(project) is False
+    status = recon_gates_status(project)
+    assert any("检索尚未结束" in e for e in status["errors"])
+    assert status["subphases"][1]["done"] is False
+    (old / "index.md").write_text(
+        "---\ntitle: 历史漏洞索引\nsummary: test\ncomplete: true\n---\n\n# index\n",
+        encoding="utf-8",
+    )
     assert recon_docs_ready(project) is True
+    assert recon_old_vulns_ready(project) is True
     assert [s["done"] for s in recon_gates_status(project)["subphases"]] == [True, True, False]
 
     models = tmp_env["models"]
@@ -109,6 +127,11 @@ def test_submit_and_confirm_flow(tmp_env, project):
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     assert out["ok"] is True
     vuln_id = out["vuln_id"]
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        submitted = db.get(models.Vuln, vuln_id)
+        assert submitted.severity == "pending"
 
     conf = registry.dispatch(
         _ctx(project, "reviewer"),
@@ -126,7 +149,10 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert conf["attack_surface_label"] == "前台"
     assert conf["required_account"] is None
     assert conf["severity"] == "high"
-    assert conf["severity_score"] == 4
+    assert conf["severity_score"] == 3
+    assert conf["submission_tier"] == "cve_candidate"
+    assert conf["submission_tier_label"] == "CVE 候选"
+    assert "CVE" in conf["submission_reason"]
 
     models = tmp_env["models"]
     Session = tmp_env["Session"]
@@ -137,13 +163,23 @@ def test_submit_and_confirm_flow(tmp_env, project):
         assert v.attack_surface == "frontend"
         assert v.required_account is None
         assert v.severity == "high"
+        assert v.severity_score == 3
+        assert v.submission_tier == "cve_candidate"
+        assert v.submission_reason
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "**产出时间**：" in report
     assert report.index("**产出时间**：") < report.index("## 摘要")
+    assert "## 漏洞描述" in report
+    assert "## 互联网资产证明" in report
+    assert "### 触发条件" in report
+    assert "docs/lab.md" in report
     assert "## 审核标注" in report
     assert "- 攻击面：前台" in report
     assert "- 严重度：高危（high）" in report
-    assert "- 校准得分：4" in report
+    assert "- 校准得分：3" in report
+    assert "- 提交分层：CVE 候选（cve_candidate）" in report
+    assert "- 分层理由：" in report
+    assert "原始类型映射" not in report
     assert "所需账号" not in report
 
 
@@ -199,6 +235,107 @@ def test_confirm_requires_severity_factors(tmp_env, project):
     assert "impact" in conf["error"]
 
 
+def test_confirm_requires_submission_tier(tmp_env, project):
+    payload = {
+        "title": "SSRF",
+        "vuln_type": "ssrf",
+        "cwe": "CWE-918",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "url -> requests.get",
+        "auth_premise": "未授权",
+        "http_request": "GET /fetch?url=http://127.0.0.1 HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "internal response",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "attack_surface": "frontend",
+            "impact": "sensitive_data_or_privilege",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+        },
+    )
+    assert conf["ok"] is False
+    assert "submission_tier" in conf["error"]
+
+
+def test_confirm_hardening_and_duplicate_tiers(tmp_env, project):
+    payload = {
+        "title": "CORS",
+        "vuln_type": "other",
+        "cwe": "CWE-942",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "Origin -> ACAO",
+        "auth_premise": "未授权",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "reflected origin",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    hard = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "加固建议",
+            "submission_reason": "CORS 配置问题，默认按加固建议处理",
+        },
+    )
+    assert hard["ok"] is True
+    assert hard["submission_tier"] == "hardening"
+
+    payload2 = dict(payload)
+    payload2["title"] = "CORS again"
+    out2 = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload2)
+    dup = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out2["vuln_id"],
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "duplicate_grouped",
+            "submission_reason": "与已确认 CORS 同根因",
+        },
+    )
+    assert dup["ok"] is False
+    assert "root_cause_key" in dup["error"]
+
+    dup_ok = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out2["vuln_id"],
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "duplicate_grouped",
+            "submission_reason": "与已确认 CORS 同根因",
+            "root_cause_key": "cors:JwtFilter",
+        },
+    )
+    assert dup_ok["ok"] is True
+    assert dup_ok["submission_tier"] == "duplicate_grouped"
+    assert dup_ok["root_cause_key"] == "cors:JwtFilter"
+    report = (vuln_dir(project, out2["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert "- 根因合并键：cors:JwtFilter" in report
+
+
 def test_confirm_backend_requires_account(tmp_env, project):
     payload = {
         "title": "SQLI in login",
@@ -232,6 +369,8 @@ def test_confirm_backend_requires_account(tmp_env, project):
             "impact": "rce_or_full_data",
             "exploit_complexity": "single_request",
             "defense_status": "none",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "管理员可达但可完整控制，仍作为 CVE 候选",
         },
     )
     assert conf["ok"] is True
@@ -279,7 +418,8 @@ def test_confirm_backend_user_account(tmp_env, project):
     assert conf["ok"] is True
     assert conf["required_account"] == "user"
     assert conf["required_account_label"] == "普通权限"
-    assert conf["severity"] == "high"
+    assert conf["severity"] == "medium"
+    assert conf["severity_score"] == 2
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "- 所需账号：普通权限" in report
 
@@ -579,6 +719,38 @@ def test_shell_timeout_kills_process(tmp_env, project):
     assert time.time() - started < 15
 
 
+def test_shell_dispatch_hard_timeout_returns_if_handler_hangs(monkeypatch, tmp_env, project):
+    import app.tools as tools_mod
+
+    tool = native_shell_tool()
+    original = registry.get(tool)
+    assert original is not None
+
+    def hung_handler(ctx, args):  # noqa: ANN001
+        time.sleep(5)
+        return {"ok": True}
+
+    monkeypatch.setattr(tools_mod, "_SHELL_DISPATCH_TIMEOUT_GRACE", 0)
+    registry.register(
+        ToolSpec(
+            name=tool,
+            description=original.description,
+            parameters=original.parameters,
+            handler=hung_handler,
+        )
+    )
+    try:
+        started = time.time()
+        out = registry.dispatch(_ctx(project, "recon"), tool, {"command": "ignored", "timeout": 1})
+    finally:
+        registry.register(original)
+
+    assert out["ok"] is False
+    assert out.get("hard_timeout") is True
+    assert "工具调用硬超时" in (out.get("error") or "")
+    assert time.time() - started < 3
+
+
 def test_decode_shell_bytes_utf8_and_gbk():
     from app.tools.common import decode_shell_bytes
 
@@ -613,6 +785,11 @@ def test_recon_docs_ready_and_mark_batch(tmp_env, project):
     old = old_vulns_dir(project)
     old.mkdir(parents=True, exist_ok=True)
     (old / "index.md").write_text("# index\n", encoding="utf-8")
+    assert recon_old_vulns_ready(project) is False
+    (old / "index.md").write_text(
+        "---\ntitle: 历史漏洞索引\nsummary: test\ncomplete: true\n---\n\n# index\n",
+        encoding="utf-8",
+    )
     assert recon_old_vulns_ready(project) is True
     assert recon_docs_ready(project) is True
     assert recon_gates_met(project) is False

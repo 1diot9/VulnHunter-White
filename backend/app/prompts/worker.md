@@ -24,9 +24,22 @@
 - 本轮至少成功过一次 `FinishFile` 才能 `FinishRound`（门闩，不是「标完就结束」）。
 - 若本轮注入入口尚未 FinishFile，FinishRound 会被拒绝。
 
+## 什么算漏洞（提交闸门）
+source→sink 可达只是候选，**不是**漏洞。必须同时满足才 SubmitVuln：
+1. 用户可控输入能到达真实执行的 sink。
+2. **默认/官方部署**下，攻击者只凭题目允许的权限和 HTTP 输入，就能打出**可观察的有害冲击**（与正常请求可区分：读到不该读的数据、写/删成功、命令执行、未授权操作等）。
+3. 不依赖第二个独立漏洞、不依赖审核员/攻击者先往服务器写 payload 文件、不依赖非默认目录布局（例如目标路径下碰巧存在 `templates/*.html`）。
+
+以下**不要提交**：
+- 仅不安全拼接/`Path.resolve`/`../` 逃逸，但 sink 只解析固定子目录+固定后缀，默认请求只有 404 或与正常页相同。
+- 完整利用还需要文件写入、主题上传、或非默认 `workDir`。
+- 项目配置、示例、compose、`.env`、文档或首次安装向导里的**默认账号/默认密码/弱口令**（含 `admin/admin`、文档演示凭据、本审计 lab 写入的账号）。这是部署约定，不是代码漏洞。
+- 已知且允许的业务能力（见 docs/auth.md）——若仍提交，必须 `intended_behavior=true`。
+- 不要按漏洞类型填写或推断严重度；入库为 `pending`，由 Reviewer 按利用上下文校准。
+
 ## 流程
 1. Read/Grep 分析注入文件及其调用链。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
-2. 发现漏洞立即 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence）。
+2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence）。不要把「发现不安全 API」当成发现漏洞。
 3. 提交前必须 SearchOldVuln，避免重复报已有洞（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；若是新变体须在 source_sink 说明差异。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边 FinishFile 不能作为入口的文件，然后继续挖。仅当本轮注入入口已完整分析后，才 FinishFile 它并 FinishRound。
@@ -35,7 +48,17 @@
 ## PoC 要求
 - poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），不要写死靶场地址。
 - http_request 为完整 HTTP 请求包。
-- 报告中文。
+- PoC 必须证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。
+- report_md 必须为中文，结构对齐 `templates/vuln-report.md`，至少包含：`## 摘要`、`## 漏洞描述`、`## 漏洞危害`、`## 漏洞厂商全称`、`## 已知受影响产品及版本`、`## 互联网资产证明`、`## 漏洞技术细节`、`## 复现证明`、`## 修复方案`、`## 备注`。
+- `## 互联网资产证明` 须分别给出 FOFA 与 X 情报社区（微步在线 X 情报中心资产测绘）的可复制搜索语句；测绘语句不允许出现「或」关系。
+- 「基础环境搭建」只引用 `docs/lab.md`，不要复述镜像、端口、凭据或启动命令；文档尚不存在时写「动态环境尚未落盘，见 `docs/lab.md`」。
+- 漏洞描述采用两段式：第一段概述厂商/单位与产品系统，第二段概述漏洞成因与后果。SQL 注入须在危害中说明是否能获取 OS-Shell。
+
+## 互联网资产证明规则
+- 指纹定位的是“应用/组件资产”，不是漏洞入口本身；优先使用应用标题、登录页/版权/静态资源路径、响应头、favicon hash、证书主题、备案主体、产品名等稳定特征。
+- FOFA 写法：`field="value"`，逻辑连接只允许 `&&` 与括号，禁止 `||` 或任何「或」关系；常用字段包括 `title`、`body`、`header`、`icon_hash`、`fid`、`app`、`product`、`server`、`domain`、`host`、`port`、`protocol`、`status_code`、`cert`、`icp`。
+- X 情报社区写法：面向资产测绘，使用 `field="value"`；同样禁止「或」关系；常用字段包括 `ip`、`domain`、`app`、`title`、`body`、`cert.subject`、`port`、`protocol`、`icp_name`、`cert.hash`、`dom_hash`、`html_hash`、`icon_hash`、`dns`、`plugins`。
+- 不要把漏洞路径、PoC 参数、随机 token、用户名、租户数据、时间戳或一次性错误信息作为唯一指纹；没有实际 favicon/hash 时不要编造 hash，写明待运行环境确认。
 
 ## 打回修复（Fix）
 若本线程是 Fix：只修改被打回的漏洞报告，完成后 FinishFix，不要认领新文件。

@@ -917,6 +917,7 @@ def register_common_tools() -> None:
             description=(
                 "在项目工作区执行 shell（沙箱限制）。禁止 ls -R、find、tree、Get-ChildItem -Recurse "
                 "等递归全库列举；Where-Object/-Exclude 不会跳过 node_modules/target。目录请用 Glob 或只列一层。"
+                "timeout 单位是秒，默认 120，最多 180；curl/docker/网络请求必须加自身超时参数。"
             ),
             parameters={
                 "type": "object",
@@ -936,6 +937,7 @@ def register_common_tools() -> None:
                 "在项目工作区执行 PowerShell（沙箱限制）。禁止 Get-ChildItem -Recurse/-Depth、ls -R、find、tree "
                 "等递归全库列举；Where-Object/-Exclude 不会跳过 node_modules/target。目录请用 Glob 或只列一层。"
                 "不要使用 bash heredoc（<< EOF）；多行脚本用 here-string @'...'@ 或先 Write 到 workspace 再执行。"
+                "timeout 单位是秒，默认 120，最多 180；curl/docker/网络请求必须加自身超时参数。"
             ),
             parameters={
                 "type": "object",
@@ -975,7 +977,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索（历史漏洞 / 组件情报）。每确认一条历史漏洞立刻 WriteOldVuln，不要攒到侦察结束",
+            description="网络搜索（历史漏洞 / 组件情报）。每确认一条历史漏洞立刻 WriteOldVuln；落盘不会结束历史漏洞会话",
             parameters={
                 "type": "object",
                 "properties": {

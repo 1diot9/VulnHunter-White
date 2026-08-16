@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from app.services.lab import find_free_port, lab_doc_path, remap_ports_if_needed, write_lab_doc_if_ready
-from app.services.phase_reports import reports_by_phase
+import json
+import subprocess
 
-
-def _reviewer_report_ids(project_id: int) -> set[str]:
-    phase_reports = reports_by_phase(project_id)
-    reviewer = next(p for p in phase_reports["phases"] if p["phase"] == "reviewer")
-    return {item["id"] for item in reviewer["reports"]}
+from app.services.lab import find_free_port, lab_doc_path, load_env, recreate_lab, remap_ports_if_needed, save_env
 
 
 def test_find_free_port():
@@ -40,28 +36,151 @@ def test_remap_when_busy(monkeypatch):
     assert str(out["host_port"]) in out["target_url"]
 
 
+def _inspect_json(project_id: int, *, running: bool, host_port: int) -> str:
+    return json.dumps(
+        [
+            {
+                "Id": "abc123",
+                "Name": f"/vulnhunter-{project_id}",
+                "Config": {"Image": "demo:old"},
+                "State": {"Running": running, "Status": "running" if running else "exited"},
+                "NetworkSettings": {
+                    "Ports": {
+                        "8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}],
+                        "5005/tcp": [{"HostIp": "127.0.0.1", "HostPort": "15005"}],
+                    }
+                },
+            }
+        ]
+    )
 
-def test_write_lab_doc_if_ready_generates_visible_report(project):
-    env = {
-        "accepted": True,
-        "runtime": "java",
-        "image": "demo:latest",
-        "container_name": f"vulnhunter-{project}",
-        "container_port": 8080,
-        "host_port": 18080,
-        "jdwp_container_port": 5005,
-        "jdwp_host_port": 15005,
-        "target_url": "http://127.0.0.1:18080",
-        "lab_state": "ready",
-        "credentials": {"username": "admin", "password": "admin123"},
-        "status": "running",
-        "notes": "seeded test data",
-    }
 
-    path = write_lab_doc_if_ready(project, env, via="manual")
+def _completed(command, returncode: int = 0, stdout: str = "", stderr: str = ""):  # noqa: ANN001
+    return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr=stderr)
 
-    assert path == lab_doc_path(project)
-    doc = path.read_text(encoding="utf-8")
+
+def test_recreate_lab_reuses_running_container_without_remapping(project, monkeypatch):
+    from app.services import lab
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": "demo:old",
+            "container_name": f"vulnhunter-{project}",
+            "container_port": 8080,
+            "host_port": 9999,
+            "jdwp_container_port": 5005,
+            "target_url": "http://127.0.0.1:9999/login",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    monkeypatch.setattr(lab, "find_free_port", lambda *_, **__: (_ for _ in ()).throw(AssertionError("should reuse")))
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(command)
+        if command[:2] == ["docker", "inspect"]:
+            return _completed(command, stdout=_inspect_json(project, running=True, host_port=18080))
+        if command[:2] == ["docker", "start"]:
+            raise AssertionError("running container should not be started")
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = recreate_lab(project)
+
+    saved = load_env(project)
+    assert result["ok"] is True
+    assert result["via"] == "reuse"
+    assert saved["status"] == "running"
+    assert saved["host_port"] == 18080
+    assert saved["jdwp_host_port"] == 15005
+    assert saved["target_url"] == "http://127.0.0.1:18080/login"
+    assert not any(call[:2] == ["docker", "start"] for call in calls)
+    doc = lab_doc_path(project).read_text(encoding="utf-8")
     assert "# 动态环境搭建" in doc
-    assert "http://127.0.0.1:18080" in doc
-    assert "docs/lab.md" in _reviewer_report_ids(project)
+    assert "http://127.0.0.1:18080/login" in doc
+    assert "docker start vulnhunter-" in doc
+
+
+def test_recreate_lab_starts_stopped_container_and_refreshes_ports(project, monkeypatch):
+    from app.services import lab
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": "demo:old",
+            "container_name": f"vulnhunter-{project}",
+            "container_port": 8080,
+            "host_port": 18080,
+            "jdwp_container_port": 5005,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    running = {"value": False}
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(command)
+        if command[:2] == ["docker", "inspect"]:
+            return _completed(command, stdout=_inspect_json(project, running=running["value"], host_port=18123))
+        if command[:2] == ["docker", "start"]:
+            running["value"] = True
+            return _completed(command, stdout=f"vulnhunter-{project}\n")
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = recreate_lab(project)
+
+    saved = load_env(project)
+    assert result["ok"] is True
+    assert result["via"] == "start"
+    assert saved["status"] == "running"
+    assert saved["host_port"] == 18123
+    assert saved["target_url"] == "http://127.0.0.1:18123"
+    assert any(call[:2] == ["docker", "start"] for call in calls)
+    assert lab_doc_path(project).is_file()
+
+
+def test_recreate_lab_reports_start_failure_for_existing_container(project, monkeypatch):
+    from app.services import lab
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": "demo:old",
+            "container_name": f"vulnhunter-{project}",
+            "container_port": 8080,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        if command[:2] == ["docker", "inspect"]:
+            return _completed(command, stdout=_inspect_json(project, running=False, host_port=18080))
+        if command[:2] == ["docker", "start"]:
+            return _completed(command, returncode=1, stderr="port is already allocated")
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = recreate_lab(project)
+
+    saved = load_env(project)
+    assert result["ok"] is False
+    assert "port is already allocated" in result["error"]
+    assert saved["status"] == "exited"
+    assert not lab_doc_path(project).exists()

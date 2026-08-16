@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -21,6 +23,9 @@ ToolHandler = Callable[["ToolContext", dict[str, Any]], dict[str, Any]]
 PARALLEL_SAFE = frozenset({"Read", "Grep", "Glob", "SearchOldVuln", "WebSearch"})
 
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
+_SHELL_DISPATCH_TIMEOUT_DEFAULT = 120
+_SHELL_DISPATCH_TIMEOUT_MAX = 180
+_SHELL_DISPATCH_TIMEOUT_GRACE = 10
 
 
 def native_shell_tool() -> str:
@@ -160,6 +165,60 @@ class ToolRegistry:
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
 
+    def _shell_dispatch_timeout(self, arguments: dict[str, Any]) -> int:
+        try:
+            requested = int(arguments.get("timeout") or _SHELL_DISPATCH_TIMEOUT_DEFAULT)
+        except (TypeError, ValueError):
+            requested = _SHELL_DISPATCH_TIMEOUT_DEFAULT
+        return max(1, min(requested, _SHELL_DISPATCH_TIMEOUT_MAX)) + _SHELL_DISPATCH_TIMEOUT_GRACE
+
+    def _dispatch_shell_with_hard_timeout(
+        self,
+        spec: ToolSpec,
+        ctx: ToolContext,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep AgentLoop moving even if a shell child process defeats the shell runner."""
+        timeout = self._shell_dispatch_timeout(arguments)
+        done: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def _target() -> None:
+            try:
+                done.put(("result", spec.handler(ctx, arguments)), block=False)
+            except Exception as e:  # noqa: BLE001
+                done.put(("error", (e, traceback.format_exc()[-2000:])), block=False)
+
+        t = threading.Thread(
+            target=_target,
+            name=f"vh-tool-{spec.name}-{ctx.project_id}-{ctx.phase_run_id or 'na'}",
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            return {
+                "ok": False,
+                "error": (
+                    f"工具调用硬超时 ({timeout}s)，已返回失败让 Agent 继续；"
+                    "底层 shell 可能仍在系统回收中。请给 curl/docker/网络命令设置自身超时后重试。"
+                ),
+                "error_class": "local",
+                "hard_timeout": True,
+            }
+        try:
+            kind, payload = done.get_nowait()
+        except queue.Empty:
+            return {"ok": False, "error": "工具线程无结果返回", "error_class": "local"}
+        if kind == "error":
+            err, tb = payload
+            return {
+                "ok": False,
+                "error": str(err),
+                "error_class": "local",
+                "traceback": tb,
+            }
+        return payload
+
     def openai_tools_for_role(self, role: str) -> list[dict[str, Any]]:
         allowed = tools_allowed_for_role(role)
         out: list[dict[str, Any]] = []
@@ -218,7 +277,10 @@ class ToolRegistry:
 
         started = time.time()
         try:
-            result = spec.handler(ctx, arguments)
+            if name in SHELL_TOOLS:
+                result = self._dispatch_shell_with_hard_timeout(spec, ctx, arguments)
+            else:
+                result = spec.handler(ctx, arguments)
             if not isinstance(result, dict):
                 result = {"ok": True, "result": result}
             if "ok" not in result:

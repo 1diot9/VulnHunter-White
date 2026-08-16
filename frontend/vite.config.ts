@@ -10,6 +10,51 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (
+            id.includes('react-markdown') ||
+            id.includes('remark-gfm') ||
+            id.includes('remark-') ||
+            id.includes('micromark') ||
+            id.includes('mdast-') ||
+            id.includes('hast-') ||
+            id.includes('unist-') ||
+            id.includes('vfile') ||
+            id.includes('property-information') ||
+            id.includes('space-separated-tokens') ||
+            id.includes('comma-separated-tokens') ||
+            id.includes('devlop') ||
+            id.includes('decode-named-character-reference') ||
+            id.includes('character-entities') ||
+            id.includes('trim-lines') ||
+            id.includes('ccount') ||
+            id.includes('longest-streak') ||
+            id.includes('markdown-table') ||
+            id.includes('zwitch') ||
+            id.includes('bail') ||
+            id.includes('trough') ||
+            id.includes('unified') ||
+            id.includes('/mdast') ||
+            id.includes('/hast')
+          ) {
+            return 'markdown'
+          }
+          if (
+            id.includes('/react/') ||
+            id.includes('/react-dom/') ||
+            id.includes('/scheduler/') ||
+            id.includes('react-router')
+          ) {
+            return 'react-vendor'
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

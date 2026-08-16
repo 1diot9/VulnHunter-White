@@ -10,9 +10,10 @@ from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
 from ..vuln_types import (
     REVIEW_FACTOR_LABELS,
-    SEVERITY_LABELS,
     SeverityCalibration,
+    SubmissionTierDecision,
     calibrate_review_severity,
+    normalize_submission_decision,
 )
 from . import ToolSpec, registry
 
@@ -70,23 +71,25 @@ def _review_label_body(
     surface: str,
     account: str | None,
     calibration: SeverityCalibration,
-    previous_severity: str,
+    submission: SubmissionTierDecision,
 ) -> str:
     lines = [f"- 攻击面：{_SURFACE_LABELS[surface]}"]
     if surface == "backend" and account:
         lines.append(f"- 所需账号：{_ACCOUNT_LABELS[account]}")
-    previous_label = SEVERITY_LABELS.get(previous_severity, previous_severity)
     lines.extend(
         [
             f"- 严重度：{calibration.severity_label}（{calibration.severity}）",
-            f"- 原始类型映射严重度：{previous_label}（{previous_severity}）",
             f"- 校准得分：{calibration.score}",
             f"- 可达性：{REVIEW_FACTOR_LABELS['reachability'][calibration.reachability]}",
             f"- 影响范围：{REVIEW_FACTOR_LABELS['impact'][calibration.impact]}",
             f"- 利用复杂度：{REVIEW_FACTOR_LABELS['exploit_complexity'][calibration.exploit_complexity]}",
             f"- 防护状态：{REVIEW_FACTOR_LABELS['defense_status'][calibration.defense_status]}",
+            f"- 提交分层：{submission.tier_label}（{submission.tier}）",
+            f"- 分层理由：{submission.reason}",
         ]
     )
+    if submission.root_cause_key:
+        lines.append(f"- 根因合并键：{submission.root_cause_key}")
     return "\n".join(lines)
 
 
@@ -128,6 +131,11 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             exploit_complexity=args.get("exploit_complexity"),
             defense_status=args.get("defense_status"),
         )
+        submission = normalize_submission_decision(
+            submission_tier=args.get("submission_tier"),
+            submission_reason=args.get("submission_reason"),
+            root_cause_key=args.get("root_cause_key"),
+        )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     note = args.get("note") or ""
@@ -135,7 +143,6 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
             return {"ok": False, "error": "漏洞不存在"}
-        previous_severity = vuln.severity
         if vuln.intended_behavior and evidence != "static_only":
             # still allow confirm but flag
             pass
@@ -147,12 +154,16 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.attack_surface = surface
         vuln.required_account = account
         vuln.severity = calibration.severity
+        vuln.severity_score = calibration.score
+        vuln.submission_tier = submission.tier
+        vuln.submission_reason = submission.reason
+        vuln.root_cause_key = submission.root_cause_key
         if note:
             vuln.return_reason = None
         upsert_report_section(
             vuln_dir(vuln.project_id, int(vuln_id)) / "report.md",
             _REVIEW_HEADING,
-            _review_label_body(surface, account, calibration, previous_severity),
+            _review_label_body(surface, account, calibration, submission),
         )
         db.commit()
         status = vuln.status
@@ -169,6 +180,10 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "severity": calibration.severity,
         "severity_label": calibration.severity_label,
         "severity_score": calibration.score,
+        "submission_tier": submission.tier,
+        "submission_tier_label": submission.tier_label,
+        "submission_reason": submission.reason,
+        "root_cause_key": submission.root_cause_key,
     }
     if account:
         out["required_account_label"] = _ACCOUNT_LABELS[account]
@@ -214,11 +229,16 @@ def register_reviewer_tools() -> None:
         ToolSpec(
             name="ConfirmVuln",
             description=(
-                "确认漏洞，并按审核证据校准最终严重度。"
+                "确认漏洞，并按审核证据校准最终严重度与提交分层。"
+                "只确认默认/官方部署下攻击者可单独利用、且能打出可观察有害冲击的问题；"
+                "不要把仅 sink 可达、靠 docker exec 种文件/组合独立写原语才成立、"
+                "或项目配置/文档里的默认密码弱口令标成漏洞。"
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp。"
-                "还必须标注 impact、exploit_complexity、defense_status。"
+                "还必须标注 impact、exploit_complexity、defense_status、"
+                "submission_tier、submission_reason；同根因重复时再标 root_cause_key。"
+                "严重度只按利用上下文校准，不沿用漏洞类型。"
             ),
             parameters={
                 "type": "object",
@@ -258,6 +278,26 @@ def register_reviewer_tools() -> None:
                             "conditional=有防护且绕过需额外条件。也可写中文。"
                         ),
                     },
+                    "submission_tier": {
+                        "type": "string",
+                        "description": (
+                            "必填。提交分层（与漏洞是否成立独立）："
+                            "cve_candidate=CVE 候选；advisory_only=仅公告/合并公告；"
+                            "hardening=加固建议；duplicate_grouped=同根因重复；"
+                            "needs_more_evidence=证据不足。也可写中文。"
+                        ),
+                    },
+                    "submission_reason": {
+                        "type": "string",
+                        "description": "必填。说明为何进入该提交分层（可否 CVE、为何降级、如何合并）。",
+                    },
+                    "root_cause_key": {
+                        "type": "string",
+                        "description": (
+                            "可选。同根因合并键，如 idor:SysCommentController。"
+                            "submission_tier=duplicate_grouped 时必填。"
+                        ),
+                    },
                     "note": {"type": "string"},
                 },
                 "required": [
@@ -265,6 +305,8 @@ def register_reviewer_tools() -> None:
                     "impact",
                     "exploit_complexity",
                     "defense_status",
+                    "submission_tier",
+                    "submission_reason",
                 ],
             },
             handler=_confirm_vuln,

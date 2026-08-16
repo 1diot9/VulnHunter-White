@@ -1,4 +1,4 @@
-"""Catalog FinishRound reports, recon docs, and per-phase compression summaries."""
+"""Catalog FinishRound reports, recon docs, and visible phase summaries."""
 
 from __future__ import annotations
 
@@ -43,6 +43,14 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
     ("docs/lab.md", "reviewer", "reviewer", "动态环境搭建"),
 )
+_DOC_BY_REL = {rel: (control, subphase, title) for rel, control, subphase, title in _DOC_SPECS}
+_PREVIEW_CHARS = 8192
+
+
+def _shows_summary_in_phase_reports(control: str) -> bool:
+    # Worker summaries are context-compression checkpoints; the user-facing
+    # mining report is the FinishRound report under workspace/rounds.
+    return control != "worker"
 
 
 def _iso_mtime(path: Path) -> str:
@@ -70,6 +78,11 @@ def _heading_or_preview(text: str) -> tuple[str | None, str]:
     return heading, preview
 
 
+def _read_preview_text(path: Path) -> str:
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        return f.read(_PREVIEW_CHARS)
+
+
 def _item(
     *,
     rel: str,
@@ -81,7 +94,7 @@ def _item(
     title: str,
     content: str | None = None,
 ) -> dict[str, Any]:
-    text = content if content is not None else path.read_text(encoding="utf-8", errors="replace")
+    text = content if content is not None else _read_preview_text(path)
     heading, preview = _heading_or_preview(text)
     out: dict[str, Any] = {
         "id": rel.replace("\\", "/"),
@@ -122,6 +135,60 @@ def _resolve(project_id: int, rel: str) -> Path:
     except ValueError as e:
         raise ValueError("路径越界") from e
     return target
+
+
+def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> dict[str, Any]:
+    rel = _safe_rel(rel)
+    path = _resolve(project_id, rel)
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise FileNotFoundError(rel)
+    if rel in _DOC_BY_REL:
+        control, subphase, title = _DOC_BY_REL[rel]
+        return _item(
+            rel=rel,
+            path=path,
+            control=control,
+            subphase=subphase,
+            kind="doc",
+            round_no=None,
+            title=title,
+            content=content,
+        )
+    if rel.startswith("workspace/rounds/"):
+        m = _ROUND_NAME.match(path.name)
+        if not m:
+            raise FileNotFoundError(rel)
+        n = int(m.group("n"))
+        return _item(
+            rel=rel,
+            path=path,
+            control="worker",
+            subphase="mine",
+            kind="round",
+            round_no=n,
+            title=f"第 {n} 轮审计",
+            content=content,
+        )
+    if rel.startswith("docs/summaries/"):
+        m = _SUMMARY_NAME.match(path.name)
+        if not m:
+            raise FileNotFoundError(rel)
+        phase = m.group("phase")
+        kind_raw = m.group("kind")
+        n = int(m.group("n"))
+        kind = "rescue" if kind_raw == "rescue" else "summary"
+        control, _, subphase = _PHASE_META[phase]
+        return _item(
+            rel=rel,
+            path=path,
+            control=control,
+            subphase=subphase,
+            kind=kind,
+            round_no=n,
+            title=_summary_title(phase, kind_raw, n),
+            content=content,
+        )
+    raise FileNotFoundError(rel)
 
 
 def _summary_title(phase: str, kind: str | None, n: int) -> str:
@@ -182,6 +249,8 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
             n = int(m.group("n"))
             kind = "rescue" if kind_raw == "rescue" else "summary"
             control, _, subphase = _PHASE_META[phase]
+            if not _shows_summary_in_phase_reports(control):
+                continue
             items.append(
                 _item(
                     rel=f"docs/summaries/{path.name}",
@@ -217,12 +286,9 @@ def reports_by_phase(project_id: int) -> dict[str, Any]:
 
 def read_phase_report(project_id: int, rel: str) -> dict[str, Any]:
     rel = _safe_rel(rel)
-    known = {item["id"]: item for item in list_phase_reports(project_id)}
-    meta = known.get(rel)
-    if not meta:
-        raise FileNotFoundError(rel)
     path = _resolve(project_id, rel)
     if not path.is_file():
         raise FileNotFoundError(rel)
+    meta = _item_for_rel(project_id, rel)
     text = path.read_text(encoding="utf-8", errors="replace")
     return {**meta, "content": text}

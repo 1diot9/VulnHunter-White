@@ -29,6 +29,7 @@ type FlowState = {
   filesAudited?: number
   filesSkipped?: number
   filesTotal?: number
+  workerRounds?: number
   vulnPending?: number
   reconSubphases?: ReconSubphaseView[]
 }
@@ -78,6 +79,7 @@ export default function PhaseFlow({
   filesAudited,
   filesSkipped,
   filesTotal,
+  workerRounds,
   vulnPending,
   reconSubphases,
   onSelect,
@@ -89,6 +91,7 @@ export default function PhaseFlow({
     filesAudited,
     filesSkipped,
     filesTotal,
+    workerRounds,
     vulnPending,
     reconSubphases,
   }
@@ -105,7 +108,10 @@ export default function PhaseFlow({
               onClick={() => onSelect?.(p.id)}
               className="h-auto rounded-md p-0"
             >
-              <Badge variant={badgeVariant(phaseTone(p.id, state))}>{p.label}</Badge>
+              <Badge variant={badgeVariant(phaseTone(p.id, state))}>
+                {p.label}
+                {p.id === 'worker' && workerRounds != null ? ` ${workerRounds} 轮` : ''}
+              </Badge>
             </Button>
             {p.id === 'recon' && subs.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1">

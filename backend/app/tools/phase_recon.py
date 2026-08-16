@@ -23,8 +23,29 @@ def recon_map_ready(project_id: int) -> bool:
     return _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
 
 
+def _truthy_meta(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    return str(val).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _old_vuln_index_path(project_id: int) -> Path:
+    return old_vulns_dir(project_id) / "index.md"
+
+
+def _old_vuln_search_complete(index_path: Path) -> bool:
+    if not _doc_nonempty(index_path):
+        return False
+    text = index_path.read_text(encoding="utf-8", errors="ignore")
+    meta, _ = _parse_frontmatter(text)
+    return _truthy_meta(meta.get("complete"))
+
+
 def recon_old_vulns_ready(project_id: int) -> bool:
-    return _doc_nonempty(old_vulns_dir(project_id) / "index.md")
+    """True only after the agent declares search complete — not after the first WriteOldVuln."""
+    return _old_vuln_search_complete(_old_vuln_index_path(project_id))
 
 
 def recon_gates_status(project_id: int) -> dict[str, Any]:
@@ -38,7 +59,10 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
         )
         if not _doc_nonempty(path)
     ]
-    old_missing = [] if recon_old_vulns_ready(project_id) else ["old-vulns/index.md"]
+    old_index = _old_vuln_index_path(project_id)
+    old_index_ready = _doc_nonempty(old_index)
+    old_done = recon_old_vulns_ready(project_id)
+    old_missing = [] if old_index_ready else ["old-vulns/index.md"]
     missing = map_missing + old_missing
     with SessionLocal() as db:
         unmarked = (
@@ -57,11 +81,16 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
         errors.append(f"缺少代码地图/鉴权文档: {', '.join(map_missing)}")
     if old_missing:
         errors.append("缺少历史漏洞索引 old-vulns/index.md；请用 WriteOldVuln 逐条落盘，不要用 Write 攒到最后")
+    elif not old_done:
+        errors.append(
+            "历史漏洞检索尚未结束；逐条 WriteOldVuln 只落盘、不会结束本会话，"
+            "检索全部结束后再 WriteOldVuln(done=true)"
+        )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
     subphases = [
         {"id": "map", "label": "代码地图/鉴权", "done": not map_missing},
-        {"id": "old_vulns", "label": "历史漏洞", "done": not old_missing},
+        {"id": "old_vulns", "label": "历史漏洞", "done": old_done},
         {"id": "mark", "label": "文件盖章", "done": mark_done},
     ]
     return {
@@ -84,8 +113,17 @@ def recon_docs_ready(project_id: int) -> bool:
     return recon_map_ready(project_id) and recon_old_vulns_ready(project_id)
 
 
-def recon_subphases(project_id: int) -> list[dict[str, Any]]:
-    return list(recon_gates_status(project_id).get("subphases") or [])
+def recon_subphases(project_id: int, unmarked: int | None = None) -> list[dict[str, Any]]:
+    if unmarked is None:
+        return list(recon_gates_status(project_id).get("subphases") or [])
+    docs = docs_dir(project_id)
+    map_done = _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
+    old_done = recon_old_vulns_ready(project_id)
+    return [
+        {"id": "map", "label": "代码地图/鉴权", "done": map_done},
+        {"id": "old_vulns", "label": "历史漏洞", "done": old_done},
+        {"id": "mark", "label": "文件盖章", "done": unmarked == 0},
+    ]
 
 
 def normalize_weight_path(path: str) -> str:
@@ -266,7 +304,11 @@ def _mark_skip(ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 
 _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
-_WRITE_NOW_HINT = "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
+_WRITE_NOW_HINT = (
+    "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
+    "落盘不会结束本会话；检索全部结束后再 WriteOldVuln(done=true)。"
+)
+_SEARCH_DONE_HINT = "检索已声明结束，系统将结束本会话。"
 
 
 def _slug_filename(title: str, cve: str = "") -> str:
@@ -306,7 +348,7 @@ def _find_existing_old_vuln(old_dir: Path, *, title: str, cve: str, filename: st
     return None
 
 
-def _rebuild_old_vuln_index(old_dir: Path) -> int:
+def _rebuild_old_vuln_index(old_dir: Path, *, complete: bool = False) -> int:
     rows: list[str] = []
     for fp in _iter_old_vuln_files(old_dir):
         text = fp.read_text(encoding="utf-8", errors="ignore")
@@ -321,6 +363,7 @@ def _rebuild_old_vuln_index(old_dir: Path) -> int:
         "---\n"
         "title: 历史漏洞索引\n"
         "summary: 本项目已知历史漏洞列表\n"
+        f"complete: {'true' if complete else 'false'}\n"
         "---\n\n"
         "# 历史漏洞索引\n\n"
         "| 标题 | 摘要 | 文件 |\n"
@@ -332,34 +375,47 @@ def _rebuild_old_vuln_index(old_dir: Path) -> int:
     return count
 
 
+def _conclude_old_vuln_search(old_dir: Path, *, no_findings: bool, note: str) -> dict[str, Any]:
+    count = _rebuild_old_vuln_index(old_dir, complete=True)
+    if no_findings and count == 0:
+        extra = f"\n\n检索说明：{note}\n" if note else "\n\n经 WebSearch / SearchGHSA 检索，未发现需单独建档的公开历史漏洞。\n"
+        index = old_dir / "index.md"
+        index.write_text(index.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    return {
+        "ok": True,
+        "no_findings": no_findings,
+        "done": True,
+        "indexed": count,
+        "path": "docs/old-vulns/index.md",
+        "hint": _SEARCH_DONE_HINT,
+    }
+
+
 def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     no_findings = bool(args.get("no_findings"))
+    done = bool(args.get("done") or args.get("complete") or args.get("search_done"))
+    conclude = no_findings or done
+    title = str(args.get("title") or "").strip()
     old_dir = old_vulns_dir(ctx.project_id)
     old_dir.mkdir(parents=True, exist_ok=True)
 
-    if no_findings:
-        count = _rebuild_old_vuln_index(old_dir)
-        note = str(args.get("note") or "").strip()
-        if count == 0:
-            extra = f"\n\n检索说明：{note}\n" if note else "\n\n经 WebSearch / SearchGHSA 检索，未发现需单独建档的公开历史漏洞。\n"
-            index = old_dir / "index.md"
-            index.write_text(index.read_text(encoding="utf-8") + extra, encoding="utf-8")
-        return {
-            "ok": True,
-            "no_findings": True,
-            "indexed": count,
-            "path": "docs/old-vulns/index.md",
-            "hint": _WRITE_NOW_HINT if count else "已写入空索引。可继续 MarkSource/MarkWeight，门闩满足后系统会自动结束侦察。",
-        }
+    if conclude and (no_findings or not title):
+        return _conclude_old_vuln_search(
+            old_dir,
+            no_findings=no_findings,
+            note=str(args.get("note") or "").strip(),
+        )
 
-    title = str(args.get("title") or "").strip()
     summary = str(args.get("summary") or "").strip()
     content = args.get("content")
     if content is None:
         content = args.get("body") or args.get("markdown") or ""
     content = str(content)
     if not title:
-        return {"ok": False, "error": "缺少 title。每确认一条历史漏洞立刻调用，不要攒着。"}
+        return {
+            "ok": False,
+            "error": "缺少 title。每确认一条历史漏洞立刻调用，不要攒着。检索全部结束后再 WriteOldVuln(done=true)。",
+        }
     if not summary:
         return {"ok": False, "error": "缺少 summary"}
     if not content.strip():
@@ -404,7 +460,7 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     front = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     text = f"---\n{front}\n---\n\n{body.strip()}\n"
     target.write_text(text, encoding="utf-8")
-    indexed = _rebuild_old_vuln_index(old_dir)
+    indexed = _rebuild_old_vuln_index(old_dir, complete=conclude)
     rel = f"docs/old-vulns/{target.name}"
     return {
         "ok": True,
@@ -412,7 +468,8 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "created": created,
         "indexed": indexed,
-        "hint": _WRITE_NOW_HINT,
+        "done": conclude,
+        "hint": _SEARCH_DONE_HINT if conclude else _WRITE_NOW_HINT,
     }
 
 
@@ -479,7 +536,7 @@ def register_recon_tools() -> None:
             description=(
                 "立即写入一条历史漏洞到 docs/old-vulns/ 并自动更新 index.md。"
                 "每用 WebSearch/SearchGHSA 查到一条就调用；禁止调查完再一次性写入，否则上下文压缩会丢失内容。"
-                "确认无公开历史漏洞时设 no_findings=true。"
+                "逐条落盘不会结束本会话。检索全部结束后设 done=true；确认无公开历史漏洞时设 no_findings=true。"
             ),
             parameters={
                 "type": "object",
@@ -494,9 +551,13 @@ def register_recon_tools() -> None:
                     "component": {"type": "string"},
                     "affected_version": {"type": "string"},
                     "filename": {"type": "string", "description": "可选文件名，默认由 CVE/标题生成"},
+                    "done": {
+                        "type": "boolean",
+                        "description": "检索已全部完成时为 true，声明本会话结束；逐条落盘时不要设",
+                    },
                     "no_findings": {
                         "type": "boolean",
-                        "description": "已检索且无公开历史漏洞时为 true，仅写空索引",
+                        "description": "已检索且无公开历史漏洞时为 true，写空索引并结束本会话",
                     },
                     "note": {"type": "string", "description": "no_findings 时的检索说明"},
                 },

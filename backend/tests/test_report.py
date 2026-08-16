@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.services.report import format_produced_at, stamp_produced_at, write_report_md
+from app.services.report import (
+    ensure_search_fingerprint_section,
+    format_produced_at,
+    stamp_produced_at,
+    write_report_md,
+)
 from app.services.paths import vuln_dir
 from app.tools import ToolContext, registry
 
@@ -58,6 +63,40 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
     report = (vuln_dir(project, out["vuln_id"]) / "report.md").read_text(encoding="utf-8")
     assert report.startswith("# custom report\n\n**产出时间**：")
     assert "## 漏洞描述" in report
+    assert "## 互联网资产证明" in report
+
+
+def test_submit_vuln_writes_search_fingerprints(tmp_env, project):
+    payload = {
+        "title": "fingerprint report",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "a->b",
+        "auth_premise": "未授权",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "ok",
+        "fofa_fingerprint": 'title="Demo App" && body="/static/demo.css"',
+        "x_fingerprint": 'app="Demo App" && title="Demo App"',
+        "fingerprint_basis": "- 标题：Demo App\n- 静态资源：/static/demo.css",
+    }
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        payload,
+    )
+    assert out["ok"] is True
+    report = (vuln_dir(project, out["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert "## 互联网资产证明" in report
+    assert "### 精准测绘语法" in report
+    assert 'title="Demo App" && body="/static/demo.css"' in report
+    assert 'app="Demo App" && title="Demo App"' in report
+    assert "### 指纹依据" not in report
+    assert "## 应用搜索指纹" not in report
+    assert report.index("## 互联网资产证明") < report.index("## 漏洞技术细节")
+    assert "docs/lab.md" in report
 
 
 def test_finish_fix_keeps_original_produced_at(tmp_env, project):
@@ -120,3 +159,26 @@ def test_write_report_md_creates_parent(tmp_path):
     write_report_md(path, "# t\n\nbody\n", datetime(2026, 8, 16, 1, 17, 0, tzinfo=timezone.utc))
     text = path.read_text(encoding="utf-8")
     assert "**产出时间**：2026-08-16 09:17:00" in text
+
+
+def test_ensure_search_fingerprint_section_inserts_before_poc():
+    text = "# t\n\n## 预期证据\nok\n\n## PoC\n见 poc.py\n"
+    out = ensure_search_fingerprint_section(text, fofa='title="A"', x='app="A"', basis="- 标题：A")
+    assert out.index("## 互联网资产证明") < out.index("## PoC")
+    assert 'title="A"' in out
+    assert 'app="A"' in out
+    assert "### 指纹依据" not in out
+
+
+def test_ensure_search_fingerprint_section_inserts_before_tech_details():
+    text = "# t\n\n## 已知受影响产品及版本\n暂未明确\n\n## 漏洞技术细节\n-\n"
+    out = ensure_search_fingerprint_section(text, fofa='title="A"', x='app="A"')
+    assert out.index("## 互联网资产证明") < out.index("## 漏洞技术细节")
+    assert "### 精准测绘语法" in out
+
+
+def test_ensure_search_fingerprint_section_keeps_legacy_heading():
+    text = "# t\n\n## 应用搜索指纹\n\n### FOFA\n```text\ntitle=\"A\"\n```\n"
+    out = ensure_search_fingerprint_section(text, fofa='title="B"', x='app="B"')
+    assert out == text
+    assert "## 互联网资产证明" not in out

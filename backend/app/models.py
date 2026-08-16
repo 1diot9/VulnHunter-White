@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    event,
     inspect,
     text,
 )
@@ -113,6 +114,8 @@ class Vuln(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     vuln_type: Mapped[str] = mapped_column(String(64), default="other")
     severity: Mapped[str] = mapped_column(String(32), default="low")
+    severity_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Reviewer 校准得分，pending_review 阶段可为空
     cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -130,6 +133,11 @@ class Vuln(Base):
     # frontend | backend — Reviewer 确认时标注
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # user | admin — 仅后台漏洞需要
+    submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # cve_candidate | advisory_only | hardening | duplicate_grouped | needs_more_evidence
+    submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
     review_rounds: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -207,12 +215,28 @@ REQUIRED_TABLES = (
     "token_usages",
 )
 
+SQLITE_BUSY_TIMEOUT_MS = 30000
+
 # Windows: use forward slashes so sqlite3 does not mis-parse drive paths.
 engine = create_engine(
     f"sqlite:///{DB_PATH.resolve().as_posix()}",
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+        "timeout": SQLITE_BUSY_TIMEOUT_MS / 1000,
+    },
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
 
 
 def _ensure_columns() -> None:
@@ -229,6 +253,10 @@ def _ensure_columns() -> None:
         "vulns": {
             "attack_surface": "VARCHAR(32)",
             "required_account": "VARCHAR(32)",
+            "severity_score": "INTEGER",
+            "submission_tier": "VARCHAR(64)",
+            "submission_reason": "TEXT",
+            "root_cause_key": "VARCHAR(256)",
         },
     }
     with engine.begin() as conn:

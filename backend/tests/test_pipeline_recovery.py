@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import timedelta
+
+from sqlalchemy.exc import OperationalError
 
 from app.agent.compression import inject_summary_block, latest_summary, write_summary
 from app.config import settings
@@ -25,7 +28,10 @@ def _mark_all_weighted(project: int) -> None:
     (docs / "auth.md").write_text("# auth\n", encoding="utf-8")
     old = old_vulns_dir(project)
     old.mkdir(parents=True, exist_ok=True)
-    (old / "index.md").write_text("# index\n", encoding="utf-8")
+    (old / "index.md").write_text(
+        "---\ntitle: 历史漏洞索引\nsummary: test\ncomplete: true\n---\n\n# index\n",
+        encoding="utf-8",
+    )
 
 
 def test_release_claim_allows_repick(tmp_env, project):
@@ -222,6 +228,45 @@ def test_maybe_complete_project(tmp_env, project):
         proj = db.get(models.Project, project)
         assert proj.status == "completed"
         assert proj.phase == "done"
+
+
+def test_reviewer_loop_retries_sqlite_locked_project_check(tmp_env, project, monkeypatch):
+    errors: list[str] = []
+
+    class FakeCancel:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.stopped = True
+            return True
+
+    class LockedSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, model, project_id):
+            raise OperationalError(
+                "SELECT projects.id FROM projects WHERE projects.id = ?",
+                (project_id,),
+                sqlite3.OperationalError("database is locked"),
+            )
+
+    cancel = FakeCancel()
+    monkeypatch.setattr(pipeline, "_cancel_event", lambda pid: cancel)
+    monkeypatch.setattr(pipeline, "_loop_cancel", lambda pid, phase: cancel)
+    monkeypatch.setattr(pipeline, "SessionLocal", lambda: LockedSession())
+    monkeypatch.setattr(pipeline.live_log, "error", lambda pid, text, **kwargs: errors.append(text))
+
+    pipeline._run_reviewer_loop(project)
+
+    assert errors == []
 
 
 def test_finish_round_then_summary_injection(tmp_env, project):

@@ -6,8 +6,8 @@ from typing import Any
 
 from ..models import FileWeight, Project, SessionLocal, Vuln
 from ..services.paths import vuln_dir
-from ..services.report import write_report_md
-from ..vuln_types import normalize_vuln_type, severity_for_type
+from ..services.report import ensure_search_fingerprint_section, write_report_md
+from ..vuln_types import PENDING_SEVERITY, normalize_vuln_type
 from . import ToolSpec, registry
 
 
@@ -112,7 +112,6 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
     vtype = normalize_vuln_type(str(args.get("vuln_type")))
-    severity = severity_for_type(vtype)
     intended = bool(args.get("intended_behavior") or False)
     try:
         line_no = int(args.get("line_no"))
@@ -124,7 +123,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             project_id=ctx.project_id,
             title=str(args["title"]).strip(),
             vuln_type=vtype,
-            severity=severity,
+            severity=PENDING_SEVERITY,
             cwe=str(args["cwe"]).strip(),
             file_path=str(args["file_path"]).replace("\\", "/"),
             line_no=line_no,
@@ -142,7 +141,13 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln_id = vuln.id
         # write artifacts
         vdir = vuln_dir(ctx.project_id, vuln_id)
-        report = args.get("report_md") or _default_report(args, vtype, severity)
+        report = args.get("report_md") or _default_report(args, vtype)
+        report = ensure_search_fingerprint_section(
+            str(report),
+            fofa=args.get("fofa_fingerprint"),
+            x=args.get("x_fingerprint"),
+            basis=args.get("fingerprint_basis"),
+        )
         write_report_md(vdir / "report.md", report, vuln.created_at)
         (vdir / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         (vdir / "poc.py").write_text(str(args["poc_code"]), encoding="utf-8")
@@ -160,7 +165,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _default_report(args: dict[str, Any], vtype: str, severity: str) -> str:
+def _default_report(args: dict[str, Any], vtype: str) -> str:
     return f"""---
 title: {args.get('title')}
 summary: {args.get('source_sink', '')[:200]}
@@ -169,27 +174,61 @@ summary: {args.get('source_sink', '')[:200]}
 # {args.get('title')}
 
 ## 摘要
-- 类型：{vtype}
-- 严重度：{severity}
+- 漏洞技术类型：{vtype}
+- 严重度：待 Reviewer 按利用上下文校准（不按类型映射）
 - CWE：{args.get('cwe')}
 - 位置：{args.get('file_path')}:{args.get('line_no')}
 
-## Source → Sink
+## 漏洞描述
+第一段：待根据厂商与产品资料补全系统介绍。
+
+第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，数据流为 {args.get('source_sink')}。
+
+## 漏洞危害
+- 已证明危害：{args.get('expected_evidence')}
+- 潜在危害：待根据漏洞类型补全。
+- SQL 注入须明确：是否能获取 OS-Shell：未验证
+
+## 漏洞厂商全称
+暂未明确
+
+## 已知受影响产品及版本
+暂未明确
+
+## 漏洞技术细节
+
+### Source → Sink
 {args.get('source_sink')}
 
-## 鉴权前提
-{args.get('auth_premise')}
+### 完整 PoC 描述
+可运行脚本见同目录 `poc.py`。
 
-## HTTP 请求包
 ```http
 {args.get('http_request')}
 ```
 
-## 预期证据
+### 触发条件
+{args.get('auth_premise')}
+
+## 复现证明
+
+### 基础环境搭建
+详见项目文档 `docs/lab.md`。
+
+### 漏洞触发操作
+-
+
+### 预期证据
 {args.get('expected_evidence')}
 
-## PoC
-见同目录 `poc.py`。
+### 复现注意事项
+-
+
+## 修复方案
+-
+
+## 备注
+无
 """
 
 
@@ -285,7 +324,13 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
             vuln.file_path = str(args["file_path"])
         if report_md:
             vdir = vuln_dir(ctx.project_id, vuln.id)
-            write_report_md(vdir / "report.md", str(report_md), vuln.created_at)
+            report = ensure_search_fingerprint_section(
+                str(report_md),
+                fofa=args.get("fofa_fingerprint"),
+                x=args.get("x_fingerprint"),
+                basis=args.get("fingerprint_basis"),
+            )
+            write_report_md(vdir / "report.md", report, vuln.created_at)
         if args.get("http_request"):
             (vuln_dir(ctx.project_id, vuln.id) / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         if args.get("poc_code"):
@@ -302,7 +347,13 @@ def register_worker_tools() -> None:
     registry.register(
         ToolSpec(
             name="SubmitVuln",
-            description="提交待审核漏洞（必填字段齐全才入库）",
+            description=(
+                "提交待审核漏洞（必填字段齐全才入库）。"
+                "仅当默认/官方部署下，攻击者只凭自身权限与 HTTP 输入就能打出可观察有害冲击时才提交；"
+                "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
+                "或只是配置/文档/compose 里的默认密码弱口令的不要提交。"
+                "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -317,6 +368,9 @@ def register_worker_tools() -> None:
                     "poc_code": {"type": "string"},
                     "expected_evidence": {"type": "string"},
                     "intended_behavior": {"type": "boolean"},
+                    "fofa_fingerprint": {"type": "string"},
+                    "x_fingerprint": {"type": "string"},
+                    "fingerprint_basis": {"type": "string"},
                     "report_md": {"type": "string"},
                 },
                 "required": list(REQUIRED_SUBMIT_FIELDS),
@@ -374,6 +428,9 @@ def register_worker_tools() -> None:
                     "http_request": {"type": "string"},
                     "poc_code": {"type": "string"},
                     "expected_evidence": {"type": "string"},
+                    "fofa_fingerprint": {"type": "string"},
+                    "x_fingerprint": {"type": "string"},
+                    "fingerprint_basis": {"type": "string"},
                     "cwe": {"type": "string"},
                     "file_path": {"type": "string"},
                     "line_no": {"type": "integer"},

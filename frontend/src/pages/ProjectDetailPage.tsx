@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type LogEvent, type Project, type Vuln } from '../api'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import PhaseFlow from '../components/PhaseFlow'
-import PhaseReportsPanel from '../components/PhaseReportsPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { formatAttackSurface, formatDateTime, formatFileProgress, formatTokens } from '../lib/utils'
+import {
+  formatAttackSurface,
+  formatDateTime,
+  formatFileProgress,
+  formatSeverity,
+  formatSeverityScore,
+  formatSubmissionTier,
+  formatTokens,
+  severityScoreBadgeClass,
+} from '../lib/utils'
+import { startVisibilityPoll } from '../lib/visibilityPoll'
+
+const PhaseReportsPanel = lazy(() => import('../components/PhaseReportsPanel'))
 
 const LOG_PAGE = 100
 const PHASE_TABS = [
@@ -115,6 +126,7 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null)
   const [events, setEvents] = useState<LogEvent[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
+  const [vulnsLoading, setVulnsLoading] = useState(false)
   const [tab, setTab] = useState<'logs' | 'reports' | 'vulns'>('logs')
   const [phaseFilter, setPhaseFilter] = useState('recon')
   const [hasOlder, setHasOlder] = useState(false)
@@ -156,6 +168,7 @@ export default function ProjectDetailPage() {
     sessionCountRef.current = 1
     setStreamFrom(null)
     setEvents([])
+    setVulns([])
     setHasOlder(false)
     setRevealLimit(LOG_PAGE)
     setLogSession(null)
@@ -175,19 +188,37 @@ export default function ProjectDetailPage() {
           syncedPhase.current = true
           selectPhase(defaultPhaseTab(p.phase, p.status))
         }
-        const vs = await api.listVulns(projectId)
-        if (alive) setVulns(vs)
       } catch {
         /* ignore transient */
       }
     }
-    refreshMeta()
-    const t = setInterval(refreshMeta, 3000)
+    const stop = startVisibilityPoll(refreshMeta, 3000)
     return () => {
       alive = false
-      clearInterval(t)
+      stop()
     }
   }, [projectId])
+
+  useEffect(() => {
+    if (!projectId || tab !== 'vulns') return
+    let alive = true
+    const refreshVulns = async () => {
+      setVulnsLoading(true)
+      try {
+        const vs = await api.listVulns(projectId)
+        if (alive) setVulns(vs)
+      } catch {
+        /* ignore transient */
+      } finally {
+        if (alive) setVulnsLoading(false)
+      }
+    }
+    const stop = startVisibilityPoll(refreshVulns, 5000)
+    return () => {
+      alive = false
+      stop()
+    }
+  }, [projectId, tab])
 
   useEffect(() => {
     if (!projectId) return
@@ -208,8 +239,8 @@ export default function ProjectDetailPage() {
         setEvents(d.events)
         oldestRef.current = d.oldest
         setHasOlder(d.has_older)
-        fileEndRef.current = Math.max(fileEndRef.current, d.file_end)
-        setStreamFrom((cur) => (cur == null ? d.file_end : cur))
+        fileEndRef.current = d.file_end
+        setStreamFrom(d.file_end)
         const count = d.session_count || 1
         const sess = d.session || 1
         sessionCountRef.current = count
@@ -233,7 +264,10 @@ export default function ProjectDetailPage() {
     const connect = () => {
       source?.close()
       const from = Math.max(fileEndRef.current, streamFrom)
-      source = new EventSource(`/api/projects/${projectId}/stream?from_offset=${from}`)
+      const params = new URLSearchParams({ from_offset: String(from) })
+      if (phaseRef.current) params.set('phase', phaseRef.current)
+      if (logSession != null) params.set('session', String(logSession))
+      source = new EventSource(`/api/projects/${projectId}/stream?${params.toString()}`)
       source.onmessage = (event) => {
         if (!mounted) return
         backoffMs = 800
@@ -244,7 +278,19 @@ export default function ProjectDetailPage() {
           return
         }
         if (data.type === 'status') {
-          api.getProject(projectId).then((p) => mounted && setProject(p)).catch(() => undefined)
+          const nextStatus = typeof data.status === 'string' ? data.status : undefined
+          const nextPhase = typeof data.phase === 'string' ? data.phase : undefined
+          if (nextStatus || nextPhase) {
+            setProject((cur) =>
+              cur
+                ? {
+                    ...cur,
+                    status: nextStatus ?? cur.status,
+                    phase: nextPhase ?? cur.phase,
+                  }
+                : cur,
+            )
+          }
           return
         }
         if (data.type === 'event' || data.kind) {
@@ -311,7 +357,7 @@ export default function ProjectDetailPage() {
       if (reconnectTimer) clearTimeout(reconnectTimer)
       source?.close()
     }
-  }, [projectId, streamFrom])
+  }, [projectId, streamFrom, phaseFilter, logSession])
 
   const loadOlder = () => {
     if (!projectId || loadingOlderRef.current || !hasOlder) return
@@ -362,6 +408,7 @@ export default function ProjectDetailPage() {
               filesAudited={project.files_audited}
               filesSkipped={project.files_skipped}
               filesTotal={project.files_total}
+              workerRounds={project.worker_rounds}
               vulnPending={project.vuln_pending}
               reconSubphases={project.recon_subphases}
               onSelect={(pid) => {
@@ -406,7 +453,9 @@ export default function ProjectDetailPage() {
       </div>
 
       {tab === 'reports' ? (
-        <PhaseReportsPanel projectId={projectId} initialPhase={controlPhaseOf(phaseFilter)} />
+        <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
+          <PhaseReportsPanel projectId={projectId} initialPhase={controlPhaseOf(phaseFilter)} />
+        </Suspense>
       ) : null}
 
       {tab === 'logs' ? (
@@ -484,6 +533,8 @@ export default function ProjectDetailPage() {
         <Card className="gap-0 divide-y divide-border py-0">
           {vulns.map((v) => {
             const surface = formatAttackSurface(v.attack_surface, v.required_account)
+            const score = formatSeverityScore(v.severity_score)
+            const tier = formatSubmissionTier(v.submission_tier)
             return (
               <Link
                 key={v.id}
@@ -493,26 +544,39 @@ export default function ProjectDetailPage() {
                 <div>
                   <div className="font-medium">{v.title}</div>
                   <div className="text-xs text-slate-400">
-                    {v.vuln_type} · {v.severity}
+                    {v.vuln_type} · {formatSeverity(v.severity)}
+                    {` · ${tier}`}
                     {surface ? ` · ${surface}` : ''} · {v.file_path}:{v.line_no} · {formatDateTime(v.created_at)}
                   </div>
                 </div>
-                <Badge
-                  variant={
-                    v.status === 'confirmed' || v.status === 'static_only'
-                      ? 'success'
-                      : v.status === 'false_positive'
-                        ? 'destructive'
-                        : 'warning'
-                  }
-                >
-                  {v.status}
-                  {v.evidence_level === 'static_only' ? ' · static' : ''}
-                </Badge>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                  <Badge
+                    variant={
+                      v.status === 'confirmed' || v.status === 'static_only'
+                        ? 'success'
+                        : v.status === 'false_positive'
+                          ? 'destructive'
+                          : 'warning'
+                    }
+                  >
+                    {v.status}
+                    {v.evidence_level === 'static_only' ? ' · static' : ''}
+                  </Badge>
+                  {score ? (
+                    <Badge variant="outline" className={severityScoreBadgeClass(v.severity_score)}>
+                      {score}
+                    </Badge>
+                  ) : null}
+                  <Badge variant={v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{tier}</Badge>
+                </div>
               </Link>
             )
           })}
-          {vulns.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无漏洞</div> : null}
+          {vulns.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground">
+              {vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
+            </div>
+          ) : null}
         </Card>
       ) : null}
     </div>

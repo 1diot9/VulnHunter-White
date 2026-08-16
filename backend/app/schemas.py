@@ -104,6 +104,7 @@ class ProjectOut(BaseModel):
     files_weighted: int = 0
     files_skipped: int = 0
     files_audited: int = 0
+    worker_rounds: int = 0
     tokens_input: int = 0
     tokens_output: int = 0
     tokens_cached: int = 0
@@ -122,6 +123,7 @@ class VulnOut(BaseModel):
     title: str
     vuln_type: str
     severity: str
+    severity_score: int | None = None
     cwe: str | None = None
     file_path: str | None = None
     line_no: int | None = None
@@ -129,6 +131,9 @@ class VulnOut(BaseModel):
     evidence_level: str | None = None
     attack_surface: str | None = None
     required_account: str | None = None
+    submission_tier: str | None = None
+    submission_reason: str | None = None
+    root_cause_key: str | None = None
     review_rounds: int = 0
     return_reason: str | None = None
     intended_behavior: bool = False
@@ -146,6 +151,26 @@ class VulnDetail(VulnOut):
     poc_code: str | None = None
     expected_evidence: str | None = None
     report_md: str | None = None
+
+
+class VulnFollowUpIn(BaseModel):
+    question: str = Field(min_length=1, max_length=20000)
+
+
+class VulnFollowUpMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: str
+    reviewer_phase_run_id: int | None = None
+
+
+class VulnFollowUpThread(BaseModel):
+    vuln_id: int
+    project_id: int
+    reviewer_phase_run_id: int | None = None
+    reviewer_context_available: bool = False
+    messages: list[VulnFollowUpMessage] = Field(default_factory=list)
 
 
 class PhaseRunOut(BaseModel):

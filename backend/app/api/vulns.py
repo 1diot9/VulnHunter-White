@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 
 from fastapi import APIRouter, HTTPException
@@ -9,24 +10,48 @@ from pydantic import BaseModel
 from sqlalchemy.orm import joinedload
 
 from ..models import SessionLocal, Vuln
-from ..schemas import VulnDetail, VulnOut
+from ..schemas import VulnDetail, VulnFollowUpIn, VulnFollowUpThread, VulnOut
 from ..services.paths import project_root, vuln_dir
 from ..services.report import stamp_produced_at
+from ..services import vuln_followup
+from ..vuln_types import ALLOWED_SUBMISSION_TIERS
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
+_SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
 
 
 class DownloadBody(BaseModel):
     ids: list[int]
 
 
+def _report_score(v: Vuln) -> int | None:
+    if v.severity_score is not None:
+        return int(v.severity_score)
+    if v.report_path:
+        path = project_root(v.project_id) / v.report_path
+    else:
+        path = vuln_dir(v.project_id, v.id) / "report.md"
+    if not path.exists():
+        return None
+    match = _SCORE_RE.search(path.read_text(encoding="utf-8", errors="ignore"))
+    return int(match.group(1)) if match else None
+
+
 def _vuln_out(v: Vuln) -> VulnOut:
     name = v.project.name if v.project is not None else ""
-    return VulnOut.model_validate(v).model_copy(update={"project_name": name})
+    return VulnOut.model_validate(v).model_copy(
+        update={"project_name": name, "severity_score": _report_score(v)}
+    )
 
 
 @router.get("", response_model=list[VulnOut])
-def list_vulns(project_id: int | None = None, status: str | None = None) -> list[VulnOut]:
+def list_vulns(
+    project_id: int | None = None,
+    status: str | None = None,
+    attack_surface: str | None = None,
+    submission_tier: str | None = None,
+    root_cause_key: str | None = None,
+) -> list[VulnOut]:
     with SessionLocal() as db:
         q = db.query(Vuln).options(joinedload(Vuln.project))
         if project_id is not None:
@@ -36,6 +61,24 @@ def list_vulns(project_id: int | None = None, status: str | None = None) -> list
                 q = q.filter(Vuln.status.in_(("confirmed", "static_only")))
             else:
                 q = q.filter(Vuln.status == status)
+        if attack_surface:
+            if attack_surface not in ("frontend", "backend"):
+                raise HTTPException(400, "attack_surface 须为 frontend|backend")
+            q = q.filter(Vuln.attack_surface == attack_surface)
+        if submission_tier:
+            if submission_tier == "untiered":
+                q = q.filter(Vuln.submission_tier.is_(None))
+            elif submission_tier not in ALLOWED_SUBMISSION_TIERS:
+                raise HTTPException(
+                    400,
+                    "submission_tier 须为 "
+                    + "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
+                    + "|untiered",
+                )
+            else:
+                q = q.filter(Vuln.submission_tier == submission_tier)
+        if root_cause_key:
+            q = q.filter(Vuln.root_cause_key == root_cause_key)
         rows = q.order_by(Vuln.id.desc()).all()
         return [_vuln_out(r) for r in rows]
 
@@ -63,6 +106,28 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             expected_evidence=v.expected_evidence,
             report_md=report_md,
         )
+
+
+@router.get("/{vuln_id}/follow-ups", response_model=VulnFollowUpThread)
+def list_vuln_followups(vuln_id: int) -> VulnFollowUpThread:
+    try:
+        return VulnFollowUpThread.model_validate(vuln_followup.list_followups(vuln_id))
+    except vuln_followup.FollowUpNotFound as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/{vuln_id}/follow-ups", response_model=VulnFollowUpThread)
+def ask_vuln_followup(vuln_id: int, body: VulnFollowUpIn) -> VulnFollowUpThread:
+    try:
+        return VulnFollowUpThread.model_validate(vuln_followup.ask_followup(vuln_id, body.question))
+    except vuln_followup.FollowUpNotFound as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except vuln_followup.ReviewerContextMissing as e:
+        raise HTTPException(409, str(e)) from e
+    except vuln_followup.FollowUpLlmError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 @router.post("/download")

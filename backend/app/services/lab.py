@@ -9,6 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from .paths import docs_dir, env_dir
 
@@ -161,6 +162,109 @@ def remap_ports_if_needed(env: dict[str, Any]) -> dict[str, Any]:
         return env
 
 
+def _docker_run(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", *args],
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _container_candidates(project_id: int, env: dict[str, Any]) -> list[str]:
+    candidates = [env.get("container_id"), env.get("container_name"), f"vulnhunter-{project_id}"]
+    out: list[str] = []
+    for item in candidates:
+        if item and item not in out:
+            out.append(str(item))
+    return out
+
+
+def _inspect_container(candidates: list[str]) -> tuple[str, dict[str, Any]] | None:
+    for candidate in candidates:
+        proc = _docker_run(["inspect", candidate])
+        if proc.returncode != 0:
+            continue
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return candidate, data[0]
+    return None
+
+
+def _status_from_inspect(info: dict[str, Any]) -> str:
+    state = info.get("State") if isinstance(info.get("State"), dict) else {}
+    return str(state.get("Status") or "unknown")
+
+
+def _container_running(info: dict[str, Any]) -> bool:
+    state = info.get("State") if isinstance(info.get("State"), dict) else {}
+    return bool(state.get("Running")) or _status_from_inspect(info) == "running"
+
+
+def _host_port(info: dict[str, Any], container_port: Any) -> int | None:
+    if not container_port:
+        return None
+    ports = ((info.get("NetworkSettings") or {}).get("Ports") or {}) if isinstance(info.get("NetworkSettings"), dict) else {}
+    bindings = ports.get(f"{container_port}/tcp") or ports.get(f"{container_port}/udp")
+    if not bindings:
+        return None
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        port = binding.get("HostPort")
+        if port:
+            try:
+                return int(port)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _target_url_with_port(url: str | None, port: int) -> str:
+    if not url:
+        return f"http://127.0.0.1:{port}"
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return f"http://127.0.0.1:{port}"
+    host = parsed.hostname or "127.0.0.1"
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    netloc = f"{host}:{port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def refresh_env_from_container(env: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    """Trust Docker inspect over stale env.json metadata for an existing lab."""
+    env = dict(env)
+    container_id = info.get("Id")
+    if container_id:
+        env["container_id"] = container_id
+    name = str(info.get("Name") or "").lstrip("/")
+    if name:
+        env["container_name"] = name
+    image = (info.get("Config") or {}).get("Image") if isinstance(info.get("Config"), dict) else None
+    if image:
+        env["image"] = image
+    env["status"] = _status_from_inspect(info)
+
+    for container_key, host_key in (
+        ("container_port", "host_port"),
+        ("jdwp_container_port", "jdwp_host_port"),
+        ("inspect_container_port", "inspect_host_port"),
+        ("debugpy_container_port", "debugpy_host_port"),
+    ):
+        port = _host_port(info, env.get(container_key))
+        if port:
+            env[host_key] = port
+    if env.get("host_port"):
+        env["target_url"] = _target_url_with_port(env.get("target_url"), int(env["host_port"]))
+    return env
+
+
 def recreate_lab(project_id: int) -> dict[str, Any]:
     """Try to bring up lab from env/ compose or recorded container."""
     env = load_env(project_id)
@@ -168,7 +272,6 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
         return {"ok": False, "error": "无 env.json"}
     if not docker_available():
         return {"ok": False, "error": "本机无 docker"}
-    env = remap_ports_if_needed(env)
     ed = env_dir(project_id)
     compose = None
     for name in ("docker-compose.yml", "compose.yml", "docker-compose.yaml"):
@@ -176,16 +279,34 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
             compose = ed / name
             break
     try:
+        inspected = _inspect_container(_container_candidates(project_id, env))
+        if inspected:
+            identifier, info = inspected
+            was_running = _container_running(info)
+            if not was_running:
+                proc = _docker_run(["start", identifier])
+                if proc.returncode != 0:
+                    env = refresh_env_from_container(env, info)
+                    save_env(project_id, env)
+                    return {"ok": False, "error": proc.stderr or proc.stdout or "docker start failed", "env": env}
+                inspected_after_start = _inspect_container(_container_candidates(project_id, env))
+                if inspected_after_start:
+                    _, info = inspected_after_start
+            env = refresh_env_from_container(env, info)
+            save_env(project_id, env)
+            via = "reuse" if was_running else "start"
+            write_lab_doc_if_ready(project_id, env, via=via)
+            return {"ok": True, "env": env, "via": via}
+
+        env = remap_ports_if_needed(env)
         if compose:
-            proc = subprocess.run(
-                ["docker", "compose", "-f", str(compose), "up", "-d"],
-                cwd=str(ed),
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
+            proc = _docker_run(["compose", "-f", str(compose), "up", "-d"], cwd=ed, timeout=600)
             if proc.returncode != 0:
                 return {"ok": False, "error": proc.stderr or proc.stdout, "env": env}
+            inspected = _inspect_container(_container_candidates(project_id, env))
+            if inspected:
+                _, info = inspected
+                env = refresh_env_from_container(env, info)
             env["status"] = "running"
             save_env(project_id, env)
             write_lab_doc_if_ready(project_id, env, via="compose")
@@ -193,7 +314,13 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
         image = env.get("image")
         name = env.get("container_name") or f"vulnhunter-{project_id}"
         if image:
-            subprocess.run(["docker", "start", name], capture_output=True, text=True, timeout=60)
+            proc = _docker_run(["start", name])
+            if proc.returncode != 0:
+                return {"ok": False, "error": proc.stderr or proc.stdout or "docker start failed", "env": env}
+            inspected = _inspect_container([name])
+            if inspected:
+                _, info = inspected
+                env = refresh_env_from_container(env, info)
             env["status"] = "running"
             save_env(project_id, env)
             write_lab_doc_if_ready(project_id, env, via="start")

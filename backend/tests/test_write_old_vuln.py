@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.paths import old_vulns_dir
 from app.tools import ToolContext, registry
+from app.tools.phase_recon import recon_old_vulns_ready
 
 
 def _ctx(project_id: int, role: str = "recon_old_vuln") -> ToolContext:
@@ -23,6 +24,8 @@ def test_write_old_vuln_creates_doc_and_index(tmp_env, project):
     assert out["ok"] is True, out
     assert out["created"] is True
     assert out["indexed"] == 1
+    assert out["done"] is False
+    assert recon_old_vulns_ready(project) is False
     old = old_vulns_dir(project)
     written = old / "CVE-2024-0001.md"
     assert written.exists()
@@ -78,8 +81,11 @@ def test_write_old_vuln_no_findings(tmp_env, project):
     )
     assert out["ok"] is True
     assert out["indexed"] == 0
+    assert out["done"] is True
+    assert recon_old_vulns_ready(project) is True
     index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
     assert "GHSA 无命中" in index
+    assert "complete: true" in index
 
 
 def test_write_old_vuln_acl_recon_old_vuln_only(tmp_env, project):
@@ -108,3 +114,52 @@ def test_write_tool_cannot_write_old_vulns(tmp_env, project):
     assert out["ok"] is False
     assert "WriteOldVuln" in out["error"]
     assert not (old_vulns_dir(project) / "sneak.md").exists()
+
+
+def test_write_old_vuln_done_after_entries(tmp_env, project):
+    registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {"title": "First", "summary": "a", "content": "body-a", "cve": "CVE-1"},
+    )
+    assert recon_old_vulns_ready(project) is False
+    out = registry.dispatch(_ctx(project), "WriteOldVuln", {"done": True})
+    assert out["ok"] is True
+    assert out["done"] is True
+    assert out["indexed"] == 1
+    assert recon_old_vulns_ready(project) is True
+    index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "First" in index
+    assert "complete: true" in index
+
+
+def test_write_old_vuln_last_entry_can_declare_done(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {
+            "title": "Only",
+            "summary": "s",
+            "content": "body",
+            "cve": "CVE-9",
+            "done": True,
+        },
+    )
+    assert out["ok"] is True
+    assert out["done"] is True
+    assert recon_old_vulns_ready(project) is True
+
+
+def test_write_old_vuln_no_findings_after_entries_keeps_docs(tmp_env, project):
+    registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {"title": "Kept", "summary": "s", "content": "body", "cve": "CVE-3"},
+    )
+    out = registry.dispatch(_ctx(project), "WriteOldVuln", {"no_findings": True})
+    assert out["ok"] is True
+    assert out["indexed"] == 1
+    assert recon_old_vulns_ready(project) is True
+    index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "Kept" in index
+    assert "未发现需单独建档" not in index

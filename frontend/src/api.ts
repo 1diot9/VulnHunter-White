@@ -18,6 +18,7 @@ export type Project = {
   files_weighted: number
   files_skipped: number
   files_audited: number
+  worker_rounds: number
   tokens_input: number
   tokens_output: number
   tokens_cached: number
@@ -47,6 +48,7 @@ export type Vuln = {
   title: string
   vuln_type: string
   severity: string
+  severity_score: number | null
   cwe: string | null
   file_path: string | null
   line_no: number | null
@@ -54,6 +56,9 @@ export type Vuln = {
   evidence_level: string | null
   attack_surface: string | null
   required_account: string | null
+  submission_tier: string | null
+  submission_reason: string | null
+  root_cause_key: string | null
   review_rounds: number
   return_reason: string | null
   intended_behavior: boolean
@@ -69,6 +74,22 @@ export type VulnDetail = Vuln & {
   poc_code: string | null
   expected_evidence: string | null
   report_md: string | null
+}
+
+export type VulnFollowUpMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+  reviewer_phase_run_id: number | null
+}
+
+export type VulnFollowUpThread = {
+  vuln_id: number
+  project_id: number
+  reviewer_phase_run_id: number | null
+  reviewer_context_available: boolean
+  messages: VulnFollowUpMessage[]
 }
 
 export type LogEvent = {
@@ -237,15 +258,31 @@ export const api = {
   listPhaseReports: (id: number) => request<PhaseReportList>(`/api/projects/${id}/reports`),
   getPhaseReport: (id: number, path: string) =>
     request<PhaseReportDetail>(`/api/projects/${id}/reports/file?path=${encodeURIComponent(path)}`),
-  listVulns: (projectId?: number, status?: string) => {
+  listVulns: (
+    projectId?: number,
+    status?: string,
+    attackSurface?: string,
+    submissionTier?: string,
+    rootCauseKey?: string,
+  ) => {
     const q = new URLSearchParams()
     if (projectId != null) q.set('project_id', String(projectId))
     if (status) q.set('status', status)
+    if (attackSurface) q.set('attack_surface', attackSurface)
+    if (submissionTier) q.set('submission_tier', submissionTier)
+    if (rootCauseKey) q.set('root_cause_key', rootCauseKey)
     const s = q.toString()
     return request<Vuln[]>(`/api/vulns${s ? `?${s}` : ''}`)
   },
   getVuln: (id: number) => request<VulnDetail>(`/api/vulns/${id}`),
-    downloadVulns: async (ids: number[]) => {
+  listVulnFollowUps: (id: number) => request<VulnFollowUpThread>(`/api/vulns/${id}/follow-ups`),
+  askVulnFollowUp: (id: number, question: string) =>
+    request<VulnFollowUpThread>(`/api/vulns/${id}/follow-ups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    }),
+  downloadVulns: async (ids: number[]) => {
     const res = await fetch('/api/vulns/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

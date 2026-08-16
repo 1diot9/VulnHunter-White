@@ -97,6 +97,7 @@ def test_recon_old_vuln_persist_nudge():
     msg = w.note_turn()
     assert msg is not None
     assert "WriteOldVuln" in msg
+    assert "落盘不会结束本会话" in msg
     assert msg == RECON_OLD_VULN_PERSIST_NUDGE.format(n=2)
 
 

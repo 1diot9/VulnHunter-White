@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import case, func
 
 from ..models import AppSettings, FileWeight, PhaseRun, Project, SessionLocal, TokenUsage, ToolLog, Vuln
 from ..schemas import (
@@ -37,47 +38,93 @@ from ..tools.phase_recon import recon_subphases
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-def _project_out(db, p: Project) -> ProjectOut:
-    confirmed = (
-        db.query(Vuln)
-        .filter(Vuln.project_id == p.id, Vuln.status.in_(("confirmed", "static_only")))
-        .count()
-    )
-    fp = db.query(Vuln).filter(Vuln.project_id == p.id, Vuln.status == "false_positive").count()
-    pending = (
-        db.query(Vuln)
-        .filter(Vuln.project_id == p.id, Vuln.status.in_(("pending_review", "returned", "fixing")))
-        .count()
-    )
-    files_total = db.query(FileWeight).filter(FileWeight.project_id == p.id).count()
-    files_weighted = (
-        db.query(FileWeight)
-        .filter(
-            FileWeight.project_id == p.id,
-            FileWeight.weight.isnot(None),
-            FileWeight.skipped.is_(False),
+def _empty_project_summary() -> dict[str, int]:
+    return {
+        "vuln_confirmed": 0,
+        "vuln_false_positive": 0,
+        "vuln_pending": 0,
+        "files_total": 0,
+        "files_weighted": 0,
+        "files_skipped": 0,
+        "files_audited": 0,
+        "files_unmarked": 0,
+        "worker_rounds": 0,
+        "tokens_input": 0,
+        "tokens_output": 0,
+        "tokens_cached": 0,
+        "tokens_total": 0,
+    }
+
+
+def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
+    ids = list(dict.fromkeys(project_ids))
+    summaries = {pid: _empty_project_summary() for pid in ids}
+    if not ids:
+        return summaries
+
+    for row in (
+        db.query(
+            Vuln.project_id,
+            func.sum(case((Vuln.status.in_(("confirmed", "static_only")), 1), else_=0)),
+            func.sum(case((Vuln.status == "false_positive", 1), else_=0)),
+            func.sum(case((Vuln.status.in_(("pending_review", "returned", "fixing")), 1), else_=0)),
         )
-        .count()
-    )
-    files_skipped = (
-        db.query(FileWeight)
-        .filter(FileWeight.project_id == p.id, FileWeight.skipped.is_(True))
-        .count()
-    )
-    files_audited = (
-        db.query(FileWeight)
-        .filter(FileWeight.project_id == p.id, FileWeight.audited.is_(True))
-        .count()
-    )
-    tokens = (
-        db.query(TokenUsage)
-        .filter(TokenUsage.project_id == p.id)
-        .all()
-    )
-    tokens_input = sum(t.tokens_input or 0 for t in tokens)
-    tokens_output = sum(t.tokens_output or 0 for t in tokens)
-    tokens_cached = sum(t.tokens_cached or 0 for t in tokens)
-    tokens_total = sum(t.tokens_total or 0 for t in tokens)
+        .filter(Vuln.project_id.in_(ids))
+        .group_by(Vuln.project_id)
+    ):
+        s = summaries[int(row[0])]
+        s["vuln_confirmed"] = int(row[1] or 0)
+        s["vuln_false_positive"] = int(row[2] or 0)
+        s["vuln_pending"] = int(row[3] or 0)
+
+    for row in (
+        db.query(
+            FileWeight.project_id,
+            func.count(FileWeight.id),
+            func.sum(case((FileWeight.weight.isnot(None) & FileWeight.skipped.is_(False), 1), else_=0)),
+            func.sum(case((FileWeight.skipped.is_(True), 1), else_=0)),
+            func.sum(case((FileWeight.audited.is_(True), 1), else_=0)),
+            func.sum(case((FileWeight.skipped.is_(False) & FileWeight.weight.is_(None), 1), else_=0)),
+        )
+        .filter(FileWeight.project_id.in_(ids))
+        .group_by(FileWeight.project_id)
+    ):
+        s = summaries[int(row[0])]
+        s["files_total"] = int(row[1] or 0)
+        s["files_weighted"] = int(row[2] or 0)
+        s["files_skipped"] = int(row[3] or 0)
+        s["files_audited"] = int(row[4] or 0)
+        s["files_unmarked"] = int(row[5] or 0)
+
+    for row in (
+        db.query(PhaseRun.project_id, func.count(PhaseRun.id))
+        .filter(PhaseRun.project_id.in_(ids), PhaseRun.phase == "worker")
+        .group_by(PhaseRun.project_id)
+    ):
+        summaries[int(row[0])]["worker_rounds"] = int(row[1] or 0)
+
+    for row in (
+        db.query(
+            TokenUsage.project_id,
+            func.coalesce(func.sum(TokenUsage.tokens_input), 0),
+            func.coalesce(func.sum(TokenUsage.tokens_output), 0),
+            func.coalesce(func.sum(TokenUsage.tokens_cached), 0),
+            func.coalesce(func.sum(TokenUsage.tokens_total), 0),
+        )
+        .filter(TokenUsage.project_id.in_(ids))
+        .group_by(TokenUsage.project_id)
+    ):
+        s = summaries[int(row[0])]
+        s["tokens_input"] = int(row[1] or 0)
+        s["tokens_output"] = int(row[2] or 0)
+        s["tokens_cached"] = int(row[3] or 0)
+        s["tokens_total"] = int(row[4] or 0)
+
+    return summaries
+
+
+def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> ProjectOut:
+    summary = summary or _project_summaries(db, [p.id]).get(p.id, _empty_project_summary())
     return ProjectOut(
         id=p.id,
         name=p.name,
@@ -91,18 +138,19 @@ def _project_out(db, p: Project) -> ProjectOut:
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
         updated_at=p.updated_at,
-        vuln_confirmed=confirmed,
-        vuln_false_positive=fp,
-        vuln_pending=pending,
-        files_total=files_total,
-        files_weighted=files_weighted,
-        files_skipped=files_skipped,
-        files_audited=files_audited,
-        tokens_input=tokens_input,
-        tokens_output=tokens_output,
-        tokens_cached=tokens_cached,
-        tokens_total=tokens_total,
-        recon_subphases=recon_subphases(p.id),
+        vuln_confirmed=summary["vuln_confirmed"],
+        vuln_false_positive=summary["vuln_false_positive"],
+        vuln_pending=summary["vuln_pending"],
+        files_total=summary["files_total"],
+        files_weighted=summary["files_weighted"],
+        files_skipped=summary["files_skipped"],
+        files_audited=summary["files_audited"],
+        worker_rounds=summary["worker_rounds"],
+        tokens_input=summary["tokens_input"],
+        tokens_output=summary["tokens_output"],
+        tokens_cached=summary["tokens_cached"],
+        tokens_total=summary["tokens_total"],
+        recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
         **_phase_state_fields(p.id),
     )
 
@@ -111,7 +159,8 @@ def _project_out(db, p: Project) -> ProjectOut:
 def list_projects() -> list[ProjectOut]:
     with SessionLocal() as db:
         rows = db.query(Project).order_by(Project.id.desc()).all()
-        return [_project_out(db, p) for p in rows]
+        summaries = _project_summaries(db, [p.id for p in rows])
+        return [_project_out(db, p, summaries.get(p.id)) for p in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -275,7 +324,7 @@ def project_events(
 
 
 @router.get("/{project_id}/stream")
-async def project_stream(project_id: int, from_offset: int = 0):
+async def project_stream(project_id: int, from_offset: int = 0, phase: str | None = None, session: int | None = None):
     import json
 
     async def gen():
@@ -285,7 +334,7 @@ async def project_stream(project_id: int, from_offset: int = 0):
             # Browser EventSource reconnects this quickly after reload.
             yield "retry: 800\n\n"
             while not is_shutting_down():
-                page = live_log.read_events(project_id, offset=offset, limit=200)
+                page = live_log.read_events(project_id, offset=offset, limit=200, phase=phase, session=session)
                 if page.events:
                     offset = page.offset
                 else:

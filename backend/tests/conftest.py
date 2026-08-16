@@ -40,6 +40,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.ingest as ingest
     import app.services.llm_settings as llm_settings
     import app.services.pipeline as pipeline
+    import app.services.vuln_followup as vuln_followup
     import app.tools as tools
     import app.tools.phase_recon as phase_recon
     import app.tools.phase_reviewer as phase_reviewer
@@ -53,6 +54,7 @@ def tmp_env(tmp_path, monkeypatch):
         phase_reviewer,
         ingest,
         llm_settings,
+        vuln_followup,
         ghsa_service,
         pipeline,
         agent_loop,
