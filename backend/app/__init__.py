@@ -1,0 +1,1 @@
+"""VulnHunter backend application."""

@@ -1,0 +1,520 @@
+import { useEffect, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api, type LogEvent, type Project, type Vuln } from '../api'
+import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
+import PhaseFlow from '../components/PhaseFlow'
+import PhaseReportsPanel from '../components/PhaseReportsPanel'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { formatAttackSurface, formatDateTime, formatFileProgress, formatTokens } from '../lib/utils'
+
+const LOG_PAGE = 100
+const PHASE_TABS = [
+  ['recon', '侦察'],
+  ['worker', '挖掘'],
+  ['reviewer', '审核'],
+] as const
+const WORKER_LOG_TABS = [
+  ['mine', '挖掘'],
+  ['fix', '修复'],
+] as const
+const RECON_LOG_TABS = [
+  ['recon-map', '地图/鉴权', 'map'],
+  ['recon-old-vuln', '历史漏洞', 'old_vulns'],
+  ['recon-mark', '盖章', 'mark'],
+] as const
+
+function isSessionStart(ev: LogEvent): boolean {
+  if (ev.session_start) return true
+  return ev.kind === 'system' && (ev.text || '').includes('新开对话')
+}
+
+function controlPhaseOfEvent(ev: LogEvent): 'recon' | 'worker' | 'reviewer' | null {
+  const p = ev.phase || ev.role || ''
+  if (p === 'reviewer') return 'reviewer'
+  if (
+    p === 'recon' ||
+    p === 'recon-map' ||
+    p === 'recon-old-vuln' ||
+    p === 'recon-mark' ||
+    p === 'recon_mark' ||
+    p === 'recon_old_vuln'
+  ) {
+    return 'recon'
+  }
+  if (p === 'worker' || p === 'fix' || p === 'mine') return 'worker'
+  return null
+}
+
+function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' {
+  if (logPhase === 'reviewer') return 'reviewer'
+  if (
+    logPhase === 'recon' ||
+    logPhase === 'recon-map' ||
+    logPhase === 'recon-old-vuln' ||
+    logPhase === 'recon-mark' ||
+    logPhase === 'recon_mark' ||
+    logPhase === 'recon_old_vuln'
+  ) {
+    return 'recon'
+  }
+  return 'worker'
+}
+
+function defaultPhaseTab(phase: string, status: string): string {
+  if (status === 'completed' || phase === 'done' || phase === 'reviewer' || status === 'reviewing') {
+    return 'reviewer'
+  }
+  if (phase === 'worker' || phase === 'fix' || status === 'auditing') return 'worker'
+  return 'recon'
+}
+
+function PhaseRunControls({
+  projectId,
+  phase,
+  project,
+}: {
+  projectId: number
+  phase: 'recon' | 'worker' | 'reviewer'
+  project: Project
+}) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const state = project.phase_states?.[phase]
+  const paused = Boolean(state?.paused || project.project_paused)
+  const label = phase === 'recon' ? '侦察' : phase === 'reviewer' ? '审核' : '挖掘'
+  const run = async (kind: 'pause' | 'resume' | 'restart') => {
+    setBusy(kind)
+    try {
+      if (kind === 'pause') await api.pausePhase(projectId, phase)
+      else if (kind === 'resume') await api.resumePhase(projectId, phase)
+      else await api.restartPhase(projectId, phase)
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-slate-500">{label}</span>
+      <Button variant="outline" disabled={busy != null || paused} onClick={() => run('pause')}>
+        {busy === 'pause' ? '暂停中…' : '暂停'}
+      </Button>
+      <Button variant="outline" disabled={busy != null} onClick={() => run('resume')}>
+        {busy === 'resume' ? '续跑中…' : '续跑'}
+      </Button>
+      <Button variant="outline" disabled={busy != null} onClick={() => run('restart')}>
+        {busy === 'restart' ? '新跑中…' : '新跑'}
+      </Button>
+    </div>
+  )
+}
+
+export default function ProjectDetailPage() {
+  const { id } = useParams()
+  const projectId = Number(id)
+  const [project, setProject] = useState<Project | null>(null)
+  const [events, setEvents] = useState<LogEvent[]>([])
+  const [vulns, setVulns] = useState<Vuln[]>([])
+  const [tab, setTab] = useState<'logs' | 'reports' | 'vulns'>('logs')
+  const [phaseFilter, setPhaseFilter] = useState('recon')
+  const [hasOlder, setHasOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [revealLimit, setRevealLimit] = useState(LOG_PAGE)
+  const [streamFrom, setStreamFrom] = useState<number | null>(null)
+  const [logSession, setLogSession] = useState<number | null>(null)
+  const [displaySession, setDisplaySession] = useState(1)
+  const [sessionCount, setSessionCount] = useState(1)
+  const oldestRef = useRef(0)
+  const fileEndRef = useRef(0)
+  const phaseRef = useRef(phaseFilter)
+  const syncedPhase = useRef(false)
+  const loadingOlderRef = useRef(false)
+  const atTopRef = useRef(false)
+  const followLiveRef = useRef(true)
+  const displaySessionRef = useRef(1)
+  const sessionCountRef = useRef(1)
+
+  const selectPhase = (p: string) => {
+    const controlChanged = controlPhaseOf(phaseFilter) !== controlPhaseOf(p)
+    setPhaseFilter(p)
+    if (controlChanged) {
+      followLiveRef.current = true
+      setLogSession(null)
+    }
+  }
+
+  useEffect(() => {
+    phaseRef.current = phaseFilter
+  }, [phaseFilter])
+
+  useEffect(() => {
+    syncedPhase.current = false
+    fileEndRef.current = 0
+    oldestRef.current = 0
+    followLiveRef.current = true
+    displaySessionRef.current = 1
+    sessionCountRef.current = 1
+    setStreamFrom(null)
+    setEvents([])
+    setHasOlder(false)
+    setRevealLimit(LOG_PAGE)
+    setLogSession(null)
+    setDisplaySession(1)
+    setSessionCount(1)
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) return
+    let alive = true
+    const refreshMeta = async () => {
+      try {
+        const p = await api.getProject(projectId)
+        if (!alive) return
+        setProject(p)
+        if (!syncedPhase.current) {
+          syncedPhase.current = true
+          selectPhase(defaultPhaseTab(p.phase, p.status))
+        }
+        const vs = await api.listVulns(projectId)
+        if (alive) setVulns(vs)
+      } catch {
+        /* ignore transient */
+      }
+    }
+    refreshMeta()
+    const t = setInterval(refreshMeta, 3000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) return
+    let alive = true
+    oldestRef.current = 0
+    setHasOlder(false)
+    setRevealLimit(LOG_PAGE)
+    setEvents([])
+    api
+      .events(projectId, {
+        tail: true,
+        limit: LOG_PAGE,
+        phase: phaseFilter,
+        session: logSession ?? undefined,
+      })
+      .then((d) => {
+        if (!alive) return
+        setEvents(d.events)
+        oldestRef.current = d.oldest
+        setHasOlder(d.has_older)
+        fileEndRef.current = Math.max(fileEndRef.current, d.file_end)
+        setStreamFrom((cur) => (cur == null ? d.file_end : cur))
+        const count = d.session_count || 1
+        const sess = d.session || 1
+        sessionCountRef.current = count
+        displaySessionRef.current = sess
+        setSessionCount(count)
+        setDisplaySession(sess)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [projectId, phaseFilter, logSession])
+
+  useEffect(() => {
+    if (!projectId || streamFrom == null) return
+    let mounted = true
+    let source: EventSource | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let backoffMs = 800
+
+    const connect = () => {
+      source?.close()
+      const from = Math.max(fileEndRef.current, streamFrom)
+      source = new EventSource(`/api/projects/${projectId}/stream?from_offset=${from}`)
+      source.onmessage = (event) => {
+        if (!mounted) return
+        backoffMs = 800
+        let data: Record<string, unknown>
+        try {
+          data = JSON.parse(event.data)
+        } catch {
+          return
+        }
+        if (data.type === 'status') {
+          api.getProject(projectId).then((p) => mounted && setProject(p)).catch(() => undefined)
+          return
+        }
+        if (data.type === 'event' || data.kind) {
+          const { type: _t, ...ev } = data
+          if (!ev.kind) return
+          const seq = typeof ev.seq === 'number' ? ev.seq : undefined
+          if (seq != null) fileEndRef.current = Math.max(fileEndRef.current, seq + 1)
+          const evSession = typeof ev.session === 'number' ? ev.session : undefined
+          const evControl = controlPhaseOfEvent(ev as LogEvent)
+          const viewControl = controlPhaseOf(phaseRef.current)
+            if (evControl && evControl === viewControl) {
+            const started =
+              (evSession != null && evSession > sessionCountRef.current) ||
+              (isSessionStart(ev as LogEvent) && evSession == null)
+            if (started) {
+              const next = evSession ?? sessionCountRef.current + 1
+              sessionCountRef.current = Math.max(sessionCountRef.current, next)
+              setSessionCount(sessionCountRef.current)
+              if (followLiveRef.current) {
+                displaySessionRef.current = next
+                setDisplaySession(next)
+                oldestRef.current = seq ?? 0
+                setHasOlder(false)
+                setRevealLimit(LOG_PAGE)
+                if (!eventMatchesPhase(ev as LogEvent, phaseRef.current)) {
+                  setEvents([])
+                  return
+                }
+                setEvents([ev as LogEvent])
+                return
+              }
+            }
+          }
+          if (!eventMatchesPhase(ev as LogEvent, phaseRef.current)) return
+          if (evSession != null && evSession !== displaySessionRef.current) return
+          // 已追平后的历史重放（seq 早于当前窗口）直接丢掉，避免早期日志灌进「最近 100」。
+          if (seq != null && oldestRef.current > 0 && seq < oldestRef.current) return
+          setEvents((prev) => {
+            if (seq != null && prev.some((x) => x.seq === seq)) return prev
+            return [...prev, ev as LogEvent]
+          })
+        }
+      }
+      source.onerror = () => {
+        source?.close()
+        if (mounted) scheduleReconnect()
+      }
+    }
+
+    const scheduleReconnect = () => {
+      if (!mounted || reconnectTimer) return
+      const wait = backoffMs
+      backoffMs = Math.min(Math.round(backoffMs * 1.8), 8000)
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        if (mounted) connect()
+      }, wait)
+    }
+
+    const start = window.setTimeout(connect, 0)
+    return () => {
+      mounted = false
+      window.clearTimeout(start)
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      source?.close()
+    }
+  }, [projectId, streamFrom])
+
+  const loadOlder = () => {
+    if (!projectId || loadingOlderRef.current || !hasOlder) return
+    loadingOlderRef.current = true
+    setLoadingOlder(true)
+    const before = oldestRef.current
+    api
+      .events(projectId, {
+        before,
+        limit: LOG_PAGE,
+        phase: phaseFilter,
+        session: logSession ?? displaySession,
+      })
+      .then((d) => {
+        if (!atTopRef.current) return
+        setEvents((prev) => {
+          const seen = new Set(prev.map((e) => e.seq).filter((x): x is number => x != null))
+          const older = d.events.filter((e) => e.seq == null || !seen.has(e.seq))
+          return [...older, ...prev]
+        })
+        const added = d.events.length
+        if (added) setRevealLimit((n) => n + added)
+        oldestRef.current = d.oldest
+        setHasOlder(d.has_older)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loadingOlderRef.current = false
+        setLoadingOlder(false)
+      })
+  }
+
+  if (!project) return <div className="text-slate-400">加载中…</div>
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <Link to="/" className="text-sm text-slate-400 hover:underline">
+            ← 返回
+          </Link>
+          <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
+          <div className="mt-2">
+            <PhaseFlow
+              phase={project.phase}
+              status={project.status}
+              reconDone={project.recon_done}
+              filesAudited={project.files_audited}
+              filesSkipped={project.files_skipped}
+              filesTotal={project.files_total}
+              vulnPending={project.vuln_pending}
+              reconSubphases={project.recon_subphases}
+              onSelect={(pid) => {
+                setTab('logs')
+                if (pid !== 'done') selectPhase(pid)
+              }}
+            />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => api.pause(projectId)}>
+            全部暂停
+          </Button>
+          <Button variant="outline" onClick={() => api.resume(projectId)}>
+            全部续跑
+          </Button>
+          <Button variant="destructive" onClick={() => api.cancel(projectId)}>
+            停止
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 text-sm text-slate-300">
+        <Badge variant="info">{project.status}</Badge>
+        <span>tokens {formatTokens(project.tokens_total)}</span>
+        <span>{formatFileProgress(project)}</span>
+        <span>
+          洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}
+        </span>
+      </div>
+
+      <div className="flex gap-2">
+        <Button variant={tab === 'logs' ? 'default' : 'outline'} onClick={() => setTab('logs')}>
+          阶段日志
+        </Button>
+        <Button variant={tab === 'reports' ? 'default' : 'outline'} onClick={() => setTab('reports')}>
+          阶段报告
+        </Button>
+        <Button variant={tab === 'vulns' ? 'default' : 'outline'} onClick={() => setTab('vulns')}>
+          本项目漏洞
+        </Button>
+      </div>
+
+      {tab === 'reports' ? (
+        <PhaseReportsPanel projectId={projectId} initialPhase={controlPhaseOf(phaseFilter)} />
+      ) : null}
+
+      {tab === 'logs' ? (
+        <Card>
+          <CardContent className="p-3">
+          <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+            <div className="vh-phase-tabs">
+              {PHASE_TABS.map(([k, label]) => (
+                <div key={k} className="vh-phase-branch">
+                  <Button
+                    variant={controlPhaseOf(phaseFilter) === k ? 'default' : 'outline'}
+                    onClick={() => selectPhase(k)}
+                  >
+                    {label}
+                  </Button>
+                  {k === 'recon' ? (
+                    <div className="vh-phase-subs">
+                      {RECON_LOG_TABS.map(([sk, slabel, subId]) => {
+                        const done = Boolean(project.recon_subphases?.find((s) => s.id === subId)?.done)
+                        return (
+                          <Button
+                            key={sk}
+                            className="h-6 px-2 text-[11px]"
+                            variant={phaseFilter === sk ? 'default' : 'outline'}
+                            onClick={() => selectPhase(sk)}
+                          >
+                            {slabel}
+                            {done ? ' ✓' : ' ○'}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                  {k === 'worker' ? (
+                    <div className="vh-phase-subs">
+                      {WORKER_LOG_TABS.map(([sk, slabel]) => (
+                        <Button
+                          key={sk}
+                          className="h-6 px-2 text-[11px]"
+                          variant={phaseFilter === sk ? 'default' : 'outline'}
+                          onClick={() => selectPhase(sk)}
+                        >
+                          {slabel}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <PhaseRunControls projectId={projectId} phase={controlPhaseOf(phaseFilter)} project={project} />
+          </div>
+          <LiveLogPanel
+            events={events}
+            autoScroll
+            phaseFilter={phaseFilter}
+            hasOlder={hasOlder}
+            loadingOlder={loadingOlder}
+            revealLimit={revealLimit}
+            onLoadOlder={loadOlder}
+            atTopRef={atTopRef}
+            session={displaySession}
+            sessionCount={sessionCount}
+            onSessionChange={(n) => {
+              followLiveRef.current = n == null || n >= sessionCountRef.current
+              const next = n ?? sessionCountRef.current
+              displaySessionRef.current = next
+              setDisplaySession(next)
+              setLogSession(n)
+            }}
+          />
+          </CardContent>
+        </Card>
+      ) : tab === 'vulns' ? (
+        <Card className="gap-0 divide-y divide-border py-0">
+          {vulns.map((v) => {
+            const surface = formatAttackSurface(v.attack_surface, v.required_account)
+            return (
+              <Link
+                key={v.id}
+                to={`/vulns/${v.id}`}
+                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted"
+              >
+                <div>
+                  <div className="font-medium">{v.title}</div>
+                  <div className="text-xs text-slate-400">
+                    {v.vuln_type} · {v.severity}
+                    {surface ? ` · ${surface}` : ''} · {v.file_path}:{v.line_no} · {formatDateTime(v.created_at)}
+                  </div>
+                </div>
+                <Badge
+                  variant={
+                    v.status === 'confirmed' || v.status === 'static_only'
+                      ? 'success'
+                      : v.status === 'false_positive'
+                        ? 'destructive'
+                        : 'warning'
+                  }
+                >
+                  {v.status}
+                  {v.evidence_level === 'static_only' ? ' · static' : ''}
+                </Badge>
+              </Link>
+            )
+          })}
+          {vulns.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无漏洞</div> : null}
+        </Card>
+      ) : null}
+    </div>
+  )
+}

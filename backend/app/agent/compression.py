@@ -1,0 +1,188 @@
+"""Context compression helpers."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from ..config import settings
+from ..services.paths import summaries_dir
+
+
+def _str_tokens(text: str) -> int:
+    """CJK ≈ 1 token/char; ASCII ≈ 4 chars/token. char/4 alone undercounts 中文 system prompts."""
+    if not text:
+        return 0
+    cjk = 0
+    other = 0
+    for ch in text:
+        o = ord(ch)
+        if 0x2E80 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF or 0xFF00 <= o <= 0xFFEF:
+            cjk += 1
+        else:
+            other += 1
+    return cjk + (other + 3) // 4
+
+
+def _json_tokens(obj: Any) -> int:
+    if obj is None:
+        return 0
+    if isinstance(obj, str):
+        return _str_tokens(obj)
+    try:
+        return _str_tokens(json.dumps(obj, ensure_ascii=False))
+    except TypeError:
+        return _str_tokens(str(obj))
+
+
+def estimate_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> int:
+    """Estimate request tokens: messages + optional tools schema."""
+    total = 0
+    for m in messages:
+        total += _json_tokens(m.get("content"))
+        if m.get("tool_calls"):
+            total += _json_tokens(m["tool_calls"])
+    if tools:
+        total += _json_tokens(tools)
+    return max(1, total)
+
+
+def _clip_tool_content(content: str, max_chars: int) -> str:
+    if len(content) <= max_chars:
+        return content
+    return content[:max_chars] + f"\n...[truncated {len(content) - max_chars} chars]"
+
+
+def truncate_old_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep last N tool results (capped); newest stay large enough for a Read page."""
+    keep = settings.tool_result_keep_rounds
+    drop = settings.tool_result_drop_rounds
+    trunc = settings.tool_result_truncate_chars
+    keep_max = settings.tool_result_keep_max_chars
+    full = min(settings.tool_result_keep_full_rounds, keep)
+    full_max = settings.tool_result_keep_full_max_chars
+
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if not tool_indices:
+        return messages
+
+    out = []
+    total_tools = len(tool_indices)
+
+    for i, m in enumerate(messages):
+        if m.get("role") != "tool":
+            out.append(m)
+            continue
+        from_end = total_tools - tool_indices.index(i)
+        if from_end > drop:
+            continue
+        nm = dict(m)
+        content = nm.get("content") or ""
+        if not isinstance(content, str):
+            out.append(nm)
+            continue
+        if from_end <= full:
+            cap = full_max
+        elif from_end <= keep:
+            cap = keep_max
+        else:
+            cap = trunc
+        if len(content) > cap:
+            nm["content"] = _clip_tool_content(content, cap)
+        out.append(nm)
+    return out
+
+
+def needs_compress(
+    messages: list[dict[str, Any]],
+    context_window: int,
+    tools: list[dict[str, Any]] | None = None,
+    last_prompt_tokens: int = 0,
+) -> bool:
+    threshold = int(context_window * settings.context_compress_ratio)
+    if last_prompt_tokens >= threshold:
+        return True
+    return estimate_tokens(messages, tools) >= threshold
+
+
+_SUMMARY_REST = re.compile(r"^(rescue-|round-)?\d+\.md$")
+
+
+def _phase_summary_files(d: Path, phase: str, *, rescue: bool | None = None) -> list[Path]:
+    """Files that belong to this phase only (recon-1.md, not recon-old-vuln-1.md)."""
+    prefix = f"{phase}-"
+    out: list[Path] = []
+    if not d.exists():
+        return out
+    for p in d.glob(f"{prefix}*.md"):
+        rest = p.name[len(prefix) :]
+        if not _SUMMARY_REST.match(rest):
+            continue
+        is_rescue = rest.startswith("rescue-")
+        if rescue is True and not is_rescue:
+            continue
+        if rescue is False and is_rescue:
+            continue
+        out.append(p)
+    return out
+
+
+def write_summary(project_id: int, phase: str, summary: str) -> str:
+    d = summaries_dir(project_id)
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{phase}-{len(_phase_summary_files(d, phase)) + 1}.md"
+    path = d / name
+    path.write_text(summary, encoding="utf-8")
+    return f"docs/summaries/{name}"
+
+
+def latest_summary(project_id: int, phase: str) -> str | None:
+    """Prefer newest {phase}-rescue-N.md, else newest {phase}-N.md / {phase}-round-N.md."""
+    d = summaries_dir(project_id)
+    if not d.exists():
+        return None
+    rescue = sorted(_phase_summary_files(d, phase, rescue=True), key=lambda p: p.stat().st_mtime, reverse=True)
+    if rescue:
+        return rescue[0].read_text(encoding="utf-8", errors="replace")
+    candidates = _phase_summary_files(d, phase, rescue=False)
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return newest.read_text(encoding="utf-8", errors="replace")
+
+
+def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:
+    if not summary or not summary.strip():
+        return ""
+    hint = (
+        "只接续与当前注入文件相关的部分；与当前任务无关则忽略。\n"
+        if for_file
+        else "若摘要与当前任务无关则忽略。\n"
+    )
+    return (
+        "## 上一轮摘要（从这里接续，不要重复已完成工作）\n"
+        f"{summary.strip()}\n\n"
+        f"{hint}\n"
+    )
+
+
+def build_compressed_messages(
+    system: str,
+    summary: str,
+    bootstrap: str,
+    recent_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    tail = truncate_old_tool_results(list(recent_messages[-12:]))
+    return [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": (
+                "以下是上下文压缩后的摘要与当前任务注入包。请从摘要处继续，不要重复已完成工作。\n\n"
+                f"## 摘要\n{summary}\n\n## 当前注入\n{bootstrap}"
+            ),
+        },
+        *tail,
+    ]

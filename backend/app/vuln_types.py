@@ -1,0 +1,379 @@
+"""Vulnerability type taxonomy (ported from AutoPoc)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+from typing import Any
+
+VULN_TYPE_SEVERITY: dict[str, str] = {
+    "rce": "critical",
+    "ssti": "critical",
+    "deserialization": "critical",
+    "jndi_injection": "critical",
+    "jdbc_attack": "critical",
+    "file_read": "high",
+    "file_upload": "high",
+    "file_delete": "high",
+    "auth_bypass": "high",
+    "sqli": "high",
+    "xxe": "high",
+    "path_traversal": "high",
+    "ssrf": "medium",
+    "privilege_escalation": "medium",
+    "dos": "low",
+    "xss": "low",
+    "info_disclosure": "low",
+    "other": "low",
+}
+
+ALLOWED_VULN_TYPES = frozenset(VULN_TYPE_SEVERITY)
+
+VULN_TYPE_LABELS: dict[str, str] = {
+    "rce": "RCE",
+    "ssti": "SSTI",
+    "deserialization": "反序列化",
+    "jndi_injection": "JNDI注入",
+    "jdbc_attack": "JDBC攻击",
+    "file_read": "任意文件读取",
+    "file_upload": "任意文件上传",
+    "file_delete": "任意文件删除",
+    "auth_bypass": "认证绕过",
+    "sqli": "SQL注入",
+    "xxe": "XXE",
+    "path_traversal": "路径穿越",
+    "ssrf": "SSRF",
+    "privilege_escalation": "越权",
+    "dos": "DoS",
+    "xss": "XSS",
+    "info_disclosure": "信息泄露",
+    "other": "其他",
+}
+
+SEVERITY_LABELS: dict[str, str] = {
+    "critical": "严重",
+    "high": "高危",
+    "medium": "中危",
+    "low": "低危",
+}
+
+_REACHABILITY_SCORES: dict[str, int] = {
+    "unauthenticated": 2,
+    "low_privilege": 1,
+    "admin": 0,
+}
+
+_IMPACT_SCORES: dict[str, int] = {
+    "rce_or_full_data": 3,
+    "sensitive_data_or_privilege": 2,
+    "limited_info": 1,
+}
+
+_COMPLEXITY_SCORES: dict[str, int] = {
+    "single_request": 0,
+    "multi_step": -1,
+    "specific_environment": -2,
+}
+
+_DEFENSE_SCORES: dict[str, int] = {
+    "none": 0,
+    "bypassable": 0,
+    "conditional": -1,
+}
+
+REVIEW_FACTOR_LABELS: dict[str, dict[str, str]] = {
+    "reachability": {
+        "unauthenticated": "未认证可达",
+        "low_privilege": "低权限可达",
+        "admin": "管理员权限才可达",
+    },
+    "impact": {
+        "rce_or_full_data": "RCE/全库读取/完整控制",
+        "sensitive_data_or_privilege": "敏感数据泄露/权限提升/部分数据",
+        "limited_info": "有限信息泄露/信息收集",
+    },
+    "exploit_complexity": {
+        "single_request": "单请求或简单触发",
+        "multi_step": "多步骤利用",
+        "specific_environment": "依赖特定环境",
+    },
+    "defense_status": {
+        "none": "无有效防护",
+        "bypassable": "有防护但可绕过",
+        "conditional": "有防护且绕过需额外条件",
+    },
+}
+
+_IMPACT_ALIASES: dict[str, str] = {
+    "rce_or_full_data": "rce_or_full_data",
+    "rce": "rce_or_full_data",
+    "full_data": "rce_or_full_data",
+    "full_database": "rce_or_full_data",
+    "full_db": "rce_or_full_data",
+    "complete_compromise": "rce_or_full_data",
+    "code_execution": "rce_or_full_data",
+    "代码执行": "rce_or_full_data",
+    "远程代码执行": "rce_or_full_data",
+    "全库": "rce_or_full_data",
+    "完整数据泄露": "rce_or_full_data",
+    "完整控制": "rce_or_full_data",
+    "sensitive_data_or_privilege": "sensitive_data_or_privilege",
+    "sensitive_data": "sensitive_data_or_privilege",
+    "partial_data": "sensitive_data_or_privilege",
+    "privilege": "sensitive_data_or_privilege",
+    "privilege_escalation": "sensitive_data_or_privilege",
+    "敏感数据": "sensitive_data_or_privilege",
+    "部分数据": "sensitive_data_or_privilege",
+    "权限提升": "sensitive_data_or_privilege",
+    "越权": "sensitive_data_or_privilege",
+    "limited_info": "limited_info",
+    "info": "limited_info",
+    "information": "limited_info",
+    "limited": "limited_info",
+    "信息收集": "limited_info",
+    "有限影响": "limited_info",
+    "有限信息泄露": "limited_info",
+}
+
+_COMPLEXITY_ALIASES: dict[str, str] = {
+    "single_request": "single_request",
+    "single": "single_request",
+    "simple": "single_request",
+    "low": "single_request",
+    "单请求": "single_request",
+    "简单": "single_request",
+    "低": "single_request",
+    "multi_step": "multi_step",
+    "multiple_steps": "multi_step",
+    "medium": "multi_step",
+    "多步骤": "multi_step",
+    "中": "multi_step",
+    "specific_environment": "specific_environment",
+    "specific_env": "specific_environment",
+    "environment": "specific_environment",
+    "high": "specific_environment",
+    "特定环境": "specific_environment",
+    "特定条件": "specific_environment",
+    "高": "specific_environment",
+}
+
+_DEFENSE_ALIASES: dict[str, str] = {
+    "none": "none",
+    "no_protection": "none",
+    "no_effective_protection": "none",
+    "absent": "none",
+    "无防护": "none",
+    "无有效防护": "none",
+    "bypassable": "bypassable",
+    "has_bypass": "bypassable",
+    "bypass": "bypassable",
+    "weak": "bypassable",
+    "可绕过": "bypassable",
+    "有防护但可绕过": "bypassable",
+    "conditional": "conditional",
+    "extra_condition": "conditional",
+    "hard_to_bypass": "conditional",
+    "partial": "conditional",
+    "需额外条件": "conditional",
+    "有防护且绕过需额外条件": "conditional",
+}
+
+
+@dataclass(frozen=True)
+class SeverityCalibration:
+    severity: str
+    score: int
+    reachability: str
+    impact: str
+    exploit_complexity: str
+    defense_status: str
+
+    @property
+    def severity_label(self) -> str:
+        return SEVERITY_LABELS[self.severity]
+
+
+_ALIAS_MAP: dict[str, str] = {
+    "rce": "rce",
+    "remote_code_execution": "rce",
+    "remote code execution": "rce",
+    "command_injection": "rce",
+    "command injection": "rce",
+    "code_injection": "rce",
+    "命令注入": "rce",
+    "代码注入": "rce",
+    "远程代码执行": "rce",
+    "ssti": "ssti",
+    "template_injection": "ssti",
+    "模板注入": "ssti",
+    "模版注入": "ssti",
+    "deserialization": "deserialization",
+    "反序列化": "deserialization",
+    "jndi_injection": "jndi_injection",
+    "jndi": "jndi_injection",
+    "jndi注入": "jndi_injection",
+    "jdbc_attack": "jdbc_attack",
+    "jdbc": "jdbc_attack",
+    "file_read": "file_read",
+    "任意文件读取": "file_read",
+    "file_upload": "file_upload",
+    "任意文件上传": "file_upload",
+    "file_delete": "file_delete",
+    "任意文件删除": "file_delete",
+    "auth_bypass": "auth_bypass",
+    "认证绕过": "auth_bypass",
+    "鉴权绕过": "auth_bypass",
+    "sqli": "sqli",
+    "sql_injection": "sqli",
+    "sql注入": "sqli",
+    "xxe": "xxe",
+    "path_traversal": "path_traversal",
+    "路径穿越": "path_traversal",
+    "ssrf": "ssrf",
+    "privilege_escalation": "privilege_escalation",
+    "idor": "privilege_escalation",
+    "越权": "privilege_escalation",
+    "dos": "dos",
+    "xss": "xss",
+    "info_disclosure": "info_disclosure",
+    "信息泄露": "info_disclosure",
+    "other": "other",
+    "其他": "other",
+}
+
+_INFER_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"jndi", re.I), "jndi_injection"),
+    (re.compile(r"jdbc", re.I), "jdbc_attack"),
+    (re.compile(r"deserializ|反序列化", re.I), "deserialization"),
+    (re.compile(r"ssti|template\s*injection|模[板版]注入", re.I), "ssti"),
+    (re.compile(r"\brce\b|command\s*injection|命令注入|远程代码执行", re.I), "rce"),
+    (re.compile(r"\bxxe\b", re.I), "xxe"),
+    (re.compile(r"sql\s*injection|\bsqli\b|sql注入", re.I), "sqli"),
+    (re.compile(r"file\s*upload|任意文件上传", re.I), "file_upload"),
+    (re.compile(r"file\s*delet|任意文件删除", re.I), "file_delete"),
+    (re.compile(r"file\s*read|任意文件读取", re.I), "file_read"),
+    (re.compile(r"path\s*traversal|路径穿越", re.I), "path_traversal"),
+    (re.compile(r"auth(entication)?\s*bypass|认证绕过|鉴权绕过", re.I), "auth_bypass"),
+    (re.compile(r"\bssrf\b", re.I), "ssrf"),
+    (re.compile(r"privilege\s*escalation|\bidor\b|越权", re.I), "privilege_escalation"),
+    (re.compile(r"\bxss\b", re.I), "xss"),
+    (re.compile(r"\bdos\b|拒绝服务", re.I), "dos"),
+    (re.compile(r"information\s*disclosure|信息泄露", re.I), "info_disclosure"),
+]
+
+
+def normalize_vuln_type(raw: str | None) -> str:
+    if not raw:
+        return "other"
+    s = str(raw).strip()
+    if not s:
+        return "other"
+    key = s.lower().replace("-", "_")
+    if key in ALLOWED_VULN_TYPES:
+        return key
+    if key in _ALIAS_MAP:
+        return _ALIAS_MAP[key]
+    if s in _ALIAS_MAP:
+        return _ALIAS_MAP[s]
+    compact = re.sub(r"[\s_\-]+", " ", s.lower()).strip()
+    if compact in _ALIAS_MAP:
+        return _ALIAS_MAP[compact]
+    return infer_vuln_type_from_text(s)
+
+
+def severity_for_type(vuln_type: str) -> str:
+    return VULN_TYPE_SEVERITY.get(normalize_vuln_type(vuln_type), "low")
+
+
+def _factor_key(raw: Any) -> str:
+    s = str(raw or "").strip()
+    return re.sub(r"[\s\-]+", "_", s.lower()) if s.isascii() else s
+
+
+def _normalize_review_factor(raw: Any, aliases: dict[str, str], field_name: str) -> str:
+    key = _factor_key(raw)
+    if not key:
+        raise ValueError(f"缺少 {field_name}")
+    normalized = aliases.get(key)
+    if not normalized:
+        allowed = "|".join(sorted(set(aliases.values())))
+        raise ValueError(f"{field_name} 无效，可选: {allowed}")
+    return normalized
+
+
+def reachability_from_review_context(attack_surface: str, required_account: str | None) -> str:
+    if attack_surface == "frontend":
+        return "unauthenticated"
+    if attack_surface == "backend" and required_account == "user":
+        return "low_privilege"
+    return "admin"
+
+
+def severity_from_review_score(score: int) -> str:
+    if score >= 5:
+        return "critical"
+    if score >= 3:
+        return "high"
+    if score >= 1:
+        return "medium"
+    return "low"
+
+
+def calibrate_review_severity(
+    *,
+    attack_surface: str,
+    required_account: str | None,
+    impact: Any,
+    exploit_complexity: Any,
+    defense_status: Any,
+) -> SeverityCalibration:
+    """Calibrate final review severity from exploit context, not vulnerability type alone."""
+    reachability = reachability_from_review_context(attack_surface, required_account)
+    normalized_impact = _normalize_review_factor(impact, _IMPACT_ALIASES, "impact")
+    normalized_complexity = _normalize_review_factor(
+        exploit_complexity, _COMPLEXITY_ALIASES, "exploit_complexity"
+    )
+    normalized_defense = _normalize_review_factor(
+        defense_status, _DEFENSE_ALIASES, "defense_status"
+    )
+    score = (
+        _REACHABILITY_SCORES[reachability]
+        + _IMPACT_SCORES[normalized_impact]
+        + _COMPLEXITY_SCORES[normalized_complexity]
+        + _DEFENSE_SCORES[normalized_defense]
+    )
+    return SeverityCalibration(
+        severity=severity_from_review_score(score),
+        score=score,
+        reachability=reachability,
+        impact=normalized_impact,
+        exploit_complexity=normalized_complexity,
+        defense_status=normalized_defense,
+    )
+
+
+def infer_vuln_type_from_text(*parts: str | None) -> str:
+    text = " ".join(p for p in parts if p)
+    if not text.strip():
+        return "other"
+    for pattern, vtype in _INFER_RULES:
+        if pattern.search(text):
+            return vtype
+    return "other"
+
+
+def resolve_vuln_type_and_severity(item: dict[str, Any]) -> tuple[str, str]:
+    raw_type = item.get("vuln_type") or item.get("type") or item.get("category")
+    if raw_type:
+        vtype = normalize_vuln_type(str(raw_type))
+    else:
+        vtype = infer_vuln_type_from_text(
+            item.get("identifier"),
+            item.get("title"),
+            item.get("summary"),
+        )
+    return vtype, severity_for_type(vtype)
+
+
+def prompt_type_enum() -> str:
+    return "|".join(sorted(ALLOWED_VULN_TYPES, key=lambda t: list(VULN_TYPE_SEVERITY).index(t)))
