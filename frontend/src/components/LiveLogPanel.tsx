@@ -64,6 +64,7 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   }
   if (phaseFilter === 'reviewer-lab') return p === 'reviewer-lab' || p === 'reviewer_lab'
   if (phaseFilter === 'reviewer-review') return p === 'reviewer'
+  if (phaseFilter === 'verifier') return p === 'verifier'
   return p === phaseFilter
 }
 

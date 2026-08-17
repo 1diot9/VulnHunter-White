@@ -12,6 +12,7 @@ const PHASES = [
   ['recon', '侦察'],
   ['worker', '挖掘'],
   ['reviewer', '审核'],
+  ['verifier', '验证'],
 ] as const
 
 const SUB_TABS: Record<string, readonly [string, string][]> = {
@@ -31,6 +32,10 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
     ['all', '全部'],
     ['lab', '环境搭建'],
     ['reviewer', '审核'],
+  ],
+  verifier: [
+    ['all', '全部'],
+    ['verify', '互联网验证'],
   ],
 }
 
@@ -58,7 +63,15 @@ export default function PhaseReportsPanel({
   projectId: number
   initialPhase?: string
 }) {
-  const [phase, setPhase] = useState(initialPhase === 'reviewer' ? 'reviewer' : initialPhase === 'recon' ? 'recon' : 'worker')
+  const [phase, setPhase] = useState(
+    initialPhase === 'reviewer'
+      ? 'reviewer'
+      : initialPhase === 'recon'
+        ? 'recon'
+        : initialPhase === 'verifier'
+          ? 'verifier'
+          : 'worker',
+  )
   const [sub, setSub] = useState('all')
   const [groups, setGroups] = useState<{ phase: string; label: string; count: number; reports: PhaseReport[] }[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)

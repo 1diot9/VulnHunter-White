@@ -4,6 +4,7 @@ import { api, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ManualLabPromptEditor } from '../components/ManualLabFields'
+import { VerifierToggle } from '../components/VerifierToggle'
 import PhaseFlow from '../components/PhaseFlow'
 import VulnGroupList from '../components/VulnGroupList'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +25,7 @@ const PHASE_TABS = [
   ['recon', '侦察'],
   ['worker', '挖掘'],
   ['reviewer', '审核'],
+  ['verifier', '验证'],
 ] as const
 const WORKER_LOG_TABS = [
   ['mine', '挖掘'],
@@ -45,7 +47,8 @@ function isSessionStart(ev: LogEvent): boolean {
   return ev.kind === 'system' && (ev.text || '').includes('新开对话')
 }
 
-function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' {
+function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 'verifier' {
+  if (logPhase === 'verifier') return 'verifier'
   if (logPhase === 'reviewer' || logPhase === 'reviewer-lab' || logPhase === 'reviewer_lab' || logPhase === 'reviewer-review') return 'reviewer'
   if (
     logPhase === 'recon' ||
@@ -63,6 +66,7 @@ function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' {
 }
 
 function defaultPhaseTab(phase: string, status: string): string {
+  if (phase === 'verifier') return 'verifier'
   if (status === 'completed' || phase === 'done' || phase === 'reviewer' || status === 'reviewing') {
     return 'reviewer'
   }
@@ -76,13 +80,13 @@ function PhaseRunControls({
   project,
 }: {
   projectId: number
-  phase: 'recon' | 'worker' | 'reviewer'
+  phase: 'recon' | 'worker' | 'reviewer' | 'verifier'
   project: Project
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const state = project.phase_states?.[phase]
   const paused = Boolean(state?.paused || project.project_paused)
-  const label = phase === 'recon' ? '侦察' : phase === 'reviewer' ? '审核' : '挖掘'
+  const label = phase === 'recon' ? '侦察' : phase === 'reviewer' ? '审核' : phase === 'verifier' ? '验证' : '挖掘'
   const run = async (kind: 'pause' | 'resume' | 'restart') => {
     setBusy(kind)
     try {
@@ -398,6 +402,8 @@ export default function ProjectDetailPage() {
               reconSubphases={project.recon_subphases}
               labSetupDone={project.lab_setup_done}
               manualLab={project.manual_lab}
+              verifierEnabled={project.verifier_enabled}
+              verifierPending={project.verifier_pending}
               onSelect={(pid) => {
                 setTab('logs')
                 if (pid !== 'done') selectPhase(pid)
@@ -459,6 +465,18 @@ export default function ProjectDetailPage() {
             }}
           />
         ) : null}
+        <VerifierToggle
+          enabled={Boolean(project.verifier_enabled)}
+          onEnabledChange={async (enabled) => {
+            if (enabled === Boolean(project.verifier_enabled)) return
+            try {
+              const next = await api.updateProject(projectId, { verifier_enabled: enabled })
+              setProject(next)
+            } catch {
+              /* ignore */
+            }
+          }}
+        />
       </div>
 
       <div className="flex gap-2">

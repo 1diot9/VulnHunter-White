@@ -20,9 +20,14 @@ const PHASES = [
     hint: '独立验证 Worker 提交的漏洞是否成立，并分层为有 CVE 价值或低危害难利用。',
   },
   {
+    id: 'verifier',
+    label: '验证',
+    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认搜 10 个，任一成功即结束。',
+  },
+  {
     id: 'done',
     label: '完成',
-    hint: '侦察、挖掘与审核均已结束。',
+    hint: '侦察、挖掘、审核与（若开启）互联网验证均已结束。',
   },
 ] as const
 
@@ -61,6 +66,8 @@ type FlowState = {
   reconSubphases?: ReconSubphaseView[]
   labSetupDone?: boolean
   manualLab?: boolean
+  verifierEnabled?: boolean
+  verifierPending?: number
 }
 
 type BranchItem = {
@@ -104,6 +111,12 @@ function phaseTone(id: string, s: FlowState): Tone {
       return 'info'
     }
     if (s.phase === 'reviewer' || s.status === 'reviewing' || (s.vulnPending ?? 0) > 0) return 'info'
+    return 'neutral'
+  }
+  if (id === 'verifier') {
+    if (!s.verifierEnabled) return 'neutral'
+    if ((s.verifierPending ?? 0) === 0 && (s.status === 'completed' || s.phase === 'done')) return 'success'
+    if (s.phase === 'verifier' || (s.verifierPending ?? 0) > 0) return 'info'
     return 'neutral'
   }
   return 'neutral'
@@ -176,6 +189,8 @@ export default function PhaseFlow({
   reconSubphases,
   labSetupDone,
   manualLab,
+  verifierEnabled,
+  verifierPending,
   onSelect,
 }: FlowState & { onSelect?: (id: string) => void }) {
   const state: FlowState = {
@@ -190,6 +205,8 @@ export default function PhaseFlow({
     reconSubphases,
     labSetupDone,
     manualLab,
+    verifierEnabled,
+    verifierPending,
   }
   const subs = reconSubphases ?? []
 
@@ -233,6 +250,7 @@ export default function PhaseFlow({
     recon: branchOf('recon'),
     worker: branchOf('worker'),
     reviewer: branchOf('reviewer'),
+    verifier: branchOf('verifier'),
     done: branchOf('done'),
   }
   const spacerCount = Math.max(...Object.values(branches).map((items) => items.length), 0)
@@ -260,6 +278,7 @@ export default function PhaseFlow({
                     <Badge variant={badgeVariant(phaseTone(p.id, state))}>
                       {p.label}
                       {p.id === 'worker' && workerRounds != null ? ` ${workerRounds} 轮` : ''}
+                      {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
                     </Badge>
                   </FlowTip>
                 </div>
