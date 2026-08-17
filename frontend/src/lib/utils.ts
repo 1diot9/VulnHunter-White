@@ -71,6 +71,16 @@ export function formatAuditModeHint(value: string | null | undefined): string {
   return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.hint ?? AUDIT_MODE_OPTIONS[0].hint
 }
 
+export function formatProjectRunStatus(
+  status: string | null | undefined,
+  projectPaused?: boolean,
+): '运行中' | '已暂停' | '已停止' | '已完成' {
+  if (status === 'completed') return '已完成'
+  if (status === 'paused' || projectPaused) return '已暂停'
+  if (status === 'cancelled' || status === 'error') return '已停止'
+  return '运行中'
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   let s = value.trim()
