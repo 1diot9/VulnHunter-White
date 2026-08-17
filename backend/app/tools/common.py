@@ -977,7 +977,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索（历史漏洞 / 组件情报）。每确认一条历史漏洞立刻 WriteOldVuln；落盘不会结束历史漏洞会话",
+            description="网络搜索（本项目历史漏洞；组件 CVE 仅当本仓库有对应危险 API 调用且版本仍可能受影响）。符合口径的立刻 WriteOldVuln；落盘不会结束历史漏洞会话",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1010,8 +1010,9 @@ def register_common_tools() -> None:
         ToolSpec(
             name="SearchOldVuln",
             description=(
-                "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old）与本项目已提交报告（kind=found）。"
-                "默认返回标题与摘要，传入 title 可看全文。提交前用于查重，避免重复报已发现的洞。"
+                "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，项目自身或仍可能打到的组件调用点）"
+                "与本项目已提交报告（kind=found）。默认返回标题与摘要，传入 title 可看全文。"
+                "用于跟危险 API 线索，以及提交前查重，避免重复报已发现的洞。"
             ),
             parameters={
                 "type": "object",

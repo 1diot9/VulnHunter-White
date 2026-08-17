@@ -306,7 +306,9 @@ def _mark_skip(ctx, args: dict[str, Any]) -> dict[str, Any]:
 _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
 _WRITE_NOW_HINT = (
     "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
-    "落盘不会结束本会话；检索全部结束后再 WriteOldVuln(done=true)。"
+    "只收录本项目自身洞，或本仓库有调用点且仍可能打到的组件洞；"
+    "已修复/未使用/仅传递依赖不要建档。"
+    "落盘不会结束本会话；检索全部结束后再 WriteOldVuln(done=true, note=跳过说明)。"
 )
 _SEARCH_DONE_HINT = "检索已声明结束，系统将结束本会话。"
 
@@ -375,12 +377,21 @@ def _rebuild_old_vuln_index(old_dir: Path, *, complete: bool = False) -> int:
     return count
 
 
+def _append_search_note(old_dir: Path, *, note: str, no_findings: bool, count: int) -> None:
+    extra = ""
+    if note:
+        extra = f"\n\n检索说明：{note}\n"
+    elif no_findings and count == 0:
+        extra = "\n\n经 WebSearch / SearchGHSA 检索，未发现需单独建档的公开历史漏洞。\n"
+    if not extra:
+        return
+    index = old_dir / "index.md"
+    index.write_text(index.read_text(encoding="utf-8") + extra, encoding="utf-8")
+
+
 def _conclude_old_vuln_search(old_dir: Path, *, no_findings: bool, note: str) -> dict[str, Any]:
     count = _rebuild_old_vuln_index(old_dir, complete=True)
-    if no_findings and count == 0:
-        extra = f"\n\n检索说明：{note}\n" if note else "\n\n经 WebSearch / SearchGHSA 检索，未发现需单独建档的公开历史漏洞。\n"
-        index = old_dir / "index.md"
-        index.write_text(index.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    _append_search_note(old_dir, note=note, no_findings=no_findings, count=count)
     return {
         "ok": True,
         "no_findings": no_findings,
@@ -414,12 +425,12 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not title:
         return {
             "ok": False,
-            "error": "缺少 title。每确认一条历史漏洞立刻调用，不要攒着。检索全部结束后再 WriteOldVuln(done=true)。",
+            "error": "缺少 title。每确认一条符合口径的历史漏洞立刻调用，不要攒着。检索全部结束后再 WriteOldVuln(done=true)。",
         }
     if not summary:
         return {"ok": False, "error": "缺少 summary"}
     if not content.strip():
-        return {"ok": False, "error": "缺少 content（请写入漏洞点/影响版本/补丁等正文）"}
+        return {"ok": False, "error": "缺少 content（请写入本仓库调用点/影响版本/补丁等正文）"}
 
     extra_meta, body = _parse_frontmatter(content) if content.lstrip().startswith("---") else ({}, content)
     if not isinstance(extra_meta, dict):
@@ -461,6 +472,13 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     text = f"---\n{front}\n---\n\n{body.strip()}\n"
     target.write_text(text, encoding="utf-8")
     indexed = _rebuild_old_vuln_index(old_dir, complete=conclude)
+    if conclude:
+        _append_search_note(
+            old_dir,
+            note=str(args.get("note") or "").strip(),
+            no_findings=no_findings,
+            count=indexed,
+        )
     rel = f"docs/old-vulns/{target.name}"
     return {
         "ok": True,
@@ -535,15 +553,20 @@ def register_recon_tools() -> None:
             name="WriteOldVuln",
             description=(
                 "立即写入一条历史漏洞到 docs/old-vulns/ 并自动更新 index.md。"
-                "每用 WebSearch/SearchGHSA 查到一条就调用；禁止调查完再一次性写入，否则上下文压缩会丢失内容。"
-                "逐条落盘不会结束本会话。检索全部结束后设 done=true；确认无公开历史漏洞时设 no_findings=true。"
+                "只收录本项目自身公开洞，或本仓库源码确有危险 API 调用点、版本仍可能受影响、默认部署可能打到的组件洞。"
+                "已修复、未使用、仅传递依赖的 CVE 不要建档，结束时用 done+note 写进索引。"
+                "每确认一条就调用；禁止调查完再一次性写入，否则上下文压缩会丢失内容。"
+                "逐条落盘不会结束本会话。检索全部结束后设 done=true；无符合口径的条目时设 no_findings=true。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "漏洞标题"},
                     "summary": {"type": "string", "description": "一句话摘要"},
-                    "content": {"type": "string", "description": "Markdown 正文（影响版本/漏洞点/补丁/参考链接）"},
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown 正文（本仓库调用点/版本与默认可达性/影响版本/补丁/参考链接）",
+                    },
                     "cve": {"type": "string"},
                     "cwe": {"type": "string"},
                     "severity": {"type": "string"},
@@ -557,9 +580,12 @@ def register_recon_tools() -> None:
                     },
                     "no_findings": {
                         "type": "boolean",
-                        "description": "已检索且无公开历史漏洞时为 true，写空索引并结束本会话",
+                        "description": "已检索且无符合口径的历史漏洞时为 true，写空索引并结束本会话",
                     },
-                    "note": {"type": "string", "description": "no_findings 时的检索说明"},
+                    "note": {
+                        "type": "string",
+                        "description": "结束说明：跳过的已修复/未使用/仅传递依赖 CVE，或无发现时的检索说明",
+                    },
                 },
             },
             handler=_write_old_vuln,

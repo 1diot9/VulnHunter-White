@@ -31,7 +31,8 @@ def test_tool_call_resets_no_tool_counter():
 
 
 def test_repeated_identical_tool_calls():
-    w = AgentWatchdog(max_same_tool_calls=3)
+    w = AgentWatchdog()
+    assert w.max_same_tool_calls == 3
     call = {"name": "Read", "arguments": {"path": "a.java"}}
     assert w.observe_tools([call]) is None
     assert w.observe_tools([call]) is None
@@ -47,8 +48,8 @@ def test_repeated_identical_tool_calls():
 
 
 def test_identical_tool_nudge_text():
-    msg = identical_tool_nudge("PowerShell", 4)
-    assert msg == IDENTICAL_TOOL_NUDGE.format(name="PowerShell", n=4)
+    msg = identical_tool_nudge("PowerShell", 3)
+    assert msg == IDENTICAL_TOOL_NUDGE.format(name="PowerShell", n=3)
     assert "未执行" in msg
     assert "不要原样重试" in msg
 

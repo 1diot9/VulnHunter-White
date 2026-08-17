@@ -133,6 +133,26 @@ def test_write_old_vuln_done_after_entries(tmp_env, project):
     assert "complete: true" in index
 
 
+def test_write_old_vuln_done_appends_skip_note(tmp_env, project):
+    registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {"title": "App CVE", "summary": "own", "content": "call site Foo.bar", "cve": "CVE-1"},
+    )
+    out = registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {"done": True, "note": "已跳过已修复的 Spring/Tomcat 传递依赖 CVE，未单独建档"},
+    )
+    assert out["ok"] is True
+    assert out["done"] is True
+    index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "App CVE" in index
+    assert "检索说明" in index
+    assert "Spring/Tomcat" in index
+    assert "complete: true" in index
+
+
 def test_write_old_vuln_last_entry_can_declare_done(tmp_env, project):
     out = registry.dispatch(
         _ctx(project),
@@ -143,11 +163,15 @@ def test_write_old_vuln_last_entry_can_declare_done(tmp_env, project):
             "content": "body",
             "cve": "CVE-9",
             "done": True,
+            "note": "已跳过未使用的 Undertow CVE",
         },
     )
     assert out["ok"] is True
     assert out["done"] is True
     assert recon_old_vulns_ready(project) is True
+    index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "Only" in index
+    assert "Undertow" in index
 
 
 def test_write_old_vuln_no_findings_after_entries_keeps_docs(tmp_env, project):
