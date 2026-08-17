@@ -114,6 +114,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "有 CVE 价值" in text
     assert "低危害难利用" in text
     assert "advisory_only" not in text
+    assert "needs_more_evidence" not in text
+    assert "证据不足" not in text
     assert "双层审核" in text
     assert "前台" in text
     assert "后台" in text

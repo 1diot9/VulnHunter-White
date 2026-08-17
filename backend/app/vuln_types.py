@@ -63,7 +63,6 @@ SUBMISSION_TIERS: dict[str, str] = {
     "cve_candidate": "有 CVE 价值",
     "low_impact": "低危害难利用",
     "duplicate_grouped": "同根因重复",
-    "needs_more_evidence": "证据不足",
 }
 
 ALLOWED_SUBMISSION_TIERS = frozenset(SUBMISSION_TIERS)
@@ -103,10 +102,6 @@ _SUBMISSION_TIER_ALIASES: dict[str, str] = {
     "同根因": "duplicate_grouped",
     "同根因重复": "duplicate_grouped",
     "重复": "duplicate_grouped",
-    "needs_more_evidence": "needs_more_evidence",
-    "needs_evidence": "needs_more_evidence",
-    "evidence": "needs_more_evidence",
-    "证据不足": "needs_more_evidence",
 }
 
 _REACHABILITY_SCORES: dict[str, int] = {
@@ -472,14 +467,8 @@ def normalize_submission_decision(
     return SubmissionTierDecision(tier=tier, reason=reason, root_cause_key=root)
 
 
-def suggest_submission_tier(
-    *,
-    calibration: SeverityCalibration,
-    evidence_level: str | None = None,
-) -> str:
+def suggest_submission_tier(*, calibration: SeverityCalibration) -> str:
     """Heuristic hint for tests/docs; Reviewer still must choose explicitly."""
-    if evidence_level == "static_only" and calibration.score < 3:
-        return "needs_more_evidence"
     if calibration.reachability == "admin" and calibration.impact == "limited_info":
         return "low_impact"
     if calibration.score >= 3 and calibration.reachability in ("unauthenticated", "low_privilege"):

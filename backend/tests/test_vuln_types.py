@@ -106,6 +106,15 @@ def test_normalize_submission_decision_and_aliases():
     except ValueError as exc:
         assert "root_cause_key" in str(exc)
 
+    try:
+        normalize_submission_decision(
+            submission_tier="证据不足",
+            submission_reason="环境没打出来",
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "submission_tier" in str(exc)
+
 
 def test_suggest_submission_tier_hint():
     strong = calibrate_review_severity(
@@ -124,4 +133,4 @@ def test_suggest_submission_tier_hint():
         exploit_complexity="specific_environment",
         defense_status="conditional",
     )
-    assert suggest_submission_tier(calibration=weak, evidence_level="static_only") == "needs_more_evidence"
+    assert suggest_submission_tier(calibration=weak) == "low_impact"

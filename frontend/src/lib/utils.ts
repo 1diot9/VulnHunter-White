@@ -28,8 +28,6 @@ export function formatSubmissionTier(value: string | null | undefined): string {
       return '低危害难利用'
     case 'duplicate_grouped':
       return '同根因重复'
-    case 'needs_more_evidence':
-      return '证据不足'
     default:
       return '未分层'
   }

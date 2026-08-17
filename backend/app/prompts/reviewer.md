@@ -23,9 +23,10 @@
 - `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网等；影响强、复现清晰，值得单独提交 CVE。
 - `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、影响达不到 CVE 强度的问题。
 
-另外两个是流程标记，不是价值分类：
+另外一个是流程标记，不是价值分类：
 - `duplicate_grouped`：危害或鉴权前提**明显不同**、但仍属同一根因家族、值得单独留档的变体。同一根因同一危害、只是方法不同 → **不要**用本标记，改用 `MergeIntoVuln` 并入主报告。若仍用本标记，**必须原样复用** SearchOldVuln `kind=found` 里该主报告已有的 `root_cause_key`。
-- `needs_more_evidence`：代码上已能证明默认可利用（例如未过滤的公开 SQL 注入），只是环境没打出来；**不要**用来收留「sink 碰到了但默认无冲击」的问题。
+
+缺动态复现不是价值分层：环境没打出来、但静态已能证明默认可利用时，Confirm 用 `evidence_level=static_only`，价值仍标 `cve_candidate` 或 `low_impact`。
 
 `root_cause_key` 是家族合并键，不是本条报告的标题。格式固定为 `类型:稳定锚点`（如 `idor:SysCommentController`、`ssrf:checkSsrfHttpUrl`），锚点用过滤器/工具类/权限注解所在类，不要用接口名、方法名、行号、文件名去生成「每条一个」的新键。
 
@@ -46,8 +47,8 @@
    - env/env.json 中 runtime 为 java/nodejs/python 且调试端口可用 → 优先 debug MCP（若已接入）。
    - 否则 **普通动态**：对 target_url 发请求 / 运行 poc.py，结合 docker exec、日志、文件、进程**观察**冲击。
    - 原 PoC 无有害差异 → 不要标 `evidence_level=dynamic` 确认；按否决项误报或打回。
-   - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)。
-   - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `needs_more_evidence` 过关。
+   - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
+   - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
 5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。确认前必须按四维校准：
    - 可达性：由 `attack_surface` + `required_account` 决定。前台=未认证可达(+1)，后台普通权限=低权限可达(+0)，后台管理员=管理员可达(-1)。
    - 影响范围 `impact`：

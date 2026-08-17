@@ -12,7 +12,6 @@ export type VulnTierFilter =
   | 'cve_candidate'
   | 'low_impact'
   | 'duplicate_grouped'
-  | 'needs_more_evidence'
   | 'untiered'
 
 const SEVERITY_RANK: Record<string, number> = {
@@ -34,7 +33,6 @@ const STATUS_RANK: Record<string, number> = {
 
 const TIER_RANK: Record<string, number> = {
   cve_candidate: 40,
-  needs_more_evidence: 25,
   low_impact: 20,
   advisory_only: 20,
   hardening: 20,

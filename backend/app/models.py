@@ -136,7 +136,7 @@ class Vuln(Base):
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # user | admin — 仅后台漏洞需要
     submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # cve_candidate | low_impact | duplicate_grouped | needs_more_evidence
+    # cve_candidate | low_impact | duplicate_grouped
     submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
@@ -276,7 +276,7 @@ def _ensure_columns() -> None:
 
 
 def _migrate_submission_tiers() -> None:
-    """Fold legacy hardening/advisory_only rows into low_impact."""
+    """Fold legacy hardening/advisory_only/needs_more_evidence rows into value tiers."""
     insp = inspect(engine)
     if "vulns" not in insp.get_table_names():
         return
@@ -288,6 +288,19 @@ def _migrate_submission_tiers() -> None:
             text(
                 "UPDATE vulns SET submission_tier = 'low_impact' "
                 "WHERE submission_tier IN ('hardening', 'advisory_only')"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE vulns SET submission_tier = 'cve_candidate' "
+                "WHERE submission_tier = 'needs_more_evidence' "
+                "AND COALESCE(severity_score, 0) >= 3"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE vulns SET submission_tier = 'low_impact' "
+                "WHERE submission_tier = 'needs_more_evidence'"
             )
         )
 

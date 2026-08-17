@@ -48,7 +48,6 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
         }
       >
         {STATUS_LABEL[v.status] || v.status}
-        {v.evidence_level === 'static_only' ? ' · 静态' : ''}
       </Badge>
       {score ? (
         <Badge

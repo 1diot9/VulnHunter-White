@@ -1,14 +1,20 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Project, type Vuln, type VulnDetail } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
 import {
-  cn,
   formatAttackSurface,
   formatDateTime,
   formatSeverity,
@@ -26,12 +32,12 @@ const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
   cve_candidate: '有 CVE 价值',
   low_impact: '低危害难利用',
   duplicate_grouped: '同根因重复',
-  needs_more_evidence: '证据不足',
   untiered: '未分层',
 }
 
 export default function VulnsPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const detailId = id ? Number(id) : null
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'false_positive' | 'pending_review'>('all')
   const [surfaceFilter, setSurfaceFilter] = useState<'all' | 'frontend' | 'backend'>('all')
@@ -94,7 +100,6 @@ export default function VulnsPage() {
   const projectFilterLabel = projectId == null ? '全部项目' : projectNameById.get(projectId) || `项目 ${projectId}`
   const surfaceFilterLabel =
     surfaceFilter === 'frontend' ? '前台漏洞' : surfaceFilter === 'backend' ? '后台漏洞' : '全部前后台'
-  const showDetailPane = detailId != null
 
   async function downloadIds(ids: number[], filename: string) {
     if (!ids.length) return
@@ -188,94 +193,98 @@ export default function VulnsPage() {
         ))}
       </div>
 
-      <div
-        className={cn(
-          'grid items-start gap-4',
-          showDetailPane ? 'lg:grid-cols-[minmax(16rem,18rem)_minmax(0,1fr)]' : 'lg:grid-cols-1',
-        )}
-      >
-        <Card className="max-h-[calc(100vh-13rem)] gap-0 divide-y divide-border overflow-auto py-0">
-          <VulnGroupList
-            vulns={vulns}
-            tierFilter={tierFilter}
-            activeId={detailId}
-            selectedIds={selected}
-            onToggleSelect={(id, checked) =>
-              setSelected((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)))
-            }
-            projectNameById={projectNameById}
-          />
-        </Card>
+      <Card className="max-h-[calc(100vh-13rem)] gap-0 divide-y divide-border overflow-auto py-0">
+        <VulnGroupList
+          vulns={vulns}
+          tierFilter={tierFilter}
+          activeId={detailId}
+          selectedIds={selected}
+          onToggleSelect={(id, checked) =>
+            setSelected((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)))
+          }
+          projectNameById={projectNameById}
+        />
+      </Card>
 
-        {showDetailPane ? (
-        <Card className="min-w-0 max-h-[calc(100vh-13rem)] overflow-auto">
-          <CardContent className="p-5">
-          {detail ? (
-            <div className="space-y-3">
-              <h2 className="text-lg font-semibold">{detail.title}</h2>
-              <div className="text-xs text-slate-400">
-                {detailProject} · 产出时间 {formatDateTime(detail.created_at)}
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant="outline">{detail.vuln_type}</Badge>
-                <Badge variant="warning">{formatSeverity(detail.severity)}</Badge>
-                {detailScore ? (
-                  <Badge variant="outline" className={severityScoreBadgeClass(detail.severity_score)}>
-                    {detailScore}
-                  </Badge>
-                ) : null}
-                <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
-                <Badge variant="info">{detail.status}</Badge>
-                {detail.evidence_level ? <Badge variant="outline">{detail.evidence_level}</Badge> : null}
-                {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
-              </div>
-              {detail.submission_reason ? (
-                <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  <div className="text-xs text-slate-400">分层理由</div>
-                  <div>{detail.submission_reason}</div>
-                  {detail.root_cause_key ? (
-                    <div className="mt-1 text-xs text-slate-400">根因键：{detail.root_cause_key}</div>
+      <Dialog
+        open={detailId != null}
+        onOpenChange={(open) => {
+          if (!open) navigate('/vulns', { replace: true })
+        }}
+      >
+        <DialogContent className="flex max-h-[min(90vh,52rem)] w-full max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
+            <DialogTitle className="text-lg leading-snug font-semibold">
+              {detail?.title || '漏洞详情'}
+            </DialogTitle>
+            <DialogDescription>
+              {detail ? `${detailProject} · 产出时间 ${formatDateTime(detail.created_at)}` : '加载报告…'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+            {detail ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Badge variant="outline">{detail.vuln_type}</Badge>
+                  <Badge variant="warning">{formatSeverity(detail.severity)}</Badge>
+                  {detailScore ? (
+                    <Badge variant="outline" className={severityScoreBadgeClass(detail.severity_score)}>
+                      {detailScore}
+                    </Badge>
                   ) : null}
+                  <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
+                  <Badge variant="info">{detail.status}</Badge>
+                  {detail.evidence_level && detail.evidence_level !== 'static_only' ? (
+                    <Badge variant="outline">{detail.evidence_level}</Badge>
+                  ) : null}
+                  {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
                 </div>
-              ) : null}
-              {detail.merged_into_id ? (
-                <div className="rounded border border-cyan-900/50 bg-cyan-950/30 px-3 py-2 text-sm text-cyan-200/90">
-                  已并入主报告{' '}
-                  <a className="underline" href={`/vulns/${detail.merged_into_id}`}>
-                    #{detail.merged_into_id}
-                  </a>
-                </div>
-              ) : null}
-              {detail.merged_from_ids && detail.merged_from_ids.length > 0 ? (
-                <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  <div className="text-xs text-slate-400">已并入本报告的条目</div>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {detail.merged_from_ids.map((mid) => (
-                      <a key={mid} className="text-cyan-300 underline" href={`/vulns/${mid}`}>
-                        #{mid}
-                      </a>
-                    ))}
+                {detail.submission_reason ? (
+                  <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
+                    <div className="text-xs text-slate-400">分层理由</div>
+                    <div>{detail.submission_reason}</div>
+                    {detail.root_cause_key ? (
+                      <div className="mt-1 text-xs text-slate-400">根因键：{detail.root_cause_key}</div>
+                    ) : null}
                   </div>
-                </div>
-              ) : null}
-              <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
-                <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
-              </Suspense>
-              {detail.http_request ? (
-                <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.http_request}</pre>
-              ) : null}
-              {detail.poc_code ? (
-                <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
-              ) : null}
-              <VulnFollowUpPanel vulnId={detail.id} />
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">选择左侧漏洞查看详情</div>
-          )}
-          </CardContent>
-        </Card>
-        ) : null}
-      </div>
+                ) : null}
+                {detail.merged_into_id ? (
+                  <div className="rounded border border-cyan-900/50 bg-cyan-950/30 px-3 py-2 text-sm text-cyan-200/90">
+                    已并入主报告{' '}
+                    <Link className="underline" to={`/vulns/${detail.merged_into_id}`}>
+                      #{detail.merged_into_id}
+                    </Link>
+                  </div>
+                ) : null}
+                {detail.merged_from_ids && detail.merged_from_ids.length > 0 ? (
+                  <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
+                    <div className="text-xs text-slate-400">已并入本报告的条目</div>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {detail.merged_from_ids.map((mid) => (
+                        <Link key={mid} className="text-cyan-300 underline" to={`/vulns/${mid}`}>
+                          #{mid}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
+                  <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
+                </Suspense>
+                {detail.http_request ? (
+                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.http_request}</pre>
+                ) : null}
+                {detail.poc_code ? (
+                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
+                ) : null}
+                <VulnFollowUpPanel vulnId={detail.id} />
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">加载报告…</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

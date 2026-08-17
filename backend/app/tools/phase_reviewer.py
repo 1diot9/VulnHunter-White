@@ -522,8 +522,8 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "必填。价值分层：cve_candidate=有 CVE 价值；"
                             "low_impact=低危害难利用。"
-                            "流程标记：duplicate_grouped=危害/鉴权不同的相关变体（不是并入）；"
-                            "needs_more_evidence=证据不足。也可写中文。"
+                            "流程标记：duplicate_grouped=危害/鉴权不同的相关变体（不是并入）。"
+                            "缺动态复现请用 evidence_level=static_only，不要另造价值分层。也可写中文。"
                         ),
                     },
                     "submission_reason": {

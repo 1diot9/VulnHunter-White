@@ -286,6 +286,38 @@ def test_confirm_requires_submission_tier(tmp_env, project):
     assert "submission_tier" in conf["error"]
 
 
+def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
+    payload = {
+        "title": "SQLi",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "impact": "rce_or_full_data",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "证据不足",
+            "submission_reason": "环境没打出来",
+        },
+    )
+    assert conf["ok"] is False
+    assert "submission_tier" in conf["error"]
+
+
 def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     _set_audit_mode(project, "full")
     payload = {
