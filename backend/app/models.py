@@ -59,6 +59,8 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | recon | worker | reviewer | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # bounty | full — set at create time; change only while paused
+    audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -134,7 +136,7 @@ class Vuln(Base):
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # user | admin — 仅后台漏洞需要
     submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # cve_candidate | advisory_only | hardening | duplicate_grouped | needs_more_evidence
+    # cve_candidate | low_impact | duplicate_grouped | needs_more_evidence
     submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
@@ -250,6 +252,7 @@ def _ensure_columns() -> None:
         },
         "tool_logs": {"error_class": "VARCHAR(32)"},
         "phase_runs": {"file_path": "VARCHAR(1024)"},
+        "projects": {"audit_mode": "VARCHAR(32) DEFAULT 'bounty'"},
         "vulns": {
             "attack_surface": "VARCHAR(32)",
             "required_account": "VARCHAR(32)",
@@ -269,12 +272,30 @@ def _ensure_columns() -> None:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
+def _migrate_submission_tiers() -> None:
+    """Fold legacy hardening/advisory_only rows into low_impact."""
+    insp = inspect(engine)
+    if "vulns" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("vulns")}
+    if "submission_tier" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE vulns SET submission_tier = 'low_impact' "
+                "WHERE submission_tier IN ('hardening', 'advisory_only')"
+            )
+        )
+
+
 def ensure_schema() -> None:
     """Idempotent: create missing tables/columns. Safe to call from worker threads."""
     DATA_DIR = DB_PATH.parent
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
+    _migrate_submission_tiers()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]
     if missing:

@@ -82,6 +82,11 @@ class ProjectCreate(BaseModel):
     name: str = ""
     source_type: Literal["github", "zip"] = "github"
     source_url: str | None = None
+    audit_mode: Literal["bounty", "full"] = "bounty"
+
+
+class ProjectUpdate(BaseModel):
+    audit_mode: Literal["bounty", "full"]
 
 
 class ProjectOut(BaseModel):
@@ -93,6 +98,7 @@ class ProjectOut(BaseModel):
     status: str
     phase: str
     recon_done: bool
+    audit_mode: str = "bounty"
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime

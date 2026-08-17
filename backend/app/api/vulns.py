@@ -14,7 +14,7 @@ from ..schemas import VulnDetail, VulnFollowUpIn, VulnFollowUpThread, VulnOut
 from ..services.paths import project_root, vuln_dir
 from ..services.report import stamp_produced_at
 from ..services import vuln_followup
-from ..vuln_types import ALLOWED_SUBMISSION_TIERS
+from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, normalize_submission_tier
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
@@ -68,15 +68,20 @@ def list_vulns(
         if submission_tier:
             if submission_tier == "untiered":
                 q = q.filter(Vuln.submission_tier.is_(None))
-            elif submission_tier not in ALLOWED_SUBMISSION_TIERS:
-                raise HTTPException(
-                    400,
-                    "submission_tier 须为 "
-                    + "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
-                    + "|untiered",
-                )
             else:
-                q = q.filter(Vuln.submission_tier == submission_tier)
+                try:
+                    normalized = normalize_submission_tier(submission_tier)
+                except ValueError:
+                    raise HTTPException(
+                        400,
+                        "submission_tier 须为 "
+                        + "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
+                        + "|untiered",
+                    ) from None
+                if normalized == "low_impact":
+                    q = q.filter(Vuln.submission_tier.in_(tuple(LEGACY_LOW_IMPACT_TIERS)))
+                else:
+                    q = q.filter(Vuln.submission_tier == normalized)
         if root_cause_key:
             q = q.filter(Vuln.root_cause_key == root_cause_key)
         rows = q.order_by(Vuln.id.desc()).all()

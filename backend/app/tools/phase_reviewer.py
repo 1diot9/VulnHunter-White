@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
 from ..config import settings
-from ..models import SessionLocal, Vuln
+from ..models import Project, SessionLocal, Vuln
 from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
 from ..vuln_types import (
@@ -84,7 +85,7 @@ def _review_label_body(
             f"- 影响范围：{REVIEW_FACTOR_LABELS['impact'][calibration.impact]}",
             f"- 利用复杂度：{REVIEW_FACTOR_LABELS['exploit_complexity'][calibration.exploit_complexity]}",
             f"- 防护状态：{REVIEW_FACTOR_LABELS['defense_status'][calibration.defense_status]}",
-            f"- 提交分层：{submission.tier_label}（{submission.tier}）",
+            f"- 价值分层：{submission.tier_label}（{submission.tier}）",
             f"- 分层理由：{submission.reason}",
         ]
     )
@@ -143,6 +144,15 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
             return {"ok": False, "error": "漏洞不存在"}
+        proj = db.get(Project, ctx.project_id)
+        mode = normalize_audit_mode(None if not proj else proj.audit_mode)
+        if mode == AUDIT_MODE_BOUNTY:
+            blocked = bounty_confirm_block_reason(
+                vuln_type=str(vuln.vuln_type or ""),
+                submission_tier=submission.tier,
+            )
+            if blocked:
+                return {"ok": False, "error": blocked}
         if vuln.intended_behavior and evidence != "static_only":
             # still allow confirm but flag
             pass
@@ -229,7 +239,7 @@ def register_reviewer_tools() -> None:
         ToolSpec(
             name="ConfirmVuln",
             description=(
-                "确认漏洞，并按审核证据校准最终严重度与提交分层。"
+                "确认漏洞，并按审核证据校准最终严重度与价值分层。"
                 "只确认默认/官方部署下攻击者可单独利用、且能打出可观察有害冲击的问题；"
                 "不要把仅 sink 可达、靠 docker exec 种文件/组合独立写原语才成立、"
                 "或项目配置/文档里的默认密码弱口令标成漏洞。"
@@ -281,20 +291,21 @@ def register_reviewer_tools() -> None:
                     "submission_tier": {
                         "type": "string",
                         "description": (
-                            "必填。提交分层（与漏洞是否成立独立）："
-                            "cve_candidate=CVE 候选；advisory_only=仅公告/合并公告；"
-                            "hardening=加固建议；duplicate_grouped=同根因重复；"
+                            "必填。价值分层：cve_candidate=有 CVE 价值；"
+                            "low_impact=低危害难利用。"
+                            "流程标记：duplicate_grouped=同根因重复；"
                             "needs_more_evidence=证据不足。也可写中文。"
                         ),
                     },
                     "submission_reason": {
                         "type": "string",
-                        "description": "必填。说明为何进入该提交分层（可否 CVE、为何降级、如何合并）。",
+                        "description": "必填。说明为何进入该价值分层（有无 CVE 价值、为何算低危害难利用、如何合并）。",
                     },
                     "root_cause_key": {
                         "type": "string",
                         "description": (
-                            "可选。同根因合并键，如 idor:SysCommentController。"
+                            "同一根因的合并键，如 idor:SysCommentController。"
+                            "主报告与后续变体都应填写相同键；"
                             "submission_tier=duplicate_grouped 时必填。"
                         ),
                     },

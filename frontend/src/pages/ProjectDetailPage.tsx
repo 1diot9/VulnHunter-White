@@ -3,18 +3,15 @@ import { Link, useParams } from 'react-router-dom'
 import { api, type LogEvent, type Project, type Vuln } from '../api'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import PhaseFlow from '../components/PhaseFlow'
+import VulnGroupList from '../components/VulnGroupList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-  formatAttackSurface,
-  formatDateTime,
+  formatAuditMode,
   formatFileProgress,
-  formatSeverity,
-  formatSeverityScore,
-  formatSubmissionTier,
   formatTokens,
-  severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
@@ -431,8 +428,33 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3 text-sm text-slate-300">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
         <Badge variant="info">{project.status}</Badge>
+        {project.status === 'paused' ? (
+          <Select
+            value={project.audit_mode || 'bounty'}
+            onValueChange={async (value) => {
+              if (value !== 'bounty' && value !== 'full') return
+              if (value === project.audit_mode) return
+              try {
+                const next = await api.updateProject(projectId, { audit_mode: value })
+                setProject(next)
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            <SelectTrigger className="w-auto min-w-28">
+              <SelectValue>{formatAuditMode(project.audit_mode)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="start">
+              <SelectItem value="bounty">赏金模式</SelectItem>
+              <SelectItem value="full">全量模式</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : (
+          <Badge variant="outline">{formatAuditMode(project.audit_mode)}</Badge>
+        )}
         <span>tokens {formatTokens(project.tokens_total)}</span>
         <span>{formatFileProgress(project)}</span>
         <span>
@@ -531,52 +553,10 @@ export default function ProjectDetailPage() {
         </Card>
       ) : tab === 'vulns' ? (
         <Card className="gap-0 divide-y divide-border py-0">
-          {vulns.map((v) => {
-            const surface = formatAttackSurface(v.attack_surface, v.required_account)
-            const score = formatSeverityScore(v.severity_score)
-            const tier = formatSubmissionTier(v.submission_tier)
-            return (
-              <Link
-                key={v.id}
-                to={`/vulns/${v.id}`}
-                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted"
-              >
-                <div>
-                  <div className="font-medium">{v.title}</div>
-                  <div className="text-xs text-slate-400">
-                    {v.vuln_type} · {formatSeverity(v.severity)}
-                    {` · ${tier}`}
-                    {surface ? ` · ${surface}` : ''} · {v.file_path}:{v.line_no} · {formatDateTime(v.created_at)}
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                  <Badge
-                    variant={
-                      v.status === 'confirmed' || v.status === 'static_only'
-                        ? 'success'
-                        : v.status === 'false_positive'
-                          ? 'destructive'
-                          : 'warning'
-                    }
-                  >
-                    {v.status}
-                    {v.evidence_level === 'static_only' ? ' · static' : ''}
-                  </Badge>
-                  {score ? (
-                    <Badge variant="outline" className={severityScoreBadgeClass(v.severity_score)}>
-                      {score}
-                    </Badge>
-                  ) : null}
-                  <Badge variant={v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{tier}</Badge>
-                </div>
-              </Link>
-            )
-          })}
-          {vulns.length === 0 ? (
-            <div className="p-4 text-sm text-muted-foreground">
-              {vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
-            </div>
-          ) : null}
+          <VulnGroupList
+            vulns={vulns}
+            emptyText={vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
+          />
         </Card>
       ) : null}
     </div>

@@ -82,6 +82,83 @@ def test_projects_list_empty(tmp_env):
         assert r.json() == []
 
 
+def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={"source_type": "github", "source_url": "https://github.com/owner/demo"},
+        )
+        assert created.status_code == 200
+        assert created.json()["audit_mode"] == "bounty"
+        full = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/full",
+                "audit_mode": "full",
+            },
+        )
+        assert full.status_code == 200
+        assert full.json()["audit_mode"] == "full"
+        bad = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/bad",
+                "audit_mode": "nope",
+            },
+        )
+        assert bad.status_code == 422
+
+
+def test_create_zip_audit_mode_and_invalid(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"audit_mode": "full"},
+        )
+        assert created.status_code == 200
+        assert created.json()["audit_mode"] == "full"
+        bad = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"audit_mode": "nope"},
+        )
+        assert bad.status_code == 400
+
+
+def test_patch_audit_mode_only_when_paused(tmp_env, project):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    with TestClient(app) as client:
+        denied = client.patch(f"/api/projects/{project}", json={"audit_mode": "full"})
+        assert denied.status_code == 400
+        assert "暂停" in denied.json()["detail"]
+        with SessionLocal() as db:
+            p = db.get(Project, project)
+            p.status = "paused"
+            db.commit()
+        ok = client.patch(f"/api/projects/{project}", json={"audit_mode": "full"})
+        assert ok.status_code == 200
+        assert ok.json()["audit_mode"] == "full"
+        assert ok.json()["status"] == "paused"
+
+
 def test_project_file_progress_counts(tmp_env, project):
     from app.main import app
     from app.models import FileWeight, PhaseRun, SessionLocal
@@ -102,6 +179,7 @@ def test_project_file_progress_counts(tmp_env, project):
 
     with TestClient(app) as client:
         body = client.get(f"/api/projects/{project}").json()
+        assert body["audit_mode"] == "bounty"
         assert body["files_total"] == 4
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
@@ -306,8 +384,8 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
             status="confirmed",
             attack_surface="backend",
             required_account="user",
-            submission_tier="advisory_only",
-            submission_reason="低权限 IDOR，合并公告",
+            submission_tier="low_impact",
+            submission_reason="低权限 IDOR，低危害难利用",
             root_cause_key="idor:UserController",
         )
         legacy = Vuln(
@@ -327,7 +405,7 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
             status="confirmed",
             attack_surface="frontend",
             submission_tier="hardening",
-            submission_reason="CORS 加固建议",
+            submission_reason="CORS 低危害难利用",
         )
         db.add_all([front, back, legacy, hard])
         db.commit()
@@ -366,6 +444,11 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
         cve_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=cve_candidate").json()
         assert [v["id"] for v in cve_rows] == [front_id]
         assert cve_rows[0]["submission_reason"] == "未认证 SQLI"
+
+        low_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=low_impact").json()
+        assert {v["id"] for v in low_rows} == {back_id, hard_id}
+        alias_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=hardening").json()
+        assert {v["id"] for v in alias_rows} == {back_id, hard_id}
 
         untiered = client.get(f"/api/vulns?project_id={project}&submission_tier=untiered").json()
         assert [v["id"] for v in untiered] == [legacy_id]

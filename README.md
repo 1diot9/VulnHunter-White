@@ -51,10 +51,11 @@ npm run dev
 ## 能力概览
 
 - 凡 Web 项目均可审计（不限语言）
-- v1 仅启发式挖掘
+- v1 仅启发式挖掘；创建项目时选择赏金模式（默认）或全量模式
+- 赏金模式按可利用高危害类型收口；全量模式保留低危害难利用项（CORS、反射 XSS、缺速率限制等）
 - 动态验证：有 Java/Node/Python debug MCP 则优先；否则普通动态（HTTP PoC + docker exec/日志）
 - LLM 报错对齐 AutoPoc：429 休眠续跑、超时 conclude、死循环新开、阶段最多再试 2 次
-- 历史漏洞：SearchGHSA + WebSearch + SearchOldVuln
+- 历史漏洞：SearchGHSA + WebSearch + SearchOldVuln；只建档项目自身洞与仍可能打到的组件调用点
 
 ## 目录
 

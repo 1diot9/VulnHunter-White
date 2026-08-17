@@ -7,6 +7,7 @@ export type Project = {
   status: string
   phase: string
   recon_done: boolean
+  audit_mode: 'bounty' | 'full'
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -222,18 +223,25 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   listProjects: () => request<Project[]>('/api/projects'),
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
-  createGithub: (source_url: string, name = '') =>
+  createGithub: (source_url: string, name = '', audit_mode: 'bounty' | 'full' = 'bounty') =>
     request<Project>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_type: 'github', source_url, name }),
+      body: JSON.stringify({ source_type: 'github', source_url, name, audit_mode }),
     }),
-  uploadZip: async (file: File, name = '') => {
+  uploadZip: async (file: File, name = '', audit_mode: 'bounty' | 'full' = 'bounty') => {
     const fd = new FormData()
     fd.append('file', file)
     if (name) fd.append('name', name)
+    fd.append('audit_mode', audit_mode)
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
+  updateProject: (id: number, body: { audit_mode: 'bounty' | 'full' }) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
   pausePhase: (id: number, phase: string) =>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_submit_block_reason, normalize_audit_mode
 from ..models import FileWeight, Project, SessionLocal, Vuln
 from ..services.paths import vuln_dir
 from ..services.report import ensure_search_fingerprint_section, write_report_md
@@ -119,6 +120,12 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "line_no 必须是整数"}
 
     with SessionLocal() as db:
+        proj = db.get(Project, ctx.project_id)
+        mode = normalize_audit_mode(None if not proj else proj.audit_mode)
+        if mode == AUDIT_MODE_BOUNTY:
+            blocked = bounty_submit_block_reason(vtype)
+            if blocked:
+                return {"ok": False, "error": blocked}
         vuln = Vuln(
             project_id=ctx.project_id,
             title=str(args["title"]).strip(),

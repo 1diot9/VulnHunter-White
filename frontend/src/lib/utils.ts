@@ -21,11 +21,11 @@ export function formatAttackSurface(
 export function formatSubmissionTier(value: string | null | undefined): string {
   switch (value) {
     case 'cve_candidate':
-      return 'CVE 候选'
+      return '有 CVE 价值'
+    case 'low_impact':
     case 'advisory_only':
-      return '仅公告'
     case 'hardening':
-      return '加固建议'
+      return '低危害难利用'
     case 'duplicate_grouped':
       return '同根因重复'
     case 'needs_more_evidence':
@@ -33,6 +33,11 @@ export function formatSubmissionTier(value: string | null | undefined): string {
     default:
       return '未分层'
   }
+}
+
+export function formatAuditMode(value: string | null | undefined): string {
+  if (value === 'full') return '全量模式'
+  return '赏金模式'
 }
 
 export function formatDateTime(value: string | null | undefined): string {

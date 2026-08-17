@@ -1,11 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { api, type Project, type Vuln, type VulnDetail } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import VulnGroupList from '../components/VulnGroupList'
 import {
   cn,
   formatAttackSurface,
@@ -18,34 +18,24 @@ import {
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import VulnFollowUpPanel from '../components/VulnFollowUpPanel'
 
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审',
-  confirmed: '已确认',
-  false_positive: '误报',
-  static_only: '仅静态',
-  returned: '已打回',
-}
+const MarkdownView = lazy(() => import('../components/MarkdownView'))
 
 type TierFilter =
   | 'all'
   | 'cve_candidate'
-  | 'advisory_only'
-  | 'hardening'
+  | 'low_impact'
   | 'duplicate_grouped'
   | 'needs_more_evidence'
   | 'untiered'
 
 const TIER_FILTER_LABEL: Record<TierFilter, string> = {
   all: '全部分层',
-  cve_candidate: 'CVE 候选',
-  advisory_only: '仅公告',
-  hardening: '加固建议',
+  cve_candidate: '有 CVE 价值',
+  low_impact: '低危害难利用',
   duplicate_grouped: '同根因重复',
   needs_more_evidence: '证据不足',
   untiered: '未分层',
 }
-
-const MarkdownView = lazy(() => import('../components/MarkdownView'))
 
 export default function VulnsPage() {
   const { id } = useParams()
@@ -137,11 +127,11 @@ export default function VulnsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">漏洞产出</h1>
-          <p className="text-sm text-slate-400">按项目、状态与提交分层筛选；可单独下载 CVE 候选。</p>
+          <p className="text-sm text-slate-400">按项目、状态与价值分层筛选；同根因报告折叠在危害最大的条目下。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={downloadCveCandidates} disabled={!cveCandidateIds.length && !selected.length}>
-            仅下载 CVE 候选
+            仅下载有 CVE 价值
           </Button>
           <Button onClick={download}>批量下载</Button>
         </div>
@@ -210,59 +200,15 @@ export default function VulnsPage() {
         )}
       >
         <Card className="max-h-[calc(100vh-13rem)] gap-0 divide-y divide-border overflow-auto py-0">
-          {filtered.map((v) => {
-            const surface = formatAttackSurface(v.attack_surface, v.required_account)
-            const score = formatSeverityScore(v.severity_score)
-            const tier = formatSubmissionTier(v.submission_tier)
-            const projectName = v.project_name || projectNameById.get(v.project_id) || `项目 ${v.project_id}`
-            return (
-              <div
-                key={v.id}
-                className={cn(
-                  'flex items-start gap-2 px-2.5 py-2.5',
-                  detailId === v.id && 'bg-muted',
-                )}
-              >
-                <Checkbox
-                  className="mt-1 shrink-0"
-                  checked={selected.includes(v.id)}
-                  onCheckedChange={(checked) =>
-                    setSelected((prev) =>
-                      checked === true ? [...prev, v.id] : prev.filter((x) => x !== v.id),
-                    )
-                  }
-                />
-                <Link to={`/vulns/${v.id}`} className="min-w-0 flex-1 hover:underline">
-                  <div className="break-words font-medium leading-snug">{v.title}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <Badge
-                      variant={
-                        v.status === 'confirmed' || v.status === 'static_only'
-                          ? 'success'
-                          : v.status === 'false_positive'
-                            ? 'destructive'
-                            : 'warning'
-                      }
-                    >
-                      {STATUS_LABEL[v.status] || v.status}
-                      {v.evidence_level === 'static_only' ? ' · 静态' : ''}
-                    </Badge>
-                    {score ? (
-                      <Badge variant="outline" className={severityScoreBadgeClass(v.severity_score)}>
-                        {score}
-                      </Badge>
-                    ) : null}
-                    <Badge variant={v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{tier}</Badge>
-                    <span className="text-xs text-slate-400">
-                      #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
-                      {surface ? ` · ${surface}` : ''} · {formatDateTime(v.created_at)}
-                    </span>
-                  </div>
-                </Link>
-              </div>
-            )
-          })}
-          {filtered.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无数据</div> : null}
+          <VulnGroupList
+            vulns={filtered}
+            activeId={detailId}
+            selectedIds={selected}
+            onToggleSelect={(id, checked) =>
+              setSelected((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)))
+            }
+            projectNameById={projectNameById}
+          />
         </Card>
 
         {showDetailPane ? (

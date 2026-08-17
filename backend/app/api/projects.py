@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 
+from ..audit_mode import normalize_audit_mode, parse_audit_mode
 from ..models import AppSettings, FileWeight, PhaseRun, Project, SessionLocal, TokenUsage, ToolLog, Vuln
 from ..schemas import (
     EventsChunk,
@@ -17,6 +18,7 @@ from ..schemas import (
     PhaseRunOut,
     ProjectCreate,
     ProjectOut,
+    ProjectUpdate,
 )
 from ..services.live_log import live_log
 from ..services.paths import ensure_project_dirs, force_rmtree, project_root
@@ -24,6 +26,7 @@ from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.pipeline import (
     control_phase,
     get_phase_states,
+    note_audit_mode_changed,
     request_cancel,
     request_pause,
     request_phase_pause,
@@ -134,6 +137,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         status=p.status,
         phase=p.phase,
         recon_done=p.recon_done,
+        audit_mode=normalize_audit_mode(p.audit_mode),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -179,6 +183,10 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
     if not (body.source_url or "").strip():
         raise HTTPException(400, "缺少 source_url")
     name = (body.name or "").strip() or body.source_url.strip().rstrip("/").split("/")[-1]
+    try:
+        audit_mode = parse_audit_mode(body.audit_mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
         p = Project(
             name=name,
@@ -186,6 +194,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             source_url=body.source_url.strip(),
             status="pending",
             phase="pending",
+            audit_mode=audit_mode,
         )
         db.add(p)
         db.commit()
@@ -203,10 +212,15 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
 async def create_project_zip(
     file: UploadFile = File(...),
     name: str = Form(""),
+    audit_mode: str = Form("bounty"),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
+    try:
+        mode = parse_audit_mode(audit_mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
-        p = Project(name=raw_name, source_type="zip", status="pending", phase="pending")
+        p = Project(name=raw_name, source_type="zip", status="pending", phase="pending", audit_mode=mode)
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -218,6 +232,28 @@ async def create_project_zip(
     content = await file.read()
     zip_path.write_bytes(content)
     start_ingest_and_audit(pid, source_type="zip", zip_path=zip_path)
+    return out
+
+
+@router.patch("/{project_id}", response_model=ProjectOut)
+def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
+    try:
+        mode = parse_audit_mode(body.audit_mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "项目不存在")
+        if p.status != "paused":
+            raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
+        old = normalize_audit_mode(p.audit_mode)
+        p.audit_mode = mode
+        db.commit()
+        db.refresh(p)
+        out = _project_out(db, p)
+    if old != mode:
+        note_audit_mode_changed(project_id, mode)
     return out
 
 

@@ -60,14 +60,14 @@ SEVERITY_LABELS: dict[str, str] = {
 }
 
 SUBMISSION_TIERS: dict[str, str] = {
-    "cve_candidate": "CVE 候选",
-    "advisory_only": "仅公告/合并公告",
-    "hardening": "加固建议",
+    "cve_candidate": "有 CVE 价值",
+    "low_impact": "低危害难利用",
     "duplicate_grouped": "同根因重复",
     "needs_more_evidence": "证据不足",
 }
 
 ALLOWED_SUBMISSION_TIERS = frozenset(SUBMISSION_TIERS)
+LEGACY_LOW_IMPACT_TIERS = frozenset({"low_impact", "hardening", "advisory_only"})
 
 _SUBMISSION_TIER_ALIASES: dict[str, str] = {
     "cve_candidate": "cve_candidate",
@@ -75,17 +75,28 @@ _SUBMISSION_TIER_ALIASES: dict[str, str] = {
     "candidate": "cve_candidate",
     "cve候选": "cve_candidate",
     "cve 候选": "cve_candidate",
+    "有cve价值": "cve_candidate",
+    "有 cve 价值": "cve_candidate",
+    "有CVE价值": "cve_candidate",
+    "有 CVE 价值": "cve_candidate",
     "可提交cve": "cve_candidate",
     "可提交": "cve_candidate",
-    "advisory_only": "advisory_only",
-    "advisory": "advisory_only",
-    "公告": "advisory_only",
-    "仅公告": "advisory_only",
-    "合并公告": "advisory_only",
-    "hardening": "hardening",
-    "harderning": "hardening",
-    "加固": "hardening",
-    "加固建议": "hardening",
+    "low_impact": "low_impact",
+    "low_value": "low_impact",
+    "low": "low_impact",
+    "低危害": "low_impact",
+    "难以利用": "low_impact",
+    "低危害难利用": "low_impact",
+    "低危害难以利用": "low_impact",
+    "advisory_only": "low_impact",
+    "advisory": "low_impact",
+    "公告": "low_impact",
+    "仅公告": "low_impact",
+    "合并公告": "low_impact",
+    "hardening": "low_impact",
+    "harderning": "low_impact",
+    "加固": "low_impact",
+    "加固建议": "low_impact",
     "duplicate_grouped": "duplicate_grouped",
     "duplicate": "duplicate_grouped",
     "dup": "duplicate_grouped",
@@ -279,7 +290,14 @@ _ALIAS_MAP: dict[str, str] = {
     "sql_injection": "sqli",
     "sql注入": "sqli",
     "xxe": "xxe",
+    "xml_injection": "xxe",
+    "xml注入": "xxe",
     "path_traversal": "path_traversal",
+    "file_inclusion": "path_traversal",
+    "lfi": "path_traversal",
+    "rfi": "path_traversal",
+    "文件包含": "path_traversal",
+    "目录遍历": "path_traversal",
     "路径穿越": "path_traversal",
     "ssrf": "ssrf",
     "privilege_escalation": "privilege_escalation",
@@ -287,6 +305,9 @@ _ALIAS_MAP: dict[str, str] = {
     "越权": "privilege_escalation",
     "dos": "dos",
     "xss": "xss",
+    "反射xss": "xss",
+    "reflected_xss": "xss",
+    "reflected xss": "xss",
     "info_disclosure": "info_disclosure",
     "信息泄露": "info_disclosure",
     "other": "other",
@@ -299,16 +320,16 @@ _INFER_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"deserializ|反序列化", re.I), "deserialization"),
     (re.compile(r"ssti|template\s*injection|模[板版]注入", re.I), "ssti"),
     (re.compile(r"\brce\b|command\s*injection|命令注入|远程代码执行", re.I), "rce"),
-    (re.compile(r"\bxxe\b", re.I), "xxe"),
+    (re.compile(r"\bxxe\b|xml\s*injection|xml注入", re.I), "xxe"),
     (re.compile(r"sql\s*injection|\bsqli\b|sql注入", re.I), "sqli"),
     (re.compile(r"file\s*upload|任意文件上传", re.I), "file_upload"),
     (re.compile(r"file\s*delet|任意文件删除", re.I), "file_delete"),
     (re.compile(r"file\s*read|任意文件读取", re.I), "file_read"),
-    (re.compile(r"path\s*traversal|路径穿越", re.I), "path_traversal"),
+    (re.compile(r"path\s*traversal|file\s*inclusion|\blfi\b|\brfi\b|路径穿越|文件包含|目录遍历", re.I), "path_traversal"),
     (re.compile(r"auth(entication)?\s*bypass|认证绕过|鉴权绕过", re.I), "auth_bypass"),
     (re.compile(r"\bssrf\b", re.I), "ssrf"),
     (re.compile(r"privilege\s*escalation|\bidor\b|越权", re.I), "privilege_escalation"),
-    (re.compile(r"\bxss\b", re.I), "xss"),
+    (re.compile(r"\bxss\b|反射xss", re.I), "xss"),
     (re.compile(r"\bdos\b|拒绝服务", re.I), "dos"),
     (re.compile(r"information\s*disclosure|信息泄露", re.I), "info_disclosure"),
 ]
@@ -460,12 +481,10 @@ def suggest_submission_tier(
     if evidence_level == "static_only" and calibration.score < 3:
         return "needs_more_evidence"
     if calibration.reachability == "admin" and calibration.impact == "limited_info":
-        return "hardening"
+        return "low_impact"
     if calibration.score >= 3 and calibration.reachability in ("unauthenticated", "low_privilege"):
         return "cve_candidate"
-    if calibration.score >= 1:
-        return "advisory_only"
-    return "hardening"
+    return "low_impact"
 
 
 def infer_vuln_type_from_text(*parts: str | None) -> str:

@@ -86,6 +86,7 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "defense_status" in review
     assert "submission_tier" in review
     assert "submission_reason" in review
+    assert "root_cause_key" in review
     assert "CVE" in review
     assert "互联网资产证明" in review
     assert "docs/lab.md" in review
@@ -101,8 +102,12 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "submission_tier" in text
     assert "submission_reason" in text
     assert "root_cause_key" in text
+    assert "主报告本身也要带上该键" in text
     assert "cve_candidate" in text
-    assert "hardening" in text
+    assert "low_impact" in text
+    assert "有 CVE 价值" in text
+    assert "低危害难利用" in text
+    assert "advisory_only" not in text
     assert "双层审核" in text
     assert "前台" in text
     assert "后台" in text
@@ -117,6 +122,9 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "弱口令" in text
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
+    assert "audit_mode_hint" in load_prompt("initial/reviewer.md")
+    assert "audit_mode_hint" in load_prompt("initial/worker.md")
+    assert "audit_mode_hint" in load_prompt("initial/fix.md")
 
 
 def test_worker_prompt_requires_default_exploitability():
@@ -128,6 +136,43 @@ def test_worker_prompt_requires_default_exploitability():
     assert "仅当满足上方提交闸门时 SubmitVuln" in worker
     assert "默认密码" in worker
     assert "弱口令" in worker
+
+
+def test_audit_mode_overlay_prompts(tmp_env, project):
+    bounty_worker = load_prompt("modes/bounty.md")
+    assert "赏金模式" in bounty_worker
+    assert "不要 Confirm、不要标 `low_impact`" in bounty_worker
+    assert "应用自身提供的配置选项" in bounty_worker
+    full = load_prompt("modes/full.md")
+    assert "全量模式" in full
+    assert "low_impact" in full
+
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+
+    overlay = pipeline._phase_system_prompt(project, "worker.md")
+    assert "赏金模式" in overlay
+    assert "什么算漏洞" in overlay
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.audit_mode = "full"
+        db.commit()
+    full_overlay = pipeline._phase_system_prompt(project, "reviewer.md")
+    assert "全量模式" in full_overlay
+    assert "双层审核" in full_overlay
+
+    initial = pipeline._initial_prompt(
+        "worker.md",
+        worker_id="w1",
+        round_id=1,
+        file_path="a.py",
+        weight=10,
+        has_source=True,
+        sources="login",
+        snippet="x",
+    )
+    assert "赏金模式" in initial
+    assert "${audit_mode_hint}" not in initial
 
 
 def test_worker_prompts_decouple_finish_file_and_round():

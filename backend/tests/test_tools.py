@@ -19,8 +19,18 @@ SEVERITY_FACTORS = {
     "exploit_complexity": "single_request",
     "defense_status": "none",
     "submission_tier": "cve_candidate",
-    "submission_reason": "未认证可达且可造成敏感数据/权限影响，适合 CVE 候选",
+    "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }
+
+
+def _set_audit_mode(project_id: int, mode: str) -> None:
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        assert proj is not None
+        proj.audit_mode = mode
+        db.commit()
 
 
 def test_acl_blocks_worker_from_mark_weight(tmp_env, project):
@@ -151,7 +161,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert conf["severity"] == "high"
     assert conf["severity_score"] == 3
     assert conf["submission_tier"] == "cve_candidate"
-    assert conf["submission_tier_label"] == "CVE 候选"
+    assert conf["submission_tier_label"] == "有 CVE 价值"
     assert "CVE" in conf["submission_reason"]
 
     models = tmp_env["models"]
@@ -177,7 +187,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert "- 攻击面：前台" in report
     assert "- 严重度：高危（high）" in report
     assert "- 校准得分：3" in report
-    assert "- 提交分层：CVE 候选（cve_candidate）" in report
+    assert "- 价值分层：有 CVE 价值（cve_candidate）" in report
     assert "- 分层理由：" in report
     assert "原始类型映射" not in report
     assert "所需账号" not in report
@@ -265,7 +275,8 @@ def test_confirm_requires_submission_tier(tmp_env, project):
     assert "submission_tier" in conf["error"]
 
 
-def test_confirm_hardening_and_duplicate_tiers(tmp_env, project):
+def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
+    _set_audit_mode(project, "full")
     payload = {
         "title": "CORS",
         "vuln_type": "other",
@@ -289,12 +300,12 @@ def test_confirm_hardening_and_duplicate_tiers(tmp_env, project):
             "impact": "limited_info",
             "exploit_complexity": "single_request",
             "defense_status": "none",
-            "submission_tier": "加固建议",
-            "submission_reason": "CORS 配置问题，默认按加固建议处理",
+            "submission_tier": "低危害难利用",
+            "submission_reason": "CORS 配置问题，默认按低危害难利用处理",
         },
     )
     assert hard["ok"] is True
-    assert hard["submission_tier"] == "hardening"
+    assert hard["submission_tier"] == "low_impact"
 
     payload2 = dict(payload)
     payload2["title"] = "CORS again"
@@ -336,6 +347,80 @@ def test_confirm_hardening_and_duplicate_tiers(tmp_env, project):
     assert "- 根因合并键：cors:JwtFilter" in report
 
 
+def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project):
+    xss = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "Reflected XSS",
+            "vuln_type": "反射XSS",
+            "cwe": "CWE-79",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> HTML",
+            "auth_premise": "未授权",
+            "http_request": "GET /?q=<script> HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "script echoed",
+        },
+    )
+    assert xss["ok"] is False
+    assert "赏金模式" in xss["error"]
+
+    payload = {
+        "title": "CORS",
+        "vuln_type": "other",
+        "cwe": "CWE-942",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "Origin -> ACAO",
+        "auth_premise": "未授权",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "reflected origin",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    assert out["ok"] is True
+    hard = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "hardening",
+            "submission_reason": "CORS 配置问题",
+        },
+    )
+    assert hard["ok"] is False
+    assert "赏金模式" in hard["error"]
+    assert "低危害" in hard["error"]
+
+
+def test_full_mode_allows_xss_submit(tmp_env, project):
+    _set_audit_mode(project, "full")
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "Reflected XSS",
+            "vuln_type": "xss",
+            "cwe": "CWE-79",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> HTML",
+            "auth_premise": "未授权",
+            "http_request": "GET /?q=<script> HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "script echoed",
+        },
+    )
+    assert out["ok"] is True
+    assert out["status"] == "pending_review"
+
+
 def test_confirm_backend_requires_account(tmp_env, project):
     payload = {
         "title": "SQLI in login",
@@ -370,7 +455,7 @@ def test_confirm_backend_requires_account(tmp_env, project):
             "exploit_complexity": "single_request",
             "defense_status": "none",
             "submission_tier": "cve_candidate",
-            "submission_reason": "管理员可达但可完整控制，仍作为 CVE 候选",
+            "submission_reason": "管理员可达但可完整控制，仍有 CVE 价值",
         },
     )
     assert conf["ok"] is True
@@ -426,16 +511,16 @@ def test_confirm_backend_user_account(tmp_env, project):
 
 def test_confirm_frontend_ignores_account(tmp_env, project):
     payload = {
-        "title": "XSS",
-        "vuln_type": "xss",
-        "cwe": "CWE-79",
+        "title": "SQLi",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
         "file_path": "app/Main.java",
         "line_no": 1,
         "source_sink": "a->b",
         "auth_premise": "未授权",
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
-        "expected_evidence": "alert",
+        "expected_evidence": "error based",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]

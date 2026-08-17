@@ -15,6 +15,10 @@ def test_normalize_aliases():
     assert normalize_vuln_type("SQL注入") == "sqli"
     assert normalize_vuln_type("command_injection") == "rce"
     assert normalize_vuln_type("jndi") == "jndi_injection"
+    assert normalize_vuln_type("xml_injection") == "xxe"
+    assert normalize_vuln_type("文件包含") == "path_traversal"
+    assert normalize_vuln_type("目录遍历") == "path_traversal"
+    assert normalize_vuln_type("反射XSS") == "xss"
     assert normalize_vuln_type("") == "other"
 
 
@@ -72,11 +76,18 @@ def test_review_severity_calibration_accepts_chinese_aliases():
 
 def test_normalize_submission_decision_and_aliases():
     decision = normalize_submission_decision(
-        submission_tier="CVE 候选",
+        submission_tier="有 CVE 价值",
         submission_reason="未认证任意文件读",
     )
     assert decision.tier == "cve_candidate"
-    assert decision.tier_label == "CVE 候选"
+    assert decision.tier_label == "有 CVE 价值"
+
+    low = normalize_submission_decision(
+        submission_tier="加固建议",
+        submission_reason="CORS",
+    )
+    assert low.tier == "low_impact"
+    assert low.tier_label == "低危害难利用"
 
     dup = normalize_submission_decision(
         submission_tier="同根因重复",

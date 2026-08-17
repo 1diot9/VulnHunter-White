@@ -23,6 +23,7 @@ from ..agent.checkpoint import (
 )
 from ..agent.compression import inject_summary_block, inject_worker_prior_block, latest_summary
 from ..agent.loop import AgentLoop
+from ..audit_mode import audit_mode_label, initial_hint, normalize_audit_mode
 from ..config import settings
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
@@ -218,6 +219,18 @@ def request_pause(project_id: int) -> None:
             proj.status = "paused"
             db.commit()
     live_log.system(project_id, "用户暂停全部阶段")
+
+
+def note_audit_mode_changed(project_id: int, mode: str) -> None:
+    """Keep the project paused; next resume must use the new Worker/Reviewer rules."""
+    for control in ("worker", "reviewer"):
+        _force_new_run.add((project_id, control))
+        _abandon_phase_checkpoints(project_id, control)
+        _bump_phase_generation(project_id, control)
+    live_log.system(
+        project_id,
+        f"挖掘模式已改为{audit_mode_label(mode)}，续跑后 Worker/Reviewer 将按新规则新开",
+    )
 
 
 def request_resume(project_id: int) -> None:
@@ -742,8 +755,32 @@ def _sources_for_file(project_id: int, path: str) -> list[str]:
         return [f"{r.method_name}" for r in rows]
 
 
+def _read_audit_mode(project_id: int) -> str:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return normalize_audit_mode(None if not proj else proj.audit_mode)
+
+
+def _audit_mode_vars(project_id: int) -> dict[str, str]:
+    mode = _read_audit_mode(project_id)
+    return {
+        "audit_mode": mode,
+        "audit_mode_label": audit_mode_label(mode),
+        "audit_mode_hint": initial_hint(mode),
+    }
+
+
+def _phase_system_prompt(project_id: int, name: str) -> str:
+    base = load_prompt(name).rstrip()
+    overlay = load_prompt(f"modes/{_read_audit_mode(project_id)}.md").strip()
+    return f"{base}\n\n{overlay}\n"
+
+
 def _initial_prompt(name: str, **kwargs: object) -> str:
     """Render a user-message document from prompts/initial/ and inject it as-is."""
+    kwargs.setdefault("audit_mode", "bounty")
+    kwargs.setdefault("audit_mode_label", audit_mode_label("bounty"))
+    kwargs.setdefault("audit_mode_hint", initial_hint("bounty"))
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -1565,7 +1602,6 @@ def _finish_worker_round(
 
 def _run_worker_loop(project_id: int, worker_id: str) -> None:
     cancel = _cancel_event(project_id)
-    system = load_prompt("worker.md")
     round_id = 0
     current_run_id: int | None = None
     try:
@@ -1616,6 +1652,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
             round_id += 1
             sources = _sources_for_file(project_id, fw.path)
             snippet = _read_file_snippet(project_id, fw.path)
+            system = _phase_system_prompt(project_id, "worker.md")
             body = _initial_prompt(
                 "worker.md",
                 worker_id=worker_id,
@@ -1625,6 +1662,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 has_source=fw.has_source,
                 sources=", ".join(sources) if sources else "（无）",
                 snippet=snippet,
+                **_audit_mode_vars(project_id),
             )
             user = _prompt_with_summary("worker", project_id, body, for_file=True)
             run_id = _new_phase_run(
@@ -1677,13 +1715,14 @@ def _run_fix(project_id: int, vuln_id: int) -> None:
             title = vuln.title
             report_path = vuln.report_path
         cp = _adopt_resumable(project_id, "fix", vuln_id=vuln_id)
-        system = load_prompt("worker.md")
+        system = _phase_system_prompt(project_id, "worker.md")
         body = _initial_prompt(
             "fix.md",
             vuln_id=vuln_id,
             title=title,
             reason=reason,
             report_path=report_path,
+            **_audit_mode_vars(project_id),
         )
         user = _prompt_with_summary("fix", project_id, body)
         try:
@@ -1819,13 +1858,14 @@ def _run_reviewer_once(project_id: int) -> None:
                 proj.status = "reviewing"
                 db.commit()
 
-        system = load_prompt("reviewer.md")
+        system = _phase_system_prompt(project_id, "reviewer.md")
         body = _initial_prompt(
             "reviewer.md",
             vuln_id=vuln_id,
             payload=json_dumps(payload),
             lab_note=lab_note,
             debug_plan=json_dumps(debug_plan),
+            **_audit_mode_vars(project_id),
         )
         user = _prompt_with_summary("reviewer", project_id, body)
         run_id = _new_phase_run(project_id, "reviewer", "reviewer", vuln_id=vuln_id)

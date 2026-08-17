@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatDateTime, formatFileProgress, formatTokenUsage } from '../lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { formatAuditMode, formatDateTime, formatFileProgress, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [url, setUrl] = useState('')
+  const [auditMode, setAuditMode] = useState<'bounty' | 'full'>('bounty')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -25,7 +27,7 @@ export default function HomePage() {
     setBusy(true)
     setError('')
     try {
-      await api.createGithub(url.trim())
+      await api.createGithub(url.trim(), '', auditMode)
       setUrl('')
       await refresh()
     } catch (e) {
@@ -40,7 +42,7 @@ export default function HomePage() {
     setBusy(true)
     setError('')
     try {
-      await api.uploadZip(file)
+      await api.uploadZip(file, '', auditMode)
       await refresh()
     } catch (e) {
       setError(String(e))
@@ -53,12 +55,21 @@ export default function HomePage() {
     <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。</p>
+        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。默认赏金模式。</p>
       </div>
 
       <Card className="w-full">
         <CardContent className="w-full">
-        <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+        <div className="grid w-full gap-3 md:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+          <Select value={auditMode} onValueChange={(value) => value && setAuditMode(value as 'bounty' | 'full')}>
+            <SelectTrigger className="w-auto min-w-28">
+              <SelectValue>{formatAuditMode(auditMode)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="start">
+              <SelectItem value="bounty">赏金模式</SelectItem>
+              <SelectItem value="full">全量模式</SelectItem>
+            </SelectContent>
+          </Select>
           <Input
             className="w-full"
             placeholder="https://github.com/owner/repo"
@@ -93,7 +104,7 @@ export default function HomePage() {
                 </Link>
                 </CardTitle>
                 <CardDescription className="mt-1 text-xs">
-                  {p.identity || p.source_url || p.source_type} · {formatDateTime(p.created_at)}
+                  {formatAuditMode(p.audit_mode)} · {p.identity || p.source_url || p.source_type} · {formatDateTime(p.created_at)}
                 </CardDescription>
               </div>
               <CardAction>
