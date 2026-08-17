@@ -21,6 +21,7 @@ const STATUS_LABEL: Record<string, string> = {
   false_positive: '误报',
   static_only: '仅静态',
   returned: '已打回',
+  merged: '已并入',
 }
 
 function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {

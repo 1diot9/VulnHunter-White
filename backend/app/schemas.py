@@ -140,6 +140,7 @@ class VulnOut(BaseModel):
     submission_tier: str | None = None
     submission_reason: str | None = None
     root_cause_key: str | None = None
+    merged_into_id: int | None = None
     review_rounds: int = 0
     return_reason: str | None = None
     intended_behavior: bool = False
@@ -157,6 +158,7 @@ class VulnDetail(VulnOut):
     poc_code: str | None = None
     expected_evidence: str | None = None
     report_md: str | None = None
+    merged_from_ids: list[int] = Field(default_factory=list)
 
 
 class VulnFollowUpIn(BaseModel):

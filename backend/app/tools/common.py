@@ -694,9 +694,20 @@ def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
         "kind_label": _kind_label(entry["kind"]),
     }
     if entry.get("kind") == KIND_FOUND:
-        for key in ("vuln_id", "status", "file_path", "vuln_type", "cwe", "submission_tier", "root_cause_key"):
+        for key in (
+            "vuln_id",
+            "status",
+            "file_path",
+            "vuln_type",
+            "cwe",
+            "submission_tier",
+            "root_cause_key",
+            "merged_into_id",
+        ):
             if key in entry:
                 out[key] = entry[key]
+        if entry.get("status") == "merged" and entry.get("merged_into_id"):
+            out["merged_note"] = f"已并入 #{entry['merged_into_id']}"
     return out
 
 
@@ -721,6 +732,8 @@ def _search_blob(entry: dict[str, Any]) -> str:
         entry.get("status") or "",
         entry.get("submission_tier") or "",
         entry.get("root_cause_key") or "",
+        str(entry.get("merged_into_id") or ""),
+        entry.get("merged_note") or "",
     ]
     return "\n".join(str(p) for p in parts).lower()
 
@@ -785,6 +798,8 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
                 loc = f"{vuln.file_path or ''}:{vuln.line_no or ''}".strip(":")
                 bits = [vuln.vuln_type or "", vuln.cwe or "", loc, (vuln.source_sink or "")[:160]]
                 summary = " | ".join(b for b in bits if b)
+            if vuln.status == "merged" and vuln.merged_into_id:
+                summary = f"[已并入 #{vuln.merged_into_id}] {summary}".strip()
             entries.append(
                 {
                     "kind": KIND_FOUND,
@@ -800,6 +815,7 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
                     "cwe": vuln.cwe,
                     "submission_tier": vuln.submission_tier,
                     "root_cause_key": vuln.root_cause_key,
+                    "merged_into_id": vuln.merged_into_id,
                 }
             )
     return entries
@@ -1019,6 +1035,7 @@ def register_common_tools() -> None:
                 "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，项目自身或仍可能打到的组件调用点）"
                 "与本项目已提交报告（kind=found）。默认返回标题与摘要；kind=found 会带上 submission_tier、root_cause_key。"
                 "传入 title 可看全文。提交前查重；Reviewer 标 duplicate_grouped 时必须原样复用已有 root_cause_key。"
+                "kind=found 含 merged_into_id：已并入条目勿再交相同受影响点。"
             ),
             parameters={
                 "type": "object",

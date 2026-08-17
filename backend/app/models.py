@@ -127,7 +127,7 @@ class Vuln(Base):
     poc_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     intended_behavior: Mapped[bool] = mapped_column(Boolean, default=False)
-    # pending_review | returned | confirmed | false_positive | static_only
+    # pending_review | returned | confirmed | false_positive | static_only | merged
     status: Mapped[str] = mapped_column(String(64), default="pending_review")
     evidence_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # dynamic | static_only | mcp
@@ -140,6 +140,8 @@ class Vuln(Base):
     submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
+    merged_into_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # status=merged 时指向主报告 id
     review_rounds: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -260,6 +262,7 @@ def _ensure_columns() -> None:
             "submission_tier": "VARCHAR(64)",
             "submission_reason": "TEXT",
             "root_cause_key": "VARCHAR(256)",
+            "merged_into_id": "INTEGER",
         },
     }
     with engine.begin() as conn:

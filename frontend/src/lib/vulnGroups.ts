@@ -159,7 +159,7 @@ function matchesTier(v: Vuln, tier: VulnTierFilter): boolean {
   return v.submission_tier === tier
 }
 
-/** Keep API order for parents; nest same-root-cause / duplicate_grouped reports under the original. */
+/** Keep API order for parents; nest same-root-cause / duplicate_grouped / merged reports under the original. */
 export function groupVulnsByRootCause(vulns: Vuln[]): VulnGroup[] {
   const parentOf = new Map<number, number>()
 
@@ -175,8 +175,16 @@ export function groupVulnsByRootCause(vulns: Vuln[]): VulnGroup[] {
     parentOf.set(childId, parentId)
   }
 
+  // Explicit merges first: status=merged + merged_into_id
+  const byId = new Map(vulns.map((v) => [v.id, v]))
+  for (const v of vulns) {
+    if (v.status !== 'merged' || v.merged_into_id == null) continue
+    if (byId.has(v.merged_into_id)) setParent(v.id, v.merged_into_id)
+  }
+
   const buckets = new Map<string, Vuln[]>()
   for (const v of vulns) {
+    if (v.status === 'merged') continue
     const key = canonicalRootCauseKey(v.root_cause_key)
     if (!key) continue
     const gk = `${v.project_id}::${key}`
@@ -220,6 +228,8 @@ export function groupVulnsByRootCause(vulns: Vuln[]): VulnGroup[] {
 
   const groups: VulnGroup[] = []
   for (const v of vulns) {
+    // Merged rows never stand alone as a card
+    if (v.status === 'merged') continue
     if (resolveRoot(v.id) !== v.id) continue
     const others = (children.get(v.id) || []).slice().sort(compareImpact)
     const key =

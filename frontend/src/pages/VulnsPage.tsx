@@ -238,6 +238,26 @@ export default function VulnsPage() {
                   ) : null}
                 </div>
               ) : null}
+              {detail.merged_into_id ? (
+                <div className="rounded border border-cyan-900/50 bg-cyan-950/30 px-3 py-2 text-sm text-cyan-200/90">
+                  已并入主报告{' '}
+                  <a className="underline" href={`/vulns/${detail.merged_into_id}`}>
+                    #{detail.merged_into_id}
+                  </a>
+                </div>
+              ) : null}
+              {detail.merged_from_ids && detail.merged_from_ids.length > 0 ? (
+                <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
+                  <div className="text-xs text-slate-400">已并入本报告的条目</div>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {detail.merged_from_ids.map((mid) => (
+                      <a key={mid} className="text-cyan-300 underline" href={`/vulns/${mid}`}>
+                        #{mid}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
                 <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
               </Suspense>

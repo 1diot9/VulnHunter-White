@@ -746,8 +746,12 @@ def test_openai_tools_for_role_contains_expected():
     worker_names = {t["function"]["name"] for t in registry.openai_tools_for_role("worker")}
     assert "FinishAudit" not in worker_names
     assert "FinishRound" in worker_names
+    assert "AppendAffectedLocations" in worker_names
     assert "AddSourceExt" not in worker_names
     assert ROLE_ACL["worker"].isdisjoint({"FinishRecon", "FinishAudit", "ConfirmVuln", "WriteOldVuln"})
+    reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
+    assert "MergeIntoVuln" in reviewer_names
+    assert "ConfirmVuln" in reviewer_names
     injected_shells = recon_names & SHELL_TOOLS
     assert injected_shells == {native_shell_tool()}
 

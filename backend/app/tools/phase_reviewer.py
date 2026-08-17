@@ -1,4 +1,4 @@
-"""Reviewer tools: ConfirmVuln, ReturnToWorker."""
+"""Reviewer tools: ConfirmVuln, MergeIntoVuln, ReturnToWorker."""
 
 from __future__ import annotations
 
@@ -8,20 +8,31 @@ from typing import Any
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
 from ..config import settings
 from ..models import Project, SessionLocal, Vuln
+from ..services.affected_locations import (
+    append_affected_locations,
+    location_from_vuln,
+    parse_locations,
+)
 from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
-from ..services.root_cause import mismatched_root_cause_key_error, stamp_root_cause_on_parent
+from ..services.root_cause import (
+    canonical_root_cause_key,
+    mismatched_root_cause_key_error,
+    stamp_root_cause_on_parent,
+)
 from ..vuln_types import (
     REVIEW_FACTOR_LABELS,
     SeverityCalibration,
     SubmissionTierDecision,
     calibrate_review_severity,
+    normalize_root_cause_key,
     normalize_submission_decision,
 )
 from . import ToolSpec, registry
 
 _FP_HEADING = "## 误报判定"
 _REVIEW_HEADING = "## 审核标注"
+_MERGE_OK_TARGET = frozenset({"pending_review", "confirmed", "static_only"})
 
 _SURFACE_ALIASES = {
     "frontend": "frontend",
@@ -110,6 +121,198 @@ def _commit_false_positive(ctx, db, vuln: Vuln, vuln_id: int, reason: str, messa
     return {"ok": True, "vuln_id": int(vuln_id), "status": "false_positive", "message": message}
 
 
+def _check_surface_match(target: Vuln, args: dict[str, Any]) -> str | None:
+    """If target already has attack_surface, require matching declaration in args."""
+    if not (target.attack_surface or "").strip():
+        return None
+    surface = _normalize_attack_surface(args.get("attack_surface"))
+    if not surface:
+        return (
+            f"目标 #{target.id} 已标注 attack_surface={target.attack_surface}，"
+            "MergeIntoVuln 须传入相同的 attack_surface 声明一致"
+        )
+    if surface != target.attack_surface:
+        return (
+            f"攻击面不一致：目标为 {target.attack_surface}，传入为 {surface}；"
+            "危害/鉴权不同请单独 Confirm，不要并入"
+        )
+    if surface == "backend":
+        account = _normalize_required_account(args.get("required_account"))
+        if target.required_account:
+            if not account:
+                return (
+                    f"目标 #{target.id} 已标注 required_account={target.required_account}，"
+                    "须传入相同的 required_account"
+                )
+            if account != target.required_account:
+                return (
+                    f"所需账号不一致：目标为 {target.required_account}，传入为 {account}；"
+                    "不要并入"
+                )
+    return None
+
+
+def _resolve_merge_locations(
+    args: dict[str, Any], sources: list[Vuln]
+) -> tuple[list[dict[str, Any]], str | None]:
+    raw = args.get("locations")
+    if raw is not None:
+        return parse_locations(raw)
+    locs: list[dict[str, Any]] = []
+    for src in sources:
+        loc = location_from_vuln(src)
+        if loc:
+            locs.append(loc)
+    if not locs:
+        return [], "缺少 locations，且无法从源漏洞推导 file_path"
+    return locs, None
+
+
+def _stamp_merged(child: Vuln, parent: Vuln, root_key: str | None, reason: str) -> None:
+    child.status = "merged"
+    child.merged_into_id = parent.id
+    child.submission_tier = None
+    child.submission_reason = reason
+    child.return_reason = reason
+    if root_key:
+        child.root_cause_key = root_key
+        if not (parent.root_cause_key or "").strip():
+            parent.root_cause_key = root_key
+
+
+def _merge_into_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    current_id = args.get("vuln_id") or ctx.vuln_id
+    if not current_id:
+        return {"ok": False, "error": "缺少 vuln_id"}
+    into_raw = args.get("into")
+    absorb_raw = args.get("absorb")
+    has_into = into_raw is not None and into_raw != ""
+    has_absorb = absorb_raw is not None and absorb_raw != "" and absorb_raw != []
+    if has_into == has_absorb:
+        return {"ok": False, "error": "须二选一：into=主报告id 或 absorb=[兄弟id...]"}
+    reason = str(args.get("reason") or args.get("submission_reason") or "同根因并入主报告").strip()
+    root_key = normalize_root_cause_key(args.get("root_cause_key"))
+
+    with SessionLocal() as db:
+        current = db.get(Vuln, int(current_id))
+        if not current or current.project_id != ctx.project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        if current.status != "pending_review":
+            return {"ok": False, "error": f"仅 pending_review 可合并，当前为 {current.status}"}
+
+        if has_into:
+            parent = db.get(Vuln, int(into_raw))
+            if not parent or parent.project_id != ctx.project_id:
+                return {"ok": False, "error": "并入目标不存在"}
+            if parent.id == current.id:
+                return {"ok": False, "error": "不能并入自己"}
+            if parent.status not in _MERGE_OK_TARGET:
+                return {
+                    "ok": False,
+                    "error": (
+                        "并入目标 status 须为 pending_review|confirmed|static_only，"
+                        f"当前为 {parent.status}"
+                    ),
+                }
+            if parent.vuln_type != current.vuln_type:
+                return {
+                    "ok": False,
+                    "error": f"vuln_type 不一致：当前 {current.vuln_type}，目标 {parent.vuln_type}",
+                }
+            surface_err = _check_surface_match(parent, args)
+            if surface_err:
+                return {"ok": False, "error": surface_err}
+            parent_key = (parent.root_cause_key or "").strip()
+            if parent_key:
+                if root_key and canonical_root_cause_key(root_key) != canonical_root_cause_key(
+                    parent_key
+                ):
+                    return {
+                        "ok": False,
+                        "error": f"须原样复用目标 root_cause_key={parent_key}，不要另写新键",
+                    }
+                root_key = parent_key
+            elif not root_key:
+                root_key = normalize_root_cause_key(current.root_cause_key)
+            locations, loc_err = _resolve_merge_locations(args, [current])
+            if loc_err:
+                return {"ok": False, "error": loc_err}
+            report_path = vuln_dir(ctx.project_id, parent.id) / "report.md"
+            stats = append_affected_locations(report_path, locations)
+            _stamp_merged(current, parent, root_key, reason)
+            db.commit()
+            ctx.state["review_done"] = True
+            ctx.state["review_verdict"] = "merged"
+            return {
+                "ok": True,
+                "vuln_id": current.id,
+                "status": "merged",
+                "merged_into_id": parent.id,
+                "root_cause_key": root_key,
+                **stats,
+                "message": f"已将 #{current.id} 并入主报告 #{parent.id}，本会话结束",
+            }
+
+        if isinstance(absorb_raw, (int, str)):
+            absorb_ids = [int(absorb_raw)]
+        elif isinstance(absorb_raw, list):
+            try:
+                absorb_ids = [int(x) for x in absorb_raw]
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "absorb 须为整数 id 列表"}
+        else:
+            return {"ok": False, "error": "absorb 须为整数 id 列表"}
+        if not absorb_ids:
+            return {"ok": False, "error": "absorb 不能为空"}
+        if current.id in absorb_ids:
+            return {"ok": False, "error": "absorb 不能包含当前漏洞自身"}
+
+        siblings: list[Vuln] = []
+        for sid in absorb_ids:
+            sib = db.get(Vuln, sid)
+            if not sib or sib.project_id != ctx.project_id:
+                return {"ok": False, "error": f"absorb 目标 #{sid} 不存在"}
+            if sib.status != "pending_review":
+                return {
+                    "ok": False,
+                    "error": f"absorb 目标 #{sid} 须为 pending_review，当前为 {sib.status}",
+                }
+            if sib.vuln_type != current.vuln_type:
+                return {
+                    "ok": False,
+                    "error": f"vuln_type 不一致：当前 {current.vuln_type}，#{sid} 为 {sib.vuln_type}",
+                }
+            siblings.append(sib)
+
+        if not root_key:
+            for item in [current, *siblings]:
+                if (item.root_cause_key or "").strip():
+                    root_key = item.root_cause_key
+                    break
+        locations, loc_err = _resolve_merge_locations(args, siblings)
+        if loc_err:
+            return {"ok": False, "error": loc_err}
+        report_path = vuln_dir(ctx.project_id, current.id) / "report.md"
+        stats = append_affected_locations(report_path, locations)
+        if root_key and not (current.root_cause_key or "").strip():
+            current.root_cause_key = root_key
+        for sib in siblings:
+            _stamp_merged(sib, current, root_key, reason)
+        db.commit()
+        return {
+            "ok": True,
+            "vuln_id": current.id,
+            "status": current.status,
+            "absorbed": [s.id for s in siblings],
+            "root_cause_key": current.root_cause_key,
+            **stats,
+            "message": (
+                f"已将 {len(siblings)} 条并入当前主报告 #{current.id}；"
+                "请继续 ConfirmVuln 完成本条审核"
+            ),
+        }
+
+
 def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
@@ -146,6 +349,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
             return {"ok": False, "error": "漏洞不存在"}
+        if vuln.status == "merged":
+            return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         proj = db.get(Project, ctx.project_id)
         mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if mode == AUDIT_MODE_BOUNTY:
@@ -270,8 +475,8 @@ def register_reviewer_tools() -> None:
                 "evidence_level=static_only|dynamic|mcp。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
-                "同一根因的主报告与后续变体必须填完全相同的 root_cause_key；"
-                "duplicate_grouped 时必须从 SearchOldVuln kind=found 原样复用已有键，禁止另写新键。"
+                "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
+                "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
             ),
             parameters={
@@ -317,7 +522,7 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "必填。价值分层：cve_candidate=有 CVE 价值；"
                             "low_impact=低危害难利用。"
-                            "流程标记：duplicate_grouped=同根因重复；"
+                            "流程标记：duplicate_grouped=危害/鉴权不同的相关变体（不是并入）；"
                             "needs_more_evidence=证据不足。也可写中文。"
                         ),
                     },
@@ -350,8 +555,60 @@ def register_reviewer_tools() -> None:
     )
     registry.register(
         ToolSpec(
+            name="MergeIntoVuln",
+            description=(
+                "将同根因、同危害的重复报告并入主报告（系统追加「同根因受影响点」并关闭重复条）。"
+                "二选一：into=主报告id（把当前条并入目标，当前条 status=merged，会话结束）；"
+                "或 absorb=[兄弟id...]（把队列里的 pending 兄弟并入当前主报告，然后继续 ConfirmVuln）。"
+                "不要用打回或误报来「合并」；不要 Write 已确认 report.md。"
+                "危害或攻击面不同时不要调用本工具。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "vuln_id": {"type": "integer", "description": "当前审核漏洞；默认本会话"},
+                    "into": {
+                        "type": "integer",
+                        "description": "把当前条并入该主报告 id",
+                    },
+                    "absorb": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "把这些 pending 兄弟并入当前条",
+                    },
+                    "locations": {
+                        "type": "array",
+                        "description": "可选。追加到主报告的受影响点；省略则用源漏洞 file_path:line_no",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {"type": "string"},
+                                "line_no": {"type": "integer"},
+                                "method": {"type": "string"},
+                                "note": {"type": "string"},
+                            },
+                        },
+                    },
+                    "root_cause_key": {"type": "string"},
+                    "attack_surface": {
+                        "type": "string",
+                        "description": "目标已有攻击面时必须传入相同值声明一致",
+                    },
+                    "required_account": {
+                        "type": "string",
+                        "description": "目标已有 required_account 时必须传入相同值",
+                    },
+                    "reason": {"type": "string"},
+                    "submission_reason": {"type": "string"},
+                },
+            },
+            handler=_merge_into_vuln,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="ReturnToWorker",
-            description="打回 Worker 修改报告，或直接判误报",
+            description="打回 Worker 修改报告，或直接判误报。不要用打回做同根因合并。",
             parameters={
                 "type": "object",
                 "properties": {

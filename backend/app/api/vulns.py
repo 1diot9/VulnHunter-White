@@ -102,6 +102,15 @@ def get_vuln(vuln_id: int) -> VulnDetail:
                     p.read_text(encoding="utf-8", errors="ignore"),
                     v.created_at,
                 )
+        merged_from = [
+            row.id
+            for row in (
+                db.query(Vuln)
+                .filter(Vuln.project_id == v.project_id, Vuln.merged_into_id == v.id)
+                .order_by(Vuln.id.asc())
+                .all()
+            )
+        ]
         return VulnDetail(
             **_vuln_out(v).model_dump(),
             source_sink=v.source_sink,
@@ -110,6 +119,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             poc_code=v.poc_code,
             expected_evidence=v.expected_evidence,
             report_md=report_md,
+            merged_from_ids=merged_from,
         )
 
 

@@ -105,6 +105,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "TodoWrite",
             "SearchOldVuln",
             "SubmitVuln",
+            "AppendAffectedLocations",
             "FinishFile",
             "FinishRound",
             "FinishFix",
@@ -122,6 +123,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SearchOldVuln",
             "SearchGHSA",
             "ConfirmVuln",
+            "MergeIntoVuln",
             "ReturnToWorker",
         }
     ),
@@ -137,6 +139,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SearchOldVuln",
             "FinishFix",
             "SubmitVuln",
+            "AppendAffectedLocations",
         }
     ),
 }

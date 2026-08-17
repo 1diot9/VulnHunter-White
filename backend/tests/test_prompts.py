@@ -106,7 +106,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "submission_tier" in text
     assert "submission_reason" in text
     assert "root_cause_key" in text
-    assert "主报告本身也要带上该键" in text
+    assert "MergeIntoVuln" in text
     assert "原样复用" in text
     assert "不要另写新键" in text or "禁止另写新键" in text or "禁止另造" in text
     assert "cve_candidate" in text
@@ -128,9 +128,11 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "弱口令" in text
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
+    assert "MergeIntoVuln" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/reviewer.md")
     assert "原样复用" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/worker.md")
+    assert "AppendAffectedLocations" in load_prompt("initial/worker.md")
     assert "audit_mode_hint" in load_prompt("initial/fix.md")
 
 
@@ -141,6 +143,10 @@ def test_worker_prompt_requires_default_exploitability():
     assert "不要按漏洞类型填写或推断严重度" in worker
     assert "发现漏洞立即 SubmitVuln" not in worker
     assert "仅当满足上方提交闸门时 SubmitVuln" in worker
+    assert "同根因只交一份" in worker
+    assert "AppendAffectedLocations" in worker
+    assert "同根因受影响点" in worker
+    assert "root_cause_key" in worker
     assert "默认密码" in worker
     assert "弱口令" in worker
 
@@ -202,6 +208,9 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "不要重新梳理项目结构" in worker
     assert "不要重复分析项目结构" in initial
     assert "不要重复尝试摘要中已走过的路径" in initial
+    assert "仅最新一轮的「建议后续方向」仍可能有效" in worker
+    assert "仅最新一轮的「建议后续方向」仍可能有效" in initial
+    assert "系统注入历史摘要时只会保留最新一轮的该段" in worker
     assert "templates/round-report.md" in worker
     assert "## 本轮挖掘方向" in worker
     assert "templates/round-report.md" in initial

@@ -1,4 +1,4 @@
-"""Worker-phase tools: SubmitVuln, FinishFile, FinishRound, FinishFix."""
+"""Worker-phase tools: SubmitVuln, AppendAffectedLocations, FinishFile, FinishRound, FinishFix."""
 
 from __future__ import annotations
 
@@ -6,9 +6,15 @@ from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_submit_block_reason, normalize_audit_mode
 from ..models import FileWeight, Project, SessionLocal, Vuln
+from ..services.affected_locations import (
+    AFFECTED_LOCATIONS_HEADING,
+    append_affected_locations,
+    format_location_line,
+    parse_locations,
+)
 from ..services.paths import vuln_dir
 from ..services.report import ensure_search_fingerprint_section, write_report_md
-from ..vuln_types import PENDING_SEVERITY, normalize_vuln_type
+from ..vuln_types import PENDING_SEVERITY, normalize_root_cause_key, normalize_vuln_type
 from . import ToolSpec, registry
 
 
@@ -103,6 +109,24 @@ def project_complete_gates(project_id: int) -> bool:
         return pending == 0
 
 
+def _ensure_affected_section(report: str, args: dict[str, Any]) -> str:
+    """Ensure report has 同根因受影响点; seed with primary location if missing."""
+    if AFFECTED_LOCATIONS_HEADING in report or "## 同根因受影响点" in report:
+        return report
+    primary = {
+        "file_path": str(args.get("file_path") or "").replace("\\", "/"),
+        "line_no": args.get("line_no"),
+        "method": None,
+        "note": "代表点",
+    }
+    section = f"{AFFECTED_LOCATIONS_HEADING}\n\n{format_location_line(primary)}\n"
+    for marker in ("\n## 复现证明\n", "\n## 修复方案\n", "\n## 备注\n"):
+        idx = report.find(marker)
+        if idx != -1:
+            return report[:idx].rstrip() + "\n\n" + section + report[idx:]
+    return report.rstrip() + "\n\n" + section
+
+
 def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if ctx.role == "worker" and mining_complete(ctx.project_id):
         return {
@@ -118,6 +142,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         line_no = int(args.get("line_no"))
     except (TypeError, ValueError):
         return {"ok": False, "error": "line_no 必须是整数"}
+    root_key = normalize_root_cause_key(args.get("root_cause_key"))
 
     with SessionLocal() as db:
         proj = db.get(Project, ctx.project_id)
@@ -140,15 +165,16 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             poc_code=str(args["poc_code"]),
             expected_evidence=str(args["expected_evidence"]),
             intended_behavior=intended,
+            root_cause_key=root_key,
             status="pending_review",
         )
         db.add(vuln)
         db.commit()
         db.refresh(vuln)
         vuln_id = vuln.id
-        # write artifacts
         vdir = vuln_dir(ctx.project_id, vuln_id)
         report = args.get("report_md") or _default_report(args, vtype)
+        report = _ensure_affected_section(str(report), args)
         report = ensure_search_fingerprint_section(
             str(report),
             fofa=args.get("fofa_fingerprint"),
@@ -162,17 +188,62 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         db.commit()
 
     ctx.state.setdefault("submitted_vulns", []).append(vuln_id)
-    # Signal scheduler via shared state
     ctx.state["review_queue_notify"] = True
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "vuln_id": vuln_id,
         "status": "pending_review",
         "message": "已入审核队列，Worker 可继续审计",
     }
+    if root_key:
+        out["root_cause_key"] = root_key
+    return out
+
+
+def _append_affected_locations(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    vuln_id = args.get("vuln_id")
+    if not vuln_id:
+        return {"ok": False, "error": "缺少 vuln_id"}
+    locations, err = parse_locations(args.get("locations"))
+    if err:
+        return {"ok": False, "error": err}
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != ctx.project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        if vuln.status != "pending_review":
+            return {
+                "ok": False,
+                "error": (
+                    f"仅 status=pending_review 可 AppendAffectedLocations，当前为 {vuln.status}；"
+                    "已确认报告请交新条由 Reviewer MergeIntoVuln，不要自行改写"
+                ),
+            }
+        root_key = normalize_root_cause_key(args.get("root_cause_key"))
+        if root_key and not (vuln.root_cause_key or "").strip():
+            vuln.root_cause_key = root_key
+            db.commit()
+        report_path = vuln_dir(ctx.project_id, vuln.id) / "report.md"
+        stats = append_affected_locations(report_path, locations)
+        return {
+            "ok": True,
+            "vuln_id": vuln.id,
+            "status": vuln.status,
+            "root_cause_key": vuln.root_cause_key,
+            **stats,
+            "message": f"已追加 {stats['added']} 个受影响点到漏洞 #{vuln.id}",
+        }
 
 
 def _default_report(args: dict[str, Any], vtype: str) -> str:
+    primary = format_location_line(
+        {
+            "file_path": str(args.get("file_path") or "").replace("\\", "/"),
+            "line_no": args.get("line_no"),
+            "method": None,
+            "note": "代表点",
+        }
+    )
     return f"""---
 title: {args.get('title')}
 summary: {args.get('source_sink', '')[:200]}
@@ -216,6 +287,9 @@ summary: {args.get('source_sink', '')[:200]}
 
 ### 触发条件
 {args.get('auth_premise')}
+
+## 同根因受影响点
+{primary}
 
 ## 复现证明
 
@@ -359,6 +433,9 @@ def register_worker_tools() -> None:
                 "仅当默认/官方部署下，攻击者只凭自身权限与 HTTP 输入就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
                 "或只是配置/文档/compose 里的默认密码弱口令的不要提交。"
+                "同一根因同一危害只交一份：先 Grep 同类其余方法写入报告「同根因受影响点」；"
+                "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"
+                "应填写 root_cause_key（类型:稳定锚点）。"
                 "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
             ),
             parameters={
@@ -375,6 +452,10 @@ def register_worker_tools() -> None:
                     "poc_code": {"type": "string"},
                     "expected_evidence": {"type": "string"},
                     "intended_behavior": {"type": "boolean"},
+                    "root_cause_key": {
+                        "type": "string",
+                        "description": "同根因合并键，格式 类型:稳定锚点，如 idor:SysCommentController",
+                    },
                     "fofa_fingerprint": {"type": "string"},
                     "x_fingerprint": {"type": "string"},
                     "fingerprint_basis": {"type": "string"},
@@ -383,6 +464,41 @@ def register_worker_tools() -> None:
                 "required": list(REQUIRED_SUBMIT_FIELDS),
             },
             handler=_submit_vuln,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="AppendAffectedLocations",
+            description=(
+                "向本项目已有 pending_review 报告追加同根因受影响点（方法/接口）。"
+                "同一根因同一危害已有待审条目时必须用本工具，禁止再 SubmitVuln。"
+                "不可对 confirmed/static_only 调用；已确认主报告的新方法请另交一条供 Reviewer 并入。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "vuln_id": {"type": "integer"},
+                    "locations": {
+                        "type": "array",
+                        "description": "受影响点列表，每项含 file_path，可选 line_no/method/note",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {"type": "string"},
+                                "line_no": {"type": "integer"},
+                                "method": {"type": "string"},
+                                "note": {"type": "string"},
+                            },
+                        },
+                    },
+                    "root_cause_key": {
+                        "type": "string",
+                        "description": "若目标尚无 root_cause_key 可一并补写",
+                    },
+                },
+                "required": ["vuln_id", "locations"],
+            },
+            handler=_append_affected_locations,
         )
     )
     registry.register(
@@ -420,6 +536,7 @@ def register_worker_tools() -> None:
                             "本轮挖掘摘要（中文），结构对齐 templates/round-report.md，"
                             "须含 ## 本轮入口、## 本轮挖掘方向、## 已尝试、"
                             "## 已排除（后续轮不要再走）、## 建议后续方向。"
+                            "建议后续方向只写此刻仍未覆盖、且不在更早轮已尝试/已排除里的方向。"
                         ),
                     },
                     "summary": {

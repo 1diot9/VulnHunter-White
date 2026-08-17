@@ -60,6 +60,7 @@ export type Vuln = {
   submission_tier: string | null
   submission_reason: string | null
   root_cause_key: string | null
+  merged_into_id: number | null
   review_rounds: number
   return_reason: string | null
   intended_behavior: boolean
@@ -75,6 +76,7 @@ export type VulnDetail = Vuln & {
   poc_code: string | null
   expected_evidence: string | null
   report_md: string | null
+  merged_from_ids?: number[]
 }
 
 export type VulnFollowUpMessage = {

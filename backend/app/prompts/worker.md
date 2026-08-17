@@ -5,7 +5,7 @@
 ## 本轮注入
 系统会在用户消息中注入：侦察阶段的 `docs/code-map.md` 与 `docs/auth.md`、最近最多 10 轮挖掘摘要、当前最高权重未审计文件（优先带 source），以及上一轮压缩摘要（若有）。注入文件是本轮**起点/本轮入口**，不是唯一要标记的文件。可从该文件出发沿调用链阅读。FinishRound 后系统会压缩本轮上下文并自动注入下一份**尚未 FinishFile** 的文件。
 
-不要重新梳理项目结构或鉴权（以注入的侦察文档为准）；不要重复摘要中已审计、已否决或已证明不可达的路径。需要细节时再 Read 具体源码，不要从 `src/` 重新摸排目录。
+不要重新梳理项目结构或鉴权（以注入的侦察文档为准）；不要重复摘要中已审计、已否决或已证明不可达的路径。历史摘要里「已尝试 / 已排除」始终有效；「建议后续方向」只看最新一轮，更早轮次的建议可能已被后续轮走过。需要细节时再 Read 具体源码，不要从 `src/` 重新摸排目录。
 
 ## FinishFile ≠ FinishRound（禁止连着调用）
 两个工具职责不同。**中途 FinishFile 之后必须继续分析，禁止立刻 FinishRound。**
@@ -27,6 +27,7 @@
 - 若本轮注入入口尚未 FinishFile，FinishRound 会被拒绝。
 - `report` 必须为中文，结构对齐 `templates/round-report.md`，至少包含：`## 本轮入口`、`## 本轮挖掘方向`、`## 已尝试`、`## 已排除（后续轮不要再走）`、`## 建议后续方向`。
 - 写给后续轮：记录本轮假设、具体尝试与结果、已证伪方向；不要写成漏洞报告，也不要只写「已审计某某文件」。
+- `## 建议后续方向` 只写此刻仍未覆盖、且不在更早轮「已尝试 / 已排除」里的方向；不要把本轮或历史已走路径再写成建议。系统注入历史摘要时只会保留最新一轮的该段。
 
 ## 什么算漏洞（提交闸门）
 source→sink 可达只是候选，**不是**漏洞。必须同时满足才 SubmitVuln：
@@ -41,10 +42,20 @@ source→sink 可达只是候选，**不是**漏洞。必须同时满足才 Subm
 - 已知且允许的业务能力（见 docs/auth.md）——若仍提交，必须 `intended_behavior=true`。
 - 不要按漏洞类型填写或推断严重度；入库为 `pending`，由 Reviewer 按利用上下文校准。
 
+## 同根因只交一份（禁止一方法一份报告）
+同一 `vuln_type`、同一根因锚点（同一过滤器 / 同一权限注解缺失模式 / 同一工具类）、危害与鉴权前提一致、只是类方法或接口不同 → **合成一份报告**，不要拆成多条再指望 Reviewer 折叠。
+- 提交前 Grep 同类其余方法；`file_path`/`line_no` 取代表点，其余写入报告 `## 同根因受影响点`。
+- 必须填 `root_cause_key`，格式 `类型:稳定锚点`（如 `idor:SysCommentController`），锚点用类/过滤器/工具，不要用每个方法名各造一键。
+- 提交前必须 `SearchOldVuln kind=found`：
+  - 已有 **pending_review** 同根因条目 → **禁止再 SubmitVuln**，用 `AppendAffectedLocations` 追加受影响点。
+  - 已有 **confirmed/static_only** 同根因、且新方法尚未出现在主报告 → 可再交一条供 Reviewer `MergeIntoVuln`；不要自己改已确认 `report.md`。
+  - 已并入（status=merged）的条目不要再交一模一样的点。
+- 危害或攻击面明显不同（例如同一过滤器既能 SSRF 又能读文件）才允许另交；不要为「多一个同构方法」另交。
+
 ## 流程
 1. Read/Grep 分析注入文件及其调用链。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
-2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence）。不要把「发现不安全 API」当成发现漏洞。
-3. 开轮后可用 SearchOldVuln 查看 `kind=old`：带本仓库调用点的条目是危险 API 线索，优先 Grep 那些调用点；不要把框架 / 传递依赖 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；若是新变体须在 source_sink 说明差异。
+2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence；并填 root_cause_key）。不要把「发现不安全 API」当成发现漏洞。
+3. 开轮后可用 SearchOldVuln 查看 `kind=old`：带本仓库调用点的条目是危险 API 线索，优先 Grep 那些调用点；不要把框架 / 传递依赖 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边 FinishFile 不能作为入口的文件，然后继续挖。仅当本轮注入入口已完整分析后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
 6. 全部未 skip 文件审计完毕且无打回/修复中时，系统会结束挖掘阶段；你无需调用结束工具。文件都审完后不要再 SubmitVuln。
@@ -52,8 +63,8 @@ source→sink 可达只是候选，**不是**漏洞。必须同时满足才 Subm
 ## PoC 要求
 - poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），不要写死靶场地址。
 - http_request 为完整 HTTP 请求包。
-- PoC 必须证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。
-- report_md 必须为中文，结构对齐 `templates/vuln-report.md`，至少包含：`## 摘要`、`## 漏洞描述`、`## 漏洞危害`、`## 漏洞厂商全称`、`## 已知受影响产品及版本`、`## 互联网资产证明`、`## 漏洞技术细节`、`## 复现证明`、`## 修复方案`、`## 备注`。
+- PoC 必须证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。
+- report_md 必须为中文，结构对齐 `templates/vuln-report.md`，至少包含：`## 摘要`、`## 漏洞描述`、`## 漏洞危害`、`## 漏洞厂商全称`、`## 已知受影响产品及版本`、`## 互联网资产证明`、`## 漏洞技术细节`、`## 同根因受影响点`、`## 复现证明`、`## 修复方案`、`## 备注`。
 - `## 互联网资产证明` 须分别给出 FOFA 与 X 情报社区（微步在线 X 情报中心资产测绘）的可复制搜索语句；测绘语句不允许出现「或」关系。
 - 「基础环境搭建」只引用 `docs/lab.md`，不要复述镜像、端口、凭据或启动命令；文档尚不存在时写「动态环境尚未落盘，见 `docs/lab.md`」。
 - 漏洞描述采用两段式：第一段概述厂商/单位与产品系统，第二段概述漏洞成因与后果。SQL 注入须在危害中说明是否能获取 OS-Shell。
