@@ -577,6 +577,8 @@ def todo_relpath(ctx) -> str:
         return "workspace/todos-recon.json"
     if role in ("recon_old_vuln", "recon-old-vuln"):
         return "workspace/todos-recon-old-vuln.json"
+    if role in ("recon_source_ext", "recon-source-ext"):
+        return "workspace/todos-recon-source-ext.json"
     if role == "worker":
         return f"workspace/todos-worker-{_todo_slug(getattr(ctx, 'worker_id', None), 'default')}.json"
     if role == "reviewer":

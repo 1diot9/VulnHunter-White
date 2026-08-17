@@ -84,6 +84,21 @@ def test_recon_old_vuln_persist_nudge():
     assert "看门狗：侦察（历史漏洞）连续 2 轮未 WriteOldVuln，已提醒立即落盘" == w.persist_nudge_log()
 
 
+def test_recon_source_ext_persist_nudge():
+    from app.agent.watchdog import RECON_SOURCE_EXT_PERSIST_NUDGE
+
+    w = AgentWatchdog(phase="recon-source-ext", persist_nudge_interval=2)
+    assert w.note_turn(["Glob"]) is None
+    msg = w.note_turn(["Read"])
+    assert msg == RECON_SOURCE_EXT_PERSIST_NUDGE.format(n=2)
+    assert "AddSourceExt" in msg
+    assert w.note_turn(["AddSourceExt"]) is None
+    assert w.idle_turns == 0
+    assert "看门狗：侦察（扩展名）连续 2 轮未 AddSourceExt，已提醒立即落盘" == AgentWatchdog(
+        phase="recon-source-ext", idle_turns=2
+    ).persist_nudge_log()
+
+
 def test_worker_finish_nudge_every_50_turns():
     w = AgentWatchdog(phase="worker")
     assert w.worker_finish_interval == WORKER_FINISH_INTERVAL == 50

@@ -32,6 +32,53 @@ SOURCE_EXTS = frozenset(
     }
 )
 
+# Agent 可按侦察文档追加的模板/映射/配置扩展名（并集，不按语言裁掉 SOURCE_EXTS）
+EXTRA_SOURCE_EXTS = frozenset(
+    {
+        ".ftl",
+        ".ftlh",
+        ".vm",
+        ".jspx",
+        ".xml",
+        ".html",
+        ".htm",
+        ".xhtml",
+        ".properties",
+        ".yml",
+        ".yaml",
+        ".sql",
+        ".json",
+        ".twig",
+        ".erb",
+        ".ejs",
+        ".hbs",
+        ".mustache",
+        ".jinja",
+        ".j2",
+        ".njk",
+        ".phtml",
+    }
+)
+
+INDEX_SKIP_NAMES = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "composer.lock",
+        "pom.xml",
+        "ivy.xml",
+        "build.gradle",
+        "settings.gradle",
+        "build.gradle.kts",
+        "settings.gradle.kts",
+    }
+)
+
+_EXT_RE = re.compile(r"\.[a-z0-9]{1,12}$")
+WORKER_ADDED_WEIGHT = 50
+
 IGNORE_DIR_NAMES = frozenset(
     {
         ".git",
@@ -93,9 +140,26 @@ def _should_ignore_dir(name: str) -> bool:
 
 def _should_ignore_file(path: Path) -> bool:
     name = path.name.lower()
-    if name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "composer.lock"):
+    if name in INDEX_SKIP_NAMES:
         return True
     return any(name.endswith(suf) for suf in IGNORE_FILE_SUFFIXES)
+
+
+def normalize_source_ext(ext: str) -> str | None:
+    raw = str(ext or "").strip().lower()
+    if not raw:
+        return None
+    if not raw.startswith("."):
+        raw = "." + raw
+    if "/" in raw or "\\" in raw or ".." in raw:
+        return None
+    if not _EXT_RE.fullmatch(raw):
+        return None
+    return raw
+
+
+def is_indexable_ext(ext: str) -> bool:
+    return ext in SOURCE_EXTS or ext in EXTRA_SOURCE_EXTS
 
 
 def is_test_path(rel: str) -> bool:
@@ -120,9 +184,10 @@ def _walk(root: Path):
         yield Path(dirpath), dirnames, filenames
 
 
-def _collect(src_root: Path) -> list[Path]:
+def _collect(src_root: Path, exts: frozenset[str] | None = None) -> list[Path]:
     import os
 
+    allowed = SOURCE_EXTS if exts is None else frozenset(exts)
     results: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(src_root):
         dirnames[:] = [d for d in dirnames if not _should_ignore_dir(d)]
@@ -130,7 +195,7 @@ def _collect(src_root: Path) -> list[Path]:
             p = Path(dirpath) / fn
             if _should_ignore_file(p):
                 continue
-            if p.suffix.lower() not in SOURCE_EXTS:
+            if p.suffix.lower() not in allowed:
                 continue
             results.append(p)
     return results
@@ -243,3 +308,76 @@ def build_file_index(project_id: int) -> int:
             proj.identity = detect_identity(root, proj.source_url)
         db.commit()
     return len(files)
+
+
+def expand_file_index(
+    project_id: int,
+    extra_exts: list[str],
+    *,
+    assign_weight: int | None = None,
+) -> dict:
+    """Append FileWeight rows for extra extensions without wiping existing marks."""
+    accepted: list[str] = []
+    rejected: list[str] = []
+    seen: set[str] = set()
+    for raw in extra_exts:
+        ext = normalize_source_ext(raw)
+        if ext is None or not is_indexable_ext(ext):
+            rejected.append(str(raw))
+            continue
+        if ext in seen:
+            continue
+        seen.add(ext)
+        accepted.append(ext)
+    if not accepted:
+        return {
+            "added": [],
+            "added_count": 0,
+            "skipped_test": 0,
+            "exts": [],
+            "rejected": rejected,
+        }
+
+    ensure_project_dirs(project_id)
+    root = src_dir(project_id)
+    files = _collect(root, frozenset(accepted))
+    added: list[str] = []
+    skipped_test = 0
+    with SessionLocal() as db:
+        existing = {
+            str(r[0])
+            for r in db.query(FileWeight.path).filter(FileWeight.project_id == project_id).all()
+        }
+        for fp in files:
+            rel = str(fp.relative_to(root)).replace("\\", "/")
+            if rel in existing:
+                continue
+            skip = is_test_path(rel)
+            weight: int | None
+            if skip:
+                weight = 0
+                skipped_test += 1
+            elif assign_weight is not None:
+                weight = int(assign_weight)
+            else:
+                weight = None
+            db.add(
+                FileWeight(
+                    project_id=project_id,
+                    path=rel,
+                    weight=weight,
+                    skipped=skip,
+                    audited=False,
+                    has_source=False,
+                )
+            )
+            added.append(rel)
+            existing.add(rel)
+        db.commit()
+    return {
+        "added": added,
+        "added_count": len(added),
+        "skipped_test": skipped_test,
+        "exts": accepted,
+        "rejected": rejected,
+    }

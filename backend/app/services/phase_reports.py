@@ -10,7 +10,7 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln|-mark)?|worker|fix|reviewer)"
+    r"^(?P<phase>recon(?:-old-vuln|-source-ext|-mark)?|worker|fix|reviewer)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
@@ -19,6 +19,7 @@ _ROUND_NAME = re.compile(r"^round-(?P<n>\d+)\.md$")
 # filename phase -> (control phase, control label, subphase id)
 _PHASE_META: dict[str, tuple[str, str, str]] = {
     "recon": ("recon", "侦察", "map"),
+    "recon-source-ext": ("recon", "侦察", "source_ext"),
     "recon-old-vuln": ("recon", "侦察", "old_vulns"),
     "recon-mark": ("recon", "侦察", "mark"),
     "worker": ("worker", "挖掘", "mine"),
@@ -29,6 +30,7 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
 _CONTROL_LABEL = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核"}
 _SUB_LABEL = {
     "map": "地图/鉴权",
+    "source_ext": "扩展名",
     "old_vulns": "历史漏洞",
     "mark": "盖章",
     "mine": "挖掘",
@@ -40,6 +42,7 @@ _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue"
 _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/code-map.md", "recon", "map", "代码地图"),
     ("docs/auth.md", "recon", "map", "鉴权说明"),
+    ("docs/source-exts.md", "recon", "source_ext", "额外源码扩展名"),
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
     ("docs/lab.md", "reviewer", "reviewer", "动态环境搭建"),
 )

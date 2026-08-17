@@ -1,4 +1,4 @@
-"""Recon-phase tools: MarkSource, MarkWeight, MarkSkip, WriteOldVuln."""
+"""Recon-phase tools: MarkSource, MarkWeight, MarkSkip, AddSourceExt, WriteOldVuln."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from ..models import FileWeight, Project, SessionLocal, Source
+from ..services.ingest import EXTRA_SOURCE_EXTS, expand_file_index
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
 from .common import _parse_frontmatter
@@ -35,6 +36,10 @@ def _old_vuln_index_path(project_id: int) -> Path:
     return old_vulns_dir(project_id) / "index.md"
 
 
+def _source_exts_path(project_id: int) -> Path:
+    return docs_dir(project_id) / "source-exts.md"
+
+
 def _old_vuln_search_complete(index_path: Path) -> bool:
     if not _doc_nonempty(index_path):
         return False
@@ -46,6 +51,25 @@ def _old_vuln_search_complete(index_path: Path) -> bool:
 def recon_old_vulns_ready(project_id: int) -> bool:
     """True only after the agent declares search complete — not after the first WriteOldVuln."""
     return _old_vuln_search_complete(_old_vuln_index_path(project_id))
+
+
+def recon_source_ext_ready(project_id: int) -> bool:
+    """True only after AddSourceExt(done/none) — not after the first extra-ext ingest."""
+    path = _source_exts_path(project_id)
+    if not _doc_nonempty(path):
+        return False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    meta, _ = _parse_frontmatter(text)
+    return _truthy_meta(meta.get("complete"))
+
+
+def _recon_subphase_rows(*, map_done: bool, ext_done: bool, old_done: bool, mark_done: bool) -> list[dict[str, Any]]:
+    return [
+        {"id": "map", "label": "代码地图/鉴权", "done": map_done},
+        {"id": "source_ext", "label": "扩展名", "done": ext_done},
+        {"id": "old_vulns", "label": "历史漏洞", "done": old_done},
+        {"id": "mark", "label": "文件盖章", "done": mark_done},
+    ]
 
 
 def recon_gates_status(project_id: int) -> dict[str, Any]:
@@ -63,7 +87,9 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     old_index_ready = _doc_nonempty(old_index)
     old_done = recon_old_vulns_ready(project_id)
     old_missing = [] if old_index_ready else ["old-vulns/index.md"]
-    missing = map_missing + old_missing
+    ext_done = recon_source_ext_ready(project_id)
+    ext_missing = [] if _doc_nonempty(_source_exts_path(project_id)) else ["source-exts.md"]
+    missing = map_missing + ext_missing + old_missing
     with SessionLocal() as db:
         unmarked = (
             db.query(FileWeight)
@@ -79,6 +105,13 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     errors: list[str] = []
     if map_missing:
         errors.append(f"缺少代码地图/鉴权文档: {', '.join(map_missing)}")
+    if ext_missing:
+        errors.append("尚未检查额外源码扩展名；请用 AddSourceExt 追加模板/映射，或 AddSourceExt(none=true)")
+    elif not ext_done:
+        errors.append(
+            "额外源码扩展名尚未确认结束；AddSourceExt 只入库、不会结束本会话，"
+            "确认完毕后 AddSourceExt(done=true)"
+        )
     if old_missing:
         errors.append("缺少历史漏洞索引 old-vulns/index.md；请用 WriteOldVuln 逐条落盘，不要用 Write 攒到最后")
     elif not old_done:
@@ -88,11 +121,12 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
         )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
-    subphases = [
-        {"id": "map", "label": "代码地图/鉴权", "done": not map_missing},
-        {"id": "old_vulns", "label": "历史漏洞", "done": old_done},
-        {"id": "mark", "label": "文件盖章", "done": mark_done},
-    ]
+    subphases = _recon_subphase_rows(
+        map_done=not map_missing,
+        ext_done=ext_done,
+        old_done=old_done,
+        mark_done=mark_done,
+    )
     return {
         "ok": not errors,
         "missing_docs": missing,
@@ -118,12 +152,12 @@ def recon_subphases(project_id: int, unmarked: int | None = None) -> list[dict[s
         return list(recon_gates_status(project_id).get("subphases") or [])
     docs = docs_dir(project_id)
     map_done = _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
-    old_done = recon_old_vulns_ready(project_id)
-    return [
-        {"id": "map", "label": "代码地图/鉴权", "done": map_done},
-        {"id": "old_vulns", "label": "历史漏洞", "done": old_done},
-        {"id": "mark", "label": "文件盖章", "done": unmarked == 0},
-    ]
+    return _recon_subphase_rows(
+        map_done=map_done,
+        ext_done=recon_source_ext_ready(project_id),
+        old_done=recon_old_vulns_ready(project_id),
+        mark_done=unmarked == 0,
+    )
 
 
 def normalize_weight_path(path: str) -> str:
@@ -301,6 +335,155 @@ def _mark_skip(ctx, args: dict[str, Any]) -> dict[str, Any]:
             updated.append(p)
         db.commit()
     return {"ok": True, "skipped": updated, "count": len(updated)}
+
+
+_ADDED_SAMPLE = 30
+_SOURCE_EXT_DONE_HINT = "扩展名检查已声明结束，系统将结束本会话，随后进入历史漏洞与盖章。"
+_SOURCE_EXT_WRITE_HINT = (
+    "已入库。请继续检查其他模板/映射扩展名；全部确认后再 AddSourceExt(done=true)。"
+    "无需追加时用 AddSourceExt(none=true)。落盘不会结束本会话。"
+)
+
+
+def _meta_exts(meta: dict[str, Any]) -> list[str]:
+    raw = meta.get("exts")
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
+    elif isinstance(raw, list):
+        parts = [str(p).strip() for p in raw if str(p).strip()]
+    else:
+        parts = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        ext = p if p.startswith(".") else f".{p}"
+        ext = ext.lower()
+        if ext in seen:
+            continue
+        seen.add(ext)
+        out.append(ext)
+    return out
+
+
+def _load_source_exts_state(project_id: int) -> tuple[list[str], int, bool]:
+    path = _source_exts_path(project_id)
+    if not path.exists():
+        return [], 0, False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    meta, _ = _parse_frontmatter(text)
+    added = meta.get("added_count")
+    try:
+        added_n = int(added or 0)
+    except (TypeError, ValueError):
+        added_n = 0
+    return _meta_exts(meta), added_n, _truthy_meta(meta.get("complete"))
+
+
+def _write_source_exts_doc(
+    project_id: int,
+    *,
+    exts: list[str],
+    added_count: int,
+    complete: bool,
+    note: str = "",
+) -> Path:
+    path = _source_exts_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ext_yaml = ", ".join(f'"{e}"' for e in exts)
+    listed = "、".join(f"`{e}`" for e in exts) if exts else "无（沿用默认编程语言白名单）"
+    extra = f"\n\n说明：{note}\n" if note else ""
+    body = (
+        "---\n"
+        "title: 额外源码扩展名\n"
+        "summary: 侦察确认后追加的模板/映射等执行面文件类型\n"
+        f"complete: {'true' if complete else 'false'}\n"
+        f"exts: [{ext_yaml}]\n"
+        f"added_count: {added_count}\n"
+        "---\n\n"
+        "# 额外源码扩展名\n\n"
+        f"已确认扩展名：{listed}。累计新增 {added_count} 个文件（测试路径自动跳过）。"
+        f"{extra}"
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    raw = args.get("exts") if args.get("exts") is not None else args.get("ext")
+    if isinstance(raw, str):
+        extra = [raw]
+    elif isinstance(raw, list):
+        extra = [str(x) for x in raw if str(x).strip()]
+    else:
+        extra = []
+    none = bool(args.get("none") or args.get("no_extra") or args.get("no_findings"))
+    conclude = bool(args.get("done") or args.get("complete") or none)
+    if not extra and not conclude:
+        return {
+            "ok": False,
+            "error": "缺少 ext/exts；无需追加时用 AddSourceExt(none=true)，全部确认后 AddSourceExt(done=true)",
+        }
+
+    prev_exts, prev_added, _ = _load_source_exts_state(ctx.project_id)
+    added: list[str] = []
+    skipped_test = 0
+    accepted: list[str] = []
+    rejected: list[str] = []
+    if extra:
+        result = expand_file_index(ctx.project_id, extra, assign_weight=None)
+        accepted = list(result["exts"])
+        rejected = list(result["rejected"])
+        added = list(result["added"])
+        skipped_test = int(result["skipped_test"] or 0)
+        if not accepted and not conclude:
+            allowed = ", ".join(sorted(EXTRA_SOURCE_EXTS))
+            return {
+                "ok": False,
+                "error": f"扩展名均不在可追加白名单内: {rejected}。允许: {allowed}",
+                "rejected": rejected,
+            }
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for ext in prev_exts + accepted:
+        if ext in seen:
+            continue
+        seen.add(ext)
+        merged.append(ext)
+    added_count = prev_added + len(added)
+    path = _write_source_exts_doc(
+        ctx.project_id,
+        exts=merged,
+        added_count=added_count,
+        complete=conclude,
+        note=str(args.get("note") or "").strip(),
+    )
+    if conclude:
+        hint = _SOURCE_EXT_DONE_HINT
+        if none and not merged:
+            hint = "无需追加扩展名，系统将结束本会话。"
+    elif added:
+        hint = _SOURCE_EXT_WRITE_HINT
+    else:
+        hint = "未发现新文件（可能已入库或位于忽略目录）。" + _SOURCE_EXT_WRITE_HINT
+    if skipped_test:
+        hint += f" 其中 {skipped_test} 个测试路径已自动跳过。"
+    if rejected:
+        hint += f" 已忽略不在白名单的扩展名: {rejected}。"
+    return {
+        "ok": True,
+        "exts": merged,
+        "added_count": len(added),
+        "added_total": added_count,
+        "skipped_test": skipped_test,
+        "rejected": rejected,
+        "added_sample": added[:_ADDED_SAMPLE],
+        "done": conclude,
+        "none": none,
+        "path": "docs/source-exts.md",
+        "hint": hint,
+        "doc": str(path.name),
+    }
 
 
 _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
@@ -546,6 +729,38 @@ def register_recon_tools() -> None:
                 },
             },
             handler=_mark_skip,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="AddSourceExt",
+            description=(
+                "根据代码地图追加源码扩展名并入库（不删除已有文件标记）。"
+                "用于模板/映射等默认未索引类型，例如 Freemarker .ftl、MyBatis .xml。"
+                "逐次追加不会结束本会话；全部确认后设 done=true。"
+                "无需追加时设 none=true。不要为图片、压缩包、第三方静态资源加扩展名。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ext": {"type": "string", "description": "单个扩展名，如 .ftl"},
+                    "exts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多个扩展名，如 [\".ftl\", \".xml\"]",
+                    },
+                    "done": {
+                        "type": "boolean",
+                        "description": "扩展名已全部确认时为 true，结束本会话；逐次追加时不要设",
+                    },
+                    "none": {
+                        "type": "boolean",
+                        "description": "无需追加任何扩展名时为 true，写空记录并结束本会话",
+                    },
+                    "note": {"type": "string", "description": "可选说明，写入 docs/source-exts.md"},
+                },
+            },
+            handler=_add_source_ext,
         )
     )
     registry.register(

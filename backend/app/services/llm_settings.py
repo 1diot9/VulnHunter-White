@@ -12,7 +12,7 @@ from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, Settings
 
 LlmRole = Literal["recon", "worker", "reviewer"]
 LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer")
-_RECON_AGENT_ROLES = frozenset({"recon", "recon_mark", "recon_old_vuln"})
+_RECON_AGENT_ROLES = frozenset({"recon", "recon_mark", "recon_old_vuln", "recon_source_ext"})
 _WIRE = frozenset({"chat", "responses"})
 
 

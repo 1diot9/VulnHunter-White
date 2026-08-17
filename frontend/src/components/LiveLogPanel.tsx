@@ -22,6 +22,8 @@ type Props = {
 const PHASE_LABEL: Record<string, string> = {
   recon: '侦察/地图',
   'recon-map': '侦察/地图',
+  'recon-source-ext': '侦察/扩展名',
+  recon_source_ext: '侦察/扩展名',
   'recon-old-vuln': '侦察/历史漏洞',
   recon_old_vuln: '侦察/历史漏洞',
   'recon-mark': '侦察/盖章',
@@ -43,11 +45,14 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
       p === 'recon' ||
       p === 'recon-mark' ||
       p === 'recon_mark' ||
+      p === 'recon-source-ext' ||
+      p === 'recon_source_ext' ||
       p === 'recon-old-vuln' ||
       p === 'recon_old_vuln'
     )
   }
   if (phaseFilter === 'recon-map') return p === 'recon'
+  if (phaseFilter === 'recon-source-ext') return p === 'recon-source-ext' || p === 'recon_source_ext'
   if (phaseFilter === 'recon-old-vuln') return p === 'recon-old-vuln' || p === 'recon_old_vuln'
   if (phaseFilter === 'recon-mark') return p === 'recon-mark' || p === 'recon_mark'
   return p === phaseFilter

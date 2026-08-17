@@ -35,7 +35,7 @@ IDENTICAL_TOOL_NUDGE = (
 )
 
 RECON_PERSIST_INTERVAL = 50
-RECON_PERSIST_PHASES = frozenset({"recon-old-vuln"})
+RECON_PERSIST_PHASES = frozenset({"recon-old-vuln", "recon-source-ext"})
 
 RECON_OLD_VULN_PERSIST_NUDGE = (
     "看门狗提醒：侦察（历史漏洞）已连续 {n} 轮未调用 WriteOldVuln。"
@@ -44,6 +44,15 @@ RECON_OLD_VULN_PERSIST_NUDGE = (
     "若无公开历史漏洞立刻 WriteOldVuln(no_findings=true)；"
     "检索已全部完成再 WriteOldVuln(done=true)。"
     "不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
+)
+
+RECON_SOURCE_EXT_PERSIST_NUDGE = (
+    "看门狗提醒：侦察（扩展名）已连续 {n} 轮未调用 AddSourceExt。"
+    "请根据 docs/code-map.md 立刻追加模板/映射扩展名，不要空转——"
+    "有执行面文件立刻 AddSourceExt(exts=[...])（落盘不会结束本会话）；"
+    "无需追加立刻 AddSourceExt(none=true)；"
+    "全部确认后再 AddSourceExt(done=true)。"
+    "不要改写 code-map/auth，不要标权重。"
 )
 
 WORKER_FINISH_INTERVAL = 50
@@ -59,6 +68,7 @@ WORKER_FINISH_NUDGE = (
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon-old-vuln": frozenset({"WriteOldVuln"}),
+    "recon-source-ext": frozenset({"AddSourceExt"}),
     "worker": frozenset({"FinishFile"}),
 }
 
@@ -99,6 +109,8 @@ class AgentWatchdog:
                 return WORKER_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
+            if self.phase == "recon-source-ext":
+                return RECON_SOURCE_EXT_PERSIST_NUDGE.format(n=self.idle_turns)
         return None
 
     def persist_nudge_log(self) -> str:
@@ -107,6 +119,8 @@ class AgentWatchdog:
             return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记非入口文件"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
+        if self.phase == "recon-source-ext":
+            return f"看门狗：侦察（扩展名）连续 {n} 轮未 AddSourceExt，已提醒立即落盘"
         return f"看门狗：连续 {n} 轮未落盘，已提醒"
 
     def note_no_tools(self) -> str:

@@ -186,10 +186,10 @@ def test_project_file_progress_counts(tmp_env, project):
         assert body["files_audited"] == 1
         assert body["worker_rounds"] == 2
         subs = body["recon_subphases"]
-        assert [s["id"] for s in subs] == ["map", "old_vulns", "mark"]
+        assert [s["id"] for s in subs] == ["map", "source_ext", "old_vulns", "mark"]
         assert all("label" in s and "done" in s for s in subs)
         subs = body["recon_subphases"]
-        assert [s["id"] for s in subs] == ["map", "old_vulns", "mark"]
+        assert [s["id"] for s in subs] == ["map", "source_ext", "old_vulns", "mark"]
         assert all("label" in s and "done" in s for s in subs)
 
 

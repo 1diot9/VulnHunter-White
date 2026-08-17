@@ -18,6 +18,10 @@ INITIAL_DOCS = (
     "recon-old-vuln-retry-loop.md",
     "recon-old-vuln-retry-timeout.md",
     "recon-old-vuln-retry-other.md",
+    "recon-source-ext.md",
+    "recon-source-ext-retry-loop.md",
+    "recon-source-ext-retry-timeout.md",
+    "recon-source-ext-retry-other.md",
     "recon-mark.md",
     "worker.md",
     "fix.md",
@@ -201,6 +205,21 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "templates/round-report.md" in worker
     assert "## 本轮挖掘方向" in worker
     assert "templates/round-report.md" in initial
+    assert "AddSourceExt" not in worker
+    assert "AddSourceExt" not in initial
+
+
+def test_recon_source_ext_prompt_and_map_does_not_add_ext():
+    recon = load_prompt("recon.md")
+    initial = load_prompt("initial/recon.md")
+    assert "不要 `AddSourceExt`" in recon
+    assert "不要 AddSourceExt" in initial
+    ext = load_prompt("recon-source-ext.md")
+    ext_init = load_prompt("initial/recon-source-ext.md")
+    assert "AddSourceExt" in ext
+    assert "done=true" in ext
+    assert "none=true" in ext
+    assert "AddSourceExt" in ext_init
 
 
 def test_worker_prompt_requires_asset_search_fingerprints():
@@ -219,6 +238,7 @@ def test_pipeline_source_has_no_inline_initial_prompts():
     for needle in (
         "请开始代码地图与鉴权文档会话",
         "请开始历史漏洞会话",
+        "请根据 docs/code-map.md 检查并追加未入库扩展名",
         "请从该文件出发沿调用链审计",
         "你是 Fix Worker",
         "审核漏洞 ID=",

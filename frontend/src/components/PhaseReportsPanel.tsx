@@ -18,6 +18,7 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
   recon: [
     ['all', '全部'],
     ['map', '地图/鉴权'],
+    ['source_ext', '扩展名'],
     ['old_vulns', '历史漏洞'],
     ['mark', '盖章'],
   ],

@@ -32,6 +32,10 @@ def _mark_all_weighted(project: int) -> None:
         "---\ntitle: 历史漏洞索引\nsummary: test\ncomplete: true\n---\n\n# index\n",
         encoding="utf-8",
     )
+    (docs / "source-exts.md").write_text(
+        "---\ntitle: 额外源码扩展名\nsummary: test\ncomplete: true\nexts: []\nadded_count: 0\n---\n\n# 额外源码扩展名\n",
+        encoding="utf-8",
+    )
 
 
 def test_release_claim_allows_repick(tmp_env, project):
@@ -370,14 +374,18 @@ def test_run_recon_subphases_are_serial(tmp_env, project, monkeypatch):
     order: list[str] = []
     monkeypatch.setattr(pipeline, "_maybe_mark_recon_done", lambda pid: False)
     monkeypatch.setattr(pipeline, "recon_map_ready", lambda pid: False)
+    monkeypatch.setattr(pipeline, "recon_source_ext_ready", lambda pid: False)
     monkeypatch.setattr(pipeline, "recon_old_vulns_ready", lambda pid: False)
     monkeypatch.setattr(pipeline, "_run_recon_map", lambda pid, cancel: order.append("map") or True)
+    monkeypatch.setattr(
+        pipeline, "_run_recon_source_ext", lambda pid, cancel: order.append("ext") or True
+    )
     monkeypatch.setattr(
         pipeline, "_run_recon_old_vulns", lambda pid, cancel: order.append("old") or True
     )
     monkeypatch.setattr(pipeline, "_run_recon_marking", lambda pid, cancel: order.append("mark"))
     pipeline._run_recon(project)
-    assert order == ["map", "old", "mark"]
+    assert order == ["map", "ext", "old", "mark"]
 
 
 def test_run_recon_does_not_skip_ahead_when_map_fails(tmp_env, project, monkeypatch):
@@ -385,6 +393,9 @@ def test_run_recon_does_not_skip_ahead_when_map_fails(tmp_env, project, monkeypa
     monkeypatch.setattr(pipeline, "_maybe_mark_recon_done", lambda pid: False)
     monkeypatch.setattr(pipeline, "recon_map_ready", lambda pid: False)
     monkeypatch.setattr(pipeline, "_run_recon_map", lambda pid, cancel: order.append("map") or False)
+    monkeypatch.setattr(
+        pipeline, "_run_recon_source_ext", lambda pid, cancel: order.append("ext") or True
+    )
     monkeypatch.setattr(
         pipeline, "_run_recon_old_vulns", lambda pid, cancel: order.append("old") or True
     )
@@ -394,8 +405,14 @@ def test_run_recon_does_not_skip_ahead_when_map_fails(tmp_env, project, monkeypa
 
 
 def test_recon_control_includes_old_vuln_phase():
-    assert pipeline.CONTROL_DB_PHASES["recon"] == ("recon", "recon-old-vuln", "recon-mark")
+    assert pipeline.CONTROL_DB_PHASES["recon"] == (
+        "recon",
+        "recon-source-ext",
+        "recon-old-vuln",
+        "recon-mark",
+    )
     assert pipeline.control_phase("recon-old-vuln") == "recon"
+    assert pipeline.control_phase("recon-source-ext") == "recon"
     assert pipeline.control_phase("recon-map") == "recon"
 
 

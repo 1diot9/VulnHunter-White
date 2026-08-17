@@ -66,6 +66,15 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "MarkSource",
         }
     ),
+    "recon_source_ext": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "TodoWrite",
+            "AddSourceExt",
+        }
+    ),
     "recon_old_vuln": frozenset(
         {
             "Read",

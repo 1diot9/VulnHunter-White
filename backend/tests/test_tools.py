@@ -5,7 +5,7 @@ import os
 import time
 
 from app.services.ingest import build_file_index
-from app.services.paths import docs_dir, old_vulns_dir, vuln_dir, workspace_dir
+from app.services.paths import docs_dir, old_vulns_dir, src_dir, vuln_dir, workspace_dir
 from app.tools import ROLE_ACL, SHELL_TOOLS, ToolContext, ToolSpec, native_shell_tool, registry
 from app.tools.common import todo_relpath
 
@@ -87,14 +87,22 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     assert recon_old_vulns_ready(project) is False
     status = recon_gates_status(project)
     assert any("检索尚未结束" in e for e in status["errors"])
-    assert status["subphases"][1]["done"] is False
+    by_id = {s["id"]: s["done"] for s in status["subphases"]}
+    assert by_id["old_vulns"] is False
+    assert by_id["source_ext"] is False
     (old / "index.md").write_text(
         "---\ntitle: 历史漏洞索引\nsummary: test\ncomplete: true\n---\n\n# index\n",
         encoding="utf-8",
     )
     assert recon_docs_ready(project) is True
     assert recon_old_vulns_ready(project) is True
-    assert [s["done"] for s in recon_gates_status(project)["subphases"]] == [True, True, False]
+    assert [s["id"] for s in recon_gates_status(project)["subphases"]] == [
+        "map",
+        "source_ext",
+        "old_vulns",
+        "mark",
+    ]
+    assert [s["done"] for s in recon_gates_status(project)["subphases"]] == [True, False, True, False]
 
     models = tmp_env["models"]
     Session = tmp_env["Session"]
@@ -107,6 +115,9 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
                     {"path": fw.path, "weight": 50},
                 )
 
+    assert recon_gates_met(project) is False
+    none = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"none": True})
+    assert none["ok"] is True
     assert recon_gates_met(project) is True
     assert apply_recon_done(project) is True
     with Session() as db:
@@ -716,6 +727,7 @@ def test_openai_tools_for_role_contains_expected():
     assert "SearchGHSA" not in recon_names
     assert "WebSearch" not in recon_names
     assert "MarkSource" in recon_names
+    assert "AddSourceExt" not in recon_names
     assert "SubmitVuln" not in recon_names
     assert "MarkWeight" not in recon_names
     old_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln")}
@@ -723,12 +735,18 @@ def test_openai_tools_for_role_contains_expected():
     assert "SearchGHSA" in old_names
     assert "WebSearch" in old_names
     assert "MarkSource" not in old_names
+    assert "AddSourceExt" not in old_names
     assert "Write" not in old_names
+    ext_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_source_ext")}
+    assert "AddSourceExt" in ext_names
+    assert "Read" in ext_names
+    assert "MarkWeight" not in ext_names
     mark_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_mark")}
     assert mark_names == {"MarkSource", "MarkWeight", "MarkSkip"}
     worker_names = {t["function"]["name"] for t in registry.openai_tools_for_role("worker")}
     assert "FinishAudit" not in worker_names
     assert "FinishRound" in worker_names
+    assert "AddSourceExt" not in worker_names
     assert ROLE_ACL["worker"].isdisjoint({"FinishRecon", "FinishAudit", "ConfirmVuln", "WriteOldVuln"})
     injected_shells = recon_names & SHELL_TOOLS
     assert injected_shells == {native_shell_tool()}
@@ -907,6 +925,7 @@ def test_recon_docs_ready_and_mark_batch(tmp_env, project):
     assert recon_gates_met(project) is False
     subs = {s["id"]: s["done"] for s in recon_subphases(project)}
     assert subs["map"] is True
+    assert subs["source_ext"] is False
     assert subs["old_vulns"] is True
     assert subs["mark"] is False
 
@@ -975,6 +994,80 @@ def test_recon_mark_cannot_read(tmp_env, project):
     out = registry.dispatch(_ctx(project, "recon_mark"), "Read", {"path": "app/Main.java"})
     assert out["ok"] is False
     assert "无权" in out["error"]
+
+
+def test_add_source_ext_is_recon_source_ext_only(tmp_env, project):
+    from app.tools.phase_recon import recon_source_ext_ready
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    src = src_dir(project)
+    (src / "app" / "job.ftl").write_text("<#-- view -->\n", encoding="utf-8")
+    (src / "app" / "page.html").write_text("<html></html>\n", encoding="utf-8")
+    build_file_index(project)
+
+    for role in ("recon", "recon_mark", "worker", "recon_old_vuln"):
+        denied = registry.dispatch(_ctx(project, role), "AddSourceExt", {"ext": ".ftl"})
+        assert denied["ok"] is False
+        assert "无权" in denied["error"]
+
+    out = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"exts": [".ftl", ".png"]})
+    assert out["ok"] is True
+    assert out["exts"] == [".ftl"]
+    assert out["added_count"] == 1
+    assert out["done"] is False
+    assert recon_source_ext_ready(project) is False
+    assert "job.ftl" in out["added_sample"][0]
+    assert ".png" in out["rejected"]
+
+    with Session() as db:
+        ftl = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/job.ftl")
+            .one()
+        )
+        java = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/Main.java")
+            .one()
+        )
+        assert ftl.weight is None
+        assert ftl.skipped is False
+        assert java.weight is None or java.skipped
+
+    more = registry.dispatch(
+        _ctx(project, "recon_source_ext"),
+        "AddSourceExt",
+        {"ext": "html", "done": True},
+    )
+    assert more["ok"] is True
+    assert more["added_count"] == 1
+    assert more["done"] is True
+    assert recon_source_ext_ready(project) is True
+    with Session() as db:
+        html = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/page.html")
+            .one()
+        )
+        assert html.weight is None
+        assert html.skipped is False
+
+    bad = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"exts": [".png", ".exe"]})
+    assert bad["ok"] is False
+
+
+def test_add_source_ext_none_concludes(tmp_env, project):
+    from app.tools.phase_recon import recon_source_ext_ready
+
+    build_file_index(project)
+    assert recon_source_ext_ready(project) is False
+    out = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"none": True})
+    assert out["ok"] is True
+    assert out["done"] is True
+    assert recon_source_ext_ready(project) is True
+    doc = (docs_dir(project) / "source-exts.md").read_text(encoding="utf-8")
+    assert "complete: true" in doc
 
 
 def test_read_small_file_numbered(tmp_env, project):

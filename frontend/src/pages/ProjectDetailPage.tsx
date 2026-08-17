@@ -29,6 +29,7 @@ const WORKER_LOG_TABS = [
 ] as const
 const RECON_LOG_TABS = [
   ['recon-map', '地图/鉴权', 'map'],
+  ['recon-source-ext', '扩展名', 'source_ext'],
   ['recon-old-vuln', '历史漏洞', 'old_vulns'],
   ['recon-mark', '盖章', 'mark'],
 ] as const
@@ -44,6 +45,8 @@ function controlPhaseOfEvent(ev: LogEvent): 'recon' | 'worker' | 'reviewer' | nu
   if (
     p === 'recon' ||
     p === 'recon-map' ||
+    p === 'recon-source-ext' ||
+    p === 'recon_source_ext' ||
     p === 'recon-old-vuln' ||
     p === 'recon-mark' ||
     p === 'recon_mark' ||
@@ -60,6 +63,8 @@ function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' {
   if (
     logPhase === 'recon' ||
     logPhase === 'recon-map' ||
+    logPhase === 'recon-source-ext' ||
+    logPhase === 'recon_source_ext' ||
     logPhase === 'recon-old-vuln' ||
     logPhase === 'recon-mark' ||
     logPhase === 'recon_mark' ||

@@ -13,8 +13,19 @@ from .paths import live_events_path
 
 # worker=挖掘页全部；mine=仅挖掘 Worker；fix=仅修复 Worker
 PHASE_GROUPS: dict[str, frozenset[str]] = {
-    "recon": frozenset({"recon", "recon-mark", "recon_mark", "recon-old-vuln", "recon_old_vuln"}),
+    "recon": frozenset(
+        {
+            "recon",
+            "recon-mark",
+            "recon_mark",
+            "recon-old-vuln",
+            "recon_old_vuln",
+            "recon-source-ext",
+            "recon_source_ext",
+        }
+    ),
     "recon-map": frozenset({"recon"}),
+    "recon-source-ext": frozenset({"recon-source-ext", "recon_source_ext"}),
     "recon-old-vuln": frozenset({"recon-old-vuln", "recon_old_vuln"}),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
     "worker": frozenset({"worker", "fix"}),
@@ -427,7 +438,7 @@ class LiveLog:
 
 
 def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
-    """phase 为空不过滤。recon=侦察三子阶段；recon-map / recon-old-vuln / recon-mark 为子阶段。worker=挖掘+修复。"""
+    """phase 为空不过滤。recon=侦察子阶段；recon-map / recon-source-ext / recon-old-vuln / recon-mark 为子阶段。worker=挖掘+修复。"""
     if not phase:
         return True
     wanted = PHASE_GROUPS.get(phase, frozenset({phase}))
@@ -449,7 +460,7 @@ def control_phase_of(phase: str | None) -> str | None:
 def control_phase_of_filter(phase: str | None) -> str | None:
     if not phase:
         return None
-    if phase in ("recon", "recon-map", "recon-old-vuln", "recon-mark"):
+    if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-mark"):
         return "recon"
     if phase in ("worker", "mine", "fix"):
         return "worker"

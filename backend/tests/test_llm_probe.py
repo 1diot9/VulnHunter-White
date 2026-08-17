@@ -141,6 +141,8 @@ def test_llm_role_for_recon_sub_sessions():
     assert llm_role_for_agent("recon") == "recon"
     assert llm_role_for_agent("recon-old-vuln") == "recon"
     assert llm_role_for_agent("recon_old_vuln") == "recon"
+    assert llm_role_for_agent("recon_source_ext") == "recon"
+    assert llm_role_for_agent("recon-source-ext") == "recon"
     assert llm_role_for_agent("recon_mark") == "recon"
     assert llm_role_for_agent("recon-mark") == "recon"
     assert llm_role_for_agent("fix") == "worker"

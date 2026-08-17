@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.ingest import build_file_index, detect_identity, is_test_path
+from app.services.ingest import build_file_index, detect_identity, expand_file_index, is_test_path
 from app.services.paths import src_dir
 
 
@@ -23,6 +23,48 @@ def test_build_file_index_skips_deps_and_tests(tmp_env, project):
         test_rows = [r for r in rows if "test" in r.path.lower()]
         assert test_rows
         assert all(r.skipped for r in test_rows)
+
+
+def test_expand_file_index_appends_templates_without_wiping(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    src = src_dir(project)
+    (src / "app" / "job.ftl").write_text("<#-- view -->\n", encoding="utf-8")
+    (src / "app" / "mapper.xml").write_text("<mapper/>\n", encoding="utf-8")
+    (src / "app" / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+    (src / "tests" / "job.ftl").write_text("<#-- test -->\n", encoding="utf-8")
+    n = build_file_index(project)
+    with Session() as db:
+        java = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/Main.java")
+            .one()
+        )
+        java.weight = 80
+        db.commit()
+
+    out = expand_file_index(project, [".FTL", "xml", ".png"])
+    assert out["exts"] == [".ftl", ".xml"]
+    assert out["rejected"] == [".png"]
+    assert out["added_count"] == 3
+    assert out["skipped_test"] == 1
+    paths = set(out["added"])
+    assert "app/job.ftl" in paths
+    assert "app/mapper.xml" in paths
+    assert "tests/job.ftl" in paths
+    assert "app/pom.xml" not in paths
+
+    with Session() as db:
+        rows = {r.path.replace("\\", "/"): r for r in db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all()}
+        assert len(rows) == n + 3
+        assert rows["app/Main.java"].weight == 80
+        assert rows["app/job.ftl"].weight is None
+        assert rows["app/job.ftl"].skipped is False
+        assert rows["tests/job.ftl"].skipped is True
+        assert rows["tests/job.ftl"].weight == 0
+
+    again = expand_file_index(project, [".ftl"])
+    assert again["added_count"] == 0
 
 
 def test_detect_identity_from_package_json(tmp_env, project):

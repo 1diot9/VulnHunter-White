@@ -43,6 +43,7 @@ from ..tools.phase_recon import (
     recon_gates_status,
     recon_map_ready,
     recon_old_vulns_ready,
+    recon_source_ext_ready,
 )
 from ..tools.phase_worker import mining_complete, project_complete_gates
 
@@ -71,7 +72,7 @@ REVIEWER_POOL = 1
 
 CONTROL_PHASES = ("recon", "worker", "reviewer")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
-    "recon": ("recon", "recon-old-vuln", "recon-mark"),
+    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
     "worker": ("worker", "fix"),
     "reviewer": ("reviewer",),
 }
@@ -127,7 +128,16 @@ class GenerationCancel:
 
 def control_phase(phase: str) -> str:
     p = (phase or "").strip()
-    if p in ("recon", "recon-mark", "recon_mark", "recon-old-vuln", "recon_old_vuln", "recon-map"):
+    if p in (
+        "recon",
+        "recon-mark",
+        "recon_mark",
+        "recon-old-vuln",
+        "recon_old_vuln",
+        "recon-map",
+        "recon-source-ext",
+        "recon_source_ext",
+    ):
         return "recon"
     if p in ("worker", "fix", "mine"):
         return "worker"
@@ -1282,7 +1292,7 @@ def _orchestrate(project_id: int) -> None:
 
 
 def _run_recon(project_id: int) -> None:
-    """Run recon sub-phases strictly in series: map/auth → old vulns → mark."""
+    """Run recon sub-phases strictly in series: map/auth → source-ext → old vulns → mark."""
     cancel = _cancel_event(project_id)
     try:
         if _maybe_mark_recon_done(project_id):
@@ -1290,6 +1300,12 @@ def _run_recon(project_id: int) -> None:
         if recon_map_ready(project_id):
             _finish_resumable_phase(project_id, "recon")
         elif not _run_recon_map(project_id, cancel):
+            return
+        if cancel.is_set():
+            return
+        if recon_source_ext_ready(project_id):
+            _finish_resumable_phase(project_id, "recon-source-ext")
+        elif not _run_recon_source_ext(project_id, cancel):
             return
         if cancel.is_set():
             return
@@ -1326,7 +1342,7 @@ def _run_recon_map(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-retry-loop.md",
         retry_timeout_doc="recon-retry-timeout.md",
         retry_other_doc="recon-retry-other.md",
-        done_log="代码地图与鉴权文档已就绪，进入历史漏洞会话",
+        done_log="代码地图与鉴权文档已就绪，进入扩展名检查",
         fail_error="recon 地图/鉴权会话未在重试上限内完成",
         fail_status="Recon 地图/鉴权未完成，将自动再拉起",
         fail_log="Recon 地图/鉴权会话重试用尽，等待调度器再拉起",
@@ -1349,6 +1365,25 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         fail_error="recon 历史漏洞会话未在重试上限内完成",
         fail_status="Recon 历史漏洞未完成，将自动再拉起",
         fail_log="Recon 历史漏洞会话重试用尽，等待调度器再拉起",
+    )
+
+
+def _run_recon_source_ext(project_id: int, cancel: threading.Event) -> bool:
+    return _run_recon_gated_session(
+        project_id,
+        cancel,
+        phase="recon-source-ext",
+        role="recon_source_ext",
+        prompt_name="recon-source-ext.md",
+        ready=lambda: recon_source_ext_ready(project_id),
+        initial_doc="recon-source-ext.md",
+        retry_loop_doc="recon-source-ext-retry-loop.md",
+        retry_timeout_doc="recon-source-ext-retry-timeout.md",
+        retry_other_doc="recon-source-ext-retry-other.md",
+        done_log="额外源码扩展名已确认，进入历史漏洞会话",
+        fail_error="recon 扩展名会话未在重试上限内完成",
+        fail_status="Recon 扩展名检查未完成，将自动再拉起",
+        fail_log="Recon 扩展名会话重试用尽，等待调度器再拉起",
     )
 
 
@@ -1396,7 +1431,12 @@ def _run_recon_gated_session(
                 used_checkpoint = True
             else:
                 _consume_force_new(project_id, "recon")
-                extra = "历史漏洞" if phase in ("recon-old-vuln", "recon_old_vuln") else "代码地图/鉴权"
+                extra = {
+                    "recon-old-vuln": "历史漏洞",
+                    "recon_old_vuln": "历史漏洞",
+                    "recon-source-ext": "扩展名",
+                    "recon_source_ext": "扩展名",
+                }.get(phase, "代码地图/鉴权")
                 if resumes:
                     extra = f"{extra} 重试 {resumes}/{settings.recon_max_resumes}"
                 _start_log_session(project_id, phase, extra, role=role)
