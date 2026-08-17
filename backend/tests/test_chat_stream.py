@@ -12,7 +12,7 @@ from app.agent.chat_stream import (
     consume_chat_stream,
     parse_sse_line,
 )
-from app.agent.loop import AgentLoop, AuthError, RateLimitError
+from app.agent.loop import AgentLoop, AuthError, RateLimitError, _sanitize_chat_messages
 from app.services.llm_settings import ResolvedLlm
 
 
@@ -223,6 +223,65 @@ def test_chat_http_401(monkeypatch):
     loop = _loop(monkeypatch, _FakeClient(resp))
     with pytest.raises(AuthError):
         loop._chat([{"role": "user", "content": "hi"}], [], remaining=1800)
+
+
+def test_sanitize_chat_messages_coerces_null_content():
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "Read", "arguments": '{"path":"a.java"}'},
+        }
+    ]
+    original = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        {"role": "tool", "tool_call_id": "call_1"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "continue"},
+    ]
+    out = _sanitize_chat_messages(original)
+    assert out[1]["content"] == ""
+    assert out[1]["tool_calls"] == tool_calls
+    assert out[2]["content"] == ""
+    assert out[2]["tool_call_id"] == "call_1"
+    assert out[3]["content"] == ""
+    assert original[1]["content"] is None
+    assert "content" not in original[2]
+
+
+def test_chat_sends_empty_string_for_null_assistant_content(monkeypatch):
+    resp = _FakeResponse(
+        lines=[
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+    )
+    client = _FakeClient(resp)
+    loop = _loop(monkeypatch, client)
+    loop._chat(
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "Read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": None},
+        ],
+        [],
+        remaining=1800,
+    )
+    msgs = client.captured["json"]["messages"]
+    assert msgs[1]["content"] == ""
+    assert msgs[1]["tool_calls"][0]["id"] == "call_1"
+    assert msgs[2]["content"] == ""
 
 
 def test_chat_drops_stream_options_on_400(monkeypatch):

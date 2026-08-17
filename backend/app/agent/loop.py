@@ -82,6 +82,24 @@ def _content_text(message: dict[str, Any]) -> str:
     return str(content).strip()
 
 
+def _sanitize_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Coerce null/missing content to empty string for OpenAI-compatible gateways.
+
+    OpenAI allows assistant ``content=null`` with ``tool_calls``. Qwen/DashScope
+    and several compatible gateways reject that as "content field is a required
+    field" (HTTP 400). Empty string is accepted by both.
+    """
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        nm = dict(m)
+        if nm.get("content") is None:
+            nm["content"] = ""
+        out.append(nm)
+    return out
+
+
 def _reasoning_text(message: dict[str, Any]) -> str:
     for key in ("reasoning_content", "reasoning", "thinking"):
         val = message.get(key)
@@ -391,7 +409,7 @@ class AgentLoop:
                     phase=self.phase,
                     role=self.role,
                 )
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content}
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
             messages.append(assistant_msg)
@@ -569,7 +587,7 @@ class AgentLoop:
         }
         body: dict[str, Any] = {
             "model": self.llm.model,
-            "messages": messages,
+            "messages": _sanitize_chat_messages(messages),
             "temperature": settings.temperature,
             "tools": tools,
             "tool_choice": "auto",
