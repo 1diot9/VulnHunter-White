@@ -106,7 +106,23 @@ def project_complete_gates(project_id: int) -> bool:
             )
             .count()
         )
-        return pending == 0
+        if pending > 0:
+            return False
+        proj = db.get(Project, project_id)
+        if proj and bool(proj.verifier_enabled):
+            vpending = (
+                db.query(Vuln)
+                .filter(
+                    Vuln.project_id == project_id,
+                    Vuln.verifier_status == "pending",
+                    Vuln.status.in_(("confirmed", "static_only")),
+                    Vuln.attack_surface == "frontend",
+                )
+                .count()
+            )
+            if vpending > 0:
+                return False
+        return True
 
 
 def _ensure_affected_section(report: str, args: dict[str, Any]) -> str:

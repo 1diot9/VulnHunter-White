@@ -37,6 +37,8 @@ class AppSettings(Base):
     worker_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     fix_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     github_pat: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fofa_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fofa_base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     default_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     default_base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     default_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -57,13 +59,15 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | ingesting | recon | auditing | reviewing | paused | completed | error | cancelled
     phase: Mapped[str] = mapped_column(String(64), default="pending")
-    # pending | recon | worker | reviewer | done
+    # pending | recon | worker | reviewer | verifier | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # bounty | full — set at create time; change only while paused
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
     # 人工靶场：跳过 Docker 环境轮，审核时注入用户提供的环境说明
     manual_lab: Mapped[bool] = mapped_column(Boolean, default=False)
     manual_lab_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Verifier：Reviewer 确认前台洞后用 FOFA 搜同款目标并复测；默认关闭
+    verifier_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -150,6 +154,9 @@ class Vuln(Base):
     review_rounds: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # none | pending | verified | failed | skipped — Verifier 互联网复测
+    verifier_status: Mapped[str] = mapped_column(String(32), default="none")
+    verifier_verified_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -164,7 +171,7 @@ class PhaseRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
-    # recon | worker | reviewer | reviewer-lab | fix
+    # recon | worker | reviewer | reviewer-lab | verifier | fix
     role: Mapped[str] = mapped_column(String(64), default="worker")
     status: Mapped[str] = mapped_column(String(64), default="running")
     # running | completed | failed | cancelled | paused
@@ -252,7 +259,11 @@ def _ensure_columns() -> None:
     """SQLite create_all 不会给已有表加列。"""
     insp = inspect(engine)
     wanted = {
-        "app_settings": {"fix_concurrency": "INTEGER DEFAULT 1"},
+        "app_settings": {
+            "fix_concurrency": "INTEGER DEFAULT 1",
+            "fofa_key": "TEXT",
+            "fofa_base_url": "VARCHAR(1024)",
+        },
         "file_weights": {
             "claimed_at": "DATETIME",
             "audit_attempts": "INTEGER DEFAULT 0",
@@ -263,6 +274,7 @@ def _ensure_columns() -> None:
             "audit_mode": "VARCHAR(32) DEFAULT 'bounty'",
             "manual_lab": "BOOLEAN DEFAULT 0",
             "manual_lab_prompt": "TEXT",
+            "verifier_enabled": "BOOLEAN DEFAULT 0",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",
@@ -273,6 +285,8 @@ def _ensure_columns() -> None:
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",
             "tracking_status": "VARCHAR(32) DEFAULT 'none'",
+            "verifier_status": "VARCHAR(32) DEFAULT 'none'",
+            "verifier_verified_url": "VARCHAR(1024)",
         },
     }
     with engine.begin() as conn:
@@ -331,6 +345,22 @@ def _backfill_tracking_status() -> None:
         )
 
 
+def _backfill_verifier_status() -> None:
+    insp = inspect(engine)
+    if "vulns" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("vulns")}
+    if "verifier_status" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE vulns SET verifier_status = 'none' "
+                "WHERE verifier_status IS NULL OR verifier_status = ''"
+            )
+        )
+
+
 def _backfill_parent_root_cause_keys() -> None:
     """Copy duplicate_grouped keys onto matching parents that were confirmed without one."""
     insp = inspect(engine)
@@ -354,6 +384,7 @@ def ensure_schema() -> None:
     _ensure_columns()
     _migrate_submission_tiers()
     _backfill_tracking_status()
+    _backfill_verifier_status()
     _backfill_parent_root_cause_keys()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]

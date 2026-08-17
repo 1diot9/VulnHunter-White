@@ -586,6 +586,9 @@ def todo_relpath(ctx) -> str:
         return f"workspace/todos-reviewer-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
     if role in ("reviewer_lab", "reviewer-lab"):
         return "workspace/todos-reviewer-lab.json"
+    if role == "verifier":
+        vid = getattr(ctx, "vuln_id", None)
+        return f"workspace/todos-verifier-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
     if role == "fix":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-fix-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
@@ -977,7 +980,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="TodoWrite",
-            description="维护本阶段自己的运行时待办（按 recon / 历史漏洞 / worker / reviewer / fix 分文件，不会覆盖其他阶段）",
+            description="维护本阶段自己的运行时待办（按 recon / 历史漏洞 / worker / reviewer / verifier / fix 分文件，不会覆盖其他阶段）",
             parameters={
                 "type": "object",
                 "properties": {

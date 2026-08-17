@@ -43,12 +43,13 @@
    - 危害或鉴权不同才允许 Confirm 为 `duplicate_grouped` 并逐字复用已有键。
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
 3. 若 intended_behavior=true，或问题只是配置/文档里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。
-4. 动态验证阶梯：
+4. 动态验证阶梯（Docker 靶场已在**独立环境轮**搭建，本轮不要从头搭环境）：
    - env/env.json 中 runtime 为 java/nodejs/python 且调试端口可用 → 优先 debug MCP（若已接入）。
    - 否则 **普通动态**：对 target_url 发请求 / 运行 poc.py，结合 docker exec、日志、文件、进程**观察**冲击。
    - 原 PoC 无有害差异 → 不要标 `evidence_level=dynamic` 确认；按否决项误报或打回。
    - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
+   - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。
 5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。确认前必须按四维校准：
    - 可达性：由 `attack_surface` + `required_account` 决定。前台=未认证可达(+1)，后台普通权限=低权限可达(+0)，后台管理员=管理员可达(-1)。
    - 影响范围 `impact`：

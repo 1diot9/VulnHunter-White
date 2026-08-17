@@ -35,8 +35,10 @@ from ..services.pipeline import (
     request_phase_restart,
     request_phase_resume,
     request_resume,
+    start_audit,
     start_ingest_and_audit,
 )
+from ..services.verifier import enqueue_confirmed_frontend
 from ..services.shutdown import is_shutting_down, wait_or_shutdown
 from ..tools.phase_recon import recon_subphases
 
@@ -58,6 +60,7 @@ def _empty_project_summary() -> dict[str, int]:
         "tokens_output": 0,
         "tokens_cached": 0,
         "tokens_total": 0,
+        "verifier_pending": 0,
     }
 
 
@@ -73,6 +76,17 @@ def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
             func.sum(case((Vuln.status.in_(("confirmed", "static_only")), 1), else_=0)),
             func.sum(case((Vuln.status == "false_positive", 1), else_=0)),
             func.sum(case((Vuln.status.in_(("pending_review", "returned", "fixing")), 1), else_=0)),
+            func.sum(
+                case(
+                    (
+                        (Vuln.verifier_status == "pending")
+                        & Vuln.status.in_(("confirmed", "static_only"))
+                        & (Vuln.attack_surface == "frontend"),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
         )
         .filter(Vuln.project_id.in_(ids))
         .group_by(Vuln.project_id)
@@ -81,6 +95,7 @@ def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
         s["vuln_confirmed"] = int(row[1] or 0)
         s["vuln_false_positive"] = int(row[2] or 0)
         s["vuln_pending"] = int(row[3] or 0)
+        s["verifier_pending"] = int(row[4] or 0)
 
     for row in (
         db.query(
@@ -142,6 +157,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         audit_mode=normalize_audit_mode(p.audit_mode),
         manual_lab=bool(p.manual_lab),
         manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
+        verifier_enabled=bool(p.verifier_enabled),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -160,6 +176,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         tokens_total=summary["tokens_total"],
         recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
         lab_setup_done=lab_setup_finished(p.id),
+        verifier_pending=int(summary.get("verifier_pending") or 0),
         **_phase_state_fields(p.id),
     )
 
@@ -203,6 +220,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             audit_mode=audit_mode,
             manual_lab=bool(body.manual_lab),
             manual_lab_prompt=manual_lab_prompt or None,
+            verifier_enabled=bool(body.verifier_enabled),
         )
         db.add(p)
         db.commit()
@@ -223,6 +241,7 @@ async def create_project_zip(
     audit_mode: str = Form("bounty"),
     manual_lab: bool = Form(False),
     manual_lab_prompt: str = Form(""),
+    verifier_enabled: bool = Form(False),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
@@ -239,6 +258,7 @@ async def create_project_zip(
             audit_mode=mode,
             manual_lab=bool(manual_lab),
             manual_lab_prompt=prompt or None,
+            verifier_enabled=bool(verifier_enabled),
         )
         db.add(p)
         db.commit()
@@ -256,7 +276,12 @@ async def create_project_zip(
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
-    if body.audit_mode is None and body.manual_lab is None and body.manual_lab_prompt is None:
+    if (
+        body.audit_mode is None
+        and body.manual_lab is None
+        and body.manual_lab_prompt is None
+        and body.verifier_enabled is None
+    ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
     prompt = None
@@ -272,6 +297,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         if not p:
             raise HTTPException(404, "项目不存在")
         old_mode = normalize_audit_mode(p.audit_mode)
+        old_verifier = bool(p.verifier_enabled)
         if mode is not None:
             if p.status != "paused":
                 raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
@@ -280,15 +306,34 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.manual_lab = bool(body.manual_lab)
         if prompt is not None:
             p.manual_lab_prompt = prompt or None
+        if body.verifier_enabled is not None:
+            p.verifier_enabled = bool(body.verifier_enabled)
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
         sync_notes = bool(out.manual_lab and prompt is not None)
         notes_text = out.manual_lab_prompt
+        restarted = False
+        if body.verifier_enabled is True and not old_verifier:
+            queued = enqueue_confirmed_frontend(project_id)
+            live_log.system(project_id, f"已开启 Verifier，排队 {queued} 条前台漏洞")
+            if p.status == "completed" and queued > 0:
+                p.status = "auditing"
+                p.phase = "verifier"
+                db.commit()
+                db.refresh(p)
+                out = _project_out(db, p)
+                restarted = True
+            elif p.status not in ("completed", "cancelled", "error", "pending", "ingesting"):
+                restarted = True
+        elif body.verifier_enabled is False and old_verifier:
+            live_log.system(project_id, "已关闭 Verifier，不再对新的前台漏洞做互联网复测")
     if mode is not None and old_mode != mode:
         note_audit_mode_changed(project_id, mode)
     if sync_notes:
         sync_manual_lab_notes(project_id, notes_text)
+    if restarted:
+        start_audit(project_id)
     return out
 
 

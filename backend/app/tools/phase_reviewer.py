@@ -406,6 +406,11 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
         db.commit()
         status = vuln.status
+    queued = False
+    if surface == "frontend" and status in ("confirmed", "static_only"):
+        from ..services.verifier import enqueue_frontend_vuln
+
+        queued = enqueue_frontend_vuln(ctx.project_id, int(vuln_id))
     ctx.state["review_done"] = True
     ctx.state["review_verdict"] = status
     out: dict[str, Any] = {
@@ -423,7 +428,10 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "submission_tier_label": submission.tier_label,
         "submission_reason": submission.reason,
         "root_cause_key": submission.root_cause_key,
+        "verifier_queued": queued,
     }
+    if queued:
+        out["message"] = "已确认前台漏洞，已排队 Verifier 做互联网复测"
     if account:
         out["required_account_label"] = _ACCOUNT_LABELS[account]
     return out

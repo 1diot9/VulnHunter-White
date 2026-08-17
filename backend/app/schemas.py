@@ -36,6 +36,8 @@ class SettingsOut(BaseModel):
     worker_concurrency: int = 1
     fix_concurrency: int = 1
     github_pat_set: bool = False
+    fofa_key_set: bool = False
+    fofa_base_url: str = "https://fofa.info"
     default_model: str = ""
     default_base_url: str = ""
     default_api_key_set: bool = False
@@ -48,6 +50,8 @@ class SettingsUpdate(BaseModel):
     worker_concurrency: int | None = None
     fix_concurrency: int | None = None
     github_pat: str | None = None
+    fofa_key: str | None = None
+    fofa_base_url: str | None = None
     default_model: str | None = None
     default_base_url: str | None = None
     default_api_key: str | None = None
@@ -95,12 +99,14 @@ class ProjectCreate(BaseModel):
     audit_mode: Literal["bounty", "full"] = "bounty"
     manual_lab: bool = False
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
+    verifier_enabled: bool = False
 
 
 class ProjectUpdate(BaseModel):
     audit_mode: Literal["bounty", "full"] | None = None
     manual_lab: bool | None = None
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
+    verifier_enabled: bool | None = None
 
 
 class ProjectOut(BaseModel):
@@ -115,6 +121,7 @@ class ProjectOut(BaseModel):
     audit_mode: str = "bounty"
     manual_lab: bool = False
     manual_lab_prompt: str = ""
+    verifier_enabled: bool = False
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -135,6 +142,7 @@ class ProjectOut(BaseModel):
     project_paused: bool = False
     recon_subphases: list[dict[str, Any]] = Field(default_factory=list)
     lab_setup_done: bool = False
+    verifier_pending: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -163,6 +171,8 @@ class VulnOut(BaseModel):
     return_reason: str | None = None
     intended_behavior: bool = False
     report_path: str | None = None
+    verifier_status: str = "none"
+    verifier_verified_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

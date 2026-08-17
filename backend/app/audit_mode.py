@@ -82,7 +82,10 @@ def initial_hint(mode: str) -> str:
         return (
             f"当前为{AUDIT_MODE_LABELS[normalized]}：只报 {BOUNTY_TYPE_LABELS}。"
             "CORS、反射 XSS、缺速率限制、安全头等低危害项不要提交或确认。"
-            "利用必须在默认配置或应用自身配置选项下成立，禁止主动搭建漏洞利用环境。"
+            "利用必须在默认配置或应用自身配置选项下成立。"
+            "禁止为了让洞成立而种文件、改非应用配置、组合第二个独立漏洞。"
+            "这不是禁止 Docker 靶场：Reviewer 必须在独立环境轮搭建/复用 env/ 与 docs/lab.md；"
+            "靶场只提供默认部署，不要在容器里制造利用条件。"
         )
     return (
         f"当前为{AUDIT_MODE_LABELS[normalized]}：按现行规则提交，含难以利用项"

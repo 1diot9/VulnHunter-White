@@ -147,3 +147,5 @@ def test_llm_role_for_recon_sub_sessions():
     assert llm_role_for_agent("recon-mark") == "recon"
     assert llm_role_for_agent("fix") == "worker"
     assert llm_role_for_agent("reviewer") == "reviewer"
+    assert llm_role_for_agent("reviewer_lab") == "reviewer"
+    assert llm_role_for_agent("reviewer-lab") == "reviewer"

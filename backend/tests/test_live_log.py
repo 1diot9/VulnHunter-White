@@ -79,6 +79,12 @@ def test_event_matches_phase_groups_fix_under_worker():
     assert not event_matches_phase({"phase": "recon-old-vuln", "kind": "agent"}, "recon-map")
     assert not event_matches_phase({"phase": "recon", "kind": "agent"}, "recon-old-vuln")
     assert not event_matches_phase({"phase": "fix", "kind": "agent"}, "recon")
+    assert event_matches_phase({"phase": "reviewer-lab", "kind": "agent"}, "reviewer")
+    assert event_matches_phase({"phase": "reviewer-lab", "kind": "agent"}, "reviewer-lab")
+    assert event_matches_phase({"role": "reviewer_lab", "kind": "cmd"}, "reviewer")
+    assert not event_matches_phase({"phase": "reviewer", "kind": "agent"}, "reviewer-lab")
+    assert event_matches_phase({"phase": "reviewer", "kind": "agent"}, "reviewer-review")
+    assert not event_matches_phase({"phase": "reviewer-lab", "kind": "agent"}, "reviewer-review")
     assert not event_matches_phase({"kind": "system", "text": "x"}, "reviewer")
     assert not event_matches_phase({"phase": "worker", "kind": "agent"}, "recon")
 
@@ -238,3 +244,51 @@ def test_hydrate_if_used_opens_next_page(tmp_env, project, monkeypatch, tmp_path
     live_log.reset_runtime_state()
     assert live_log.begin_session(project, "reviewer", if_used=True) == 2
     assert live_log.begin_session(project, "worker", if_used=True) == 1
+    assert live_log.begin_session(project, "fix", if_used=True) == 1
+
+
+def test_subphase_sessions_are_independent(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+
+    live_log.agent(project, "map-1", phase="recon", role="recon")
+    assert live_log.begin_session(project, "recon-mark", if_used=True) == 1
+    live_log.agent(project, "mark-1", phase="recon-mark", role="recon_mark")
+    assert live_log.begin_session(project, "recon-mark", if_used=True) == 2
+    live_log.system(project, "侦察新开对话（盖章）", phase="recon-mark", role="recon_mark", session_start=True)
+    live_log.agent(project, "mark-2", phase="recon-mark", role="recon_mark")
+
+    assert (tmp_path / "live-events" / "recon" / "round-1.jsonl").exists()
+    assert (tmp_path / "live-events" / "recon-mark" / "round-1.jsonl").exists()
+    assert (tmp_path / "live-events" / "recon-mark" / "round-2.jsonl").exists()
+
+    mapped = live_log.read_events(project, limit=10, tail=True, phase="recon-map")
+    assert mapped.session_count == 1
+    assert [e["text"] for e in mapped.events] == ["map-1"]
+
+    mark_latest = live_log.read_events(project, limit=10, tail=True, phase="recon-mark")
+    assert mark_latest.session == 2
+    assert mark_latest.session_count == 2
+    assert [e["text"] for e in mark_latest.events] == ["侦察新开对话（盖章）", "mark-2"]
+
+    mark_first = live_log.read_events(project, limit=10, tail=True, phase="recon-mark", session=1)
+    assert [e["text"] for e in mark_first.events] == ["mark-1"]
+
+    live_log.agent(project, "mine-1", phase="worker", role="worker")
+    assert live_log.begin_session(project, "fix", if_used=True) == 1
+    live_log.agent(project, "fix-1", phase="fix", role="fix")
+    assert live_log.begin_session(project, "fix", if_used=True) == 2
+    live_log.system(project, "挖掘新开对话（漏洞 #1）", phase="fix", role="fix", session_start=True)
+    live_log.agent(project, "fix-2", phase="fix", role="fix")
+
+    mine = live_log.read_events(project, limit=10, tail=True, phase="mine")
+    assert mine.session_count == 1
+    assert [e["text"] for e in mine.events] == ["mine-1"]
+    fix_latest = live_log.read_events(project, limit=10, tail=True, phase="fix")
+    assert fix_latest.session_count == 2
+    assert [e["text"] for e in fix_latest.events] == ["挖掘新开对话（漏洞 #1）", "fix-2"]
+    assert live_log.current_session(project, "worker") == 1
+    assert live_log.current_session(project, "fix") == 2
+    assert live_log.current_session(project, "recon") == 1
+    assert live_log.current_session(project, "recon-mark") == 2

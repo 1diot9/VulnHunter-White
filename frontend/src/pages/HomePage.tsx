@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, type Project } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { ManualLabToggle } from '../components/ManualLabFields'
+import { VerifierToggle } from '../components/VerifierToggle'
 import PhaseFlow from '../components/PhaseFlow'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +18,7 @@ export default function HomePage() {
   const [auditMode, setAuditMode] = useState<'bounty' | 'full'>('bounty')
   const [manualLab, setManualLab] = useState(false)
   const [manualLabPrompt, setManualLabPrompt] = useState('')
+  const [verifierEnabled, setVerifierEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -32,6 +34,7 @@ export default function HomePage() {
       await api.createGithub(url.trim(), '', auditMode, {
         manual_lab: manualLab,
         manual_lab_prompt: manualLab ? manualLabPrompt : '',
+        verifier_enabled: verifierEnabled,
       })
       setUrl('')
       await refresh()
@@ -50,6 +53,7 @@ export default function HomePage() {
       await api.uploadZip(file, '', auditMode, {
         manual_lab: manualLab,
         manual_lab_prompt: manualLab ? manualLabPrompt : '',
+        verifier_enabled: verifierEnabled,
       })
       await refresh()
     } catch (e) {
@@ -76,6 +80,7 @@ export default function HomePage() {
             onEnabledChange={setManualLab}
             onPromptChange={setManualLabPrompt}
           />
+          <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
           <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
             <Input
               className="w-full"
@@ -129,6 +134,8 @@ export default function HomePage() {
                 reconSubphases={p.recon_subphases}
                 labSetupDone={p.lab_setup_done}
                 manualLab={p.manual_lab}
+                verifierEnabled={p.verifier_enabled}
+                verifierPending={p.verifier_pending}
               />
               <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                 <span>确认 {p.vuln_confirmed}</span>

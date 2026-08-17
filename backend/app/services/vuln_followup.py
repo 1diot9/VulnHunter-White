@@ -234,6 +234,29 @@ def _message_text(message: dict[str, Any]) -> str:
     return text.strip()
 
 
+def _followup_history_text(history: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    turn = 0
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = str(item.get("content") or "").strip()
+        if not content or role not in ("user", "assistant"):
+            continue
+        if role == "user":
+            turn += 1
+            blocks.append(f"### 追问 {turn}\n{content}")
+        else:
+            blocks.append(f"### 答复 {turn or 1}\n{content}")
+    if not blocks:
+        return ""
+    joined = "\n\n".join(blocks)
+    if len(joined) > 20000:
+        joined = "（已有追问较长，已保留最近记录）\n\n" + joined[-20000:]
+    return "## 已有追问记录\n" + joined
+
+
 def _reviewer_transcript_text(ctx: dict[str, Any]) -> str:
     lines: list[str] = []
     for item in ctx.get("messages") or []:
@@ -262,6 +285,7 @@ def _build_chat_messages(
     system = str(ctx.get("system_prompt") or "").strip() or "你是 VulnHunter 的 Reviewer。"
     system += (
         "\n\n现在进入漏洞报告追问模式。请基于下方 Reviewer 轮次上下文、漏洞报告和已有追问记录回答。"
+        "必须结合此前的追问与答复连贯作答，不要当成互不相关的单轮问答。"
         "不要调用工具，不要改变漏洞状态；如果证据不足，请明确指出仍缺少什么。"
     )
     report_md = _read_report_md(vuln)
@@ -273,9 +297,16 @@ def _build_chat_messages(
         "## Reviewer 轮次上下文\n"
         f"{_reviewer_transcript_text(ctx) or '（无可读上下文）'}"
     )
+    history_text = _followup_history_text(history)
+    if history_text:
+        context += "\n\n" + history_text
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system},
         {"role": "user", "content": context},
+        {
+            "role": "assistant",
+            "content": "已加载该漏洞的 Reviewer 轮次上下文和已有追问记录。请继续提问。",
+        },
     ]
     for item in history:
         role = item.get("role")

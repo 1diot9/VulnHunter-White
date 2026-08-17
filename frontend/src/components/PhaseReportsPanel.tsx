@@ -27,6 +27,11 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
     ['mine', '挖掘'],
     ['fix', '修复'],
   ],
+  reviewer: [
+    ['all', '全部'],
+    ['lab', '环境搭建'],
+    ['reviewer', '审核'],
+  ],
 }
 
 const KIND_VARIANT: Record<string, 'info' | 'success' | 'warning' | 'outline'> = {

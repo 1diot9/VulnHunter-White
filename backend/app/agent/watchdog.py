@@ -22,11 +22,23 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+LAB_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本轮是独立的 Docker 靶场搭建，请立刻 Read/Glob 找 Dockerfile/compose，"
+    "用 shell 构建并启动，Write env/env.json；完成后 FinishLab。"
+    "无法搭建则 FinishLab(skipped=true, reason=...)。不要审核漏洞。"
+)
+
+VERIFIER_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。请立刻 Read 漏洞报告，用 FofaSearch 搜最多 10 个同款目标，"
+    "按报告 PoC 复测；任一成功即 FinishVerifier(verdict=success)。不要空转。"
+)
+
 NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。纯文字回复无法读取代码、执行命令或落盘结果，对任务没有进展。"
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
     "挖掘轮次：非入口文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的入口已完整分析后才 FinishRound；"
-    "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员） / ReturnToWorker；修复请 FinishFix。"
+    "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员） / ReturnToWorker；"
+    "互联网验证请 FofaSearch / FinishVerifier；修复请 FinishFix。"
 )
 
 IDENTICAL_TOOL_NUDGE = (
@@ -126,6 +138,10 @@ class AgentWatchdog:
     def note_no_tools(self) -> str:
         """Record a text-only turn and return the reminder to inject."""
         self.consecutive_no_tool_turns += 1
+        if self.phase in ("reviewer-lab", "reviewer_lab"):
+            return LAB_NO_TOOL_NUDGE
+        if self.phase == "verifier":
+            return VERIFIER_NO_TOOL_NUDGE
         return NO_TOOL_NUDGE
 
     def snapshot(self) -> dict[str, Any]:

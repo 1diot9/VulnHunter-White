@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     recon_mark_batch_size: int = 40
     timeout_worker_round: int = 7200
     timeout_reviewer_static: int = 1800
+    timeout_verifier: int = 1800
     timeout_docker: int = 1800
     timeout_conclude: int = 300
     timeout_conclude_rescue: int = 1800
@@ -69,6 +70,10 @@ class Settings(BaseSettings):
     https_proxy: str = "http://127.0.0.1:10808"
     # Chat Completions: empty = direct (no env HTTPS_PROXY / no http_proxy above)
     chat_proxy: str = ""
+
+    # FOFA (Verifier). Key can also be saved in Settings; env is fallback.
+    fofa_key: str = ""
+    fofa_base_url: str = "https://fofa.info"
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-"""LLM Provider / role resolution for recon / worker / reviewer."""
+"""LLM Provider / role resolution for recon / worker / reviewer / verifier."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import Any, Literal
 from ..models import AppSettings, SessionLocal
 from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, SettingsOut
 
-LlmRole = Literal["recon", "worker", "reviewer"]
-LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer")
+LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
+LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer", "verifier")
 _RECON_AGENT_ROLES = frozenset({"recon", "recon_mark", "recon_old_vuln", "recon_source_ext"})
 _WIRE = frozenset({"chat", "responses"})
 
@@ -94,6 +94,8 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         worker_concurrency=int(row.worker_concurrency or 1),
         fix_concurrency=int(getattr(row, "fix_concurrency", None) or 1),
         github_pat_set=bool((row.github_pat or "").strip()),
+        fofa_key_set=bool((getattr(row, "fofa_key", None) or "").strip()),
+        fofa_base_url=(getattr(row, "fofa_base_url", None) or "").strip() or "https://fofa.info",
         default_model=(row.default_model or "").strip(),
         default_base_url=(row.default_base_url or "").strip(),
         default_api_key_set=bool((row.default_api_key or "").strip()),
@@ -145,8 +147,10 @@ def llm_role_for_agent(role: str) -> LlmRole:
     r = (role or "").strip().replace("-", "_")
     if r in _RECON_AGENT_ROLES:
         return "recon"
-    if r == "reviewer":
+    if r == "reviewer" or r.startswith("reviewer_"):
         return "reviewer"
+    if r == "verifier":
+        return "verifier"
     return "worker"
 
 

@@ -784,6 +784,12 @@ def test_openai_tools_for_role_contains_expected():
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
+    assert "FinishLab" not in reviewer_names
+    lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}
+    assert "FinishLab" in lab_names
+    assert "Write" in lab_names
+    assert "ConfirmVuln" not in lab_names
+    assert "ReturnToWorker" not in lab_names
     injected_shells = recon_names & SHELL_TOOLS
     assert injected_shells == {native_shell_tool()}
 
@@ -973,6 +979,102 @@ def test_recon_docs_ready_and_mark_batch(tmp_env, project):
     assert paths_fully_marked(project, batch) is True
 
 
+def _add_maven_source(project_id: int, rel: str = "src/main/java/im/zfile/Foo.java") -> str:
+    src = src_dir(project_id)
+    fp = src / rel
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text("class Foo {}\n", encoding="utf-8")
+    return rel.replace("\\", "/")
+
+
+def test_mark_weight_keeps_maven_src_prefix(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked
+
+    rel = _add_maven_source(project)
+    build_file_index(project)
+    out = registry.dispatch(_ctx(project, "recon_mark"), "MarkWeight", {"path": rel, "weight": 80})
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["updated"][0]["path"] == rel
+    assert out["updated"][0]["weight"] == 80
+    assert paths_fully_marked(project, [rel]) is True
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        fw = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == rel)
+            .one()
+        )
+        assert fw.weight == 80
+
+
+def test_mark_weight_accepts_workspace_src_prefix(tmp_env, project):
+    build_file_index(project)
+    out = registry.dispatch(
+        _ctx(project, "recon_mark"),
+        "MarkWeight",
+        {"path": "src/app/Main.java", "weight": 40},
+    )
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["updated"][0]["path"] == "app/Main.java"
+
+
+def test_mark_weight_reports_unmatched_paths(tmp_env, project):
+    build_file_index(project)
+    out = registry.dispatch(
+        _ctx(project, "recon_mark"),
+        "MarkWeight",
+        {"path": "no/such.java", "weight": 10},
+    )
+    assert out["ok"] is False
+    assert out["count"] == 0
+    assert "未找到文件索引" in out["error"]
+    assert out["unmatched"] == ["no/such.java"]
+
+
+def test_mark_source_maven_path_and_empty_method(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked
+
+    rel = _add_maven_source(project, "src/main/java/im/zfile/FrontIndexController.java")
+    build_file_index(project)
+    out = registry.dispatch(
+        _ctx(project, "recon_mark"),
+        "MarkSource",
+        {"file": rel, "method": "", "note": "首页"},
+    )
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["marked"][0]["file"] == rel
+    assert out["marked"][0]["method"] == "*"
+    assert paths_fully_marked(project, [rel]) is True
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        fw = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == rel)
+            .one()
+        )
+        assert fw.weight == 100
+        assert fw.has_source is True
+        srcs = db.query(models.Source).filter(models.Source.project_id == project).all()
+        assert any(s.file_path == rel and s.method_name == "*" for s in srcs)
+
+
+def test_mark_skip_keeps_maven_src_prefix(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked
+
+    rel = _add_maven_source(project)
+    build_file_index(project)
+    out = registry.dispatch(_ctx(project, "recon_mark"), "MarkSkip", {"paths": [rel]})
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["skipped"] == [rel]
+    assert paths_fully_marked(project, [rel]) is True
+
+
 def test_recon_cannot_mark_weight(tmp_env, project):
     out = registry.dispatch(_ctx(project, "recon"), "MarkWeight", {"path": "app/Main.java", "weight": 10})
     assert out["ok"] is False
@@ -1024,6 +1126,43 @@ def test_write_ready_env_json_generates_lab_doc(tmp_env, project):
     phase_reports = reports_by_phase(project)
     reviewer_reports = next(p for p in phase_reports["phases"] if p["phase"] == "reviewer")
     assert any(item["id"] == "docs/lab.md" for item in reviewer_reports["reports"])
+    assert any(item["id"] == "docs/lab.md" and item["subphase"] == "lab" for item in reviewer_reports["reports"])
+
+
+def test_finish_lab_marks_setup_finished(tmp_env, project):
+    from app.services.lab import lab_setup_finished, load_env
+
+    env = {
+        "accepted": True,
+        "target_url": "http://127.0.0.1:18080",
+        "status": "running",
+    }
+    registry.dispatch(
+        _ctx(project, "reviewer_lab"),
+        "Write",
+        {"path": "env/env.json", "content": json.dumps(env, ensure_ascii=False)},
+    )
+    ctx = _ctx(project, "reviewer_lab")
+    out = registry.dispatch(ctx, "FinishLab", {})
+    assert out["ok"] is True
+    assert out["setup_finished"] is True
+    assert lab_setup_finished(project) is True
+    assert ctx.state.get("lab_done") is True
+    assert load_env(project).get("setup_finished") is True
+
+
+def test_finish_lab_skip_without_running_container(tmp_env, project):
+    from app.services.lab import lab_setup_finished
+    from app.services.paths import docs_dir
+
+    ctx = _ctx(project, "reviewer_lab")
+    denied = registry.dispatch(ctx, "FinishLab", {})
+    assert denied["ok"] is False
+    out = registry.dispatch(ctx, "FinishLab", {"skipped": True, "reason": "本机无 docker"})
+    assert out["ok"] is True
+    assert out["skipped"] is True
+    assert lab_setup_finished(project) is True
+    assert (docs_dir(project) / "lab.md").is_file()
 
 
 def test_recon_mark_cannot_read(tmp_env, project):

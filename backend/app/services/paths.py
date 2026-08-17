@@ -53,6 +53,7 @@ def ensure_project_dirs(project_id: int) -> Path:
         "docs",
         "docs/old-vulns",
         "docs/summaries",
+        "docs/verifier",
         "vulns",
         "env",
         "logs",

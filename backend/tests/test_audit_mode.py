@@ -25,6 +25,8 @@ def test_initial_hint_mentions_mode_rules():
     bounty = initial_hint("bounty")
     assert "赏金模式" in bounty
     assert "默认配置" in bounty
+    assert "禁止主动搭建漏洞利用环境" not in bounty
+    assert "Docker 靶场" in bounty
     full = initial_hint("full")
     assert "全量模式" in full
     assert "低危害难利用" in full

@@ -10,6 +10,7 @@ export type Project = {
   audit_mode: 'bounty' | 'full'
   manual_lab: boolean
   manual_lab_prompt: string
+  verifier_enabled: boolean
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -30,6 +31,7 @@ export type Project = {
   project_paused?: boolean
     recon_subphases?: ReconSubphase[]
     lab_setup_done?: boolean
+    verifier_pending?: number
   }
 
 export type ReconSubphase = {
@@ -71,6 +73,8 @@ export type Vuln = {
   return_reason: string | null
   intended_behavior: boolean
   report_path: string | null
+  verifier_status?: string | null
+  verifier_verified_url?: string | null
   created_at: string
   updated_at: string
 }
@@ -190,6 +194,8 @@ export type Settings = {
   worker_concurrency: number
   fix_concurrency: number
   github_pat_set: boolean
+  fofa_key_set: boolean
+  fofa_base_url: string
   default_model: string
   default_base_url: string
   default_api_key_set: boolean
@@ -235,7 +241,7 @@ export const api = {
     source_url: string,
     name = '',
     audit_mode: 'bounty' | 'full' = 'bounty',
-    opts: { manual_lab?: boolean; manual_lab_prompt?: string } = {},
+    opts: { manual_lab?: boolean; manual_lab_prompt?: string; verifier_enabled?: boolean } = {},
   ) =>
     request<Project>('/api/projects', {
       method: 'POST',
@@ -247,13 +253,14 @@ export const api = {
         audit_mode,
         manual_lab: Boolean(opts.manual_lab),
         manual_lab_prompt: opts.manual_lab_prompt || '',
+        verifier_enabled: Boolean(opts.verifier_enabled),
       }),
     }),
   uploadZip: async (
     file: File,
     name = '',
     audit_mode: 'bounty' | 'full' = 'bounty',
-    opts: { manual_lab?: boolean; manual_lab_prompt?: string } = {},
+    opts: { manual_lab?: boolean; manual_lab_prompt?: string; verifier_enabled?: boolean } = {},
   ) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -261,11 +268,17 @@ export const api = {
     fd.append('audit_mode', audit_mode)
     fd.append('manual_lab', opts.manual_lab ? 'true' : 'false')
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
+    fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
   updateProject: (
     id: number,
-    body: { audit_mode?: 'bounty' | 'full'; manual_lab?: boolean; manual_lab_prompt?: string | null },
+    body: {
+      audit_mode?: 'bounty' | 'full'
+      manual_lab?: boolean
+      manual_lab_prompt?: string | null
+      verifier_enabled?: boolean
+    },
   ) =>
     request<Project>(`/api/projects/${id}`, {
       method: 'PATCH',

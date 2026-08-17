@@ -30,6 +30,10 @@ const PHASE_LABEL: Record<string, string> = {
   recon_mark: '侦察/盖章',
   worker: '挖掘',
   reviewer: '审核',
+  'reviewer-lab': '审核/环境搭建',
+  reviewer_lab: '审核/环境搭建',
+  'reviewer-review': '审核',
+  verifier: '验证',
   fix: '修复',
   mine: '挖掘',
 }
@@ -55,6 +59,11 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   if (phaseFilter === 'recon-source-ext') return p === 'recon-source-ext' || p === 'recon_source_ext'
   if (phaseFilter === 'recon-old-vuln') return p === 'recon-old-vuln' || p === 'recon_old_vuln'
   if (phaseFilter === 'recon-mark') return p === 'recon-mark' || p === 'recon_mark'
+  if (phaseFilter === 'reviewer') {
+    return p === 'reviewer' || p === 'reviewer-lab' || p === 'reviewer_lab'
+  }
+  if (phaseFilter === 'reviewer-lab') return p === 'reviewer-lab' || p === 'reviewer_lab'
+  if (phaseFilter === 'reviewer-review') return p === 'reviewer'
   return p === phaseFilter
 }
 

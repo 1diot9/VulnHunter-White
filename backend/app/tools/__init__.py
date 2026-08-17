@@ -154,6 +154,19 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "AppendAffectedLocations",
         }
     ),
+    "verifier": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "Write",
+            "Bash",
+            "PowerShell",
+            "TodoWrite",
+            "FofaSearch",
+            "FinishVerifier",
+        }
+    ),
 }
 
 
@@ -412,3 +425,4 @@ def register_all_tools() -> None:
     from . import phase_recon  # noqa: F401
     from . import phase_worker  # noqa: F401
     from . import phase_reviewer  # noqa: F401
+    from . import phase_verifier  # noqa: F401

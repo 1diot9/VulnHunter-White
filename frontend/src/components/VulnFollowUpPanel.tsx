@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
-import { api, type VulnFollowUpThread } from '../api'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Loader2Icon } from 'lucide-react'
+import { api, type VulnFollowUpMessage, type VulnFollowUpThread } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -24,12 +25,14 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const thinkingRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let alive = true
     setThread(null)
     setError('')
     setQuestion('')
+    setSubmitting(false)
     setLoading(true)
     api
       .listVulnFollowUps(vulnId)
@@ -47,16 +50,33 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
     }
   }, [vulnId])
 
+  useEffect(() => {
+    if (!submitting) return
+    thinkingRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [submitting])
+
   async function submit() {
     const q = question.trim()
     if (!q || submitting || !thread?.reviewer_context_available) return
+    const pending: VulnFollowUpMessage = {
+      id: `pending-${Date.now()}`,
+      role: 'user',
+      content: q,
+      created_at: new Date().toISOString(),
+      reviewer_phase_run_id: thread.reviewer_phase_run_id,
+    }
     setSubmitting(true)
     setError('')
+    setQuestion('')
+    setThread({ ...thread, messages: [...thread.messages, pending] })
     try {
       const next = await api.askVulnFollowUp(vulnId, q)
       setThread(next)
-      setQuestion('')
     } catch (err) {
+      setThread((cur) =>
+        cur ? { ...cur, messages: cur.messages.filter((msg) => msg.id !== pending.id) } : cur,
+      )
+      setQuestion(q)
       setError(displayError(err))
     } finally {
       setSubmitting(false)
@@ -65,6 +85,7 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
 
   const contextLabel = thread?.reviewer_phase_run_id ? `Reviewer run #${thread.reviewer_phase_run_id}` : 'Reviewer 上下文'
   const canAsk = Boolean(thread?.reviewer_context_available) && !submitting
+  const visibleMessages = thread?.messages ?? []
 
   return (
     <Card className="border border-border/60 bg-muted/20">
@@ -72,7 +93,9 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="font-medium">报告追问</div>
-            <div className="text-xs text-muted-foreground">追问会接续该漏洞对应的 Reviewer 轮次上下文。</div>
+            <div className="text-xs text-muted-foreground">
+              追问会接续该漏洞对应的 Reviewer 轮次上下文，后续追问会带上此前问答。
+            </div>
           </div>
           <Badge variant={thread?.reviewer_context_available ? 'info' : 'outline'}>
             {loading ? '加载中' : thread?.reviewer_context_available ? contextLabel : '暂无上下文'}
@@ -85,9 +108,9 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
           </div>
         ) : null}
 
-        {thread?.messages.length ? (
+        {visibleMessages.length || submitting ? (
           <div className="space-y-3">
-            {thread.messages.map((msg) => (
+            {visibleMessages.map((msg) => (
               <div
                 key={msg.id}
                 className={msg.role === 'user' ? 'rounded-lg bg-primary/10 p-3' : 'rounded-lg bg-background/60 p-3'}
@@ -105,6 +128,24 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
                 )}
               </div>
             ))}
+            {submitting ? (
+              <div
+                ref={thinkingRef}
+                className="rounded-lg border border-border/60 bg-background/60 p-3"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2Icon className="size-4 animate-spin" />
+                  <span>模型思考中…</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="h-2.5 w-[88%] animate-pulse rounded bg-muted" />
+                  <div className="h-2.5 w-[64%] animate-pulse rounded bg-muted" />
+                  <div className="h-2.5 w-[76%] animate-pulse rounded bg-muted" />
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -118,8 +159,15 @@ export default function VulnFollowUpPanel({ vulnId }: { vulnId: number }) {
           />
           {error ? <div className="text-sm text-destructive">{error}</div> : null}
           <div className="flex justify-end">
-            <Button onClick={submit} disabled={!canAsk || !question.trim()}>
-              {submitting ? '追问中…' : '发送追问'}
+            <Button onClick={() => void submit()} disabled={!canAsk || !question.trim()}>
+              {submitting ? (
+                <>
+                  <Loader2Icon className="animate-spin" />
+                  追问中…
+                </>
+              ) : (
+                '发送追问'
+              )}
             </Button>
           </div>
         </div>

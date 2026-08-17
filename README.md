@@ -1,6 +1,6 @@
 # VulnHunter
 
-白盒审计 Agent：导入 GitHub / zip Web 项目，Recon → 启发式 Worker → Reviewer（静态 + MCP/普通动态）。
+白盒审计 Agent：导入 GitHub / zip Web 项目，Recon ∥ Reviewer 环境搭建 → 启发式 Worker → Reviewer 审核（静态 + MCP/普通动态）。
 
 ## 一键启停
 

@@ -131,6 +131,15 @@ def test_worker_finish_nudge_custom_interval():
     assert w.note_turn() is not None
 
 
+def test_reviewer_lab_no_tool_nudge():
+    from app.agent.watchdog import LAB_NO_TOOL_NUDGE, AgentWatchdog
+
+    w = AgentWatchdog(phase="reviewer-lab")
+    assert w.note_no_tools() == LAB_NO_TOOL_NUDGE
+    w2 = AgentWatchdog(phase="reviewer")
+    assert "ConfirmVuln" in w2.note_no_tools()
+
+
 def test_fix_and_reviewer_have_no_finish_nudge():
     for phase in ("fix", "reviewer", "recon-mark", "recon"):
         w = AgentWatchdog(phase=phase)

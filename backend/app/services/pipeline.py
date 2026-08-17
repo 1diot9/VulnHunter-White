@@ -68,7 +68,9 @@ _pending_inject: dict[tuple[int, str], list[dict[str, Any]]] = {}
 _threads: dict[int, list[threading.Thread]] = {}
 _recon_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
+_verifier_threads: dict[int, threading.Thread] = {}
 _reviewer_inflight: dict[int, bool] = {}
+_verifier_inflight: dict[int, bool] = {}
 _fix_inflight: dict[int, set[int]] = {}
 _adopted_phase_runs: set[tuple[int, int]] = set()
 _DB_LOCK_RETRY_SECONDS = 1.0
@@ -79,13 +81,14 @@ WORKER_MINE_POOL = 1
 WORKER_FIX_POOL = 1
 REVIEWER_POOL = 1
 
-CONTROL_PHASES = ("recon", "worker", "reviewer")
+CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
     "worker": ("worker", "fix"),
     "reviewer": ("reviewer", "reviewer-lab"),
+    "verifier": ("verifier",),
 }
-CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核"}
+CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
 
 
 def _is_sqlite_locked(exc: BaseException) -> bool:
@@ -152,6 +155,8 @@ def control_phase(phase: str) -> str:
         return "worker"
     if p in ("reviewer", "reviewer-lab", "reviewer_lab"):
         return "reviewer"
+    if p == "verifier":
+        return "verifier"
     raise ValueError(f"未知阶段: {phase}")
 
 
@@ -199,7 +204,9 @@ def reset_runtime_state() -> None:
         _threads.clear()
         _recon_threads.clear()
         _reviewer_threads.clear()
+        _verifier_threads.clear()
         _reviewer_inflight.clear()
+        _verifier_inflight.clear()
         _fix_inflight.clear()
         _adopted_phase_runs.clear()
 
@@ -265,10 +272,16 @@ def request_resume(project_id: int) -> None:
     start_audit(project_id)
 
 
+def _enabled_control_phases(project_id: int) -> tuple[str, ...]:
+    if _read_verifier_enabled(project_id):
+        return CONTROL_PHASES
+    return ("recon", "worker", "reviewer")
+
+
 def request_phase_pause(project_id: int, phase: str) -> dict[str, Any]:
     control = control_phase(phase)
     _phase_pause_event(project_id, control).set()
-    if all(_phase_pause_event(project_id, p).is_set() for p in CONTROL_PHASES):
+    if all(_phase_pause_event(project_id, p).is_set() for p in _enabled_control_phases(project_id)):
         _pause_event(project_id).set()
         with SessionLocal() as db:
             proj = db.get(Project, project_id)
@@ -534,6 +547,9 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
     if control == "reviewer":
         t = _reviewer_threads.get(project_id)
         return t is not None and t.is_alive()
+    if control == "verifier":
+        t = _verifier_threads.get(project_id)
+        return t is not None and t.is_alive()
     for t in _threads.get(project_id, []):
         if t.is_alive() and "worker" in (t.name or ""):
             return True
@@ -786,6 +802,12 @@ def _read_manual_lab(project_id: int) -> tuple[bool, str]:
         if not proj:
             return False, ""
         return bool(proj.manual_lab), str(proj.manual_lab_prompt or "").strip()
+
+
+def _read_verifier_enabled(project_id: int) -> bool:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return bool(proj and proj.verifier_enabled)
 
 
 def _reviewer_lab_note(project_id: int) -> str:
@@ -1069,8 +1091,8 @@ def _maybe_mark_recon_done(project_id: int) -> bool:
     return False
 
 
-def _maybe_complete_project(project_id: int, *, reviewer_busy: bool, fix_busy: bool) -> bool:
-    if reviewer_busy or fix_busy:
+def _maybe_complete_project(project_id: int, *, reviewer_busy: bool, fix_busy: bool, verifier_busy: bool = False) -> bool:
+    if reviewer_busy or fix_busy or verifier_busy:
         return False
     if not project_complete_gates(project_id):
         return False
@@ -1187,6 +1209,81 @@ def _run_reviewer_loop(project_id: int) -> None:
         live_log.error(project_id, f"Reviewer 线程异常: {e}", phase="reviewer")
         with _lock:
             _reviewer_inflight[project_id] = False
+
+
+def _ensure_verifier(project_id: int, cancel: threading.Event) -> None:
+    from .verifier import is_verifier_enabled, pending_verifier_count
+
+    if not is_verifier_enabled(project_id):
+        return
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return
+    if _phase_is_paused(project_id, "verifier"):
+        return
+    has_work = (
+        pending_verifier_count(project_id) > 0
+        or bool(list_resumable_runs(project_id, "verifier"))
+        or _should_skip_checkpoint(project_id, "verifier")
+    )
+    if not has_work:
+        return
+    with _lock:
+        t = _verifier_threads.get(project_id)
+        if t is not None and t.is_alive():
+            return
+        vt = threading.Thread(
+            target=_run_verifier_loop,
+            args=(project_id,),
+            daemon=True,
+            name=f"vh-verifier-{project_id}",
+        )
+        _verifier_threads[project_id] = vt
+        _threads.setdefault(project_id, []).append(vt)
+    live_log.system(project_id, "拉起 Verifier 线程")
+    vt.start()
+
+
+def _run_verifier_loop(project_id: int) -> None:
+    from .verifier import is_verifier_enabled, pending_verifier_count
+
+    cancel = _cancel_event(project_id)
+    try:
+        while not cancel.is_set():
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "verifier"), "verifier"):
+                break
+            if not is_verifier_enabled(project_id):
+                break
+            try:
+                with SessionLocal() as db:
+                    proj = db.get(Project, project_id)
+                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                        return
+                pending = pending_verifier_count(project_id)
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
+            if (
+                pending <= 0
+                and not list_resumable_runs(project_id, "verifier")
+                and not _should_skip_checkpoint(project_id, "verifier")
+            ):
+                cancel.wait(timeout=5.0)
+                continue
+            with _lock:
+                _verifier_inflight[project_id] = True
+            try:
+                _run_verifier_once(project_id)
+            finally:
+                with _lock:
+                    _verifier_inflight[project_id] = False
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"Verifier 线程异常: {e}", phase="verifier")
+        with _lock:
+            _verifier_inflight[project_id] = False
 
 
 def _ensure_workers(
@@ -1326,12 +1423,19 @@ def _orchestrate(project_id: int) -> None:
                     fut.add_done_callback(_fix_done)
 
                 _ensure_reviewer(project_id, cancel)
+                _ensure_verifier(project_id, cancel)
 
                 with _lock:
                     fix_busy = bool(_fix_inflight.get(project_id))
                     reviewer_busy = bool(_reviewer_inflight.get(project_id))
+                    verifier_busy = bool(_verifier_inflight.get(project_id))
 
-                if _maybe_complete_project(project_id, reviewer_busy=reviewer_busy, fix_busy=fix_busy):
+                if _maybe_complete_project(
+                    project_id,
+                    reviewer_busy=reviewer_busy,
+                    fix_busy=fix_busy,
+                    verifier_busy=verifier_busy,
+                ):
                     break
 
                 with SessionLocal() as db:
@@ -2136,6 +2240,106 @@ def _run_reviewer_once(project_id: int) -> None:
         )
     except Exception as e:  # noqa: BLE001
         live_log.error(project_id, f"Reviewer 异常: {e}", phase="reviewer")
+
+
+def _run_verifier_once(project_id: int) -> None:
+    from .verifier import extract_fofa_query, pick_pending_verifier_vuln, read_report_md
+
+    cancel = _cancel_event(project_id)
+    try:
+        cp = _adopt_resumable(project_id, "verifier")
+        if cp and cp.vuln_id is not None:
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if proj and proj.status not in ("completed", "cancelled", "paused"):
+                    proj.phase = "verifier"
+                    proj.status = "auditing"
+                    db.commit()
+            try:
+                loop = _loop_from_checkpoint(
+                    cp,
+                    cancel=cancel,
+                    stop_when=lambda st: bool(st.get("verifier_done")),
+                    timeout_sec=settings.timeout_verifier,
+                )
+                result = loop.run()
+            finally:
+                _release_adopted(project_id, cp.phase_run_id)
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
+            live_log.system(
+                project_id,
+                f"Verifier 结束 vuln={cp.vuln_id} verdict={result.state.get('verifier_verdict')} reason={result.stop_reason}",
+                phase="verifier",
+            )
+            return
+
+        prefer = _take_inject_vuln(project_id, "verifier")
+        vuln = pick_pending_verifier_vuln(project_id, prefer)
+        if not vuln:
+            return
+        vuln_id = vuln.id
+        report_md = read_report_md(project_id, vuln_id)
+        fofa_query = extract_fofa_query(report_md) or "（报告内未解析到 FOFA 语句，请 Read 后自行提炼）"
+        payload = {
+            "title": vuln.title,
+            "type": vuln.vuln_type,
+            "severity": vuln.severity,
+            "cwe": vuln.cwe,
+            "file": vuln.file_path,
+            "line": vuln.line_no,
+            "report_path": vuln.report_path or f"vulns/{vuln_id}/report.md",
+            "http_request": vuln.http_request,
+            "poc_code": vuln.poc_code,
+            "expected_evidence": vuln.expected_evidence,
+        }
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status not in ("completed", "cancelled", "paused"):
+                proj.phase = "verifier"
+                proj.status = "auditing"
+                db.commit()
+
+        system = _phase_system_prompt(project_id, "verifier.md")
+        body = _initial_prompt(
+            "verifier.md",
+            vuln_id=vuln_id,
+            payload=json_dumps(payload),
+            fofa_query=fofa_query,
+            **_audit_mode_vars(project_id),
+        )
+        user = _prompt_with_summary("verifier", project_id, body)
+        run_id = _new_phase_run(project_id, "verifier", "verifier", vuln_id=vuln_id)
+        _consume_force_new(project_id, "verifier")
+        _start_log_session(project_id, "verifier", extra=f"漏洞 #{vuln_id}")
+        loop = AgentLoop(
+            project_id=project_id,
+            role="verifier",
+            phase="verifier",
+            system_prompt=system,
+            user_prompt=user,
+            phase_run_id=run_id,
+            vuln_id=vuln_id,
+            cancel_event=_loop_cancel(project_id, "verifier"),
+            pause_event=_combined_pause(project_id, "verifier"),
+            timeout_sec=settings.timeout_verifier,
+            context_window=_context_window(),
+            stop_when=lambda st: bool(st.get("verifier_done")),
+        )
+        result = loop.run()
+        if result.stop_reason == "auth_error":
+            _pause_for_auth(project_id, result.error or "auth_error")
+            return
+        _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
+        live_log.system(
+            project_id,
+            f"Verifier 结束 vuln={vuln_id} verdict={result.state.get('verifier_verdict')} reason={result.stop_reason}",
+            phase="verifier",
+        )
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"Verifier 异常: {e}", phase="verifier")
 
 
 def json_dumps(obj: Any) -> str:

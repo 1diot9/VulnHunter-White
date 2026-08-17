@@ -31,10 +31,31 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
     "worker": frozenset({"worker", "fix"}),
     "mine": frozenset({"worker"}),
     "fix": frozenset({"fix"}),
-    "reviewer": frozenset({"reviewer"}),
+    "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab"}),
+    "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
+    "reviewer-review": frozenset({"reviewer"}),
+    "verifier": frozenset({"verifier"}),
 }
 
-CONTROL_PHASES = ("recon", "worker", "reviewer")
+# 日志轮次按小阶段独立计数；recon / worker 目录历史上可能混有子阶段事件。
+LOG_PHASES = (
+    "recon",
+    "recon-source-ext",
+    "recon-old-vuln",
+    "recon-mark",
+    "worker",
+    "fix",
+    "reviewer-lab",
+    "reviewer",
+    "verifier",
+)
+CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
+    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
+    "worker": ("worker", "fix"),
+    "reviewer": ("reviewer-lab", "reviewer"),
+    "verifier": ("verifier",),
+}
+_MIXED_LOG_DIRS = frozenset({"recon", "worker"})
 _SESSION_START_MARK = "新开对话"
 
 _CST = timezone(timedelta(hours=8))
@@ -105,17 +126,17 @@ class LiveLog:
         return _phase_session_events_path(project_id, phase, session)
 
     def begin_session(self, project_id: int, phase: str, *, if_used: bool = False) -> int:
-        """该控制阶段进入下一轮日志页。
+        """该小阶段进入下一轮日志页。
 
         if_used=True 时：当前页还没有任何事件则保持页码（第一轮对话留在第 1 页）。
         用户点「新跑」走默认（无条件翻页）；调度器新开 AgentLoop 走 if_used。
         """
-        cp = control_phase_of_filter(phase) or control_phase_of(phase)
-        if not cp:
+        lp = log_phase_of(phase)
+        if not lp:
             return 1
         self._hydrate_sessions(project_id)
         with _session_lock:
-            key = (project_id, cp)
+            key = (project_id, lp)
             cur = _sessions.get(key, 1)
             if if_used and not _session_used.get(key, False):
                 return cur
@@ -125,12 +146,12 @@ class LiveLog:
             return nxt
 
     def current_session(self, project_id: int, phase: str | None) -> int:
-        cp = control_phase_of_filter(phase) or control_phase_of(phase)
-        if not cp:
+        lp = log_phase_of(phase)
+        if not lp:
             return 1
         self._hydrate_sessions(project_id)
         with _session_lock:
-            return _sessions.get((project_id, cp), 1)
+            return _sessions.get((project_id, lp), 1)
 
     def _hydrate_sessions(self, project_id: int) -> None:
         path_key = str(_live_events_dir(project_id))
@@ -141,9 +162,9 @@ class LiveLog:
         parsed = _load_project_events(project_id, None)
         maxes = _annotate_sessions(parsed)
         for _, ev in parsed:
-            cp = control_phase_of(str(ev.get("phase") or ev.get("role") or ""))
-            if cp:
-                seen.add(cp)
+            lp = log_phase_of(str(ev.get("phase") or ev.get("role") or ""))
+            if lp:
+                seen.add(lp)
         with _session_lock:
             if path_key in _hydrated_paths:
                 return
@@ -151,9 +172,9 @@ class LiveLog:
                 del _sessions[key]
             for key in [k for k in _session_used if k[0] == project_id]:
                 del _session_used[key]
-            for cp, n in maxes.items():
-                _sessions[(project_id, cp)] = n
-                _session_used[(project_id, cp)] = cp in seen
+            for lp, n in maxes.items():
+                _sessions[(project_id, lp)] = n
+                _session_used[(project_id, lp)] = lp in seen
             _hydrated_paths.add(path_key)
 
     def emit(self, project_id: int, event: dict[str, Any]) -> None:
@@ -162,11 +183,11 @@ class LiveLog:
         phase = ev.get("phase") or ev.get("role")
         if "session" not in ev and phase:
             ev["session"] = self.current_session(project_id, str(phase))
-        cp = control_phase_of(str(phase or ""))
-        if cp:
+        lp = log_phase_of(str(phase or ""))
+        if lp:
             with _session_lock:
-                _session_used[(project_id, cp)] = True
-        split_phase = cp or "system"
+                _session_used[(project_id, lp)] = True
+        split_phase = lp or "system"
         session = int(ev.get("session") or 1)
         with _lock:
             ev["seq"] = _next_event_seq(project_id)
@@ -362,9 +383,8 @@ class LiveLog:
         phase: str | None = None,
         session: int | None = None,
     ) -> EventsPage:
-        control = control_phase_of_filter(phase)
-        if control:
-            session_count = _session_count(project_id, control)
+        session_count = _session_count_for_filter(project_id, phase)
+        if phase:
             wanted = session_count if session is None else session
             all_events = _load_project_events(project_id, phase, wanted)
         else:
@@ -376,7 +396,7 @@ class LiveLog:
             return EventsPage(session=wanted or session_count, session_count=session_count)
         session_max = _annotate_sessions(all_events)
         file_end = max((idx + 1 for idx, _ in all_events), default=0)
-        if not control:
+        if not phase:
             session_count = max(session_max.values(), default=session_count)
         parsed = [(idx, ev) for idx, ev in all_events if event_matches_phase(ev, phase)]
         if wanted is not None:
@@ -446,14 +466,58 @@ def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
     return p in wanted
 
 
+def log_phase_of(phase: str | None) -> str | None:
+    """事件/过滤相位 → 独立轮次目录名。"""
+    p = (phase or "").strip()
+    if p in ("recon", "recon-map"):
+        return "recon"
+    if p in ("recon-source-ext", "recon_source_ext"):
+        return "recon-source-ext"
+    if p in ("recon-old-vuln", "recon_old_vuln"):
+        return "recon-old-vuln"
+    if p in ("recon-mark", "recon_mark"):
+        return "recon-mark"
+    if p in ("worker", "mine"):
+        return "worker"
+    if p == "fix":
+        return "fix"
+    if p in ("reviewer-lab", "reviewer_lab"):
+        return "reviewer-lab"
+    if p in ("reviewer", "reviewer-review"):
+        return "reviewer"
+    if p == "verifier":
+        return "verifier"
+    return None
+
+
+def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
+    """过滤相位对应的日志目录；None 表示全部。"""
+    if not phase:
+        return None
+    if phase == "recon":
+        return CONTROL_LOG_PHASES["recon"]
+    if phase == "worker":
+        return CONTROL_LOG_PHASES["worker"]
+    if phase == "reviewer":
+        return CONTROL_LOG_PHASES["reviewer"]
+    if phase == "verifier":
+        return CONTROL_LOG_PHASES["verifier"]
+    lp = log_phase_of(phase)
+    if lp:
+        return (lp,)
+    return (phase,)
+
+
 def control_phase_of(phase: str | None) -> str | None:
     p = (phase or "").strip()
     if p in PHASE_GROUPS["recon"]:
         return "recon"
     if p in PHASE_GROUPS["worker"]:
         return "worker"
-    if p == "reviewer":
+    if p in PHASE_GROUPS["reviewer"]:
         return "reviewer"
+    if p in PHASE_GROUPS["verifier"]:
+        return "verifier"
     return None
 
 
@@ -464,8 +528,10 @@ def control_phase_of_filter(phase: str | None) -> str | None:
         return "recon"
     if phase in ("worker", "mine", "fix"):
         return "worker"
-    if phase == "reviewer":
+    if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-review"):
         return "reviewer"
+    if phase == "verifier":
+        return "verifier"
     return control_phase_of(phase)
 
 
@@ -510,32 +576,91 @@ def _split_event_paths(project_id: int, phase: str | None, session: int | None =
     base = _live_events_dir(project_id)
     if not base.exists():
         return []
-    control = control_phase_of_filter(phase)
-    if control:
-        root = base / _safe_phase_dir(control)
+    wanted = log_phases_for_filter(phase)
+    if wanted is None:
+        if session is not None:
+            return sorted(base.glob(f"*/round-{max(1, int(session))}.jsonl"))
+        return sorted(base.glob("*/round-*.jsonl"))
+    dir_names = list(wanted)
+    if len(wanted) == 1:
+        lp = wanted[0]
+        control = control_phase_of(lp)
+        if control and control != lp and control not in dir_names:
+            dir_names.append(control)
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for name in dir_names:
+        root = base / _safe_phase_dir(name)
         if not root.exists():
-            return []
+            continue
         if session is not None:
             path = root / f"round-{max(1, int(session))}.jsonl"
-            return [path] if path.exists() else []
-        return sorted(root.glob("round-*.jsonl"))
-    return sorted(base.glob("*/round-*.jsonl"))
+            candidates = [path] if path.exists() else []
+        else:
+            candidates = sorted(root.glob("round-*.jsonl"))
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+    return paths
 
 
-def _legacy_session_max(project_id: int, control: str) -> int:
+def _legacy_session_max(project_id: int, log_phase: str) -> int:
     legacy = live_events_path(project_id)
     if not legacy.exists():
         return 1
     _, parsed, _ = _load_cached_events(legacy)
-    return _annotate_sessions(parsed).get(control, 1)
+    return _annotate_sessions(parsed).get(log_phase, 1)
+
+
+def _round_max_in_dir(root: Path) -> int:
+    if not root.exists():
+        return 1
+    return max((_round_no(path) or 1 for path in root.glob("round-*.jsonl")), default=1)
+
+
+def _matching_session_max_in_dir(root: Path, log_phase: str) -> int:
+    if not root.exists():
+        return 1
+    events: list[tuple[int, dict[str, Any]]] = []
+    for path in root.glob("round-*.jsonl"):
+        _, parsed, _ = _load_cached_events(path)
+        events.extend(parsed)
+    if not events:
+        return 1
+    events.sort(key=lambda item: item[0])
+    return _annotate_sessions(events).get(log_phase, 1)
+
+
+def _session_count_log_phase(project_id: int, log_phase: str) -> int:
+    base = _live_events_dir(project_id)
+    dedicated = base / _safe_phase_dir(log_phase)
+    n = 1
+    if log_phase in _MIXED_LOG_DIRS:
+        n = max(n, _matching_session_max_in_dir(dedicated, log_phase))
+    else:
+        n = max(n, _round_max_in_dir(dedicated))
+        n = max(n, _matching_session_max_in_dir(dedicated, log_phase))
+    control = control_phase_of(log_phase)
+    if control and control != log_phase:
+        n = max(n, _matching_session_max_in_dir(base / _safe_phase_dir(control), log_phase))
+    return max(n, _legacy_session_max(project_id, log_phase))
+
+
+def _session_count_for_filter(project_id: int, phase: str | None) -> int:
+    wanted = log_phases_for_filter(phase)
+    if wanted is None:
+        wanted = LOG_PHASES
+    n = 1
+    for lp in wanted:
+        n = max(n, _session_count_log_phase(project_id, lp))
+    return n
 
 
 def _session_count(project_id: int, control: str) -> int:
-    root = _live_events_dir(project_id) / _safe_phase_dir(control)
-    from_files = 1
-    if root.exists():
-        from_files = max((_round_no(path) or 1 for path in root.glob("round-*.jsonl")), default=1)
-    return max(from_files, _legacy_session_max(project_id, control))
+    return _session_count_for_filter(project_id, control)
 
 
 def _load_project_events(
@@ -602,7 +727,7 @@ def _parse_event_line(raw: str, idx: int) -> dict[str, Any] | None:
 
 
 def _default_session_max() -> dict[str, int]:
-    return {cp: 1 for cp in CONTROL_PHASES}
+    return {lp: 1 for lp in LOG_PHASES}
 
 
 def _read_events_from_start(path) -> tuple[int, int, int, list[tuple[int, dict[str, Any]]]]:
@@ -697,28 +822,28 @@ def _append_cached_event(
         cached.file_end = max(cached.file_end, seq + 1)
         cached.line_count += 1
         cached.session_max = dict(cached.session_max or _default_session_max())
-        cp = control_phase_of(str(item.get("phase") or item.get("role") or ""))
-        if cp:
-            cached.session_max[cp] = max(cached.session_max.get(cp, 1), int(item.get("session") or 1))
+        lp = log_phase_of(str(item.get("phase") or item.get("role") or ""))
+        if lp:
+            cached.session_max[lp] = max(cached.session_max.get(lp, 1), int(item.get("session") or 1))
         cached.mtime_ns = mtime_ns
         cached.size = size
         cached.byte_offset = byte_offset
 
 
 def _annotate_sessions(parsed: list[tuple[int, dict[str, Any]]]) -> dict[str, int]:
-    """给每条事件补 session；返回各控制阶段当前最大轮次。"""
-    curs = {cp: 1 for cp in CONTROL_PHASES}
+    """给每条事件补 session；返回各小阶段当前最大轮次。"""
+    curs = {lp: 1 for lp in LOG_PHASES}
     for _, ev in parsed:
-        cp = control_phase_of(str(ev.get("phase") or ev.get("role") or ""))
-        if not cp:
+        lp = log_phase_of(str(ev.get("phase") or ev.get("role") or ""))
+        if not lp:
             continue
         raw = ev.get("session")
         if isinstance(raw, int) and raw > 0:
-            curs[cp] = max(curs[cp], raw)
+            curs[lp] = max(curs[lp], raw)
             continue
         if is_session_start(ev):
-            curs[cp] += 1
-        ev["session"] = curs[cp]
+            curs[lp] += 1
+        ev["session"] = curs[lp]
     return curs
 
 

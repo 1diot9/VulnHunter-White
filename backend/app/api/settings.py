@@ -50,6 +50,10 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.fix_concurrency = max(1, int(body.fix_concurrency))
         if body.github_pat is not None:
             row.github_pat = body.github_pat
+        if body.fofa_key is not None:
+            row.fofa_key = body.fofa_key
+        if body.fofa_base_url is not None:
+            row.fofa_base_url = (body.fofa_base_url or "").strip() or None
         if body.default_model is not None:
             row.default_model = body.default_model
         if body.default_base_url is not None:

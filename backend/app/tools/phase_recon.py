@@ -161,10 +161,53 @@ def recon_subphases(project_id: int, unmarked: int | None = None) -> list[dict[s
 
 
 def normalize_weight_path(path: str) -> str:
-    p = str(path or "").replace("\\", "/").lstrip("./")
+    """Slash-normalize a file-index path. Do not strip src/ — Maven paths start with src/main."""
+    return str(path or "").replace("\\", "/").lstrip("./")
+
+
+def weight_path_candidates(path: str) -> list[str]:
+    """Exact path first, then with/without a workspace `src/` prefix."""
+    p = normalize_weight_path(path)
+    if not p:
+        return []
+    out = [p]
     if p.startswith("src/"):
-        p = p[4:]
-    return p
+        rest = p[4:]
+        if rest and rest not in out:
+            out.append(rest)
+    else:
+        prefixed = f"src/{p}"
+        if prefixed not in out:
+            out.append(prefixed)
+    return out
+
+
+def _match_weight_row(path: str, by_path: dict[str, FileWeight]) -> FileWeight | None:
+    for candidate in weight_path_candidates(path):
+        row = by_path.get(candidate)
+        if row is not None:
+            return row
+    return None
+
+
+def _load_weight_rows(db, project_id: int, paths: list[str]) -> dict[str, FileWeight]:
+    candidates: list[str] = []
+    for p in paths:
+        candidates.extend(weight_path_candidates(p))
+    if not candidates:
+        return {}
+    rows = (
+        db.query(FileWeight)
+        .filter(FileWeight.project_id == project_id, FileWeight.path.in_(candidates))
+        .all()
+    )
+    return {r.path: r for r in rows}
+
+
+def _unmatched_error(unmatched: list[str]) -> str:
+    preview = ", ".join(unmatched[:8])
+    extra = f" …共 {len(unmatched)} 个" if len(unmatched) > 8 else ""
+    return f"未找到文件索引（{len(unmatched)}）: {preview}{extra}"
 
 
 def _score_unmarked_path(path: str) -> tuple[int, str]:
@@ -199,14 +242,9 @@ def paths_fully_marked(project_id: int, paths: list[str]) -> bool:
     if not want:
         return True
     with SessionLocal() as db:
-        rows = (
-            db.query(FileWeight)
-            .filter(FileWeight.project_id == project_id, FileWeight.path.in_(want))
-            .all()
-        )
-        by_path = {r.path: r for r in rows}
+        by_path = _load_weight_rows(db, project_id, want)
         for p in want:
-            row = by_path.get(p)
+            row = _match_weight_row(p, by_path)
             if row is None:
                 return False
             if not row.skipped and row.weight is None:
@@ -241,44 +279,55 @@ def _normalize_paths(args: dict[str, Any]) -> list[str]:
 def _mark_source(ctx, args: dict[str, Any]) -> dict[str, Any]:
     items = args.get("sources") or args.get("items")
     if not items:
-        # single form
         file_path = args.get("file") or args.get("file_path") or args.get("path")
-        method = args.get("method") or args.get("method_name")
-        if file_path and method:
-            items = [{"file": file_path, "method": method, "note": args.get("note")}]
+        if file_path:
+            items = [{"file": file_path, "method": args.get("method") or args.get("method_name"), "note": args.get("note")}]
     if not items or not isinstance(items, list):
         return {"ok": False, "error": "需要 sources 数组或 file+method"}
+    parsed: list[tuple[str, str, str | None]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        fp = normalize_weight_path(str(it.get("file") or it.get("file_path") or it.get("path") or ""))
+        if not fp:
+            continue
+        method = str(it.get("method") or it.get("method_name") or "").strip() or "*"
+        note = str(it.get("note") or "") or None
+        parsed.append((fp, method, note))
+    if not parsed:
+        return {"ok": False, "error": "需要 sources 数组或 file+method"}
     marked = []
+    unmatched: list[str] = []
     with SessionLocal() as db:
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            fp = str(it.get("file") or it.get("file_path") or it.get("path") or "").replace("\\", "/")
-            method = str(it.get("method") or it.get("method_name") or "").strip()
-            if not fp or not method:
-                continue
-            if fp.startswith("src/"):
-                fp = fp[4:]
+        by_path = _load_weight_rows(db, ctx.project_id, [fp for fp, _, _ in parsed])
+        seen: set[int] = set()
+        for fp, method, note in parsed:
+            fw = _match_weight_row(fp, by_path)
+            store_path = fw.path if fw is not None else fp
             db.add(
                 Source(
                     project_id=ctx.project_id,
-                    file_path=fp,
+                    file_path=store_path,
                     method_name=method,
-                    note=str(it.get("note") or "") or None,
+                    note=note,
                 )
             )
-            fw = (
-                db.query(FileWeight)
-                .filter(FileWeight.project_id == ctx.project_id, FileWeight.path == fp)
-                .first()
-            )
-            if fw:
+            if fw is None:
+                unmatched.append(fp)
+                continue
+            if fw.id not in seen:
                 fw.has_source = True
                 fw.weight = 100
                 fw.skipped = False
-            marked.append({"file": fp, "method": method})
+                seen.add(fw.id)
+            marked.append({"file": store_path, "method": method})
         db.commit()
-    return {"ok": True, "marked": marked, "count": len(marked)}
+    result: dict[str, Any] = {"ok": True, "marked": marked, "count": len(marked)}
+    if unmatched:
+        result["ok"] = False
+        result["unmatched"] = unmatched
+        result["error"] = _unmatched_error(unmatched)
+    return result
 
 
 def _mark_weight(ctx, args: dict[str, Any]) -> dict[str, Any]:
@@ -293,25 +342,31 @@ def _mark_weight(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not paths:
         return {"ok": False, "error": "缺少 path/paths"}
     updated = []
+    unmatched: list[str] = []
     with SessionLocal() as db:
+        by_path = _load_weight_rows(db, ctx.project_id, paths)
+        seen: set[int] = set()
         for p in paths:
-            if p.startswith("src/"):
-                p = p[4:]
-            fw = (
-                db.query(FileWeight)
-                .filter(FileWeight.project_id == ctx.project_id, FileWeight.path == p)
-                .first()
-            )
-            if not fw:
+            fw = _match_weight_row(p, by_path)
+            if fw is None:
+                unmatched.append(p)
                 continue
+            if fw.id in seen:
+                continue
+            seen.add(fw.id)
             if fw.has_source:
                 fw.weight = 100
             else:
                 fw.weight = weight
             fw.skipped = False
-            updated.append({"path": p, "weight": fw.weight})
+            updated.append({"path": fw.path, "weight": fw.weight})
         db.commit()
-    return {"ok": True, "updated": updated, "count": len(updated)}
+    result: dict[str, Any] = {"ok": True, "updated": updated, "count": len(updated)}
+    if unmatched:
+        result["ok"] = False
+        result["unmatched"] = unmatched
+        result["error"] = _unmatched_error(unmatched)
+    return result
 
 
 def _mark_skip(ctx, args: dict[str, Any]) -> dict[str, Any]:
@@ -319,22 +374,28 @@ def _mark_skip(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not paths:
         return {"ok": False, "error": "缺少 path/paths"}
     updated = []
+    unmatched: list[str] = []
     with SessionLocal() as db:
+        by_path = _load_weight_rows(db, ctx.project_id, paths)
+        seen: set[int] = set()
         for p in paths:
-            if p.startswith("src/"):
-                p = p[4:]
-            fw = (
-                db.query(FileWeight)
-                .filter(FileWeight.project_id == ctx.project_id, FileWeight.path == p)
-                .first()
-            )
-            if not fw:
+            fw = _match_weight_row(p, by_path)
+            if fw is None:
+                unmatched.append(p)
                 continue
+            if fw.id in seen:
+                continue
+            seen.add(fw.id)
             fw.skipped = True
             fw.weight = 0
-            updated.append(p)
+            updated.append(fw.path)
         db.commit()
-    return {"ok": True, "skipped": updated, "count": len(updated)}
+    result: dict[str, Any] = {"ok": True, "skipped": updated, "count": len(updated)}
+    if unmatched:
+        result["ok"] = False
+        result["unmatched"] = unmatched
+        result["error"] = _unmatched_error(unmatched)
+    return result
 
 
 _ADDED_SAMPLE = 30

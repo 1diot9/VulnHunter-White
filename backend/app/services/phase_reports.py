@@ -10,7 +10,7 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln|-source-ext|-mark)?|worker|fix|reviewer)"
+    r"^(?P<phase>recon(?:-old-vuln|-source-ext|-mark)?|worker|fix|reviewer(?:-lab)?|verifier)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
@@ -25,9 +25,11 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "worker": ("worker", "挖掘", "mine"),
     "fix": ("worker", "挖掘", "fix"),
     "reviewer": ("reviewer", "审核", "reviewer"),
+    "reviewer-lab": ("reviewer", "审核", "lab"),
+    "verifier": ("verifier", "验证", "verify"),
 }
 
-_CONTROL_LABEL = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核"}
+_CONTROL_LABEL = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
 _SUB_LABEL = {
     "map": "地图/鉴权",
     "source_ext": "扩展名",
@@ -35,7 +37,9 @@ _SUB_LABEL = {
     "mark": "盖章",
     "mine": "挖掘",
     "fix": "修复",
+    "lab": "环境搭建",
     "reviewer": "审核",
+    "verify": "互联网验证",
 }
 _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue": "抢救"}
 
@@ -44,7 +48,7 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/auth.md", "recon", "map", "鉴权说明"),
     ("docs/source-exts.md", "recon", "source_ext", "额外源码扩展名"),
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
-    ("docs/lab.md", "reviewer", "reviewer", "动态环境搭建"),
+    ("docs/lab.md", "reviewer", "lab", "动态环境搭建"),
 )
 _DOC_BY_REL = {rel: (control, subphase, title) for rel, control, subphase, title in _DOC_SPECS}
 _PREVIEW_CHARS = 8192
@@ -108,7 +112,7 @@ def _item(
         "kind": kind,
         "kind_label": _KIND_LABEL[kind],
         "round": round_no,
-        "title": heading or title,
+        "title": title if kind == "round" else (heading or title),
         "preview": preview,
         "mtime": _iso_mtime(path),
         "size": path.stat().st_size,
@@ -122,7 +126,10 @@ def _safe_rel(rel: str) -> str:
     cleaned = (rel or "").replace("\\", "/").lstrip("/")
     if not cleaned or ".." in Path(cleaned).parts:
         raise ValueError("非法路径")
-    if not (cleaned.startswith("docs/") or cleaned.startswith("workspace/rounds/")):
+    if not (
+        cleaned.startswith("docs/")
+        or cleaned.startswith("workspace/rounds/")
+    ):
         raise ValueError("非法路径")
     if not cleaned.endswith(".md"):
         raise ValueError("仅支持 markdown 报告")
@@ -169,7 +176,21 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
             subphase="mine",
             kind="round",
             round_no=n,
-            title=f"第 {n} 轮审计",
+            title=path.stem,
+            content=content,
+        )
+    if rel.startswith("docs/verifier/"):
+        stem = path.stem
+        if not stem.isdigit():
+            raise FileNotFoundError(rel)
+        return _item(
+            rel=rel,
+            path=path,
+            control="verifier",
+            subphase="verify",
+            kind="doc",
+            round_no=None,
+            title=f"互联网验证 · 漏洞 #{int(stem)}",
             content=content,
         )
     if rel.startswith("docs/summaries/"):
@@ -237,7 +258,24 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                     subphase="mine",
                     kind="round",
                     round_no=n,
-                    title=f"第 {n} 轮审计",
+                    title=path.stem,
+                )
+            )
+
+    verifier_dir = root / "docs" / "verifier"
+    if verifier_dir.is_dir():
+        for path in verifier_dir.glob("*.md"):
+            if not path.stem.isdigit() or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            items.append(
+                _item(
+                    rel=f"docs/verifier/{path.name}",
+                    path=path,
+                    control="verifier",
+                    subphase="verify",
+                    kind="doc",
+                    round_no=None,
+                    title=f"互联网验证 · 漏洞 #{int(path.stem)}",
                 )
             )
 
@@ -272,7 +310,7 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
 
 def reports_by_phase(project_id: int) -> dict[str, Any]:
     items = list_phase_reports(project_id)
-    grouped: dict[str, list[dict[str, Any]]] = {"recon": [], "worker": [], "reviewer": []}
+    grouped: dict[str, list[dict[str, Any]]] = {"recon": [], "worker": [], "reviewer": [], "verifier": []}
     for item in items:
         grouped.setdefault(item["phase"], []).append(item)
     phases = [
@@ -282,7 +320,7 @@ def reports_by_phase(project_id: int) -> dict[str, Any]:
             "count": len(grouped[key]),
             "reports": grouped[key],
         }
-        for key in ("recon", "worker", "reviewer")
+        for key in ("recon", "worker", "reviewer", "verifier")
     ]
     return {"phases": phases, "count": len(items)}
 

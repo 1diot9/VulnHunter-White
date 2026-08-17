@@ -26,6 +26,10 @@ INITIAL_DOCS = (
     "worker.md",
     "fix.md",
     "reviewer.md",
+    "reviewer-lab.md",
+    "reviewer-lab-retry-loop.md",
+    "reviewer-lab-retry-timeout.md",
+    "reviewer-lab-retry-other.md",
 )
 
 
@@ -158,6 +162,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "赏金模式" in bounty_worker
     assert "不要 Confirm、不要标 `low_impact`" in bounty_worker
     assert "应用自身提供的配置选项" in bounty_worker
+    assert "不要 docker" in bounty_worker
+    assert "禁止主动搭建漏洞利用环境" not in bounty_worker
     full = load_prompt("modes/full.md")
     assert "全量模式" in full
     assert "low_impact" in full
@@ -255,8 +261,22 @@ def test_pipeline_source_has_no_inline_initial_prompts():
         "请从该文件出发沿调用链审计",
         "你是 Fix Worker",
         "审核漏洞 ID=",
+        "本轮是 Reviewer 的**独立环境搭建轮**",
     ):
         assert needle not in src, needle
+
+
+def test_reviewer_lab_prompt_is_setup_only():
+    text = load_prompt("reviewer-lab.md")
+    assert "独立一轮" in text
+    assert "FinishLab" in text
+    assert "ConfirmVuln" in text
+    assert "不要搭 Docker" in text or "不是" in text
+    initial = load_prompt("initial/reviewer-lab.md")
+    assert "FinishLab" in initial
+    assert "不要审核漏洞" in initial
+    docker = load_prompt("docker.md")
+    assert "do not review vulnerabilities" in docker
 
 
 def test_old_vuln_prompt_persist_is_not_completion():
