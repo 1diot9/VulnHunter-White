@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import VulnGroupList from '../components/VulnGroupList'
+import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
 import {
   cn,
   formatAttackSurface,
@@ -20,15 +21,7 @@ import VulnFollowUpPanel from '../components/VulnFollowUpPanel'
 
 const MarkdownView = lazy(() => import('../components/MarkdownView'))
 
-type TierFilter =
-  | 'all'
-  | 'cve_candidate'
-  | 'low_impact'
-  | 'duplicate_grouped'
-  | 'needs_more_evidence'
-  | 'untiered'
-
-const TIER_FILTER_LABEL: Record<TierFilter, string> = {
+const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
   all: '全部分层',
   cve_candidate: '有 CVE 价值',
   low_impact: '低危害难利用',
@@ -42,7 +35,7 @@ export default function VulnsPage() {
   const detailId = id ? Number(id) : null
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'false_positive' | 'pending_review'>('all')
   const [surfaceFilter, setSurfaceFilter] = useState<'all' | 'frontend' | 'backend'>('all')
-  const [tierFilter, setTierFilter] = useState<TierFilter>('all')
+  const [tierFilter, setTierFilter] = useState<VulnTierFilter>('all')
   const [projectId, setProjectId] = useState<number | undefined>()
   const [projects, setProjects] = useState<Project[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
@@ -61,7 +54,6 @@ export default function VulnsPage() {
         projectId,
         filter === 'all' ? undefined : filter,
         surfaceFilter === 'all' ? undefined : surfaceFilter,
-        tierFilter === 'all' ? undefined : tierFilter,
       )
       .then(setVulns)
       .catch(() => {})
@@ -70,7 +62,7 @@ export default function VulnsPage() {
     api.listProjects().then(setProjects).catch(() => {})
   }, [])
 
-  useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter, tierFilter])
+  useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter])
 
   useEffect(() => {
     setSelected([])
@@ -84,10 +76,13 @@ export default function VulnsPage() {
     api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
   }, [detailId])
 
-  const filtered = useMemo(() => vulns, [vulns])
+  const visibleVulns = useMemo(
+    () => filterVulnGroups(groupVulnsByRootCause(vulns), tierFilter).flatMap((g) => [g.primary, ...g.others]),
+    [vulns, tierFilter],
+  )
   const cveCandidateIds = useMemo(
-    () => filtered.filter((v) => v.submission_tier === 'cve_candidate').map((v) => v.id),
-    [filtered],
+    () => vulns.filter((v) => v.submission_tier === 'cve_candidate').map((v) => v.id),
+    [vulns],
   )
   const detailSurface = formatAttackSurface(detail?.attack_surface, detail?.required_account)
   const detailScore = formatSeverityScore(detail?.severity_score)
@@ -111,7 +106,7 @@ export default function VulnsPage() {
   }
 
   async function download() {
-    const ids = selected.length ? selected : filtered.map((v) => v.id)
+    const ids = selected.length ? selected : visibleVulns.map((v) => v.id)
     await downloadIds(ids, 'vulns.zip')
   }
 
@@ -167,12 +162,12 @@ export default function VulnsPage() {
             <SelectItem value="backend">后台漏洞</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={tierFilter} onValueChange={(value) => setTierFilter(value as TierFilter)}>
+        <Select value={tierFilter} onValueChange={(value) => setTierFilter(value as VulnTierFilter)}>
           <SelectTrigger className="w-auto min-w-36">
             <SelectValue>{TIER_FILTER_LABEL[tierFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            {(Object.keys(TIER_FILTER_LABEL) as TierFilter[]).map((k) => (
+            {(Object.keys(TIER_FILTER_LABEL) as VulnTierFilter[]).map((k) => (
               <SelectItem key={k} value={k}>
                 {TIER_FILTER_LABEL[k]}
               </SelectItem>
@@ -201,7 +196,8 @@ export default function VulnsPage() {
       >
         <Card className="max-h-[calc(100vh-13rem)] gap-0 divide-y divide-border overflow-auto py-0">
           <VulnGroupList
-            vulns={filtered}
+            vulns={vulns}
+            tierFilter={tierFilter}
             activeId={detailId}
             selectedIds={selected}
             onToggleSelect={(id, checked) =>

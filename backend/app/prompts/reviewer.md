@@ -24,16 +24,18 @@
 - `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、影响达不到 CVE 强度的问题。
 
 另外两个是流程标记，不是价值分类：
-- `duplicate_grouped`：与已确认或本项目其他提交属于同一根因（同一过滤器、同一权限注解缺失模式、同一工具类）。必须填与主报告相同的 `root_cause_key`（如 `idor:SysCommentController`、`ssrf:checkSsrfHttpUrl`）。
+- `duplicate_grouped`：与已确认或本项目其他提交属于同一根因（同一过滤器、同一权限注解缺失模式、同一工具类）。**必须原样复用** SearchOldVuln `kind=found` 里该主报告已有的 `root_cause_key`，一个字符都不要改。
 - `needs_more_evidence`：代码上已能证明默认可利用（例如未过滤的公开 SQL 注入），只是环境没打出来；**不要**用来收留「sink 碰到了但默认无冲击」的问题。
 
-同一根因的**所有**确认（含第一条有 CVE 价值 / 低危害难利用的主报告）都要填相同的 `root_cause_key`，便于列表合并展示。只有后续变体才标 `duplicate_grouped`。
+`root_cause_key` 是家族合并键，不是本条报告的标题。格式固定为 `类型:稳定锚点`（如 `idor:SysCommentController`、`ssrf:checkSsrfHttpUrl`），锚点用过滤器/工具类/权限注解所在类，不要用接口名、方法名、行号、文件名去生成「每条一个」的新键。
+
+同一根因的**所有**确认（含第一条有 CVE 价值 / 低危害难利用的主报告）都要填**完全相同**的 `root_cause_key`，便于列表合并展示。只有后续变体才标 `duplicate_grouped`。禁止为变体另造 `idor:SysCommentController:update`、`cwe862:RequiresPermissions` 这种看起来更具体的新键。主报告还没有键时，先给主报告定一个稳定键，变体再原样复用；不要让每条变体自己起名。
 
 低危害但**请求本身即可利用**的问题仍可 Confirm，价值标 `low_impact`，不要写成 `cve_candidate`。不可利用的代码味道不要 Confirm。
 
 ## 流程
 1. 读取 vulns/{id}/report.md、request.http、poc.py，做静态复核；明显误报可 ReturnToWorker(false_positive=true, reason=...)，原因会写入报告底部。Read 若 truncated=true，用 next_offset 继续。
-2. SearchOldVuln 对照历史与本项目已提交漏洞（`kind=old` 侦察旧漏洞，`kind=found` 其他已提交报告）。若同根因已有条目，优先 `duplicate_grouped` + 相同 `root_cause_key`；主报告本身也要带上该键。
+2. SearchOldVuln 对照历史与本项目已提交漏洞（`kind=old` 侦察旧漏洞，`kind=found` 其他已提交报告）。列表会给出已有条目的 `root_cause_key`。若同根因已有条目，必须 `duplicate_grouped` 且**逐字复制**该键；主报告本身也要带上该键。找不到已有键才允许按 `类型:类名或方法名` 新建，且一旦新建，后续变体必须继续用这一把。
 3. 若 intended_behavior=true，或问题只是配置/文档里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。
 4. 动态验证阶梯：
    - env/env.json 中 runtime 为 java/nodejs/python 且调试端口可用 → 优先 debug MCP（若已接入）。
@@ -64,7 +66,7 @@
      - `admin`：需要管理员账号
    - 也可直接写中文：前台 / 后台，普通权限 / 管理员。
    - 必须再传 `impact`、`exploit_complexity`、`defense_status`。
-   - 必须再传 `submission_tier`、`submission_reason`；同一根因都要传 `root_cause_key`，后续变体再标 `duplicate_grouped`。
+   - 必须再传 `submission_tier`、`submission_reason`；同一根因都要传相同的 `root_cause_key`（变体从 SearchOldVuln 原样复用，禁止另写新键），后续变体再标 `duplicate_grouped`。
    需改报告：ReturnToWorker(reason=...)。打回超过上限会由系统判误报。
 
 ## 规则

@@ -289,6 +289,21 @@ def _migrate_submission_tiers() -> None:
         )
 
 
+def _backfill_parent_root_cause_keys() -> None:
+    """Copy duplicate_grouped keys onto matching parents that were confirmed without one."""
+    insp = inspect(engine)
+    if "vulns" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("vulns")}
+    if "root_cause_key" not in existing or "submission_tier" not in existing:
+        return
+    from .services.root_cause import backfill_parent_root_cause_keys
+
+    with SessionLocal() as db:
+        if backfill_parent_root_cause_keys(db):
+            db.commit()
+
+
 def ensure_schema() -> None:
     """Idempotent: create missing tables/columns. Safe to call from worker threads."""
     DATA_DIR = DB_PATH.parent
@@ -296,6 +311,7 @@ def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _migrate_submission_tiers()
+    _backfill_parent_root_cause_keys()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]
     if missing:

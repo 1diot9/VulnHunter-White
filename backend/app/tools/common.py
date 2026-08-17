@@ -692,8 +692,8 @@ def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
         "kind_label": _kind_label(entry["kind"]),
     }
     if entry.get("kind") == KIND_FOUND:
-        for key in ("vuln_id", "status", "file_path", "vuln_type", "cwe"):
-            if entry.get(key) is not None:
+        for key in ("vuln_id", "status", "file_path", "vuln_type", "cwe", "submission_tier", "root_cause_key"):
+            if key in entry:
                 out[key] = entry[key]
     return out
 
@@ -717,6 +717,8 @@ def _search_blob(entry: dict[str, Any]) -> str:
         entry.get("vuln_type") or "",
         entry.get("cwe") or "",
         entry.get("status") or "",
+        entry.get("submission_tier") or "",
+        entry.get("root_cause_key") or "",
     ]
     return "\n".join(str(p) for p in parts).lower()
 
@@ -794,6 +796,8 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
                     "file_path": vuln.file_path,
                     "vuln_type": vuln.vuln_type,
                     "cwe": vuln.cwe,
+                    "submission_tier": vuln.submission_tier,
+                    "root_cause_key": vuln.root_cause_key,
                 }
             )
     return entries
@@ -1011,8 +1015,8 @@ def register_common_tools() -> None:
             name="SearchOldVuln",
             description=(
                 "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，项目自身或仍可能打到的组件调用点）"
-                "与本项目已提交报告（kind=found）。默认返回标题与摘要，传入 title 可看全文。"
-                "用于跟危险 API 线索，以及提交前查重，避免重复报已发现的洞。"
+                "与本项目已提交报告（kind=found）。默认返回标题与摘要；kind=found 会带上 submission_tier、root_cause_key。"
+                "传入 title 可看全文。提交前查重；Reviewer 标 duplicate_grouped 时必须原样复用已有 root_cause_key。"
             ),
             parameters={
                 "type": "object",

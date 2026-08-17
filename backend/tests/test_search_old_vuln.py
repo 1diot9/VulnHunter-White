@@ -73,6 +73,8 @@ def test_search_old_vuln_includes_submitted(tmp_env, project):
     assert found["vuln_id"] == vuln_id
     assert found["status"] == "pending_review"
     assert found["file_path"] == "app/Main.java"
+    assert "root_cause_key" in found
+    assert "submission_tier" in found
     assert "content" not in found
 
     full = registry.dispatch(_ctx(project), "SearchOldVuln", {"title": "SQLI in login"})

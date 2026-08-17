@@ -103,6 +103,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "submission_reason" in text
     assert "root_cause_key" in text
     assert "主报告本身也要带上该键" in text
+    assert "原样复用" in text
+    assert "不要另写新键" in text or "禁止另写新键" in text or "禁止另造" in text
     assert "cve_candidate" in text
     assert "low_impact" in text
     assert "有 CVE 价值" in text
@@ -123,6 +125,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/reviewer.md")
+    assert "原样复用" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/worker.md")
     assert "audit_mode_hint" in load_prompt("initial/fix.md")
 

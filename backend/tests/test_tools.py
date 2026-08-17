@@ -345,6 +345,33 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     assert dup_ok["root_cause_key"] == "cors:JwtFilter"
     report = (vuln_dir(project, out2["vuln_id"]) / "report.md").read_text(encoding="utf-8")
     assert "- 根因合并键：cors:JwtFilter" in report
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        parent = db.get(models.Vuln, vuln_id)
+        assert parent is not None
+        assert parent.root_cause_key == "cors:JwtFilter"
+
+    payload3 = dict(payload)
+    payload3["title"] = "CORS third"
+    out3 = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload3)
+    dup_new_key = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out3["vuln_id"],
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "duplicate_grouped",
+            "submission_reason": "与已确认 CORS 同根因",
+            "root_cause_key": "cors:JwtFilter:again",
+        },
+    )
+    assert dup_new_key["ok"] is False
+    assert "cors:JwtFilter" in dup_new_key["error"]
+    assert "不要另写新键" in dup_new_key["error"]
 
 
 def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project):

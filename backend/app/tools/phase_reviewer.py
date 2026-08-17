@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
@@ -9,6 +10,7 @@ from ..config import settings
 from ..models import Project, SessionLocal, Vuln
 from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
+from ..services.root_cause import mismatched_root_cause_key_error, stamp_root_cause_on_parent
 from ..vuln_types import (
     REVIEW_FACTOR_LABELS,
     SeverityCalibration,
@@ -153,6 +155,25 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             )
             if blocked:
                 return {"ok": False, "error": blocked}
+        if submission.tier == "duplicate_grouped":
+            siblings = (
+                db.query(Vuln)
+                .filter(Vuln.project_id == vuln.project_id, Vuln.id != vuln.id)
+                .all()
+            )
+            probe = SimpleNamespace(
+                id=vuln.id,
+                project_id=vuln.project_id,
+                vuln_type=vuln.vuln_type,
+                file_path=vuln.file_path,
+                submission_tier="duplicate_grouped",
+                status=vuln.status,
+                root_cause_key=submission.root_cause_key,
+                severity_score=vuln.severity_score,
+            )
+            reused = mismatched_root_cause_key_error(probe, siblings, submission.root_cause_key)
+            if reused:
+                return {"ok": False, "error": reused}
         if vuln.intended_behavior and evidence != "static_only":
             # still allow confirm but flag
             pass
@@ -168,6 +189,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.submission_tier = submission.tier
         vuln.submission_reason = submission.reason
         vuln.root_cause_key = submission.root_cause_key
+        stamp_root_cause_on_parent(db, vuln)
         if note:
             vuln.return_reason = None
         upsert_report_section(
@@ -247,7 +269,9 @@ def register_reviewer_tools() -> None:
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
-                "submission_tier、submission_reason；同根因重复时再标 root_cause_key。"
+                "submission_tier、submission_reason。"
+                "同一根因的主报告与后续变体必须填完全相同的 root_cause_key；"
+                "duplicate_grouped 时必须从 SearchOldVuln kind=found 原样复用已有键，禁止另写新键。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
             ),
             parameters={
@@ -304,9 +328,10 @@ def register_reviewer_tools() -> None:
                     "root_cause_key": {
                         "type": "string",
                         "description": (
-                            "同一根因的合并键，如 idor:SysCommentController。"
-                            "主报告与后续变体都应填写相同键；"
-                            "submission_tier=duplicate_grouped 时必填。"
+                            "同一根因的合并键，格式 类型:稳定锚点，如 idor:SysCommentController。"
+                            "主报告与后续变体必须完全相同。"
+                            "duplicate_grouped 时必填，且必须原样复用 SearchOldVuln kind=found 已有键，"
+                            "禁止按接口/方法另造新键。"
                         ),
                     },
                     "note": {"type": "string"},

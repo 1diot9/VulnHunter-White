@@ -4,7 +4,7 @@ import { ChevronRightIcon } from 'lucide-react'
 import type { Vuln } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { groupVulnsByRootCause } from '../lib/vulnGroups'
+import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
 import {
   cn,
   formatAttackSurface,
@@ -23,31 +23,49 @@ const STATUS_LABEL: Record<string, string> = {
   returned: '已打回',
 }
 
-function StatusBadges({ v }: { v: Vuln }) {
+function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
   const score = formatSeverityScore(v.severity_score)
   const tier = formatSubmissionTier(v.submission_tier)
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+    <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', nested && 'mt-0.5 gap-1')}>
+      {nested ? (
+        <Badge variant="outline" className="h-4 border-cyan-800/80 bg-cyan-950/40 px-1.5 text-[10px] text-cyan-300/90">
+          子项
+        </Badge>
+      ) : null}
       <Badge
+        className={nested ? 'h-4 px-1.5 text-[10px] text-slate-400' : undefined}
         variant={
-          v.status === 'confirmed' || v.status === 'static_only'
-            ? 'success'
-            : v.status === 'false_positive'
-              ? 'destructive'
-              : 'warning'
+          nested
+            ? 'outline'
+            : v.status === 'confirmed' || v.status === 'static_only'
+              ? 'success'
+              : v.status === 'false_positive'
+                ? 'destructive'
+                : 'warning'
         }
       >
         {STATUS_LABEL[v.status] || v.status}
         {v.evidence_level === 'static_only' ? ' · 静态' : ''}
       </Badge>
       {score ? (
-        <Badge variant="outline" className={severityScoreBadgeClass(v.severity_score)}>
+        <Badge
+          variant="outline"
+          className={cn(severityScoreBadgeClass(v.severity_score), nested && 'h-4 px-1.5 text-[10px]')}
+        >
           {score}
         </Badge>
       ) : null}
-      <Badge variant={v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{tier}</Badge>
-      {surface ? <span className="text-xs text-slate-400">{surface}</span> : null}
+      <Badge
+        className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
+        variant={nested ? 'outline' : v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}
+      >
+        {tier}
+      </Badge>
+      {surface ? (
+        <span className={cn('text-xs text-slate-400', nested && 'text-[11px] text-slate-500')}>{surface}</span>
+      ) : null}
     </div>
   )
 }
@@ -68,18 +86,35 @@ function VulnRow({
   onToggleSelect?: (id: number, checked: boolean) => void
 }) {
   return (
-    <div className={cn('flex items-start gap-2 px-2.5 py-2.5', active && 'bg-muted', nested && 'bg-muted/30')}>
+    <div
+      className={cn(
+        'flex items-start gap-2',
+        nested
+          ? cn(
+              'rounded-r-md border-l-[3px] border-cyan-700 bg-slate-950/80 px-2 py-1 text-slate-500',
+              active && 'border-cyan-400 bg-cyan-950/40 text-slate-300',
+            )
+          : cn('px-2.5 py-2.5', active && 'bg-muted'),
+      )}
+    >
       {onToggleSelect ? (
         <Checkbox
-          className="mt-1 shrink-0"
+          className={cn('mt-1 shrink-0', nested && 'mt-0.5')}
           checked={Boolean(selected)}
           onCheckedChange={(checked) => onToggleSelect(v.id, checked === true)}
         />
       ) : null}
       <Link to={`/vulns/${v.id}`} className="min-w-0 flex-1 hover:underline">
-        <div className={cn('break-words font-medium leading-snug', nested && 'text-sm')}>{v.title}</div>
-        <StatusBadges v={v} />
-        <div className="mt-1 text-xs text-slate-400">
+        <div
+          className={cn(
+            'break-words leading-snug',
+            nested ? 'text-[11px] font-normal leading-4 text-slate-400' : 'font-medium',
+          )}
+        >
+          {v.title}
+        </div>
+        <StatusBadges v={v} nested={nested} />
+        <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
           #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
           {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
         </div>
@@ -94,6 +129,7 @@ export default function VulnGroupList({
   selectedIds,
   onToggleSelect,
   projectNameById,
+  tierFilter = 'all',
   emptyText = '暂无数据',
 }: {
   vulns: Vuln[]
@@ -101,9 +137,13 @@ export default function VulnGroupList({
   selectedIds?: number[]
   onToggleSelect?: (id: number, checked: boolean) => void
   projectNameById?: Map<number, string>
+  tierFilter?: VulnTierFilter
   emptyText?: string
 }) {
-  const groups = useMemo(() => groupVulnsByRootCause(vulns), [vulns])
+  const groups = useMemo(
+    () => filterVulnGroups(groupVulnsByRootCause(vulns), tierFilter),
+    [vulns, tierFilter],
+  )
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
@@ -177,26 +217,27 @@ export default function VulnGroupList({
                       })
                     }
                   >
-                    {open ? '收起' : `还有 ${group.others.length} 条同根因`}
+                    {open ? '收起同根因子项' : `还有 ${group.others.length} 条同根因`}
                     {group.rootCauseKey ? ` · ${group.rootCauseKey}` : ''}
                   </button>
                 ) : null}
               </div>
             </div>
-            {open
-              ? group.others.map((v) => (
-                  <div key={v.id} className="border-t border-border/50 pl-7">
-                    <VulnRow
-                      v={v}
-                      active={activeId === v.id}
-                      nested
-                      projectName={v.project_name || projectNameById?.get(v.project_id) || projectName}
-                      selected={selectedSet.has(v.id)}
-                      onToggleSelect={onToggleSelect}
-                    />
-                  </div>
-                ))
-              : null}
+            {open ? (
+              <div className="space-y-1 bg-slate-950/40 py-1.5 pr-2 pl-7">
+                {group.others.map((v) => (
+                  <VulnRow
+                    key={v.id}
+                    v={v}
+                    active={activeId === v.id}
+                    nested
+                    projectName={v.project_name || projectNameById?.get(v.project_id) || projectName}
+                    selected={selectedSet.has(v.id)}
+                    onToggleSelect={onToggleSelect}
+                  />
+                ))}
+              </div>
+            ) : null}
           </div>
         )
       })}
