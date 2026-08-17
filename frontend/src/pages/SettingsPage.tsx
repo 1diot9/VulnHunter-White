@@ -13,6 +13,8 @@ export default function SettingsPage() {
   const [defaultBaseUrl, setDefaultBaseUrl] = useState('')
   const [defaultApiKey, setDefaultApiKey] = useState('')
   const [githubPat, setGithubPat] = useState('')
+  const [fofaKey, setFofaKey] = useState('')
+  const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
   const [concurrency, setConcurrency] = useState(1)
   const [fixConcurrency, setFixConcurrency] = useState(1)
   const [contextWindow, setContextWindow] = useState(128000)
@@ -32,6 +34,7 @@ export default function SettingsPage() {
       setConcurrency(x.worker_concurrency || 1)
       setFixConcurrency(x.fix_concurrency || 1)
       setContextWindow(x.context_window || 128000)
+      setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
     })
   }, [])
 
@@ -113,6 +116,8 @@ export default function SettingsPage() {
       }
       if (defaultApiKey.trim()) body.default_api_key = defaultApiKey.trim()
       if (githubPat.trim()) body.github_pat = githubPat.trim()
+      if (fofaKey.trim()) body.fofa_key = fofaKey.trim()
+      if (fofaBaseUrl.trim()) body.fofa_base_url = fofaBaseUrl.trim()
       // ensure a default provider for chat completions if base_url set
       if (defaultBaseUrl.trim()) {
         body.llm_providers = [
@@ -129,12 +134,14 @@ export default function SettingsPage() {
           recon: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
           worker: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
           reviewer: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
+          verifier: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
         }
       }
       const next = await api.putSettings(body)
       setS(next)
       setDefaultApiKey('')
       setGithubPat('')
+      setFofaKey('')
       setMsg('已保存')
     } catch (e) {
       setMsg(String(e))
@@ -258,6 +265,25 @@ export default function SettingsPage() {
             value={githubPat}
             onChange={(e) => setGithubPat(e.target.value)}
             placeholder="ghp_..."
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>FOFA Base URL</Label>
+          <Input
+            value={fofaBaseUrl}
+            onChange={(e) => setFofaBaseUrl(e.target.value)}
+            placeholder="https://fofa.info"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>
+            FOFA Key {s.fofa_key_set ? '（已配置，留空不改）' : '（Verifier 互联网验证）'}
+          </Label>
+          <Input
+            type="password"
+            value={fofaKey}
+            onChange={(e) => setFofaKey(e.target.value)}
+            placeholder="FOFA API key"
           />
         </div>
         <div className="flex items-center gap-3">
