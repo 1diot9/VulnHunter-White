@@ -816,6 +816,14 @@ def _read_verifier_enabled(project_id: int) -> bool:
         return bool(proj and proj.verifier_enabled)
 
 
+_ASSET_PROOF_LAB_HINT = (
+    "有可访问的漏洞环境时，审核中顺带完善报告「互联网资产证明」："
+    "先 CollectLabFingerprints 采集标题/body/header/favicon，"
+    "将 FOFA 与 X 情报社区语句写入本条报告（apply=true 或 ConfirmVuln 传 fofa_fingerprint/x_fingerprint）。"
+    "不要把「待运行环境确认」留到确认后，也不要为此 ReturnToWorker。"
+)
+
+
 def _reviewer_lab_note(project_id: int) -> str:
     enabled, prompt = _read_manual_lab(project_id)
     if enabled:
@@ -823,7 +831,8 @@ def _reviewer_lab_note(project_id: int) -> str:
             return (
                 "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
                 "请按以下用户提供的环境说明访问并做动态验证（地址、账号、路径以用户说明为准）：\n"
-                f"{prompt}"
+                f"{prompt}\n"
+                f"{_ASSET_PROOF_LAB_HINT}"
             )
         return (
             "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
@@ -834,7 +843,10 @@ def _reviewer_lab_note(project_id: int) -> str:
     if lab_ready(env) or env.get("accepted"):
         rec = recreate_lab(project_id)
         dbg = debug_ports_for_runtime(load_env(project_id) or env)
-        return f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}"
+        return (
+            f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}\n"
+            f"{_ASSET_PROOF_LAB_HINT}"
+        )
     return (
         "动态环境搭建轮已结束；靶场未就绪，见 docs/lab.md。"
         "本轮只审核漏洞，不要再搭建 Docker 靶场。"

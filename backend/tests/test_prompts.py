@@ -99,6 +99,7 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "CVE" in review
     assert "互联网资产证明" in review
     assert "docs/lab.md" in review
+    assert "CollectLabFingerprints" in review
 
 
 def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
@@ -127,12 +128,16 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "互联网资产证明" in text
     assert "FOFA" in text
     assert "X 情报社区" in text
+    assert "CollectLabFingerprints" in text
+    assert "fofa_fingerprint" in text
     assert "成立性否决" in text
     assert "docker exec" in text
     assert "specific_environment" in text
     assert "不要按漏洞类型" in text
     assert "默认密码" in text
     assert "弱口令" in text
+    assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
+    assert "fofa_fingerprint" in load_prompt("initial/reviewer.md")
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
     assert "MergeIntoVuln" in load_prompt("initial/reviewer.md")

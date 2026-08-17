@@ -791,11 +791,13 @@ def test_openai_tools_for_role_contains_expected():
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
+    assert "CollectLabFingerprints" in reviewer_names
     assert "FinishLab" not in reviewer_names
     lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}
     assert "FinishLab" in lab_names
     assert "Write" in lab_names
     assert "ConfirmVuln" not in lab_names
+    assert "CollectLabFingerprints" not in lab_names
     assert "ReturnToWorker" not in lab_names
     verifier_names = {t["function"]["name"] for t in registry.openai_tools_for_role("verifier")}
     assert "FofaSearch" in verifier_names

@@ -36,6 +36,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.api.projects as api_projects
     import app.api.settings as api_settings
     import app.api.vulns as api_vulns
+    import app.services.asset_proof as asset_proof
     import app.services.ghsa_service as ghsa_service
     import app.services.fofa as fofa_service
     import app.services.ingest as ingest
@@ -62,6 +63,7 @@ def tmp_env(tmp_path, monkeypatch):
         ghsa_service,
         fofa_service,
         verifier_service,
+        asset_proof,
         pipeline,
         agent_loop,
         agent_checkpoint,

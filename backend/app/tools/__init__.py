@@ -123,6 +123,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SearchOldVuln",
             "SearchGHSA",
             "ConfirmVuln",
+            "CollectLabFingerprints",
             "MergeIntoVuln",
             "ReturnToWorker",
         }

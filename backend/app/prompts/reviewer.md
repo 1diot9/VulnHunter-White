@@ -65,7 +65,10 @@
      - `bypassable`：有防护但可绕过(+0)
      - `conditional`：有防护且绕过需额外条件(-1)
    - 分数：>=5 为 critical，3-4 为 high，1-2 为 medium，<=0 为 low。ConfirmVuln 会据此回写最终严重度。
-6. 资产证明审核：报告必须包含 `## 互联网资产证明`（旧报告中的 `## 应用搜索指纹` 视为等价），并分别给出 FOFA 与 X 情报社区（微步在线 X 情报中心资产测绘）查询语句。测绘语句不允许出现「或」/`||`。若缺失、照搬漏洞路径/PoC 参数、使用随机值/租户数据作为唯一指纹，或编造未验证的 `icon_hash`/`html_hash`/`dom_hash`，应 ReturnToWorker 要求修正。允许写“待运行环境确认”，但必须说明需要补采的标题、body/header、favicon、证书或备案等字段。「基础环境搭建」应引用 `docs/lab.md`，不要在漏洞报告内重复镜像、端口、凭据。
+6. 资产证明审核：报告必须包含 `## 互联网资产证明`（旧报告中的 `## 应用搜索指纹` 视为等价），并分别给出 FOFA 与 X 情报社区（微步在线 X 情报中心资产测绘）查询语句。测绘语句不允许出现「或」/`||`。
+   - **有漏洞环境**（`env.json` 的 `target_url` 可访问，或人工靶场说明里有地址）：必须 `CollectLabFingerprints` 采集标题、稳定 body/header、favicon `icon_hash`，把可复制语句写回本条报告（`apply=true` 或 ConfirmVuln 传入 `fofa_fingerprint`/`x_fingerprint`）。占位「待运行环境确认」、照搬漏洞路径/PoC 参数、编造 hash，都由你在本轮改好，不要为此 ReturnToWorker。
+   - **无漏洞环境**：允许保留“待运行环境确认”，但必须说明需要补采的标题、body/header、favicon、证书或备案等字段。缺失整节、或无环境却编造 `icon_hash`/`html_hash`/`dom_hash`，才 ReturnToWorker。
+   - 「基础环境搭建」应引用 `docs/lab.md`，不要在漏洞报告内重复镜像、端口、凭据。
 7. 确认：ConfirmVuln 必须标注攻击面、严重度校准字段和价值分层：
    - `attack_surface=frontend`：前台漏洞（公开/未登录可打到）。
    - `attack_surface=backend`：后台漏洞，且必须再标 `required_account`：

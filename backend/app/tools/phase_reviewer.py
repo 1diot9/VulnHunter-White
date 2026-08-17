@@ -13,6 +13,11 @@ from ..services.affected_locations import (
     location_from_vuln,
     parse_locations,
 )
+from ..services.asset_proof import (
+    apply_asset_proof,
+    collect_lab_fingerprints,
+    maybe_enrich_asset_proof,
+)
 from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
@@ -381,6 +386,20 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             reused = mismatched_root_cause_key_error(probe, siblings, submission.root_cause_key)
             if reused:
                 return {"ok": False, "error": reused}
+    proof = maybe_enrich_asset_proof(
+        ctx.project_id,
+        int(vuln_id),
+        fofa=args.get("fofa_fingerprint"),
+        x=args.get("x_fingerprint"),
+    )
+    if not proof.get("ok"):
+        return {"ok": False, "error": proof.get("error") or "互联网资产证明写入失败"}
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != ctx.project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        if vuln.status == "merged":
+            return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         if vuln.intended_behavior and evidence != "static_only":
             # still allow confirm but flag
             pass
@@ -432,7 +451,12 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "submission_reason": submission.reason,
         "root_cause_key": submission.root_cause_key,
         "verifier_queued": queued,
+        "asset_proof_updated": bool(proof.get("updated")),
     }
+    if proof.get("fofa"):
+        out["fofa_fingerprint"] = proof["fofa"]
+    if proof.get("x"):
+        out["x_fingerprint"] = proof["x"]
     if queued:
         out["message"] = "已确认前台漏洞，已排队 Verifier 做互联网复测"
     elif skip_reason:
@@ -441,6 +465,42 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if account:
         out["required_account_label"] = _ACCOUNT_LABELS[account]
     return out
+
+
+def _collect_lab_fingerprints(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    collected = collect_lab_fingerprints(
+        ctx.project_id,
+        url=str(args.get("url") or "").strip() or None,
+        path=str(args.get("path") or "").strip() or None,
+    )
+    if not collected.get("ok"):
+        extras = {k: v for k, v in collected.items() if k not in {"ok", "error"}}
+        return call_fail(str(collected.get("error") or "采集失败"), **extras)
+    if not bool(args.get("apply")):
+        return collected
+    vuln_id = args.get("vuln_id") or ctx.vuln_id
+    if not vuln_id:
+        return call_fail("apply=true 时缺少 vuln_id")
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != ctx.project_id:
+            return call_fail("漏洞不存在")
+        if vuln.status not in ("pending_review", "returned"):
+            return call_fail(f"仅 pending_review/returned 可回写资产证明，当前为 {vuln.status}")
+    applied = apply_asset_proof(
+        ctx.project_id,
+        int(vuln_id),
+        fofa=args.get("fofa_fingerprint") or collected.get("fofa"),
+        x=args.get("x_fingerprint") or collected.get("x"),
+    )
+    if not applied.get("ok"):
+        return call_fail(str(applied.get("error") or "写入失败"))
+    collected["applied"] = True
+    collected["path"] = applied["path"]
+    collected["fofa"] = applied["fofa"]
+    collected["x"] = applied["x"]
+    collected["message"] = f"已写入 {applied['path']} 的「互联网资产证明」"
+    return collected
 
 
 def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
@@ -519,6 +579,8 @@ def register_reviewer_tools() -> None:
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
                 "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
+                "有漏洞环境时顺带完善「互联网资产证明」：可先 CollectLabFingerprints，"
+                "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会按靶场自动补全。"
             ),
             parameters={
                 "type": "object",
@@ -580,6 +642,20 @@ def register_reviewer_tools() -> None:
                             "禁止按接口/方法另造新键。"
                         ),
                     },
+                    "fofa_fingerprint": {
+                        "type": "string",
+                        "description": (
+                            "可选。写入报告「互联网资产证明」的 FOFA 语句。"
+                            "有靶场时应据 CollectLabFingerprints 结果填写；禁止「或」/||。"
+                        ),
+                    },
+                    "x_fingerprint": {
+                        "type": "string",
+                        "description": (
+                            "可选。写入报告「互联网资产证明」的 X 情报社区资产测绘语句。"
+                            "禁止「或」/||。"
+                        ),
+                    },
                     "note": {"type": "string"},
                 },
                 "required": [
@@ -592,6 +668,48 @@ def register_reviewer_tools() -> None:
                 ],
             },
             handler=_confirm_vuln,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="CollectLabFingerprints",
+            description=(
+                "从当前漏洞环境采集应用指纹（标题、header、body 稳定片段、favicon icon_hash），"
+                "并给出可复制的 FOFA / X 情报社区测绘语句。"
+                "有 Docker 靶场或人工靶场地址时，审核确认前应调用；"
+                "apply=true 时直接写回本条 pending 报告的「互联网资产证明」。"
+                "不要把漏洞路径当唯一指纹，不要编造 hash。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "可选。须与 env.json target_url 或人工靶场说明中的地址同 origin",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "可选。相对路径，如 /login",
+                    },
+                    "apply": {
+                        "type": "boolean",
+                        "description": "true 时把建议语句写入本条漏洞 report.md",
+                    },
+                    "vuln_id": {
+                        "type": "integer",
+                        "description": "apply 时写入的漏洞；默认本会话",
+                    },
+                    "fofa_fingerprint": {
+                        "type": "string",
+                        "description": "可选。覆盖自动建议的 FOFA 语句后再写入",
+                    },
+                    "x_fingerprint": {
+                        "type": "string",
+                        "description": "可选。覆盖自动建议的 X 情报社区语句后再写入",
+                    },
+                },
+            },
+            handler=_collect_lab_fingerprints,
         )
     )
     registry.register(

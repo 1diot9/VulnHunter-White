@@ -12,6 +12,19 @@ _H1_RE = re.compile(r"(?m)^(# .+)\n")
 ASSET_PROOF_HEADING = "## 互联网资产证明"
 SEARCH_FINGERPRINT_HEADING = ASSET_PROOF_HEADING
 _ASSET_PROOF_HEADING_RE = re.compile(r"(?m)^##\s+(互联网资产证明|应用搜索指纹)\s*$")
+_NEXT_H2_RE = re.compile(r"(?m)^##\s+")
+_FOFA_BLOCK_RE = re.compile(
+    r"####\s*FOFA\s*\n+```(?:text|fofa)?\n(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_X_BLOCK_RE = re.compile(
+    r"####\s*X\s*情报社区\s*\n+```(?:text)?\n(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_PLACEHOLDER_QUERY_RE = re.compile(
+    r"(待根据|待运行|待确认|待补采|待补全|TODO|TBD)",
+    re.IGNORECASE,
+)
 _ASSET_PROOF_INSERT_MARKERS = (
     "\n## 漏洞技术细节\n",
     "\n## 复现证明\n",
@@ -53,6 +66,79 @@ def search_fingerprint_section(
 {x_query}
 ```
 """
+
+
+def _normalize_query(raw: object) -> str:
+    return " ".join(str(raw or "").split()).strip()
+
+
+def extract_asset_queries(text: str) -> tuple[str, str]:
+    """Return (fofa, x) queries from the internet-asset proof section."""
+    body = text or ""
+    fofa = _FOFA_BLOCK_RE.search(body)
+    x = _X_BLOCK_RE.search(body)
+    return (
+        _normalize_query(fofa.group(1) if fofa else ""),
+        _normalize_query(x.group(1) if x else ""),
+    )
+
+
+def is_placeholder_query(raw: object) -> bool:
+    value = _normalize_query(raw)
+    if not value or value in {"-", "n/a", "N/A"}:
+        return True
+    return bool(_PLACEHOLDER_QUERY_RE.search(value))
+
+
+def fingerprint_query_error(raw: object, *, label: str) -> str | None:
+    value = _normalize_query(raw)
+    if not value:
+        return f"{label}测绘语句不能为空"
+    if "||" in value or re.search(r"或", value):
+        return f"{label}测绘语句不允许出现「或」/||"
+    return None
+
+
+def replace_search_fingerprint_section(
+    text: str,
+    *,
+    fofa: object = None,
+    x: object = None,
+    basis: object = None,
+) -> str:
+    """Insert or replace the internet-asset proof section in place."""
+    body = text or ""
+    section = search_fingerprint_section(fofa=fofa, x=x, basis=basis).strip()
+    match = _ASSET_PROOF_HEADING_RE.search(body)
+    if not match:
+        return ensure_search_fingerprint_section(body, fofa=fofa, x=x, basis=basis)
+    rest = body[match.end() :]
+    nxt = _NEXT_H2_RE.search(rest)
+    end = match.end() + nxt.start() if nxt else len(body)
+    prefix = body[: match.start()].rstrip()
+    suffix = body[end:].lstrip()
+    if prefix and suffix:
+        return prefix + "\n\n" + section + "\n\n" + suffix
+    if prefix:
+        return prefix + "\n\n" + section + "\n"
+    if suffix:
+        return section + "\n\n" + suffix
+    return section + "\n"
+
+
+def write_search_fingerprint_section(
+    path: Path,
+    *,
+    fofa: object = None,
+    x: object = None,
+    basis: object = None,
+) -> str:
+    """Rewrite the asset-proof section on disk; keep the rest of the report."""
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    updated = replace_search_fingerprint_section(text, fofa=fofa, x=x, basis=basis)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    return updated
 
 
 def ensure_search_fingerprint_section(

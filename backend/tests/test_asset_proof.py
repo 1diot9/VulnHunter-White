@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+from app.services.asset_proof import (
+    collect_lab_fingerprints,
+    fofa_icon_hash,
+    maybe_enrich_asset_proof,
+    murmurhash3_32,
+    suggest_queries,
+)
+from app.services.lab import save_env
+from app.services.paths import vuln_dir
+from app.tools import ToolContext, registry
+
+
+def _ctx(project_id: int, role: str) -> ToolContext:
+    return ToolContext(project_id=project_id, role=role, phase=role)
+
+
+SEVERITY_FACTORS = {
+    "impact": "sensitive_data_or_privilege",
+    "exploit_complexity": "single_request",
+    "defense_status": "none",
+    "submission_tier": "cve_candidate",
+    "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
+}
+
+
+def test_murmurhash3_32_empty():
+    assert murmurhash3_32(b"") == 0
+
+
+def test_suggest_queries_skips_generic_title():
+    fofa, x = suggest_queries(title="登录", body_markers=["Copyright 2020 XX科技"], icon_hash="-123")
+    assert "登录" not in fofa
+    assert 'body="Copyright 2020 XX科技"' in fofa
+    assert 'icon_hash="-123"' in fofa
+    assert "||" not in fofa
+    assert 'body="Copyright 2020 XX科技"' in x
+
+
+def test_collect_lab_fingerprints_from_env(tmp_env, project, monkeypatch):
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    html = (
+        b"<html><head><title>XXOA\xe5\x8a\x9e\xe5\x85\xac\xe7\xb3\xbb\xe7\xbb\x9f</title>"
+        b'<link rel="icon" href="/favicon.ico">'
+        b'<link rel="stylesheet" href="/static/xxoa-app.css"></head>'
+        b"<body>Copyright 2020 XX\xe7\xa7\x91\xe6\x8a\x80</body></html>"
+    )
+    favicon = b"\x00\x00\x01\x00" + b"icon-bytes-here"
+
+    def fake_fetch(url: str, *, timeout: float = 8.0):
+        if url.endswith("favicon.ico"):
+            return 200, {"content-type": "image/x-icon"}, favicon, url
+        return 200, {"content-type": "text/html; charset=utf-8", "server": "XXOA-Gateway"}, html, url
+
+    monkeypatch.setattr("app.services.asset_proof.fetch_bytes", fake_fetch)
+    out = collect_lab_fingerprints(project)
+    assert out["ok"] is True, out
+    assert out["title"] == "XXOA办公系统"
+    assert out["header"] == "XXOA-Gateway"
+    assert out["icon_hash"] == fofa_icon_hash(favicon)
+    assert 'title="XXOA办公系统"' in out["fofa"]
+    assert "icon_hash=" in out["fofa"]
+    assert "||" not in out["fofa"]
+    assert 'title="XXOA办公系统"' in out["x"]
+
+
+def test_collect_lab_fingerprints_without_target(tmp_env, project):
+    out = collect_lab_fingerprints(project)
+    assert out["ok"] is False
+    assert "漏洞环境" in out["error"]
+
+
+def test_collect_tool_apply_writes_report(tmp_env, project, monkeypatch):
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = submitted["vuln_id"]
+
+    def fake_fetch(url: str, *, timeout: float = 8.0):
+        html = b"<html><head><title>DemoCMS</title></head><body>Copyright DemoCMS</body></html>"
+        return 200, {"content-type": "text/html"}, html, url
+
+    monkeypatch.setattr("app.services.asset_proof.fetch_bytes", fake_fetch)
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vuln_id),
+        "CollectLabFingerprints",
+        {"apply": True},
+    )
+    assert out["ok"] is True, out
+    assert out["applied"] is True
+    report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert 'title="DemoCMS"' in report
+    assert "待根据应用标题" not in report.split("## 互联网资产证明", 1)[1].split("## 漏洞技术细节", 1)[0]
+
+
+def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = submitted["vuln_id"]
+
+    def fake_fetch(url: str, *, timeout: float = 8.0):
+        html = b"<html><head><title>Acme OA</title></head><body>Copyright Acme</body></html>"
+        return 200, {"content-type": "text/html"}, html, url
+
+    monkeypatch.setattr("app.services.asset_proof.fetch_bytes", fake_fetch)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True
+    assert conf["asset_proof_updated"] is True
+    assert 'title="Acme OA"' in conf["fofa_fingerprint"]
+    report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert 'title="Acme OA"' in report
+    assert "## 审核标注" in report
+    assert report.index("## 互联网资产证明") < report.index("## 审核标注")
+
+
+def test_confirm_uses_explicit_fingerprints(tmp_env, project):
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = submitted["vuln_id"]
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "fofa_fingerprint": 'title="HandWritten" && body="/static/app.css"',
+            "x_fingerprint": 'app="HandWritten" && title="HandWritten"',
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True
+    assert conf["asset_proof_updated"] is True
+    report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert 'title="HandWritten"' in report
+    assert 'app="HandWritten"' in report
+
+
+def test_confirm_rejects_or_fingerprint(tmp_env, project):
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = submitted["vuln_id"]
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "fofa_fingerprint": 'title="A" || title="B"',
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is False
+    assert "或" in conf["error"] or "||" in conf["error"]
+
+
+def test_maybe_enrich_skips_when_queries_already_good(tmp_env, project, monkeypatch):
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+        "fofa_fingerprint": 'title="Kept" && body="stable"',
+        "x_fingerprint": 'app="Kept" && title="Kept"',
+    }
+    submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = submitted["vuln_id"]
+
+    def boom(url: str, *, timeout: float = 8.0):
+        raise AssertionError("should not fetch when queries already exist")
+
+    monkeypatch.setattr("app.services.asset_proof.fetch_bytes", boom)
+    out = maybe_enrich_asset_proof(project, vuln_id)
+    assert out["ok"] is True, out
+    assert out["updated"] is False
+    assert out["fofa"] == 'title="Kept" && body="stable"'

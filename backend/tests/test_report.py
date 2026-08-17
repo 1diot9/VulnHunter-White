@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 
 from app.services.report import (
     ensure_search_fingerprint_section,
+    extract_asset_queries,
     format_produced_at,
+    is_placeholder_query,
+    replace_search_fingerprint_section,
     stamp_produced_at,
     write_report_md,
 )
@@ -182,3 +185,33 @@ def test_ensure_search_fingerprint_section_keeps_legacy_heading():
     out = ensure_search_fingerprint_section(text, fofa='title="B"', x='app="B"')
     assert out == text
     assert "## 互联网资产证明" not in out
+
+
+def test_replace_search_fingerprint_section_updates_middle():
+    text = "# t\n\n## 已知受影响产品及版本\n暂未明确\n\n## 互联网资产证明\n\n### 精准测绘语法\n\n#### FOFA\n```text\n待运行环境确认\n```\n\n#### X 情报社区\n```text\n待根据 app 确认\n```\n\n## 漏洞技术细节\nkeep-me\n"
+    out = replace_search_fingerprint_section(text, fofa='title="OA"', x='app="OA"')
+    assert out.index("## 互联网资产证明") < out.index("## 漏洞技术细节")
+    assert 'title="OA"' in out
+    assert 'app="OA"' in out
+    assert "待运行环境确认" not in out
+    assert "keep-me" in out
+    assert "暂未明确" in out
+    fofa, x = extract_asset_queries(out)
+    assert fofa == 'title="OA"'
+    assert x == 'app="OA"'
+
+
+def test_replace_search_fingerprint_section_upgrades_legacy_heading():
+    text = "# t\n\n## 应用搜索指纹\n\n#### FOFA\n```text\ntitle=\"old\"\n```\n\n## 漏洞技术细节\n-\n"
+    out = replace_search_fingerprint_section(text, fofa='title="new"', x='app="new"')
+    assert "## 应用搜索指纹" not in out
+    assert "## 互联网资产证明" in out
+    assert 'title="new"' in out
+    assert "## 漏洞技术细节" in out
+
+
+def test_is_placeholder_query():
+    assert is_placeholder_query("")
+    assert is_placeholder_query("待运行环境确认")
+    assert is_placeholder_query("待根据应用标题、稳定 body/header 特征、favicon hash 等确认")
+    assert not is_placeholder_query('title="XXOA办公系统" && body="Copyright"')
