@@ -140,7 +140,7 @@ def read_text_window(
         want = default_limit
     want = min(want, _READ_MAX_LIMIT)
 
-    # Page budget stays under keep_full_max so the model sees a complete window + hint.
+    # Cap each Read page so a full window + paging hint fits in one tool result.
     budget = min(max_bytes, _READ_PAGE_MAX_BYTES)
     window = _fit_lines(remaining[:want], start + 1, budget)
     read_n = len(window)
@@ -201,7 +201,7 @@ def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
             size = target.stat().st_size
             text = target.read_text(encoding="utf-8", errors="replace")
             window = read_text_window(text, offset=offset, limit=limit, max_bytes=max_bytes)
-            # Paging fields before content so compression keeps next_offset/hint.
+            # Paging fields before content so callers see next_offset/hint without scanning the body.
             ordered: dict[str, Any] = {
                 "path": p,
                 "size": size,

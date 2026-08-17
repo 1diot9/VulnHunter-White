@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Timeouts (seconds) — aligned with AutoPoc scale
     timeout_recon: int = 3600
     timeout_recon_mark_round: int = 1800
-    recon_mark_batch_size: int = 40
+    recon_mark_batch_size: int = 150
     timeout_worker_round: int = 7200
     timeout_reviewer_static: int = 1800
     timeout_verifier: int = 1800
@@ -39,14 +39,7 @@ class Settings(BaseSettings):
     chat_read_timeout_min: float = 180.0
     chat_read_timeout_max: float = 600.0
 
-    # Context compression
-    tool_result_keep_rounds: int = 50
-    tool_result_truncate_chars: int = 3000
-    tool_result_keep_max_chars: int = 12000
-    # Newest N tool results stay large enough for one Read page (see Read offset/limit).
-    tool_result_keep_full_rounds: int = 4
-    tool_result_keep_full_max_chars: int = 48000
-    tool_result_drop_rounds: int = 200
+    # Context compression: rewrite history with a summary when prompt exceeds this ratio of the window.
     context_compress_ratio: float = 0.85
     default_context_window: int = 128000
 

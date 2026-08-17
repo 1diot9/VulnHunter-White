@@ -25,7 +25,6 @@ from .compression import (
     build_compressed_messages,
     estimate_tokens,
     needs_compress,
-    truncate_old_tool_results,
     write_summary,
 )
 from .watchdog import AgentWatchdog, identical_tool_nudge
@@ -319,7 +318,6 @@ class AgentLoop:
                 self._rescue_conclude(messages)
                 return result
 
-            messages = truncate_old_tool_results(messages)
             est = estimate_tokens(messages, tools)
             if needs_compress(
                 messages,

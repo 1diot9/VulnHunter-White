@@ -49,52 +49,6 @@ def estimate_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] 
     return max(1, total)
 
 
-def _clip_tool_content(content: str, max_chars: int) -> str:
-    if len(content) <= max_chars:
-        return content
-    return content[:max_chars] + f"\n...[truncated {len(content) - max_chars} chars]"
-
-
-def truncate_old_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep last N tool results (capped); newest stay large enough for a Read page."""
-    keep = settings.tool_result_keep_rounds
-    drop = settings.tool_result_drop_rounds
-    trunc = settings.tool_result_truncate_chars
-    keep_max = settings.tool_result_keep_max_chars
-    full = min(settings.tool_result_keep_full_rounds, keep)
-    full_max = settings.tool_result_keep_full_max_chars
-
-    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if not tool_indices:
-        return messages
-
-    out = []
-    total_tools = len(tool_indices)
-
-    for i, m in enumerate(messages):
-        if m.get("role") != "tool":
-            out.append(m)
-            continue
-        from_end = total_tools - tool_indices.index(i)
-        if from_end > drop:
-            continue
-        nm = dict(m)
-        content = nm.get("content") or ""
-        if not isinstance(content, str):
-            out.append(nm)
-            continue
-        if from_end <= full:
-            cap = full_max
-        elif from_end <= keep:
-            cap = keep_max
-        else:
-            cap = trunc
-        if len(content) > cap:
-            nm["content"] = _clip_tool_content(content, cap)
-        out.append(nm)
-    return out
-
-
 def needs_compress(
     messages: list[dict[str, Any]],
     context_window: int,
@@ -309,7 +263,7 @@ def build_compressed_messages(
     bootstrap: str,
     recent_messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    tail = truncate_old_tool_results(list(recent_messages[-12:]))
+    tail = list(recent_messages[-12:])
     return [
         {"role": "system", "content": system},
         {

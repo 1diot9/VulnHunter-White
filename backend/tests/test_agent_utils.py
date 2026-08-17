@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
-
-from app.agent.compression import estimate_tokens, needs_compress, truncate_old_tool_results
+from app.agent.compression import estimate_tokens, needs_compress
 from app.agent.loop import (
     _content_text,
     _is_rate_limit_response,
@@ -44,77 +42,6 @@ def test_estimate_tokens_includes_tools_schema():
     msgs = [{"role": "user", "content": "hi"}]
     tools = [{"function": {"name": "Read", "description": "y" * 400}}]
     assert estimate_tokens(msgs, tools) > estimate_tokens(msgs)
-
-
-def test_truncate_old_tool_results(monkeypatch):
-    monkeypatch.setattr(settings, "tool_result_keep_rounds", 2)
-    monkeypatch.setattr(settings, "tool_result_keep_full_rounds", 0)
-    monkeypatch.setattr(settings, "tool_result_drop_rounds", 5)
-    monkeypatch.setattr(settings, "tool_result_truncate_chars", 10)
-    monkeypatch.setattr(settings, "tool_result_keep_max_chars", 12000)
-    messages = [{"role": "system", "content": "s"}]
-    for i in range(6):
-        messages.append({"role": "tool", "content": "X" * 50, "tool_call_id": str(i)})
-    out = truncate_old_tool_results(messages)
-    tool_msgs = [m for m in out if m.get("role") == "tool"]
-    assert len(tool_msgs) <= 5
-    longish = [m for m in tool_msgs if "truncated" in (m.get("content") or "")]
-    assert longish
-
-
-def test_truncate_caps_recent_results(monkeypatch):
-    monkeypatch.setattr(settings, "tool_result_keep_rounds", 2)
-    monkeypatch.setattr(settings, "tool_result_keep_full_rounds", 0)
-    monkeypatch.setattr(settings, "tool_result_drop_rounds", 5)
-    monkeypatch.setattr(settings, "tool_result_truncate_chars", 10)
-    monkeypatch.setattr(settings, "tool_result_keep_max_chars", 20)
-    messages = [{"role": "system", "content": "s"}, {"role": "tool", "content": "Z" * 100, "tool_call_id": "n"}]
-    out = truncate_old_tool_results(messages)
-    newest = [m for m in out if m.get("role") == "tool"][-1]
-    assert "truncated" in (newest.get("content") or "")
-    assert len(newest["content"]) < 80
-
-
-def test_truncate_keeps_newest_read_page(monkeypatch):
-    monkeypatch.setattr(settings, "tool_result_keep_rounds", 4)
-    monkeypatch.setattr(settings, "tool_result_keep_full_rounds", 2)
-    monkeypatch.setattr(settings, "tool_result_keep_full_max_chars", 80)
-    monkeypatch.setattr(settings, "tool_result_keep_max_chars", 20)
-    monkeypatch.setattr(settings, "tool_result_truncate_chars", 10)
-    monkeypatch.setattr(settings, "tool_result_drop_rounds", 10)
-    messages = [{"role": "system", "content": "s"}]
-    for i in range(4):
-        messages.append({"role": "tool", "content": "Z" * 100, "tool_call_id": str(i)})
-    out = truncate_old_tool_results(messages)
-    tools = [m for m in out if m.get("role") == "tool"]
-    newest = tools[-2:]
-    older = tools[:-2]
-    assert all(m["content"].startswith("Z" * 80) for m in newest)
-    assert all(m["content"].startswith("Z" * 20) and not m["content"].startswith("Z" * 80) for m in older)
-
-
-def test_truncate_keeps_read_hint_in_prefix(monkeypatch):
-    monkeypatch.setattr(settings, "tool_result_keep_rounds", 2)
-    monkeypatch.setattr(settings, "tool_result_keep_full_rounds", 0)
-    monkeypatch.setattr(settings, "tool_result_keep_max_chars", 400)
-    monkeypatch.setattr(settings, "tool_result_drop_rounds", 10)
-    payload = {
-        "ok": True,
-        "files": [
-            {
-                "path": "a.java",
-                "truncated": True,
-                "next_offset": 401,
-                "hint": "请再调用 Read(path=..., offset=401, limit=400)",
-                "content": "X" * 5000,
-            }
-        ],
-    }
-    messages = [{"role": "tool", "content": json.dumps(payload, ensure_ascii=False), "tool_call_id": "1"}]
-    out = truncate_old_tool_results(messages)
-    clipped = out[0]["content"]
-    assert "offset=401" in clipped
-    assert "truncated" in clipped
 
 
 def test_needs_compress(monkeypatch):
