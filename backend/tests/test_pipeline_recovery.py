@@ -537,3 +537,177 @@ def test_maybe_mark_recon_done_logs_only_on_transition(tmp_env, project, monkeyp
     assert pipeline._maybe_mark_recon_done(project) is True
     assert logs == ["侦察门闩已满足，系统标记 recon_done"]
     assert apply_recon_done(project) is True
+
+
+def test_ensure_reviewer_starts_lab_round_without_pending_vulns(tmp_env, project, monkeypatch):
+    started: list[int] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ARG002
+            self._alive = False
+            self.name = kwargs.get("name") or ""
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def start(self) -> None:
+            self._alive = True
+            started.append(project)
+
+    monkeypatch.setattr(pipeline.threading, "Thread", FakeThread)
+    pipeline.reset_runtime_state()
+    pipeline._ensure_reviewer(project, pipeline._cancel_event(project))
+    assert started == [project]
+
+
+def test_ensure_reviewer_skips_when_lab_done_and_no_queue(tmp_env, project, monkeypatch):
+    from app.services.lab import mark_lab_setup_finished
+
+    mark_lab_setup_finished(project, skipped=True, notes="skip", via="test")
+    started: list[int] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ARG002
+            self.name = kwargs.get("name") or ""
+
+        def is_alive(self) -> bool:
+            return False
+
+        def start(self) -> None:
+            started.append(project)
+
+    monkeypatch.setattr(pipeline.threading, "Thread", FakeThread)
+    pipeline.reset_runtime_state()
+    pipeline._ensure_reviewer(project, pipeline._cancel_event(project))
+    assert started == []
+
+
+def test_reviewer_once_does_not_ask_to_build_lab(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+    from app.services.lab import mark_lab_setup_finished
+
+    mark_lab_setup_finished(project, skipped=True, notes="无 docker", via="test")
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        db.add(
+            models.Vuln(
+                project_id=project,
+                title="t",
+                vuln_type="sqli",
+                status="pending_review",
+            )
+        )
+        db.commit()
+
+    captured: dict[str, object] = {}
+
+    class FakeLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["user_prompt"] = kwargs.get("user_prompt") or ""
+            captured["timeout_sec"] = kwargs.get("timeout_sec")
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=True, stop_reason="stop_when", state={"review_done": True})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
+    pipeline._run_reviewer_once(project)
+    prompt = str(captured["user_prompt"])
+    assert "搭建可复用的 Web 靶场" not in prompt
+    assert "不要再搭建 Docker 靶场" in prompt
+    assert captured["timeout_sec"] == settings.timeout_reviewer_static
+
+
+def test_reviewer_once_injects_manual_lab_prompt(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+    from app.services.lab import finish_manual_lab
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    finish_manual_lab(project, "placeholder")
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab = True
+        proj.manual_lab_prompt = "http://127.0.0.1:18080 账号 admin/admin"
+        db.add(
+            models.Vuln(
+                project_id=project,
+                title="t",
+                vuln_type="sqli",
+                status="pending_review",
+            )
+        )
+        db.commit()
+
+    captured: dict[str, object] = {}
+
+    class FakeLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["user_prompt"] = kwargs.get("user_prompt") or ""
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=True, stop_reason="stop_when", state={"review_done": True})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
+    pipeline._run_reviewer_once(project)
+    prompt = str(captured["user_prompt"])
+    assert "人工靶场" in prompt
+    assert "http://127.0.0.1:18080 账号 admin/admin" in prompt
+    assert "不要搭建或复用 Docker 靶场" in prompt
+
+
+def test_run_reviewer_lab_skips_docker_when_manual_lab(tmp_env, project, monkeypatch):
+    from app.services.lab import lab_setup_finished, load_env
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab = True
+        proj.manual_lab_prompt = "http://192.168.1.8:8080"
+        db.commit()
+
+    called = {"loop": 0}
+
+    class BoomLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003, ARG002
+            called["loop"] += 1
+
+        def run(self):  # noqa: ANN204
+            raise AssertionError("manual lab should skip AgentLoop")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", BoomLoop)
+    pipeline._run_reviewer_lab(project)
+    assert called["loop"] == 0
+    assert lab_setup_finished(project) is True
+    env = load_env(project)
+    assert env.get("lab_kind") == "manual"
+    assert "http://192.168.1.8:8080" in str(env.get("notes") or "")
+
+
+def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monkeypatch):
+    from app.services.lab import lab_setup_finished, save_env
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "container_name": f"vulnhunter-{project}",
+        },
+    )
+    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid: {"ok": True, "via": "reuse"})
+    called = {"loop": 0}
+
+    class BoomLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003, ARG002
+            called["loop"] += 1
+
+        def run(self):  # noqa: ANN204
+            raise AssertionError("lab round should reuse env without AgentLoop")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", BoomLoop)
+    pipeline._run_reviewer_lab(project)
+    assert called["loop"] == 0
+    assert lab_setup_finished(project) is True

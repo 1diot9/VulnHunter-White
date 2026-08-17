@@ -7,10 +7,18 @@ import zipfile
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from ..models import SessionLocal, Vuln
-from ..schemas import VulnDetail, VulnFollowUpIn, VulnFollowUpThread, VulnOut
+from ..schemas import (
+    VulnDetail,
+    VulnFollowUpIn,
+    VulnFollowUpThread,
+    VulnOut,
+    VulnTrackingBatchIn,
+    VulnTrackingIn,
+)
 from ..services.paths import project_root, vuln_dir
 from ..services.report import stamp_produced_at
 from ..services import vuln_followup
@@ -18,6 +26,12 @@ from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, norm
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
+ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
+
+
+def _tracking_status_out(value: str | None) -> str:
+    raw = (value or "none").strip().lower()
+    return raw if raw in ALLOWED_TRACKING_STATUSES else "none"
 
 
 class DownloadBody(BaseModel):
@@ -40,7 +54,11 @@ def _report_score(v: Vuln) -> int | None:
 def _vuln_out(v: Vuln) -> VulnOut:
     name = v.project.name if v.project is not None else ""
     return VulnOut.model_validate(v).model_copy(
-        update={"project_name": name, "severity_score": _report_score(v)}
+        update={
+            "project_name": name,
+            "severity_score": _report_score(v),
+            "tracking_status": _tracking_status_out(v.tracking_status),
+        }
     )
 
 
@@ -51,6 +69,7 @@ def list_vulns(
     attack_surface: str | None = None,
     submission_tier: str | None = None,
     root_cause_key: str | None = None,
+    tracking_status: str | None = None,
 ) -> list[VulnOut]:
     with SessionLocal() as db:
         q = db.query(Vuln).options(joinedload(Vuln.project))
@@ -61,6 +80,13 @@ def list_vulns(
                 q = q.filter(Vuln.status.in_(("confirmed", "static_only")))
             else:
                 q = q.filter(Vuln.status == status)
+        if tracking_status:
+            if tracking_status not in ALLOWED_TRACKING_STATUSES:
+                raise HTTPException(400, "tracking_status 须为 none|submitted|ignored")
+            if tracking_status == "none":
+                q = q.filter(or_(Vuln.tracking_status == "none", Vuln.tracking_status.is_(None)))
+            else:
+                q = q.filter(Vuln.tracking_status == tracking_status)
         if attack_surface:
             if attack_surface not in ("frontend", "backend"):
                 raise HTTPException(400, "attack_surface 须为 frontend|backend")
@@ -143,6 +169,41 @@ def ask_vuln_followup(vuln_id: int, body: VulnFollowUpIn) -> VulnFollowUpThread:
         raise HTTPException(409, str(e)) from e
     except vuln_followup.FollowUpLlmError as e:
         raise HTTPException(502, str(e)) from e
+
+
+@router.patch("/{vuln_id}", response_model=VulnOut)
+def update_vuln_tracking(vuln_id: int, body: VulnTrackingIn) -> VulnOut:
+    with SessionLocal() as db:
+        v = db.query(Vuln).options(joinedload(Vuln.project)).filter(Vuln.id == vuln_id).first()
+        if not v:
+            raise HTTPException(404, "漏洞不存在")
+        v.tracking_status = body.tracking_status
+        db.commit()
+        db.refresh(v)
+        return _vuln_out(v)
+
+
+@router.post("/mark", response_model=list[VulnOut])
+def mark_vulns(body: VulnTrackingBatchIn) -> list[VulnOut]:
+    with SessionLocal() as db:
+        rows = (
+            db.query(Vuln)
+            .options(joinedload(Vuln.project))
+            .filter(Vuln.id.in_(body.ids))
+            .all()
+        )
+        by_id = {row.id: row for row in rows}
+        updated: list[Vuln] = []
+        for vid in body.ids:
+            v = by_id.get(vid)
+            if not v:
+                continue
+            v.tracking_status = body.tracking_status
+            updated.append(v)
+        db.commit()
+        for v in updated:
+            db.refresh(v)
+        return [_vuln_out(v) for v in updated]
 
 
 @router.post("/download")

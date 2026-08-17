@@ -8,6 +8,8 @@ export type Project = {
   phase: string
   recon_done: boolean
   audit_mode: 'bounty' | 'full'
+  manual_lab: boolean
+  manual_lab_prompt: string
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -26,8 +28,9 @@ export type Project = {
   tokens_total: number
   phase_states?: Record<string, PhaseState>
   project_paused?: boolean
-  recon_subphases?: ReconSubphase[]
-}
+    recon_subphases?: ReconSubphase[]
+    lab_setup_done?: boolean
+  }
 
 export type ReconSubphase = {
   id: string
@@ -42,6 +45,8 @@ export type PhaseState = {
   force_new?: boolean
 }
 
+export type VulnTrackingStatus = 'none' | 'submitted' | 'ignored'
+
 export type Vuln = {
   id: number
   project_id: number
@@ -54,6 +59,7 @@ export type Vuln = {
   file_path: string | null
   line_no: number | null
   status: string
+  tracking_status?: VulnTrackingStatus
   evidence_level: string | null
   attack_surface: string | null
   required_account: string | null
@@ -225,20 +231,42 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   listProjects: () => request<Project[]>('/api/projects'),
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
-  createGithub: (source_url: string, name = '', audit_mode: 'bounty' | 'full' = 'bounty') =>
+  createGithub: (
+    source_url: string,
+    name = '',
+    audit_mode: 'bounty' | 'full' = 'bounty',
+    opts: { manual_lab?: boolean; manual_lab_prompt?: string } = {},
+  ) =>
     request<Project>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_type: 'github', source_url, name, audit_mode }),
+      body: JSON.stringify({
+        source_type: 'github',
+        source_url,
+        name,
+        audit_mode,
+        manual_lab: Boolean(opts.manual_lab),
+        manual_lab_prompt: opts.manual_lab_prompt || '',
+      }),
     }),
-  uploadZip: async (file: File, name = '', audit_mode: 'bounty' | 'full' = 'bounty') => {
+  uploadZip: async (
+    file: File,
+    name = '',
+    audit_mode: 'bounty' | 'full' = 'bounty',
+    opts: { manual_lab?: boolean; manual_lab_prompt?: string } = {},
+  ) => {
     const fd = new FormData()
     fd.append('file', file)
     if (name) fd.append('name', name)
     fd.append('audit_mode', audit_mode)
+    fd.append('manual_lab', opts.manual_lab ? 'true' : 'false')
+    fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
-  updateProject: (id: number, body: { audit_mode: 'bounty' | 'full' }) =>
+  updateProject: (
+    id: number,
+    body: { audit_mode?: 'bounty' | 'full'; manual_lab?: boolean; manual_lab_prompt?: string | null },
+  ) =>
     request<Project>(`/api/projects/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -274,6 +302,7 @@ export const api = {
     attackSurface?: string,
     submissionTier?: string,
     rootCauseKey?: string,
+    trackingStatus?: string,
   ) => {
     const q = new URLSearchParams()
     if (projectId != null) q.set('project_id', String(projectId))
@@ -281,10 +310,23 @@ export const api = {
     if (attackSurface) q.set('attack_surface', attackSurface)
     if (submissionTier) q.set('submission_tier', submissionTier)
     if (rootCauseKey) q.set('root_cause_key', rootCauseKey)
+    if (trackingStatus) q.set('tracking_status', trackingStatus)
     const s = q.toString()
     return request<Vuln[]>(`/api/vulns${s ? `?${s}` : ''}`)
   },
   getVuln: (id: number) => request<VulnDetail>(`/api/vulns/${id}`),
+  updateVulnTracking: (id: number, tracking_status: VulnTrackingStatus) =>
+    request<Vuln>(`/api/vulns/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tracking_status }),
+    }),
+  markVulns: (ids: number[], tracking_status: VulnTrackingStatus) =>
+    request<Vuln[]>('/api/vulns/mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, tracking_status }),
+    }),
   listVulnFollowUps: (id: number) => request<VulnFollowUpThread>(`/api/vulns/${id}/follow-ups`),
   askVulnFollowUp: (id: number, question: string) =>
     request<VulnFollowUpThread>(`/api/vulns/${id}/follow-ups`, {

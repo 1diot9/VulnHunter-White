@@ -584,6 +584,8 @@ def todo_relpath(ctx) -> str:
     if role == "reviewer":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-reviewer-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
+    if role in ("reviewer_lab", "reviewer-lab"):
+        return "workspace/todos-reviewer-lab.json"
     if role == "fix":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-fix-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"

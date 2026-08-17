@@ -28,7 +28,16 @@ from ..config import settings
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
 from ..services.ingest import build_file_index, clone_github, extract_zip
-from ..services.lab import ENV_BUILDER_HINT, debug_ports_for_runtime, load_env, recreate_lab
+from ..services.lab import (
+    debug_ports_for_runtime,
+    finish_manual_lab,
+    lab_ready,
+    lab_round_complete,
+    lab_setup_finished,
+    load_env,
+    mark_lab_setup_finished,
+    recreate_lab,
+)
 from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
@@ -74,7 +83,7 @@ CONTROL_PHASES = ("recon", "worker", "reviewer")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
     "worker": ("worker", "fix"),
-    "reviewer": ("reviewer",),
+    "reviewer": ("reviewer", "reviewer-lab"),
 }
 CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核"}
 
@@ -141,7 +150,7 @@ def control_phase(phase: str) -> str:
         return "recon"
     if p in ("worker", "fix", "mine"):
         return "worker"
-    if p == "reviewer":
+    if p in ("reviewer", "reviewer-lab", "reviewer_lab"):
         return "reviewer"
     raise ValueError(f"未知阶段: {phase}")
 
@@ -771,6 +780,40 @@ def _read_audit_mode(project_id: int) -> str:
         return normalize_audit_mode(None if not proj else proj.audit_mode)
 
 
+def _read_manual_lab(project_id: int) -> tuple[bool, str]:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return False, ""
+        return bool(proj.manual_lab), str(proj.manual_lab_prompt or "").strip()
+
+
+def _reviewer_lab_note(project_id: int) -> str:
+    enabled, prompt = _read_manual_lab(project_id)
+    if enabled:
+        if prompt:
+            return (
+                "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
+                "请按以下用户提供的环境说明访问并做动态验证（地址、账号、路径以用户说明为准）：\n"
+                f"{prompt}"
+            )
+        return (
+            "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
+            "用户尚未填写漏洞环境地址/说明。无法动态验证时用 evidence_level=static_only 或误报，"
+            "不要自行 docker 搭建。"
+        )
+    env = load_env(project_id)
+    if lab_ready(env) or env.get("accepted"):
+        rec = recreate_lab(project_id)
+        dbg = debug_ports_for_runtime(load_env(project_id) or env)
+        return f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}"
+    return (
+        "动态环境搭建轮已结束；靶场未就绪，见 docs/lab.md。"
+        "本轮只审核漏洞，不要再搭建 Docker 靶场。"
+        "环境起不来时用 evidence_level=static_only 或误报。"
+    )
+
+
 def _audit_mode_vars(project_id: int) -> dict[str, str]:
     mode = _read_audit_mode(project_id)
     return {
@@ -1078,7 +1121,13 @@ def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
         )
     if _phase_is_paused(project_id, "reviewer"):
         return
-    if pending <= 0 and not list_resumable_runs(project_id, "reviewer") and not _should_skip_checkpoint(project_id, "reviewer"):
+    has_lab_work = not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
+    has_review_work = (
+        pending > 0
+        or bool(list_resumable_runs(project_id, "reviewer"))
+        or _should_skip_checkpoint(project_id, "reviewer")
+    )
+    if not has_lab_work and not has_review_work:
         return
     with _lock:
         t = _reviewer_threads.get(project_id)
@@ -1117,13 +1166,20 @@ def _run_reviewer_loop(project_id: int) -> None:
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
-            if pending <= 0 and not list_resumable_runs(project_id, "reviewer") and not _should_skip_checkpoint(project_id, "reviewer"):
+            if pending <= 0 and lab_setup_finished(project_id) and not list_resumable_runs(
+                project_id, "reviewer"
+            ) and not list_resumable_runs(project_id, "reviewer-lab") and not _should_skip_checkpoint(
+                project_id, "reviewer"
+            ):
                 cancel.wait(timeout=5.0)
                 continue
             with _lock:
                 _reviewer_inflight[project_id] = True
             try:
-                _run_reviewer_once(project_id)
+                if not lab_setup_finished(project_id) or list_resumable_runs(project_id, "reviewer-lab"):
+                    _run_reviewer_lab(project_id)
+                else:
+                    _run_reviewer_once(project_id)
             finally:
                 with _lock:
                     _reviewer_inflight[project_id] = False
@@ -1269,8 +1325,7 @@ def _orchestrate(project_id: int) -> None:
                     fut = fix_pool.submit(_run_fix, project_id, vid)
                     fut.add_done_callback(_fix_done)
 
-                if pending_vulns > 0:
-                    _ensure_reviewer(project_id, cancel)
+                _ensure_reviewer(project_id, cancel)
 
                 with _lock:
                     fix_busy = bool(_fix_inflight.get(project_id))
@@ -1819,6 +1874,157 @@ def _run_fix(project_id: int, vuln_id: int) -> None:
             pass
 
 
+def _lab_system_prompt() -> str:
+    return f"{load_prompt('reviewer-lab.md').rstrip()}\n\n{load_prompt('docker.md').rstrip()}\n"
+
+
+def _run_reviewer_lab(project_id: int) -> None:
+    cancel = _cancel_event(project_id)
+    try:
+        if lab_setup_finished(project_id):
+            _finish_resumable_phase(project_id, "reviewer-lab")
+            return
+        enabled, prompt = _read_manual_lab(project_id)
+        if enabled:
+            finish_manual_lab(project_id, prompt)
+            _finish_resumable_phase(project_id, "reviewer-lab")
+            live_log.system(
+                project_id,
+                "人工靶场已启用，跳过 Docker 环境搭建",
+                phase="reviewer-lab",
+                role="reviewer_lab",
+            )
+            return
+        env = load_env(project_id)
+        if env.get("accepted"):
+            rec = recreate_lab(project_id)
+            if lab_ready(load_env(project_id) or env):
+                mark_lab_setup_finished(project_id, via=str(rec.get("via") or "reuse"))
+                _finish_resumable_phase(project_id, "reviewer-lab")
+                live_log.system(project_id, "已复用现有 Docker 靶场，环境搭建轮结束", phase="reviewer-lab", role="reviewer_lab")
+                return
+
+        system = _lab_system_prompt()
+        user = _prompt_with_summary(
+            "reviewer-lab",
+            project_id,
+            _initial_prompt("reviewer-lab.md", project_id=project_id, **_audit_mode_vars(project_id)),
+        )
+        cp = _adopt_resumable(project_id, "reviewer-lab")
+        run_id = cp.phase_run_id if cp else _new_phase_run(project_id, "reviewer-lab", "reviewer_lab")
+        resumes = 0
+        used_checkpoint = False
+        llm = resolve_llm("reviewer")
+        timeout_sec = settings.timeout_docker + settings.timeout_reviewer_static
+        max_resumes = max(0, int(settings.phase_max_resumes))
+        try:
+            while resumes <= max_resumes and not cancel.is_set():
+                if not _wait_if_paused(project_id, _loop_cancel(project_id, "reviewer"), "reviewer"):
+                    _finish_phase_run(run_id, "cancelled")
+                    return
+                if lab_round_complete(project_id):
+                    mark_lab_setup_finished(project_id, via="lab-round")
+                    _finish_phase_run(run_id, "completed")
+                    live_log.system(project_id, "动态环境搭建轮已完成", phase="reviewer-lab", role="reviewer_lab")
+                    return
+                if cp and not used_checkpoint:
+                    loop = _loop_from_checkpoint(
+                        cp,
+                        cancel=cancel,
+                        stop_when=lambda st: lab_round_complete(project_id, st),
+                        timeout_sec=timeout_sec,
+                        llm=llm,
+                    )
+                    used_checkpoint = True
+                else:
+                    _consume_force_new(project_id, "reviewer")
+                    extra = "动态环境搭建"
+                    if resumes:
+                        extra = f"{extra} 重试 {resumes}/{max_resumes}"
+                    _start_log_session(project_id, "reviewer-lab", extra, role="reviewer_lab")
+                    loop = AgentLoop(
+                        project_id=project_id,
+                        role="reviewer_lab",
+                        phase="reviewer-lab",
+                        system_prompt=system,
+                        user_prompt=user,
+                        phase_run_id=run_id,
+                        cancel_event=_loop_cancel(project_id, "reviewer"),
+                        pause_event=_combined_pause(project_id, "reviewer"),
+                        timeout_sec=timeout_sec,
+                        context_window=_context_window(),
+                        stop_when=lambda st: lab_round_complete(project_id, st),
+                        llm=llm,
+                    )
+                result = loop.run()
+                if result.stop_reason == "auth_error":
+                    _pause_for_auth(project_id, result.error or "auth_error")
+                    return
+                if result.cancelled:
+                    _finish_phase_run(run_id, "cancelled")
+                    return
+                if _should_skip_checkpoint(project_id, "reviewer"):
+                    _finish_phase_run(run_id, "cancelled", "用户新跑")
+                    return
+                if lab_round_complete(project_id, result.state):
+                    mark_lab_setup_finished(project_id, via="lab-round")
+                    _finish_phase_run(run_id, "completed")
+                    live_log.system(project_id, "动态环境搭建轮已完成", phase="reviewer-lab", role="reviewer_lab")
+                    return
+                resumes += 1
+                if result.loop_aborted:
+                    user = _prompt_with_summary(
+                        "reviewer-lab",
+                        project_id,
+                        _initial_prompt("reviewer-lab-retry-loop.md", project_id=project_id),
+                    )
+                    live_log.system(
+                        project_id,
+                        f"环境搭建新开重试 {resumes}/{max_resumes}",
+                        phase="reviewer-lab",
+                        role="reviewer_lab",
+                    )
+                elif result.timed_out:
+                    user = _prompt_with_summary(
+                        "reviewer-lab",
+                        project_id,
+                        _initial_prompt("reviewer-lab-retry-timeout.md", project_id=project_id),
+                    )
+                else:
+                    user = _prompt_with_summary(
+                        "reviewer-lab",
+                        project_id,
+                        _initial_prompt(
+                            "reviewer-lab-retry-other.md",
+                            project_id=project_id,
+                            stop_reason=result.stop_reason,
+                            error=result.error,
+                        ),
+                    )
+                if resumes > max_resumes:
+                    break
+            mark_lab_setup_finished(
+                project_id,
+                skipped=True,
+                notes="环境搭建轮次重试用尽",
+                via="lab-round",
+            )
+            _finish_phase_run(run_id, "failed", error="reviewer 环境搭建未在重试上限内完成")
+            live_log.system(
+                project_id,
+                "环境搭建轮重试用尽，已结束本轮（后续审核可 static_only）",
+                phase="reviewer-lab",
+                role="reviewer_lab",
+            )
+        finally:
+            if cp:
+                _release_adopted(project_id, cp.phase_run_id)
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"环境搭建轮异常: {e}", phase="reviewer-lab")
+        if not lab_setup_finished(project_id):
+            mark_lab_setup_finished(project_id, skipped=True, notes=f"环境搭建轮异常: {e}", via="lab-round")
+
+
 def _run_reviewer_once(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
@@ -1835,7 +2041,7 @@ def _run_reviewer_once(project_id: int) -> None:
                     cp,
                     cancel=cancel,
                     stop_when=lambda st: bool(st.get("review_done")),
-                    timeout_sec=settings.timeout_reviewer_static + settings.timeout_docker,
+                    timeout_sec=settings.timeout_reviewer_static,
                 )
                 result = loop.run()
             finally:
@@ -1881,14 +2087,7 @@ def _run_reviewer_once(project_id: int) -> None:
                 "source_sink": vuln.source_sink,
             }
 
-        env = load_env(project_id)
-        lab_note = ""
-        if not env.get("accepted"):
-            lab_note = ENV_BUILDER_HINT
-        else:
-            rec = recreate_lab(project_id)
-            dbg = debug_ports_for_runtime(load_env(project_id) or env)
-            lab_note = f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}"
+        lab_note = _reviewer_lab_note(project_id)
         debug_plan = reviewer_debug_plan(project_id)
 
         with SessionLocal() as db:
@@ -1921,7 +2120,7 @@ def _run_reviewer_once(project_id: int) -> None:
             vuln_id=vuln_id,
             cancel_event=_loop_cancel(project_id, "reviewer"),
             pause_event=_combined_pause(project_id, "reviewer"),
-            timeout_sec=settings.timeout_reviewer_static + settings.timeout_docker,
+            timeout_sec=settings.timeout_reviewer_static,
             context_window=_context_window(),
             stop_when=lambda st: bool(st.get("review_done")),
         )

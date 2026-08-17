@@ -1,4 +1,4 @@
-"""Reviewer tools: ConfirmVuln, MergeIntoVuln, ReturnToWorker."""
+"""Reviewer tools: ConfirmVuln, MergeIntoVuln, ReturnToWorker, FinishLab."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from ..services.affected_locations import (
     location_from_vuln,
     parse_locations,
 )
+from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
 from ..services.report import upsert_report_section
 from ..services.root_cause import (
@@ -29,6 +30,7 @@ from ..vuln_types import (
     normalize_submission_decision,
 )
 from . import ToolSpec, registry
+from .common import call_fail
 
 _FP_HEADING = "## 误报判定"
 _REVIEW_HEADING = "## 审核标注"
@@ -461,6 +463,31 @@ def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    skipped = bool(args.get("skipped"))
+    reason = str(args.get("reason") or args.get("notes") or "").strip()
+    env = load_env(ctx.project_id)
+    if not skipped and not lab_ready(env):
+        return call_fail(
+            "靶场尚未 accepted=true 且 status=running。先启动 Docker 并 Write env/env.json，"
+            "或 FinishLab(skipped=true, reason=无法搭建的原因)"
+        )
+    env = mark_lab_setup_finished(
+        ctx.project_id,
+        skipped=skipped,
+        notes=reason or None,
+        via="FinishLab",
+    )
+    ctx.state["lab_done"] = True
+    return {
+        "ok": True,
+        "skipped": skipped,
+        "lab_ready": lab_ready(env),
+        "lab_doc_path": "docs/lab.md",
+        "setup_finished": True,
+    }
+
+
 def register_reviewer_tools() -> None:
     registry.register(
         ToolSpec(
@@ -619,6 +646,30 @@ def register_reviewer_tools() -> None:
                 },
             },
             handler=_return_to_worker,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="FinishLab",
+            description=(
+                "结束独立的 Docker 靶场搭建轮。靶场已 accepted 且 running 时调用；"
+                "无法搭建时 FinishLab(skipped=true, reason=...)。不要用本工具审核漏洞。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "skipped": {
+                        "type": "boolean",
+                        "description": "无法搭建时为 true，本轮仍结束",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "跳过或备注原因",
+                    },
+                    "notes": {"type": "string"},
+                },
+            },
+            handler=_finish_lab,
         )
     )
 

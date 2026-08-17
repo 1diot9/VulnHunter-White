@@ -78,15 +78,29 @@ class LlmTestOut(BaseModel):
     reply: str | None = None
 
 
+MANUAL_LAB_PROMPT_MAX = 20000
+
+
+def normalize_manual_lab_prompt(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if len(text) > MANUAL_LAB_PROMPT_MAX:
+        raise ValueError(f"人工靶场说明过长，最多 {MANUAL_LAB_PROMPT_MAX} 字")
+    return text
+
+
 class ProjectCreate(BaseModel):
     name: str = ""
     source_type: Literal["github", "zip"] = "github"
     source_url: str | None = None
     audit_mode: Literal["bounty", "full"] = "bounty"
+    manual_lab: bool = False
+    manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
 
 
 class ProjectUpdate(BaseModel):
-    audit_mode: Literal["bounty", "full"]
+    audit_mode: Literal["bounty", "full"] | None = None
+    manual_lab: bool | None = None
+    manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
 
 
 class ProjectOut(BaseModel):
@@ -99,6 +113,8 @@ class ProjectOut(BaseModel):
     phase: str
     recon_done: bool
     audit_mode: str = "bounty"
+    manual_lab: bool = False
+    manual_lab_prompt: str = ""
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -118,6 +134,7 @@ class ProjectOut(BaseModel):
     phase_states: dict[str, Any] = Field(default_factory=dict)
     project_paused: bool = False
     recon_subphases: list[dict[str, Any]] = Field(default_factory=list)
+    lab_setup_done: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -134,6 +151,7 @@ class VulnOut(BaseModel):
     file_path: str | None = None
     line_no: int | None = None
     status: str
+    tracking_status: str = "none"
     evidence_level: str | None = None
     attack_surface: str | None = None
     required_account: str | None = None
@@ -159,6 +177,15 @@ class VulnDetail(VulnOut):
     expected_evidence: str | None = None
     report_md: str | None = None
     merged_from_ids: list[int] = Field(default_factory=list)
+
+
+class VulnTrackingIn(BaseModel):
+    tracking_status: Literal["none", "submitted", "ignored"]
+
+
+class VulnTrackingBatchIn(BaseModel):
+    ids: list[int] = Field(min_length=1)
+    tracking_status: Literal["none", "submitted", "ignored"]
 
 
 class VulnFollowUpIn(BaseModel):

@@ -3,7 +3,18 @@ from __future__ import annotations
 import json
 import subprocess
 
-from app.services.lab import find_free_port, lab_doc_path, load_env, recreate_lab, remap_ports_if_needed, save_env
+from app.services.lab import (
+    find_free_port,
+    finish_manual_lab,
+    lab_doc_path,
+    lab_setup_finished,
+    load_env,
+    mark_lab_setup_finished,
+    recreate_lab,
+    remap_ports_if_needed,
+    save_env,
+    sync_manual_lab_notes,
+)
 
 
 def test_find_free_port():
@@ -184,3 +195,40 @@ def test_recreate_lab_reports_start_failure_for_existing_container(project, monk
     assert "port is already allocated" in result["error"]
     assert saved["status"] == "exited"
     assert not lab_doc_path(project).exists()
+
+
+def test_lab_setup_finished_only_after_mark(project):
+    assert lab_setup_finished(project) is False
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    assert lab_setup_finished(project) is False
+    mark_lab_setup_finished(project, via="test")
+    assert lab_setup_finished(project) is True
+    assert lab_doc_path(project).is_file()
+
+
+def test_mark_lab_setup_finished_skipped_writes_doc(project):
+    env = mark_lab_setup_finished(project, skipped=True, notes="无 docker", via="test")
+    assert env["setup_finished"] is True
+    assert env["accepted"] is False
+    assert lab_setup_finished(project) is True
+    assert "无 docker" in lab_doc_path(project).read_text(encoding="utf-8")
+
+
+def test_finish_manual_lab_skips_docker_and_writes_notes(project):
+    env = finish_manual_lab(project, "http://127.0.0.1:8080 admin/admin")
+    assert env["lab_kind"] == "manual"
+    assert env["status"] == "manual"
+    assert env["accepted"] is False
+    assert lab_setup_finished(project) is True
+    doc = lab_doc_path(project).read_text(encoding="utf-8")
+    assert "http://127.0.0.1:8080 admin/admin" in doc
+    synced = sync_manual_lab_notes(project, "http://10.0.0.8:9")
+    assert synced is not None
+    assert "http://10.0.0.8:9" in lab_doc_path(project).read_text(encoding="utf-8")

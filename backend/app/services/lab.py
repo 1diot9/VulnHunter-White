@@ -45,6 +45,74 @@ def lab_ready(env: dict[str, Any]) -> bool:
     return bool(env.get("accepted") and env.get("target_url") and status == "running")
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def lab_setup_finished(project_id: int) -> bool:
+    """True after the dedicated lab round completed (success or skipped)."""
+    return _truthy(load_env(project_id).get("setup_finished"))
+
+
+def lab_round_complete(project_id: int, state: dict[str, Any] | None = None) -> bool:
+    if state and state.get("lab_done"):
+        return True
+    if lab_setup_finished(project_id):
+        return True
+    return lab_ready(load_env(project_id))
+
+
+def finish_manual_lab(project_id: int, prompt: str = "") -> dict[str, Any]:
+    """Skip Docker lab and record the user-supplied environment note."""
+    env = dict(load_env(project_id) or {})
+    env["lab_kind"] = "manual"
+    env["setup_finished"] = True
+    env["accepted"] = False
+    env["status"] = "manual"
+    env["notes"] = prompt.strip() or "人工靶场：用户自行提供运行环境"
+    save_env(project_id, env)
+    write_lab_doc(project_id, env, via="manual")
+    return env
+
+
+def sync_manual_lab_notes(project_id: int, prompt: str) -> dict[str, Any] | None:
+    """Refresh env/lab.md notes after the user edits the manual lab prompt."""
+    env = dict(load_env(project_id) or {})
+    if not env:
+        return None
+    env["lab_kind"] = "manual"
+    env["notes"] = prompt.strip() or "人工靶场：用户自行提供运行环境"
+    save_env(project_id, env)
+    if lab_setup_finished(project_id):
+        write_lab_doc(project_id, env, via="manual")
+    return env
+
+
+def mark_lab_setup_finished(
+    project_id: int,
+    *,
+    skipped: bool = False,
+    notes: str | None = None,
+    via: str | None = None,
+) -> dict[str, Any]:
+    env = dict(load_env(project_id) or {})
+    env["setup_finished"] = True
+    if skipped:
+        env["accepted"] = False
+        if not env.get("status"):
+            env["status"] = "skipped"
+    if notes:
+        prev = str(env.get("notes") or "").strip()
+        env["notes"] = f"{prev}\n{notes}".strip() if prev else notes
+    save_env(project_id, env)
+    write_lab_doc(project_id, env, via=via or ("skipped" if skipped else "lab-round"))
+    return env
+
+
 def _markdown_value(value: Any) -> str:
     if value is None or value == "":
         return "未记录"
@@ -343,14 +411,3 @@ def debug_ports_for_runtime(env: dict[str, Any]) -> dict[str, Any]:
         out["mcp"] = "python"
         out["port"] = env.get("debugpy_host_port")
     return out
-
-
-ENV_BUILDER_HINT = """
-请在项目 `env/` 下搭建可复用的 Web 靶场（参考 AutoPoc / prompts/docker.md）：
-- 优先已有镜像 / docker-compose
-- 写出 env.json，字段包括：accepted, runtime, image, container_name, host_port, container_port,
-  target_url, lab_state(setup|ready), credentials, status, notes
-- 当 Docker 靶场可访问且 env.json accepted=true/status=running 后，写出 docs/lab.md 环境搭建文档
-- runtime 可为任意 Web 语言；仅 java/nodejs/python 时填写 jdwp_* / inspect_* / debugpy_*
-- 业务端口与调试端口分离；调试端口绑定 127.0.0.1
-"""

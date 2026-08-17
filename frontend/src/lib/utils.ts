@@ -33,9 +33,42 @@ export function formatSubmissionTier(value: string | null | undefined): string {
   }
 }
 
+export function formatTrackingStatus(value: string | null | undefined): string {
+  switch (value) {
+    case 'submitted':
+      return '已提交'
+    case 'ignored':
+      return '已忽略'
+    default:
+      return '未标记'
+  }
+}
+
+export const AUDIT_MODE_OPTIONS = [
+  {
+    value: 'bounty' as const,
+    label: '赏金模式',
+    short: '只报默认可利用的高危害漏洞',
+    hint:
+      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权等）。CORS、反射 XSS、缺速率限制等低危害项不入库；利用须在默认配置或应用自身配置下成立。',
+  },
+  {
+    value: 'full' as const,
+    label: '全量模式',
+    short: '同时收录低危害难利用项',
+    hint:
+      '除高危害外，也收录难以利用但仍能打出差异的项（CORS、反射 XSS、缺速率限制、安全头等），由 Reviewer 标为低危害难利用。',
+  },
+] as const
+
+export type AuditMode = (typeof AUDIT_MODE_OPTIONS)[number]['value']
+
 export function formatAuditMode(value: string | null | undefined): string {
-  if (value === 'full') return '全量模式'
-  return '赏金模式'
+  return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.label ?? AUDIT_MODE_OPTIONS[0].label
+}
+
+export function formatAuditModeHint(value: string | null | undefined): string {
+  return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.hint ?? AUDIT_MODE_OPTIONS[0].hint
 }
 
 export function formatDateTime(value: string | null | undefined): string {

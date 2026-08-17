@@ -1,6 +1,7 @@
 # Build / reuse a Docker lab for whitebox dynamic verification
 
 You help VulnHunter stand up a reusable lab under `env/` for the audited Web project.
+This is a dedicated Reviewer round that starts after source ingest — do not review vulnerabilities in this round.
 
 ## Goals
 1. Prefer existing Dockerfile / compose in the project `src/` over inventing from scratch.
@@ -43,3 +44,4 @@ You help VulnHunter stand up a reusable lab under `env/` for the audited Web pro
 - Set `"accepted": true` only when the container is running and lab_state matches need.
 - Keep `docs/lab.md` concise but complete enough to reproduce/reuse the lab: target URL, image/container, ports, credentials created for the lab, startup command, and notes.
 - One project shares one lab across vulns (reuse, do not rebuild per vuln unless broken).
+- Standing up this Docker lab is required. Do not skip it because bounty mode forbids "creating exploit preconditions"; those rules ban planting payloads / non-default files, not docker.

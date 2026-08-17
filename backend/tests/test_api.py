@@ -73,6 +73,34 @@ def test_project_events_session_pages(tmp_env, project, monkeypatch, tmp_path):
         assert [e["text"] for e in hist.json()["events"]] == ["round-1"]
 
 
+def test_project_events_subphase_session_pages(tmp_env, project, monkeypatch, tmp_path):
+    from app.main import app
+    from app.services.live_log import live_log
+
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+    live_log.agent(project, "map-1", phase="recon", role="recon")
+    live_log.agent(project, "mark-1", phase="recon-mark", role="recon_mark")
+    live_log.begin_session(project, "recon-mark")
+    live_log.system(project, "侦察新开对话（盖章）", phase="recon-mark", session_start=True)
+    live_log.agent(project, "mark-2", phase="recon-mark", role="recon_mark")
+
+    with TestClient(app) as client:
+        mapped = client.get(f"/api/projects/{project}/events?tail=true&limit=10&phase=recon-map")
+        assert mapped.json()["session_count"] == 1
+        assert [e["text"] for e in mapped.json()["events"]] == ["map-1"]
+        mark = client.get(f"/api/projects/{project}/events?tail=true&limit=10&phase=recon-mark")
+        body = mark.json()
+        assert body["session"] == 2
+        assert body["session_count"] == 2
+        assert [e["text"] for e in body["events"]] == ["侦察新开对话（盖章）", "mark-2"]
+        mark_first = client.get(
+            f"/api/projects/{project}/events?tail=true&limit=10&phase=recon-mark&session=1"
+        )
+        assert [e["text"] for e in mark_first.json()["events"]] == ["mark-1"]
+
+
 def test_projects_list_empty(tmp_env):
     from app.main import app
 
@@ -93,6 +121,8 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["audit_mode"] == "bounty"
+        assert created.json()["manual_lab"] is False
+        assert created.json()["manual_lab_prompt"] == ""
         full = client.post(
             "/api/projects",
             json={
@@ -159,6 +189,67 @@ def test_patch_audit_mode_only_when_paused(tmp_env, project):
         assert ok.json()["status"] == "paused"
 
 
+def test_create_and_patch_manual_lab_prompt_while_running(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/lab",
+                "manual_lab": True,
+                "manual_lab_prompt": "  http://127.0.0.1:8080 admin/admin  ",
+            },
+        )
+        assert created.status_code == 200
+        body = created.json()
+        assert body["manual_lab"] is True
+        assert body["manual_lab_prompt"] == "http://127.0.0.1:8080 admin/admin"
+        pid = body["id"]
+        with SessionLocal() as db:
+            p = db.get(Project, pid)
+            assert p.status != "paused"
+        empty = client.patch(f"/api/projects/{pid}", json={})
+        assert empty.status_code == 400
+        updated = client.patch(
+            f"/api/projects/{pid}",
+            json={"manual_lab_prompt": "http://10.0.0.8:9000 user/pass"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["manual_lab"] is True
+        assert updated.json()["manual_lab_prompt"] == "http://10.0.0.8:9000 user/pass"
+        assert updated.json()["audit_mode"] == "bounty"
+
+
+def test_create_zip_manual_lab(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={
+                "audit_mode": "bounty",
+                "manual_lab": "true",
+                "manual_lab_prompt": "http://127.0.0.1:18080",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["manual_lab"] is True
+        assert created.json()["manual_lab_prompt"] == "http://127.0.0.1:18080"
+
+
 def test_project_file_progress_counts(tmp_env, project):
     from app.main import app
     from app.models import FileWeight, PhaseRun, SessionLocal
@@ -180,6 +271,9 @@ def test_project_file_progress_counts(tmp_env, project):
     with TestClient(app) as client:
         body = client.get(f"/api/projects/{project}").json()
         assert body["audit_mode"] == "bounty"
+        assert body["lab_setup_done"] is False
+        assert body["manual_lab"] is False
+        assert body["manual_lab_prompt"] == ""
         assert body["files_total"] == 4
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
@@ -270,11 +364,68 @@ def test_vulns_list_and_download(tmp_env, project):
         assert body["submission_tier"] is None
         assert body["submission_reason"] is None
         assert body["root_cause_key"] is None
+        assert body["tracking_status"] == "none"
         assert "**产出时间**：" in (body.get("report_md") or "")
         dl = client.post("/api/vulns/download", json={"ids": [vid]})
         assert dl.status_code == 200
         assert dl.headers["content-type"].startswith("application/zip")
         assert len(dl.content) > 20
+
+
+def test_vuln_tracking_status_mark_and_filter(tmp_env, project):
+    from app.main import app
+    from app.models import SessionLocal, Vuln
+
+    with SessionLocal() as db:
+        a = Vuln(project_id=project, title="A", vuln_type="idor", severity="high", status="confirmed")
+        b = Vuln(project_id=project, title="B", vuln_type="xss", severity="low", status="confirmed")
+        c = Vuln(project_id=project, title="C", vuln_type="ssrf", severity="medium", status="static_only")
+        db.add_all([a, b, c])
+        db.commit()
+        db.refresh(a)
+        db.refresh(b)
+        db.refresh(c)
+        aid, bid, cid = a.id, b.id, c.id
+
+    with TestClient(app) as client:
+        marked = client.patch(f"/api/vulns/{aid}", json={"tracking_status": "submitted"})
+        assert marked.status_code == 200
+        assert marked.json()["tracking_status"] == "submitted"
+        assert marked.json()["status"] == "confirmed"
+
+        ignored = client.patch(f"/api/vulns/{bid}", json={"tracking_status": "ignored"})
+        assert ignored.status_code == 200
+        assert ignored.json()["tracking_status"] == "ignored"
+
+        submitted = client.get(f"/api/vulns?project_id={project}&tracking_status=submitted").json()
+        assert [v["id"] for v in submitted] == [aid]
+        ignored_rows = client.get(f"/api/vulns?project_id={project}&tracking_status=ignored").json()
+        assert [v["id"] for v in ignored_rows] == [bid]
+        unmarked = client.get(f"/api/vulns?project_id={project}&tracking_status=none").json()
+        assert [v["id"] for v in unmarked] == [cid]
+
+        batch = client.post(
+            "/api/vulns/mark",
+            json={"ids": [aid, cid, 999999], "tracking_status": "ignored"},
+        )
+        assert batch.status_code == 200
+        assert {v["id"]: v["tracking_status"] for v in batch.json()} == {
+            aid: "ignored",
+            cid: "ignored",
+        }
+
+        cleared = client.patch(f"/api/vulns/{aid}", json={"tracking_status": "none"})
+        assert cleared.status_code == 200
+        assert cleared.json()["tracking_status"] == "none"
+
+        missing = client.patch("/api/vulns/999999", json={"tracking_status": "submitted"})
+        assert missing.status_code == 404
+        bad = client.patch(f"/api/vulns/{aid}", json={"tracking_status": "nope"})
+        assert bad.status_code == 422
+        bad_filter = client.get(f"/api/vulns?project_id={project}&tracking_status=nope")
+        assert bad_filter.status_code == 400
+        empty_batch = client.post("/api/vulns/mark", json={"ids": [], "tracking_status": "submitted"})
+        assert empty_batch.status_code == 422
 
 
 def test_vuln_followups_continue_archived_reviewer_context(tmp_env, project, monkeypatch):
@@ -353,9 +504,25 @@ def test_vuln_followups_continue_archived_reviewer_context(tmp_env, project, mon
         assert "Reviewer 轮次上下文" in context
         assert "Reviewer 原始判断" in context
         assert "IDOR demo" in context
+        assert "已有追问记录" not in context
 
         persisted = client.get(f"/api/vulns/{vid}/follow-ups").json()
         assert len(persisted["messages"]) == 2
+
+        asked2 = client.post(f"/api/vulns/{vid}/follow-ups", json={"question": "刚才说的校验具体缺在哪？"})
+        assert asked2.status_code == 200
+        assert [m["role"] for m in asked2.json()["messages"]] == ["user", "assistant", "user", "assistant"]
+
+        followup_messages = seen["messages"]
+        assert isinstance(followup_messages, list)
+        followup_context = followup_messages[1]["content"]
+        joined = "\n".join(str(m.get("content") or "") for m in followup_messages)
+        assert "已有追问记录" in followup_context
+        assert "根因是什么？" in joined
+        assert "追问答复：应重点说明对象归属校验缺失。" in joined
+        assert "刚才说的校验具体缺在哪？" in joined
+        assert followup_messages[-1]["role"] == "user"
+        assert followup_messages[-1]["content"] == "刚才说的校验具体缺在哪？"
 
 
 def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
@@ -519,7 +686,7 @@ def test_project_phase_reports(tmp_env, project):
         assert "docs/summaries/recon-mark-rescue-1.md" in ids
         round_item = next(i for i in by_phase["worker"]["reports"] if i["id"] == "workspace/rounds/round-1.md")
         assert round_item["kind"] == "round"
-        assert round_item["title"] == "第1轮审计报告"
+        assert round_item["title"] == "round-1"
         assert round_item["round"] == 1
         mark = next(i for i in by_phase["recon"]["reports"] if i["kind"] == "rescue")
         assert mark["subphase"] == "mark"

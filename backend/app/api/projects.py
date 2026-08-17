@@ -19,7 +19,9 @@ from ..schemas import (
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
+    normalize_manual_lab_prompt,
 )
+from ..services.lab import lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
 from ..services.paths import ensure_project_dirs, force_rmtree, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
@@ -138,6 +140,8 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         phase=p.phase,
         recon_done=p.recon_done,
         audit_mode=normalize_audit_mode(p.audit_mode),
+        manual_lab=bool(p.manual_lab),
+        manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -155,6 +159,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         tokens_cached=summary["tokens_cached"],
         tokens_total=summary["tokens_total"],
         recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
+        lab_setup_done=lab_setup_finished(p.id),
         **_phase_state_fields(p.id),
     )
 
@@ -185,6 +190,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
     name = (body.name or "").strip() or body.source_url.strip().rstrip("/").split("/")[-1]
     try:
         audit_mode = parse_audit_mode(body.audit_mode)
+        manual_lab_prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
@@ -195,6 +201,8 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             status="pending",
             phase="pending",
             audit_mode=audit_mode,
+            manual_lab=bool(body.manual_lab),
+            manual_lab_prompt=manual_lab_prompt or None,
         )
         db.add(p)
         db.commit()
@@ -213,14 +221,25 @@ async def create_project_zip(
     file: UploadFile = File(...),
     name: str = Form(""),
     audit_mode: str = Form("bounty"),
+    manual_lab: bool = Form(False),
+    manual_lab_prompt: str = Form(""),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
         mode = parse_audit_mode(audit_mode)
+        prompt = normalize_manual_lab_prompt(manual_lab_prompt)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
-        p = Project(name=raw_name, source_type="zip", status="pending", phase="pending", audit_mode=mode)
+        p = Project(
+            name=raw_name,
+            source_type="zip",
+            status="pending",
+            phase="pending",
+            audit_mode=mode,
+            manual_lab=bool(manual_lab),
+            manual_lab_prompt=prompt or None,
+        )
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -237,23 +256,39 @@ async def create_project_zip(
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
+    if body.audit_mode is None and body.manual_lab is None and body.manual_lab_prompt is None:
+        raise HTTPException(400, "没有需要更新的字段")
+    mode = None
+    prompt = None
     try:
-        mode = parse_audit_mode(body.audit_mode)
+        if body.audit_mode is not None:
+            mode = parse_audit_mode(body.audit_mode)
+        if body.manual_lab_prompt is not None:
+            prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "项目不存在")
-        if p.status != "paused":
-            raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
-        old = normalize_audit_mode(p.audit_mode)
-        p.audit_mode = mode
+        old_mode = normalize_audit_mode(p.audit_mode)
+        if mode is not None:
+            if p.status != "paused":
+                raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
+            p.audit_mode = mode
+        if body.manual_lab is not None:
+            p.manual_lab = bool(body.manual_lab)
+        if prompt is not None:
+            p.manual_lab_prompt = prompt or None
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
-    if old != mode:
+        sync_notes = bool(out.manual_lab and prompt is not None)
+        notes_text = out.manual_lab_prompt
+    if mode is not None and old_mode != mode:
         note_audit_mode_changed(project_id, mode)
+    if sync_notes:
+        sync_manual_lab_notes(project_id, notes_text)
     return out
 
 

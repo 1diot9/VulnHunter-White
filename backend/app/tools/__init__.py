@@ -127,6 +127,18 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "ReturnToWorker",
         }
     ),
+    "reviewer_lab": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "Write",
+            "Bash",
+            "PowerShell",
+            "TodoWrite",
+            "FinishLab",
+        }
+    ),
     "fix": frozenset(
         {
             "Read",

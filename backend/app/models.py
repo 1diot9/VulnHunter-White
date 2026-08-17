@@ -61,6 +61,9 @@ class Project(Base):
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # bounty | full — set at create time; change only while paused
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
+    # 人工靶场：跳过 Docker 环境轮，审核时注入用户提供的环境说明
+    manual_lab: Mapped[bool] = mapped_column(Boolean, default=False)
+    manual_lab_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -129,6 +132,8 @@ class Vuln(Base):
     intended_behavior: Mapped[bool] = mapped_column(Boolean, default=False)
     # pending_review | returned | confirmed | false_positive | static_only | merged
     status: Mapped[str] = mapped_column(String(64), default="pending_review")
+    # none | submitted | ignored — 用户对产出的提交跟踪，与审核 status 独立
+    tracking_status: Mapped[str] = mapped_column(String(32), default="none")
     evidence_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # dynamic | static_only | mcp
     attack_surface: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -159,7 +164,7 @@ class PhaseRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
-    # recon | worker | reviewer | fix | env
+    # recon | worker | reviewer | reviewer-lab | fix
     role: Mapped[str] = mapped_column(String(64), default="worker")
     status: Mapped[str] = mapped_column(String(64), default="running")
     # running | completed | failed | cancelled | paused
@@ -254,7 +259,11 @@ def _ensure_columns() -> None:
         },
         "tool_logs": {"error_class": "VARCHAR(32)"},
         "phase_runs": {"file_path": "VARCHAR(1024)"},
-        "projects": {"audit_mode": "VARCHAR(32) DEFAULT 'bounty'"},
+        "projects": {
+            "audit_mode": "VARCHAR(32) DEFAULT 'bounty'",
+            "manual_lab": "BOOLEAN DEFAULT 0",
+            "manual_lab_prompt": "TEXT",
+        },
         "vulns": {
             "attack_surface": "VARCHAR(32)",
             "required_account": "VARCHAR(32)",
@@ -263,6 +272,7 @@ def _ensure_columns() -> None:
             "submission_reason": "TEXT",
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",
+            "tracking_status": "VARCHAR(32) DEFAULT 'none'",
         },
     }
     with engine.begin() as conn:
@@ -305,6 +315,22 @@ def _migrate_submission_tiers() -> None:
         )
 
 
+def _backfill_tracking_status() -> None:
+    insp = inspect(engine)
+    if "vulns" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("vulns")}
+    if "tracking_status" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE vulns SET tracking_status = 'none' "
+                "WHERE tracking_status IS NULL OR tracking_status = ''"
+            )
+        )
+
+
 def _backfill_parent_root_cause_keys() -> None:
     """Copy duplicate_grouped keys onto matching parents that were confirmed without one."""
     insp = inspect(engine)
@@ -327,6 +353,7 @@ def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _migrate_submission_tiers()
+    _backfill_tracking_status()
     _backfill_parent_root_cause_keys()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]

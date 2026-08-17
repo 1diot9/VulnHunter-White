@@ -1,15 +1,17 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type LogEvent, type Project, type Vuln } from '../api'
+import { AuditModeSelect } from '../components/AuditModeSelect'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
+import { ManualLabPromptEditor } from '../components/ManualLabFields'
 import PhaseFlow from '../components/PhaseFlow'
 import VulnGroupList from '../components/VulnGroupList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   formatAuditMode,
+  formatAuditModeHint,
   formatFileProgress,
   formatTokens,
 } from '../lib/utils'
@@ -27,6 +29,10 @@ const WORKER_LOG_TABS = [
   ['mine', '挖掘'],
   ['fix', '修复'],
 ] as const
+const REVIEWER_LOG_TABS = [
+  ['reviewer-lab', '环境搭建'],
+  ['reviewer-review', '审核'],
+] as const
 const RECON_LOG_TABS = [
   ['recon-map', '地图/鉴权', 'map'],
   ['recon-source-ext', '扩展名', 'source_ext'],
@@ -39,27 +45,8 @@ function isSessionStart(ev: LogEvent): boolean {
   return ev.kind === 'system' && (ev.text || '').includes('新开对话')
 }
 
-function controlPhaseOfEvent(ev: LogEvent): 'recon' | 'worker' | 'reviewer' | null {
-  const p = ev.phase || ev.role || ''
-  if (p === 'reviewer') return 'reviewer'
-  if (
-    p === 'recon' ||
-    p === 'recon-map' ||
-    p === 'recon-source-ext' ||
-    p === 'recon_source_ext' ||
-    p === 'recon-old-vuln' ||
-    p === 'recon-mark' ||
-    p === 'recon_mark' ||
-    p === 'recon_old_vuln'
-  ) {
-    return 'recon'
-  }
-  if (p === 'worker' || p === 'fix' || p === 'mine') return 'worker'
-  return null
-}
-
 function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' {
-  if (logPhase === 'reviewer') return 'reviewer'
+  if (logPhase === 'reviewer' || logPhase === 'reviewer-lab' || logPhase === 'reviewer_lab' || logPhase === 'reviewer-review') return 'reviewer'
   if (
     logPhase === 'recon' ||
     logPhase === 'recon-map' ||
@@ -149,12 +136,14 @@ export default function ProjectDetailPage() {
   const sessionCountRef = useRef(1)
 
   const selectPhase = (p: string) => {
-    const controlChanged = controlPhaseOf(phaseFilter) !== controlPhaseOf(p)
+    if (p === phaseFilter) return
     setPhaseFilter(p)
-    if (controlChanged) {
-      followLiveRef.current = true
-      setLogSession(null)
-    }
+    followLiveRef.current = true
+    displaySessionRef.current = 1
+    sessionCountRef.current = 1
+    setDisplaySession(1)
+    setSessionCount(1)
+    setLogSession(null)
   }
 
   useEffect(() => {
@@ -301,9 +290,7 @@ export default function ProjectDetailPage() {
           const seq = typeof ev.seq === 'number' ? ev.seq : undefined
           if (seq != null) fileEndRef.current = Math.max(fileEndRef.current, seq + 1)
           const evSession = typeof ev.session === 'number' ? ev.session : undefined
-          const evControl = controlPhaseOfEvent(ev as LogEvent)
-          const viewControl = controlPhaseOf(phaseRef.current)
-            if (evControl && evControl === viewControl) {
+          if (eventMatchesPhase(ev as LogEvent, phaseRef.current)) {
             const started =
               (evSession != null && evSession > sessionCountRef.current) ||
               (isSessionStart(ev as LogEvent) && evSession == null)
@@ -317,10 +304,6 @@ export default function ProjectDetailPage() {
                 oldestRef.current = seq ?? 0
                 setHasOlder(false)
                 setRevealLimit(LOG_PAGE)
-                if (!eventMatchesPhase(ev as LogEvent, phaseRef.current)) {
-                  setEvents([])
-                  return
-                }
                 setEvents([ev as LogEvent])
                 return
               }
@@ -413,6 +396,8 @@ export default function ProjectDetailPage() {
               workerRounds={project.worker_rounds}
               vulnPending={project.vuln_pending}
               reconSubphases={project.recon_subphases}
+              labSetupDone={project.lab_setup_done}
+              manualLab={project.manual_lab}
               onSelect={(pid) => {
                 setTab('logs')
                 if (pid !== 'done') selectPhase(pid)
@@ -433,38 +418,47 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-        <Badge variant="info">{project.status}</Badge>
-        {project.status === 'paused' ? (
-          <Select
-            value={project.audit_mode || 'bounty'}
-            onValueChange={async (value) => {
-              if (value !== 'bounty' && value !== 'full') return
-              if (value === project.audit_mode) return
-              try {
-                const next = await api.updateProject(projectId, { audit_mode: value })
-                setProject(next)
-              } catch {
-                /* ignore */
-              }
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
+          <Badge variant="info">{project.status}</Badge>
+          {project.status === 'paused' ? (
+            <AuditModeSelect
+              value={project.audit_mode}
+              showHint={false}
+              onValueChange={async (value) => {
+                if (value === project.audit_mode) return
+                try {
+                  const next = await api.updateProject(projectId, { audit_mode: value })
+                  setProject(next)
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+          ) : (
+            <Badge variant="outline" title={formatAuditModeHint(project.audit_mode)}>
+              {formatAuditMode(project.audit_mode)}
+            </Badge>
+          )}
+          <span>tokens {formatTokens(project.tokens_total)}</span>
+          <span>{formatFileProgress(project)}</span>
+          <span>
+            洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}
+          </span>
+        </div>
+        <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {formatAuditModeHint(project.audit_mode)}
+          {project.status === 'paused' ? ' 暂停时可更改，续跑后按新规则生效。' : ''}
+        </p>
+        {project.manual_lab ? (
+          <ManualLabPromptEditor
+            prompt={project.manual_lab_prompt || ''}
+            onSave={async (text) => {
+              const next = await api.updateProject(projectId, { manual_lab_prompt: text })
+              setProject(next)
             }}
-          >
-            <SelectTrigger className="w-auto min-w-28">
-              <SelectValue>{formatAuditMode(project.audit_mode)}</SelectValue>
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectItem value="bounty">赏金模式</SelectItem>
-              <SelectItem value="full">全量模式</SelectItem>
-            </SelectContent>
-          </Select>
-        ) : (
-          <Badge variant="outline">{formatAuditMode(project.audit_mode)}</Badge>
-        )}
-        <span>tokens {formatTokens(project.tokens_total)}</span>
-        <span>{formatFileProgress(project)}</span>
-        <span>
-          洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}
-        </span>
+          />
+        ) : null}
       </div>
 
       <div className="flex gap-2">
@@ -526,6 +520,21 @@ export default function ProjectDetailPage() {
                           onClick={() => selectPhase(sk)}
                         >
                           {slabel}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {k === 'reviewer' ? (
+                    <div className="vh-phase-subs">
+                      {REVIEWER_LOG_TABS.map(([sk, slabel]) => (
+                        <Button
+                          key={sk}
+                          className="h-6 px-2 text-[11px]"
+                          variant={phaseFilter === sk ? 'default' : 'outline'}
+                          onClick={() => selectPhase(sk)}
+                        >
+                          {sk === 'reviewer-lab' && project.manual_lab ? '人工靶场' : slabel}
+                          {sk === 'reviewer-lab' ? (project.lab_setup_done ? ' ✓' : ' ○') : ''}
                         </Button>
                       ))}
                     </div>
