@@ -141,6 +141,17 @@ def test_worker_prompts_decouple_finish_file_and_round():
     assert "然后 FinishRound" not in initial
 
 
+def test_worker_prompts_inject_recon_and_round_history():
+    worker = load_prompt("worker.md")
+    initial = load_prompt("initial/worker.md")
+    assert "docs/code-map.md" in worker
+    assert "docs/auth.md" in worker
+    assert "最近最多 10 轮挖掘摘要" in worker
+    assert "不要重新梳理项目结构" in worker
+    assert "不要重复分析项目结构" in initial
+    assert "不要重复尝试摘要中已走过的路径" in initial
+
+
 def test_worker_prompt_requires_asset_search_fingerprints():
     worker = load_prompt("worker.md")
     assert "## 互联网资产证明规则" in worker

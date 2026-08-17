@@ -6,6 +6,7 @@ Source 方法: ${sources}
 ${snippet}
 ```
 
+侦察文档与最近挖掘摘要已注入：不要重复分析项目结构，不要重复尝试摘要中已走过的路径。
 请从该文件出发沿调用链审计。
 FinishFile 与 FinishRound 不是一对：读到无法作为入口点的文件立刻 FinishFile(paths=[...])，然后继续分析本轮注入入口，禁止立刻 FinishRound。
 仅当一开始注入的这份入口文件的 source→sink 已完整分析后，才 FinishFile 它（若尚未标）并 FinishRound。不要只标注入文件。

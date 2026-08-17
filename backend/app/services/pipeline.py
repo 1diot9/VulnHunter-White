@@ -21,7 +21,7 @@ from ..agent.checkpoint import (
     set_phase_run_status,
     set_phase_run_worker,
 )
-from ..agent.compression import inject_summary_block, latest_summary
+from ..agent.compression import inject_summary_block, inject_worker_prior_block, latest_summary
 from ..agent.loop import AgentLoop
 from ..config import settings
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Source, Vuln, utcnow
@@ -753,7 +753,12 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
     if not summary and phase == "worker":
         summary = latest_summary(project_id, "worker-rescue") or latest_summary(project_id, "worker-round")
     block = inject_summary_block(summary, for_file=for_file)
-    return f"{block}{body}" if block else body
+    text = f"{block}{body}" if block else body
+    if phase == "worker" and for_file:
+        prior = inject_worker_prior_block(project_id)
+        if prior:
+            text = f"{prior}{text}"
+    return text
 
 
 def _adopt_resumable(

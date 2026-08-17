@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
-from ..services.paths import summaries_dir
+from ..services.paths import docs_dir, summaries_dir, workspace_dir
 
 
 def _str_tokens(text: str) -> int:
@@ -108,6 +108,8 @@ def needs_compress(
 
 
 _SUMMARY_REST = re.compile(r"^(rescue-|round-)?\d+\.md$")
+_ROUND_FILE = re.compile(r"^round-(\d+)\.md$")
+_WORKER_ROUND_SUMMARY = re.compile(r"^(\d+)\.md$")
 
 
 def _phase_summary_files(d: Path, phase: str, *, rescue: bool | None = None) -> list[Path]:
@@ -151,6 +153,102 @@ def latest_summary(project_id: int, phase: str) -> str | None:
         return None
     newest = max(candidates, key=lambda p: p.stat().st_mtime)
     return newest.read_text(encoding="utf-8", errors="replace")
+
+
+def _read_capped(path: Path, max_chars: int) -> str | None:
+    if not path.is_file() or path.stat().st_size <= 0:
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return None
+    if len(text) > max_chars:
+        return text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars]"
+    return text
+
+
+def _numbered_markdown(files: list[Path], rest_re: re.Pattern[str]) -> list[tuple[int, Path]]:
+    found: list[tuple[int, Path]] = []
+    for path in files:
+        if not path.is_file() or path.stat().st_size <= 0:
+            continue
+        match = rest_re.match(path.name)
+        if not match:
+            continue
+        found.append((int(match.group(1)), path))
+    found.sort(key=lambda item: item[0])
+    return found
+
+
+def list_recent_round_reports(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    """FinishRound reports under workspace/rounds, oldest-of-window first."""
+    cap = settings.worker_round_history if limit is None else limit
+    rounds = workspace_dir(project_id) / "rounds"
+    if not rounds.is_dir():
+        return []
+    found = _numbered_markdown(list(rounds.glob("round-*.md")), _ROUND_FILE)
+    return found[-cap:] if cap >= 0 else found
+
+
+def list_recent_worker_round_summaries(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    """worker-round-N.md compression summaries, used when FinishRound reports are absent."""
+    cap = settings.worker_round_history if limit is None else limit
+    files = _phase_summary_files(summaries_dir(project_id), "worker-round", rescue=False)
+    found: list[tuple[int, Path]] = []
+    prefix = "worker-round-"
+    for path in files:
+        rest = path.name[len(prefix) :]
+        match = _WORKER_ROUND_SUMMARY.match(rest)
+        if not match or not path.is_file() or path.stat().st_size <= 0:
+            continue
+        found.append((int(match.group(1)), path))
+    found.sort(key=lambda item: item[0])
+    return found[-cap:] if cap >= 0 else found
+
+
+def inject_worker_prior_block(project_id: int) -> str:
+    """Recon architecture/auth plus recent mining round summaries for a new Worker round."""
+    parts: list[str] = []
+    docs = docs_dir(project_id)
+    doc_cap = settings.recon_doc_inject_max_chars
+    map_text = _read_capped(docs / "code-map.md", doc_cap)
+    auth_text = _read_capped(docs / "auth.md", doc_cap)
+    if map_text or auth_text:
+        parts.append(
+            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
+            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用，不要再 Glob/Read 去重建模块划分、HTTP 入口或鉴权模型。\n"
+        )
+        if map_text:
+            parts.append(f"### docs/code-map.md\n{map_text}\n")
+        if auth_text:
+            parts.append(f"### docs/auth.md\n{auth_text}\n")
+
+    reports = list_recent_round_reports(project_id)
+    if reports:
+        n = len(reports)
+        parts.append(
+            f"## 最近 {n} 轮挖掘摘要（不要重复已尝试路径）\n"
+            "以下为 FinishRound 落盘的单轮报告。已审计文件、已走调用链、已否决方向不要再分析一遍；从本轮注入入口的新调用链继续。\n"
+        )
+        round_cap = settings.round_report_inject_max_chars
+        for num, path in reports:
+            text = _read_capped(path, round_cap) or "（空）"
+            parts.append(f"### 第 {num} 轮 · workspace/rounds/{path.name}\n{text}\n")
+    else:
+        summaries = list_recent_worker_round_summaries(project_id)
+        if summaries:
+            n = len(summaries)
+            parts.append(
+                f"## 最近 {n} 轮挖掘摘要（不要重复已尝试路径）\n"
+                "尚无 FinishRound 报告，改注入最近的轮次压缩摘要。已完成工作与已尝试路径不要再走一遍。\n"
+            )
+            round_cap = settings.round_report_inject_max_chars
+            for num, path in summaries:
+                text = _read_capped(path, round_cap) or "（空）"
+                parts.append(f"### 第 {num} 轮压缩摘要 · docs/summaries/{path.name}\n{text}\n")
+
+    if not parts:
+        return ""
+    return "\n".join(parts).strip() + "\n\n"
 
 
 def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:

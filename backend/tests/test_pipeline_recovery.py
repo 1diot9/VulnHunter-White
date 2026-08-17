@@ -10,7 +10,7 @@ from sqlalchemy.exc import OperationalError
 from app.agent.compression import inject_summary_block, latest_summary, write_summary
 from app.config import settings
 from app.services.ingest import build_file_index
-from app.services.paths import docs_dir, old_vulns_dir, tool_exec_errors_path
+from app.services.paths import docs_dir, old_vulns_dir, tool_exec_errors_path, workspace_dir
 from app.services import pipeline
 from app.tools import ToolContext, registry
 from app.tools.phase_recon import apply_recon_done, recon_gates_met
@@ -274,6 +274,87 @@ def test_finish_round_then_summary_injection(tmp_env, project):
     block = inject_summary_block(latest_summary(project, "worker"), for_file=True)
     assert "已分析 Main.java" in block
     assert "上一轮摘要" in block
+
+
+def _write_recon_docs(project: int) -> None:
+    docs = docs_dir(project)
+    (docs / "code-map.md").write_text("# 地图\n入口在 Main.java。\n", encoding="utf-8")
+    (docs / "auth.md").write_text("# 鉴权\nJWT 过滤器。\n", encoding="utf-8")
+
+
+def _write_round_report(project: int, n: int, text: str) -> None:
+    rounds = workspace_dir(project) / "rounds"
+    rounds.mkdir(parents=True, exist_ok=True)
+    (rounds / f"round-{n}.md").write_text(text, encoding="utf-8")
+
+
+def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):
+    from app.agent.compression import inject_worker_prior_block
+
+    _write_recon_docs(project)
+    for n in range(1, 13):
+        _write_round_report(project, n, f"[round={n}] 已审 LoginController。")
+
+    block = inject_worker_prior_block(project)
+    assert "docs/code-map.md" in block
+    assert "入口在 Main.java" in block
+    assert "docs/auth.md" in block
+    assert "JWT 过滤器" in block
+    assert "禁止再梳理项目结构" in block
+    assert "不要重复已尝试路径" in block
+    assert "### 第 3 轮 ·" in block
+    assert "### 第 12 轮 ·" in block
+    assert "[round=3]" in block
+    assert "[round=12]" in block
+    assert "[round=1]" not in block
+    assert "[round=2]" not in block
+    assert "### 第 1 轮 ·" not in block
+    assert "### 第 2 轮 ·" not in block
+
+
+def test_worker_prior_block_falls_back_to_compression_summaries(tmp_env, project):
+    from app.agent.compression import inject_worker_prior_block, write_summary
+
+    _write_recon_docs(project)
+    for n in range(1, 4):
+        write_summary(project, "worker-round", f"压缩摘要轮 {n} 已走 /admin。")
+
+    block = inject_worker_prior_block(project)
+    assert "尚无 FinishRound 报告" in block
+    assert "压缩摘要轮 1 已走 /admin" in block
+    assert "压缩摘要轮 3 已走 /admin" in block
+
+
+def test_prompt_with_summary_injects_prior_only_for_worker_files(tmp_env, project):
+    _write_recon_docs(project)
+    _write_round_report(project, 1, "已否决 /debug 路径。")
+
+    worker = pipeline._prompt_with_summary("worker", project, "本轮任务正文", for_file=True)
+    assert "入口在 Main.java" in worker
+    assert "JWT 过滤器" in worker
+    assert "已否决 /debug 路径" in worker
+    assert worker.index("侦察产物") < worker.index("本轮任务正文")
+
+    reviewer = pipeline._prompt_with_summary("reviewer", project, "审核正文")
+    assert "入口在 Main.java" not in reviewer
+    assert "已否决 /debug 路径" not in reviewer
+    assert "审核正文" in reviewer
+
+
+def test_worker_prior_block_truncates_oversized_docs(tmp_env, project, monkeypatch):
+    from app.agent.compression import inject_worker_prior_block
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "recon_doc_inject_max_chars", 20)
+    monkeypatch.setattr(settings, "round_report_inject_max_chars", 10)
+    docs = docs_dir(project)
+    (docs / "code-map.md").write_text("M" * 80, encoding="utf-8")
+    (docs / "auth.md").write_text("A" * 80, encoding="utf-8")
+    _write_round_report(project, 1, "R" * 80)
+
+    block = inject_worker_prior_block(project)
+    assert "truncated" in block
+    assert "M" * 80 not in block
 
 
 def test_summary_does_not_cross_recon_subphases(tmp_env, project):

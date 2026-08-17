@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     fix_concurrency: int = 1
     max_review_rejects: int = 2
     file_inject_max_bytes: int = 80 * 1024
+    worker_round_history: int = 10
+    recon_doc_inject_max_chars: int = 32 * 1024
+    round_report_inject_max_chars: int = 8 * 1024
     temperature: float = 0.2
 
     # Debug MCP paths (optional)
