@@ -218,6 +218,12 @@ def list_recent_round_reports(project_id: int, limit: int | None = None) -> list
     return found[-cap:] if cap >= 0 else found
 
 
+def max_round_report_no(project_id: int) -> int:
+    """Highest existing workspace/rounds/round-N.md index, or 0."""
+    found = list_recent_round_reports(project_id, limit=-1)
+    return found[-1][0] if found else 0
+
+
 def list_recent_worker_round_summaries(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
     """worker-round-N.md compression summaries, used when FinishRound reports are absent."""
     cap = settings.worker_round_history if limit is None else limit

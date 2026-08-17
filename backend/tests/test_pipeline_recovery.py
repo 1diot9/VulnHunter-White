@@ -11,6 +11,7 @@ from app.agent.compression import (
     inject_summary_block,
     inject_worker_prior_block,
     latest_summary,
+    max_round_report_no,
     strip_followup_section,
     write_summary,
 )
@@ -310,6 +311,31 @@ def test_strip_followup_section_keeps_later_h2():
     assert "## 备注" in out
     assert "保留" in out
     assert "建议后续方向" not in out
+
+
+def test_next_worker_round_id_does_not_reuse_existing_files(tmp_env, project):
+    assert pipeline._next_worker_round_id(project, session=1) == 1
+    for n in range(1, 9):
+        _write_round_report(project, n, f"old-{n}")
+    assert max_round_report_no(project) == 8
+    # Restart looks like session=1 again; must not overwrite round-1.md.
+    assert pipeline._next_worker_round_id(project, session=1) == 9
+    # Live-log session already at 27 should keep that number (gap files stay missing).
+    assert pipeline._next_worker_round_id(project, session=27) == 27
+
+
+def test_bind_worker_round_id_resume_uses_live_session(tmp_env, project):
+    loop = pipeline.AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    loop.state["round_id"] = 3
+    n = pipeline._bind_worker_round_id(loop, project, new_round=False, session=27)
+    assert n == 27
+    assert loop.state["round_id"] == 27
 
 
 def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):

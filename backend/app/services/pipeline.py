@@ -21,7 +21,12 @@ from ..agent.checkpoint import (
     set_phase_run_status,
     set_phase_run_worker,
 )
-from ..agent.compression import inject_summary_block, inject_worker_prior_block, latest_summary
+from ..agent.compression import (
+    inject_summary_block,
+    inject_worker_prior_block,
+    latest_summary,
+    max_round_report_no,
+)
 from ..agent.loop import AgentLoop
 from ..audit_mode import audit_mode_label, initial_hint, normalize_audit_mode
 from ..config import settings
@@ -1817,9 +1822,28 @@ def _finish_worker_round(
     return "next"
 
 
+def _next_worker_round_id(project_id: int, session: int) -> int:
+    """Durable FinishRound index: live-log session, never reuse an existing round-N.md.
+
+    The worker loop used to keep a process-local counter from 0. After restart /
+    新跑 it reset and FinishRound overwrote workspace/rounds/round-1.md.
+    """
+    return max(max(1, int(session or 1)), max_round_report_no(project_id) + 1)
+
+
+def _bind_worker_round_id(loop: AgentLoop, project_id: int, *, new_round: bool, session: int | None = None) -> int:
+    if session is None:
+        session = live_log.current_session(project_id, "worker")
+    if new_round:
+        n = _next_worker_round_id(project_id, session)
+    else:
+        n = max(1, int(session or 1))
+    loop.state["round_id"] = n
+    return n
+
+
 def _run_worker_loop(project_id: int, worker_id: str) -> None:
     cancel = _cancel_event(project_id)
-    round_id = 0
     current_run_id: int | None = None
     try:
         while not cancel.is_set():
@@ -1848,6 +1872,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                         timeout_sec=settings.timeout_worker_round,
                     )
                     loop.worker_id = worker_id
+                    _bind_worker_round_id(loop, project_id, new_round=False)
                     result = loop.run()
                     action = _finish_worker_round(
                         project_id, worker_id, path, cp.phase_run_id, result
@@ -1866,10 +1891,16 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 cancel.wait(timeout=5.0)
                 continue
 
-            round_id += 1
             sources = _sources_for_file(project_id, fw.path)
             snippet = _read_file_snippet(project_id, fw.path)
             system = _phase_system_prompt(project_id, "worker.md")
+            run_id = _new_phase_run(
+                project_id, "worker", "worker", worker_id=worker_id, file_path=fw.path
+            )
+            current_run_id = run_id
+            _consume_force_new(project_id, "worker")
+            session = _start_log_session(project_id, "worker", extra=fw.path)
+            round_id = _next_worker_round_id(project_id, session)
             body = _initial_prompt(
                 "worker.md",
                 worker_id=worker_id,
@@ -1882,12 +1913,6 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 **_audit_mode_vars(project_id),
             )
             user = _prompt_with_summary("worker", project_id, body, for_file=True)
-            run_id = _new_phase_run(
-                project_id, "worker", "worker", worker_id=worker_id, file_path=fw.path
-            )
-            current_run_id = run_id
-            _consume_force_new(project_id, "worker")
-            _start_log_session(project_id, "worker", extra=fw.path)
             loop = AgentLoop(
                 project_id=project_id,
                 role="worker",
