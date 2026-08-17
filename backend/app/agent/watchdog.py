@@ -8,11 +8,11 @@ killing the run after N rounds.
 Identical tool+args streaks are not executed: the loop returns an error so
 the model can change arguments or switch tools. The session keeps running.
 
-Recon map and historical-vuln sessions get a persist reminder after N
-consecutive turns without Write/MarkSource or WriteOldVuln. Worker mining
-gets a FinishFile reminder after M consecutive turns without FinishFile.
-Calling the corresponding tool resets the idle counter. Unrelated tools
-(Read/Grep/…) do not.
+Historical-vuln recon sessions get a persist reminder after N consecutive
+turns without WriteOldVuln. Worker mining gets a FinishFile reminder after
+M consecutive turns without FinishFile. Calling the corresponding tool
+resets the idle counter. Unrelated tools (Read/Grep/…) do not. Code-map
+and auth recon sessions are not nudged to persist.
 """
 
 from __future__ import annotations
@@ -35,14 +35,7 @@ IDENTICAL_TOOL_NUDGE = (
 )
 
 RECON_PERSIST_INTERVAL = 50
-RECON_PERSIST_PHASES = frozenset({"recon", "recon-old-vuln"})
-
-RECON_PERSIST_NUDGE = (
-    "看门狗提醒：侦察（代码地图/鉴权）已连续 {n} 轮未调用 Write / MarkSource。"
-    "请立刻把已调查到的内容落盘，不要等全部看完再写——"
-    "docs/code-map.md 与 docs/auth.md 用 Write 更新；HTTP 入口立刻 MarkSource。"
-    "不要写历史漏洞、不要扫全库标权重。上下文会被压缩，延迟写入会丢失。两份文档齐全后系统会进入下一会话。"
-)
+RECON_PERSIST_PHASES = frozenset({"recon-old-vuln"})
 
 RECON_OLD_VULN_PERSIST_NUDGE = (
     "看门狗提醒：侦察（历史漏洞）已连续 {n} 轮未调用 WriteOldVuln。"
@@ -65,7 +58,6 @@ WORKER_FINISH_NUDGE = (
 
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
-    "recon": frozenset({"Write", "MarkSource"}),
     "recon-old-vuln": frozenset({"WriteOldVuln"}),
     "worker": frozenset({"FinishFile"}),
 }
@@ -107,7 +99,6 @@ class AgentWatchdog:
                 return WORKER_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
-            return RECON_PERSIST_NUDGE.format(n=self.idle_turns)
         return None
 
     def persist_nudge_log(self) -> str:
@@ -116,7 +107,7 @@ class AgentWatchdog:
             return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记非入口文件"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
-        return f"看门狗：侦察连续 {n} 轮未 Write/MarkSource，已提醒立即落盘"
+        return f"看门狗：连续 {n} 轮未落盘，已提醒"
 
     def note_no_tools(self) -> str:
         """Record a text-only turn and return the reminder to inject."""

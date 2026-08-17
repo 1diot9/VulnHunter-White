@@ -5,7 +5,6 @@ from app.agent.watchdog import (
     NO_TOOL_NUDGE,
     RECON_OLD_VULN_PERSIST_NUDGE,
     RECON_PERSIST_INTERVAL,
-    RECON_PERSIST_NUDGE,
     WORKER_FINISH_INTERVAL,
     WORKER_FINISH_NUDGE,
     AgentWatchdog,
@@ -61,37 +60,19 @@ def test_distinct_tool_calls_are_not_loops():
         assert reason is None
 
 
-def test_recon_persist_nudge_every_50_turns():
+def test_recon_map_auth_has_no_persist_nudge():
     w = AgentWatchdog(phase="recon")
-    assert w.persist_nudge_interval == RECON_PERSIST_INTERVAL == 50
-    for i in range(1, 50):
+    for i in range(1, 101):
         assert w.note_turn() is None
         assert w.turn_count == i
-    msg = w.note_turn()
-    assert msg is not None
-    assert "50 轮" in msg
-    assert "code-map.md" in msg
-    assert "MarkSource" in msg
-    assert "WriteOldVuln" not in msg
-    assert "盖章" not in msg
-    assert msg == RECON_PERSIST_NUDGE.format(n=50)
-    assert w.note_turn() is None
-    for _ in range(48):
-        assert w.note_turn() is None
-    msg100 = w.note_turn()
-    assert msg100 is not None
-    assert "100 轮" in msg100
-
-
-def test_recon_persist_nudge_custom_interval():
-    w = AgentWatchdog(phase="recon", persist_nudge_interval=2)
-    assert w.note_turn() is None
-    assert w.note_turn() is not None
-    assert w.note_turn() is None
-    assert w.note_turn() is not None
+    w2 = AgentWatchdog(phase="recon", persist_nudge_interval=2)
+    for _ in range(10):
+        assert w2.note_turn(["Read"]) is None
+        assert w2.note_turn(["Write", "MarkSource"]) is None
 
 
 def test_recon_old_vuln_persist_nudge():
+    assert AgentWatchdog(phase="recon-old-vuln").persist_nudge_interval == RECON_PERSIST_INTERVAL == 50
     w = AgentWatchdog(phase="recon-old-vuln", persist_nudge_interval=2)
     assert w.note_turn() is None
     msg = w.note_turn()
@@ -99,6 +80,7 @@ def test_recon_old_vuln_persist_nudge():
     assert "WriteOldVuln" in msg
     assert "落盘不会结束本会话" in msg
     assert msg == RECON_OLD_VULN_PERSIST_NUDGE.format(n=2)
+    assert "看门狗：侦察（历史漏洞）连续 2 轮未 WriteOldVuln，已提醒立即落盘" == w.persist_nudge_log()
 
 
 def test_worker_finish_nudge_every_50_turns():
@@ -134,14 +116,14 @@ def test_worker_finish_nudge_custom_interval():
 
 
 def test_fix_and_reviewer_have_no_finish_nudge():
-    for phase in ("fix", "reviewer", "recon-mark"):
+    for phase in ("fix", "reviewer", "recon-mark", "recon"):
         w = AgentWatchdog(phase=phase)
         for _ in range(60):
             assert w.note_turn() is None
 
 
 def test_persist_nudge_disabled_when_interval_zero():
-    w = AgentWatchdog(phase="recon", persist_nudge_interval=0)
+    w = AgentWatchdog(phase="recon-old-vuln", persist_nudge_interval=0)
     for _ in range(40):
         assert w.note_turn() is None
     w2 = AgentWatchdog(phase="worker", worker_finish_interval=0)
@@ -165,20 +147,6 @@ def test_idle_counter_resets_when_target_tool_called():
     assert msg is not None
     assert "连续 3 轮未调用 FinishFile" in msg
     assert w.idle_turns == 3
-
-
-def test_unrelated_tools_do_not_reset_recon_idle():
-    w = AgentWatchdog(phase="recon", persist_nudge_interval=2)
-    assert w.note_turn(["Read"]) is None
-    msg = w.note_turn(["Grep", "Bash"])
-    assert msg is not None
-    assert "连续 2 轮未调用 Write / MarkSource" in msg
-    assert w.note_turn(["Write"]) is None
-    assert w.idle_turns == 0
-    assert w.note_turn(["MarkSource"]) is None
-    assert w.idle_turns == 0
-    assert w.note_turn() is None
-    assert w.note_turn(["Read"]) is not None
 
 
 def test_write_old_vuln_resets_old_vuln_idle():
