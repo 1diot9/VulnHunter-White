@@ -225,8 +225,10 @@ def search(
         "returned": len(sample),
         "sample": sample,
         "guidance": (
-            f"默认返回最多 {FOFA_DEFAULT_SIZE} 条。按报告 PoC 逐个复测，"
-            "任一目标成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=...)，不要扫完一片。"
+            f"默认返回最多 {FOFA_DEFAULT_SIZE} 条。本项目只搜一次，结果给全部漏洞共享。"
+            "按报告 PoC 逐个复测，任一目标成功即 FinishVerifier(verdict=success, "
+            "verified_url=..., poc=..., response=..., fofa_query=本次语法, targets=全部样本)。"
+            "targets 里已测标 success/fail，其余标 untested；不要为了填表扫完一片。"
         ),
     }
 

@@ -80,6 +80,11 @@ def docs_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "docs"
 
 
+def fofa_cache_path(project_id: int) -> Path:
+    """Project-wide FOFA search cache shared by every Verifier vuln."""
+    return docs_dir(project_id) / "fofa-targets.json"
+
+
 def old_vulns_dir(project_id: int) -> Path:
     return docs_dir(project_id) / "old-vulns"
 

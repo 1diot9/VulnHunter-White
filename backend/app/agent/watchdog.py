@@ -29,8 +29,10 @@ LAB_NO_TOOL_NUDGE = (
 )
 
 VERIFIER_NO_TOOL_NUDGE = (
-    "你这一轮没有调用任何工具。请立刻 Read 漏洞报告，用 FofaSearch 搜最多 10 个同款目标，"
-    "按报告 PoC 复测；任一成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=...)。不要空转。"
+    "你这一轮没有调用任何工具。请立刻 Read 漏洞报告。"
+    "若本项目已有共享 FOFA 结果，直接按这些目标复测，不要再 FofaSearch；"
+    "否则 FofaSearch 一次（一个项目只搜一次，结果给全部漏洞共享）。"
+    "任一成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., fofa_query=...)。不要空转。"
 )
 
 NO_TOOL_NUDGE = (
@@ -38,7 +40,7 @@ NO_TOOL_NUDGE = (
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
     "挖掘轮次：非入口文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的入口已完整分析后才 FinishRound；"
     "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员） / ReturnToWorker；"
-    "互联网验证请 FofaSearch / FinishVerifier；修复请 FinishFix。"
+    "互联网验证请复用项目共享 FOFA 结果或 FofaSearch 一次 / FinishVerifier；修复请 FinishFix。"
 )
 
 IDENTICAL_TOOL_NUDGE = (

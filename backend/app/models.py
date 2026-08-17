@@ -159,6 +159,8 @@ class Vuln(Base):
     verifier_verified_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     verifier_poc: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verifier_targets: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verifier_fofa_query: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -291,6 +293,8 @@ def _ensure_columns() -> None:
             "verifier_verified_url": "VARCHAR(1024)",
             "verifier_poc": "TEXT",
             "verifier_response": "TEXT",
+            "verifier_targets": "TEXT",
+            "verifier_fofa_query": "TEXT",
         },
     }
     with engine.begin() as conn:

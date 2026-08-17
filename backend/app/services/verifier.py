@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from ..models import Project, SessionLocal, Vuln
 from ..vuln_types import normalize_vuln_type
-from .paths import docs_dir, vuln_dir
+from .paths import docs_dir, fofa_cache_path, vuln_dir
 from .report import upsert_report_section
 
 VERIFIER_NONE = "none"
@@ -52,6 +53,27 @@ _FILE_DELETE_RE = re.compile(
 _DOS_RE = re.compile(
     r"(?is)(\bdenial[\s_-]*of[\s_-]*service\b|\bslowloris\b|fork\s*bomb|拒绝服务)"
 )
+TARGET_STATUSES = ("success", "fail", "untested")
+TARGET_STATUS_LABELS = {"success": "成功", "fail": "失败", "untested": "未测"}
+_TARGET_STATUS_ALIASES = {
+    "success": "success",
+    "ok": "success",
+    "hit": "success",
+    "verified": "success",
+    "成功": "success",
+    "fail": "fail",
+    "failed": "fail",
+    "failure": "fail",
+    "失败": "fail",
+    "untested": "untested",
+    "skip": "untested",
+    "skipped": "untested",
+    "pending": "untested",
+    "未测": "untested",
+    "没测": "untested",
+    "未测试": "untested",
+}
+_HOST_KEY_RE = re.compile(r"^https?://", re.I)
 
 
 def normalize_verifier_status(raw: Any) -> str:
@@ -96,15 +118,32 @@ def format_verifier_report(
     poc: str = "",
     response: str = "",
     notes: str = "",
+    targets: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Human-readable 互联网验证 section: target, PoC, and response first."""
+    """Human-readable 互联网验证 section: target list, PoC, and response."""
+    rows = list(targets or [])
+    success_n = sum(1 for t in rows if t.get("status") == "success")
+    fail_n = sum(1 for t in rows if t.get("status") == "fail")
+    untested_n = sum(1 for t in rows if t.get("status") == "untested")
     lines = [
         f"- 结论：{verdict}",
         f"- FOFA 语法：`{fofa_query or '（未提供）'}`",
         f"- 实测条数：{tested_count}",
     ]
+    if rows:
+        lines.append(f"- FOFA 目标：共 {len(rows)}（成功 {success_n} · 失败 {fail_n} · 未测 {untested_n}）")
     if verified_url:
         lines.append(f"- 打通目标：{verified_url}")
+    if fofa_query:
+        lines.extend(["", "### FOFA 搜索语法", "", _fence(fofa_query, "text")])
+    if rows:
+        lines.extend(["", "### FOFA 目标", "", "| 状态 | 目标 | 标题 | 说明 |", "| --- | --- | --- | --- |"])
+        for item in rows:
+            status = TARGET_STATUS_LABELS.get(str(item.get("status") or ""), str(item.get("status") or "未测"))
+            host = _md_cell(str(item.get("host") or item.get("url") or ""))
+            title = _md_cell(str(item.get("title") or ""))
+            note = _md_cell(str(item.get("note") or ""))
+            lines.append(f"| {status} | {host} | {title} | {note} |")
     if poc:
         lines.extend(["", "### 使用的 PoC", "", _fence(poc, _poc_lang(poc))])
     if response:
@@ -112,6 +151,224 @@ def format_verifier_report(
     if notes:
         lines.extend(["", "### 说明", "", notes])
     return "\n".join(lines).strip() + "\n"
+
+
+def _md_cell(text: str) -> str:
+    return (text or "").replace("|", "\\|").replace("\n", " ").strip() or "—"
+
+
+def target_key(raw: Any) -> str:
+    s = str(raw or "").strip().lower()
+    if not s:
+        return ""
+    s = _HOST_KEY_RE.sub("", s)
+    s = s.split("/")[0].split("?")[0].strip()
+    return s
+
+
+def normalize_target_status(raw: Any) -> str:
+    key = str(raw or "").strip().lower()
+    return _TARGET_STATUS_ALIASES.get(key, "") or "untested"
+
+
+def _target_row(raw: Any, *, default_status: str = "untested") -> dict[str, str] | None:
+    if isinstance(raw, str):
+        raw = {"host": raw}
+    if not isinstance(raw, dict):
+        return None
+    host = str(raw.get("host") or raw.get("url") or raw.get("ip") or "").strip()
+    if not host:
+        return None
+    protocol = str(raw.get("protocol") or "").strip()
+    if protocol and "://" not in host:
+        host_disp = f"{protocol}://{host}"
+    else:
+        host_disp = host
+    status = normalize_target_status(raw.get("status") or default_status)
+    return {
+        "host": host_disp[:512],
+        "ip": str(raw.get("ip") or "")[:128],
+        "port": str(raw.get("port") or "")[:16],
+        "title": str(raw.get("title") or "")[:120],
+        "protocol": protocol[:16],
+        "status": status,
+        "note": str(raw.get("note") or raw.get("reason") or "")[:500],
+    }
+
+
+def merge_verifier_targets(
+    *,
+    fofa_sample: list[Any] | None = None,
+    submitted: list[Any] | None = None,
+    verified_url: str = "",
+) -> list[dict[str, str]]:
+    """Keep every FOFA hit; overlay LLM statuses; mark verified_url as success."""
+    by_key: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+
+    def _put(row: dict[str, str], *, overlay: bool) -> None:
+        key = target_key(row.get("host")) or target_key(row.get("ip"))
+        if not key:
+            return
+        if key not in by_key:
+            by_key[key] = row
+            order.append(key)
+            return
+        if not overlay:
+            return
+        cur = by_key[key]
+        for field in ("ip", "port", "title", "protocol"):
+            if row.get(field) and not cur.get(field):
+                cur[field] = row[field]
+        if row.get("host"):
+            if not cur.get("host"):
+                cur["host"] = row["host"]
+            elif "://" in row["host"] and "://" not in (cur.get("host") or ""):
+                cur["host"] = row["host"]
+        if row.get("status"):
+            cur["status"] = row["status"]
+        if row.get("note"):
+            cur["note"] = row["note"]
+
+    for item in fofa_sample or []:
+        row = _target_row(item, default_status="untested")
+        if row:
+            _put(row, overlay=False)
+    for item in submitted or []:
+        row = _target_row(item, default_status="untested")
+        if row:
+            _put(row, overlay=True)
+    if verified_url:
+        vkey = target_key(verified_url)
+        if vkey:
+            matched = False
+            vhost = vkey.split(":")[0]
+            for key, row in by_key.items():
+                if key == vkey or key.split(":")[0] == vhost:
+                    row["status"] = "success"
+                    if not row.get("note"):
+                        row["note"] = "复测成功"
+                    matched = True
+            if not matched:
+                row = _target_row({"host": verified_url, "status": "success", "note": "复测成功"})
+                if row:
+                    _put(row, overlay=True)
+    return [by_key[k] for k in order]
+
+
+def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
+    """Return the project-wide FOFA search cache, or None if this project has not searched yet."""
+    path = fofa_cache_path(project_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    sample = data.get("sample")
+    if not isinstance(sample, list):
+        sample = []
+    query = str(data.get("query") or "").strip()
+    try:
+        size = int(data.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    return {
+        "query": query,
+        "size": size,
+        "returned": int(data.get("returned") or len(sample)),
+        "sample": sample,
+    }
+
+
+def save_project_fofa_cache(
+    project_id: int,
+    *,
+    query: str,
+    sample: list[Any] | None,
+    size: int = 0,
+) -> dict[str, Any]:
+    """Freeze the first successful FOFA search so later vulns reuse it."""
+    rows = list(sample or [])
+    payload = {
+        "query": str(query or "").strip(),
+        "size": int(size or 0),
+        "returned": len(rows),
+        "sample": rows,
+    }
+    path = fofa_cache_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def seed_fofa_state(state: dict[str, Any], project_id: int) -> None:
+    """Copy project FOFA cache into the agent loop so FinishVerifier works without re-search."""
+    cache = load_project_fofa_cache(project_id)
+    if not cache:
+        return
+    if not str(state.get("fofa_query") or "").strip() and cache.get("query"):
+        state["fofa_query"] = cache["query"]
+    if not state.get("fofa_targets"):
+        state["fofa_targets"] = list(cache.get("sample") or [])
+        state["fofa_cached"] = True
+
+
+def resolve_fofa_sample(project_id: int, state: dict[str, Any] | None = None) -> tuple[str, list[Any]]:
+    state = state or {}
+    query = str(state.get("fofa_query") or "").strip()
+    sample = list(state.get("fofa_targets") or [])
+    if query and sample:
+        return query, sample
+    cache = load_project_fofa_cache(project_id)
+    if not cache:
+        return query, sample
+    if not query:
+        query = str(cache.get("query") or "").strip()
+    if not sample:
+        sample = list(cache.get("sample") or [])
+    return query, sample
+
+
+def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
+    if not cache:
+        return (
+            "本项目尚无共享 FOFA 结果。本条漏洞 FofaSearch 一次即可（默认 10 条），"
+            "结果写入 docs/fofa-targets.json，后续漏洞直接复用。不要搜第二次。"
+        )
+    query = cache.get("query") or "（未记录）"
+    n = cache.get("returned") or len(cache.get("sample") or [])
+    sample_json = json.dumps(cache.get("sample") or [], ensure_ascii=False)
+    return (
+        f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条）。禁止再调用 FofaSearch。"
+        f"直接用下列目标按本条报告复测：\n{sample_json}"
+    )
+
+
+def dump_verifier_targets(targets: list[dict[str, str]] | None) -> str | None:
+    if not targets:
+        return None
+    return json.dumps(targets, ensure_ascii=False)
+
+
+def parse_verifier_targets(raw: Any) -> list[dict[str, str]]:
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            row = _target_row(item)
+            if row:
+                out.append(row)
+        return out
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parse_verifier_targets(data)
 
 
 def internet_test_block_reason(

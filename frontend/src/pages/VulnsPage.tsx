@@ -24,6 +24,7 @@ import {
   formatSubmissionTier,
   formatTrackingStatus,
   formatVerifierStatus,
+  formatVerifierTargetStatus,
   severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -395,9 +396,62 @@ export default function VulnsPage() {
                     未做互联网复测。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的类型不会打互联网目标；其它原因见下方报告「互联网验证」。
                   </div>
                 ) : null}
+                {detail.verifier_targets && detail.verifier_targets.length > 0 ? (
+                  <div className="space-y-2 rounded border border-border/60 bg-muted/30 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-300">
+                      FOFA 目标 · 共 {detail.verifier_targets.length}
+                      （成功 {detail.verifier_targets.filter((t) => t.status === 'success').length} · 失败{' '}
+                      {detail.verifier_targets.filter((t) => t.status === 'fail').length} · 未测{' '}
+                      {detail.verifier_targets.filter((t) => t.status === 'untested').length}）
+                    </div>
+                    {detail.verifier_fofa_query ? (
+                      <div className="break-all font-mono text-xs text-slate-400">{detail.verifier_fofa_query}</div>
+                    ) : null}
+                    <div className="overflow-auto">
+                      <table className="w-full min-w-[28rem] text-left text-xs">
+                        <thead className="text-slate-500">
+                          <tr>
+                            <th className="py-1 pr-2 font-medium">状态</th>
+                            <th className="py-1 pr-2 font-medium">目标</th>
+                            <th className="py-1 pr-2 font-medium">标题</th>
+                            <th className="py-1 font-medium">说明</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.verifier_targets.map((t, i) => (
+                            <tr key={`${t.host}-${i}`} className="border-t border-border/40 align-top">
+                              <td className="py-1.5 pr-2">
+                                <Badge
+                                  variant={
+                                    t.status === 'success'
+                                      ? 'success'
+                                      : t.status === 'fail'
+                                        ? 'destructive'
+                                        : 'outline'
+                                  }
+                                >
+                                  {formatVerifierTargetStatus(t.status)}
+                                </Badge>
+                              </td>
+                              <td className="py-1.5 pr-2 break-all text-slate-200">{t.host || '—'}</td>
+                              <td className="py-1.5 pr-2 text-slate-400">{t.title || '—'}</td>
+                              <td className="py-1.5 text-slate-400">{t.note || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
                 {detail.verifier_status === 'verified' ? (
                   <div className="space-y-2 rounded border border-emerald-900/50 bg-emerald-950/20 px-3 py-2">
                     <div className="text-xs font-medium text-emerald-300/90">互联网复现证据</div>
+                    <div className="space-y-1 text-sm">
+                      <div className="text-xs text-slate-400">FOFA 搜索语法</div>
+                      <pre className="overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
+                        {detail.verifier_fofa_query || '（未记录）'}
+                      </pre>
+                    </div>
                     <div className="space-y-1 text-sm">
                       <div className="text-xs text-slate-400">打通目标</div>
                       <div className="break-all text-slate-200">

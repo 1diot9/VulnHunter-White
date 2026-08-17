@@ -2288,10 +2288,13 @@ def _run_reviewer_once(project_id: int) -> None:
 def _run_verifier_once(project_id: int) -> None:
     from .verifier import (
         extract_fofa_query,
+        format_shared_fofa_hint,
         internet_test_block_reason_for_vuln,
+        load_project_fofa_cache,
         mark_internet_unsafe_skipped,
         pick_pending_verifier_vuln,
         read_report_md,
+        seed_fofa_state,
     )
 
     cancel = _cancel_event(project_id)
@@ -2311,6 +2314,7 @@ def _run_verifier_once(project_id: int) -> None:
                     stop_when=lambda st: bool(st.get("verifier_done")),
                     timeout_sec=settings.timeout_verifier,
                 )
+                seed_fofa_state(loop.state, project_id)
                 result = loop.run()
             finally:
                 _release_adopted(project_id, cp.phase_run_id)
@@ -2340,7 +2344,12 @@ def _run_verifier_once(project_id: int) -> None:
                 phase="verifier",
             )
             return
-        fofa_query = extract_fofa_query(report_md) or "（报告内未解析到 FOFA 语句，请 Read 后自行提炼）"
+        fofa_cache = load_project_fofa_cache(project_id)
+        fofa_query = (
+            (fofa_cache or {}).get("query")
+            or extract_fofa_query(report_md)
+            or "（报告内未解析到 FOFA 语句，请 Read 后自行提炼）"
+        )
         payload = {
             "title": vuln.title,
             "type": vuln.vuln_type,
@@ -2366,6 +2375,7 @@ def _run_verifier_once(project_id: int) -> None:
             vuln_id=vuln_id,
             payload=json_dumps(payload),
             fofa_query=fofa_query,
+            fofa_shared=format_shared_fofa_hint(fofa_cache),
             **_audit_mode_vars(project_id),
         )
         user = _prompt_with_summary("verifier", project_id, body)
@@ -2386,6 +2396,7 @@ def _run_verifier_once(project_id: int) -> None:
             context_window=_context_window(),
             stop_when=lambda st: bool(st.get("verifier_done")),
         )
+        seed_fofa_state(loop.state, project_id)
         result = loop.run()
         if result.stop_reason == "auth_error":
             _pause_for_auth(project_id, result.error or "auth_error")

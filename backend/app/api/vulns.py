@@ -22,6 +22,7 @@ from ..schemas import (
 from ..services.paths import project_root, vuln_dir
 from ..services.report import stamp_produced_at
 from ..services import vuln_followup
+from ..services.verifier import parse_verifier_targets
 from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, normalize_submission_tier
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
@@ -148,6 +149,8 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             merged_from_ids=merged_from,
             verifier_poc=getattr(v, "verifier_poc", None),
             verifier_response=getattr(v, "verifier_response", None),
+            verifier_targets=parse_verifier_targets(getattr(v, "verifier_targets", None)),
+            verifier_fofa_query=getattr(v, "verifier_fofa_query", None),
         )
 
 

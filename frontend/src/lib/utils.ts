@@ -59,6 +59,19 @@ export function formatVerifierStatus(value: string | null | undefined): string |
   }
 }
 
+export function formatVerifierTargetStatus(value: string | null | undefined): string {
+  switch (value) {
+    case 'success':
+      return '成功'
+    case 'fail':
+      return '失败'
+    case 'untested':
+      return '未测'
+    default:
+      return value?.trim() || '未测'
+  }
+}
+
 export const AUDIT_MODE_OPTIONS = [
   {
     value: 'bounty' as const,

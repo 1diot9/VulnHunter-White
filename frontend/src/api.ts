@@ -89,6 +89,18 @@ export type VulnDetail = Vuln & {
   merged_from_ids?: number[]
   verifier_poc?: string | null
   verifier_response?: string | null
+  verifier_targets?: VerifierTarget[]
+  verifier_fofa_query?: string | null
+}
+
+export type VerifierTarget = {
+  host: string
+  ip?: string
+  port?: string
+  title?: string
+  protocol?: string
+  status: 'success' | 'fail' | 'untested' | string
+  note?: string
 }
 
 export type VulnFollowUpMessage = {

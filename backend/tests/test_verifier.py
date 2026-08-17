@@ -13,7 +13,10 @@ from app.services.pipeline import control_phase
 from app.services.verifier import (
     enqueue_confirmed_frontend,
     extract_fofa_query,
+    format_verifier_report,
     internet_test_block_reason,
+    load_project_fofa_cache,
+    merge_verifier_targets,
     pending_verifier_count,
 )
 from app.tools import ROLE_ACL, registry
@@ -309,6 +312,7 @@ def test_finish_verifier_success(tmp_env, project):
         v = db.get(Vuln, vuln_id)
         assert v.verifier_status == "verified"
         assert v.verifier_verified_url == "http://hit.example/api/x"
+        assert v.verifier_fofa_query == 'title="demo"'
         assert "GET /api/x" in (v.verifier_poc or "")
         assert "secret" in (v.verifier_response or "")
     from app.services.paths import vuln_dir
@@ -316,10 +320,14 @@ def test_finish_verifier_success(tmp_env, project):
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "## 互联网验证" in report
     assert "打通目标：http://hit.example/api/x" in report
+    assert "### FOFA 搜索语法" in report
+    assert 'title="demo"' in report
     assert "### 使用的 PoC" in report
     assert "### 实际响应" in report
     assert "GET /api/x" in report
     assert '{"secret":"yes"}' in report
+    assert "### FOFA 目标" in report
+    assert "成功" in report
 
     from app.main import app
 
@@ -327,8 +335,192 @@ def test_finish_verifier_success(tmp_env, project):
         detail = client.get(f"/api/vulns/{vuln_id}").json()
         assert detail["verifier_status"] == "verified"
         assert detail["verifier_verified_url"] == "http://hit.example/api/x"
+        assert detail["verifier_fofa_query"] == 'title="demo"'
         assert "GET /api/x" in (detail.get("verifier_poc") or "")
         assert "secret" in (detail.get("verifier_response") or "")
+        assert isinstance(detail.get("verifier_targets"), list)
+        assert any(t.get("status") == "success" for t in detail["verifier_targets"])
+
+
+def test_finish_verifier_success_requires_query(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://hit.example/api/x",
+            "poc": "GET /api/x HTTP/1.1\nHost: hit.example\n\n",
+            "response": "HTTP/1.1 200 OK\n\nsecret",
+            "notes": "打通了但忘了填 FOFA 语法",
+        },
+    )
+    assert out["ok"] is False
+    assert "fofa_query" in out["error"]
+
+
+def test_merge_verifier_targets_keeps_untested():
+    rows = merge_verifier_targets(
+        fofa_sample=[
+            {"host": "a.example", "ip": "1.1.1.1", "port": "80", "title": "A", "protocol": "http"},
+            {"host": "b.example", "ip": "1.1.1.2", "port": "443", "title": "B", "protocol": "https"},
+            {"host": "c.example", "title": "C"},
+        ],
+        submitted=[{"host": "a.example", "status": "fail", "note": "404"}],
+        verified_url="https://b.example/login",
+    )
+    by_host = {r["host"]: r for r in rows}
+    assert len(rows) == 3
+    assert by_host["http://a.example"]["status"] == "fail"
+    assert by_host["https://b.example"]["status"] == "success"
+    assert by_host["c.example"]["status"] == "untested"
+    md = format_verifier_report(verdict="success", targets=rows, notes="停在第二个")
+    assert "| 失败 | http://a.example |" in md
+    assert "| 成功 | https://b.example |" in md
+    assert "| 未测 | c.example |" in md
+
+
+def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 3,
+                "results": [
+                    ["host1.example", "1.1.1.1", "80", "Title A", "example.com", "Org", "http"],
+                    ["host2.example", "1.1.1.2", "443", "Title B", "example.com", "Org", "https"],
+                    ["host3.example", "1.1.1.3", "8080", "Title C", "example.com", "Org", "http"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    searched = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert searched["ok"] is True
+    assert len(ctx.state["fofa_targets"]) == 3
+    poc = "GET /api/x HTTP/1.1\nHost: host1.example\n\n"
+    response = "HTTP/1.1 200 OK\n\n{\"secret\":\"yes\"}"
+    out = registry.dispatch(
+        ctx,
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://host1.example/api/x",
+            "poc": poc,
+            "response": response,
+            "targets": [{"host": "host1.example", "status": "success", "note": "回显一致"}],
+            "notes": "第一个打通即停，其余未测",
+        },
+    )
+    assert out["ok"] is True
+    statuses = {t["host"]: t["status"] for t in out["targets"]}
+    assert statuses["http://host1.example"] == "success"
+    assert statuses["https://host2.example"] == "untested"
+    assert statuses["http://host3.example"] == "untested"
+    from app.services.paths import vuln_dir
+
+    report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert "### FOFA 目标" in report
+    assert "| 成功 | http://host1.example |" in report
+    assert "| 未测 | https://host2.example |" in report
+    assert "| 未测 | http://host3.example |" in report
+    assert "共 3（成功 1 · 失败 0 · 未测 2）" in report
+    assert "### FOFA 搜索语法" in report
+    assert 'title="demo"' in report
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        detail = client.get(f"/api/vulns/{vuln_id}").json()
+        hosts = {t["host"]: t["status"] for t in detail["verifier_targets"]}
+        assert hosts["http://host1.example"] == "success"
+        assert hosts["https://host2.example"] == "untested"
+        assert hosts["http://host3.example"] == "untested"
+        assert detail["verifier_fofa_query"] == 'title="demo"'
+
+
+def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
+    hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 2,
+                "results": [
+                    ["shared.example", "1.1.1.1", "80", "Shared", "example.com", "Org", "http"],
+                    ["other.example", "1.1.1.2", "443", "Other", "example.com", "Org", "https"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln1, _ = _submit_and_confirm(project, enable_verifier=True, root_cause_key="unauthorized_access:A")
+    vuln2, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        title="另一条前台未授权",
+        root_cause_key="unauthorized_access:B",
+    )
+    first = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln1),
+        "FofaSearch",
+        {"query": 'title="demo"'},
+    )
+    assert first["ok"] is True
+    assert first.get("cached") is False
+    assert hits["n"] == 1
+    cache = load_project_fofa_cache(project)
+    assert cache is not None
+    assert cache["query"] == 'title="demo"'
+    assert len(cache["sample"]) == 2
+
+    second_ctx = _ctx(project, "verifier", vuln_id=vuln2)
+    second = registry.dispatch(second_ctx, "FofaSearch", {"query": 'title="should-not-hit-api"'})
+    assert second["ok"] is True
+    assert second.get("cached") is True
+    assert hits["n"] == 1
+    assert second["query"] == 'title="demo"'
+    assert second["sample"][0]["host"] == "shared.example"
+
+    poc = "GET /api/x HTTP/1.1\nHost: shared.example\n\n"
+    response = "HTTP/1.1 200 OK\n\n{\"secret\":\"yes\"}"
+    out = registry.dispatch(
+        second_ctx,
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://shared.example/api/x",
+            "poc": poc,
+            "response": response,
+            "notes": "复用项目共享 FOFA 目标，第一条打通",
+        },
+    )
+    assert out["ok"] is True, out
+    assert out["fofa_query"] == 'title="demo"'
+    from app.services.paths import vuln_dir
+
+    report = (vuln_dir(project, vuln2) / "report.md").read_text(encoding="utf-8")
+    assert "### FOFA 搜索语法" in report
+    assert 'title="demo"' in report
+    assert "| 成功 | http://shared.example |" in report
+    assert "| 未测 | https://other.example |" in report
+    with _db() as db:
+        assert db.get(Vuln, vuln2).verifier_fofa_query == 'title="demo"'
 
 
 def test_finish_verifier_success_requires_url(tmp_env, project):
@@ -455,7 +647,14 @@ def test_fofa_connectivity_success(tmp_env, monkeypatch):
         seen["key"] = dict(request.url.params).get("key")
         return httpx.Response(
             200,
-            json={"error": False, "username": "alice", "fcoin": 42, "isvip": True, "email": "a@b.c"},
+            json={
+                "error": False,
+                "username": "alice",
+                "fcoin": 0,
+                "fofa_point": 99982,
+                "isvip": True,
+                "email": "a@b.c",
+            },
         )
 
     _patch_fofa_http(monkeypatch, handler)
@@ -470,7 +669,7 @@ def test_fofa_connectivity_success(tmp_env, monkeypatch):
     body = r.json()
     assert body["ok"] is True
     assert body["username"] == "alice"
-    assert body["fcoin"] == 42
+    assert body["fcoin"] == 99982
     assert body["isvip"] is True
     assert body["latency_ms"] is not None
     dumped = json.dumps(body)

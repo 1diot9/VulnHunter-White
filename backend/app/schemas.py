@@ -93,7 +93,7 @@ class FofaTestOut(BaseModel):
     ok: bool
     latency_ms: int | None = None
     username: str = ""
-    fcoin: int | None = None
+    fcoin: int | None = None  # FOFA F点（info/my 的 fofa_point，不是旧币 fcoin）
     isvip: bool | None = None
     error: str | None = None
     account_error: bool = False
@@ -206,6 +206,8 @@ class VulnDetail(VulnOut):
     merged_from_ids: list[int] = Field(default_factory=list)
     verifier_poc: str | None = None
     verifier_response: str | None = None
+    verifier_targets: list[dict[str, Any]] = Field(default_factory=list)
+    verifier_fofa_query: str | None = None
 
 
 class VulnTrackingIn(BaseModel):

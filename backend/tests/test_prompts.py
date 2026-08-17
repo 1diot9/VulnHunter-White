@@ -293,12 +293,21 @@ def test_verifier_prompt_requires_fofa_and_one_success():
     assert "任一" in text or "任一目标" in text
     assert "poc" in text
     assert "response" in text
+    assert "未测" in text
+    assert "targets" in text
+    assert "共享" in text
+    assert "fofa_query" in text
     initial = load_prompt("initial/verifier.md")
     assert "FofaSearch" in initial
     assert "FinishVerifier" in initial
     assert "${fofa_query}" in initial
+    assert "${fofa_shared}" in initial
     assert "poc=" in initial
     assert "response=" in initial
+    assert "targets=" in initial
+    assert "fofa_query=" in initial
+    assert "未测" in initial
+    assert "共享" in initial
     assert "增删改" in text or "禁止" in text
 
 
