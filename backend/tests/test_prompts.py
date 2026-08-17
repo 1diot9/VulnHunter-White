@@ -208,9 +208,11 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "不要重新梳理项目结构" in worker
     assert "不要重复分析项目结构" in initial
     assert "不要重复尝试摘要中已走过的路径" in initial
-    assert "仅最新一轮的「建议后续方向」仍可能有效" in worker
-    assert "仅最新一轮的「建议后续方向」仍可能有效" in initial
-    assert "系统注入历史摘要时只会保留最新一轮的该段" in worker
+    assert "不要按历史摘要里的建议改方向" in worker
+    assert "不要按历史摘要里的建议改方向" in initial
+    assert "不要写「建议后续方向」" in worker
+    assert "仅最新一轮" not in worker
+    assert "仅最新一轮" not in initial
     assert "templates/round-report.md" in worker
     assert "## 本轮挖掘方向" in worker
     assert "templates/round-report.md" in initial

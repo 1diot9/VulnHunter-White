@@ -110,6 +110,8 @@ def needs_compress(
 _SUMMARY_REST = re.compile(r"^(rescue-|round-)?\d+\.md$")
 _ROUND_FILE = re.compile(r"^round-(\d+)\.md$")
 _WORKER_ROUND_SUMMARY = re.compile(r"^(\d+)\.md$")
+_FOLLOWUP_HEADING = re.compile(r"^##[ \t]*建议后续方向[ \t]*\r?$", re.MULTILINE)
+_NEXT_H2 = re.compile(r"^##[ \t]+\S", re.MULTILINE)
 
 
 def _phase_summary_files(d: Path, phase: str, *, rescue: bool | None = None) -> list[Path]:
@@ -161,6 +163,33 @@ def _read_capped(path: Path, max_chars: int) -> str | None:
     text = path.read_text(encoding="utf-8", errors="replace").strip()
     if not text:
         return None
+    if len(text) > max_chars:
+        return text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars]"
+    return text
+
+
+def strip_followup_section(text: str) -> str:
+    """Drop ## 建议后续方向 so historical advice cannot steer the next Worker round."""
+    match = _FOLLOWUP_HEADING.search(text)
+    if not match:
+        return text
+    rest = text[match.end() :]
+    next_h2 = _NEXT_H2.search(rest)
+    tail = rest[next_h2.start() :] if next_h2 else ""
+    head = text[: match.start()].rstrip()
+    if tail.strip():
+        return f"{head}\n{tail.lstrip()}"
+    return f"{head}\n"
+
+
+def _read_round_for_inject(path: Path, max_chars: int) -> str:
+    """Read a round report/summary for Worker inject; always strip follow-up advice before capping."""
+    if not path.is_file() or path.stat().st_size <= 0:
+        return "（空）"
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return "（空）"
+    text = strip_followup_section(text)
     if len(text) > max_chars:
         return text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars]"
     return text
@@ -227,11 +256,12 @@ def inject_worker_prior_block(project_id: int) -> str:
         n = len(reports)
         parts.append(
             f"## 最近 {n} 轮挖掘摘要（不要重复已尝试路径）\n"
-            "以下为 FinishRound 落盘的单轮报告。已审计文件、已走调用链、已否决方向不要再分析一遍；从本轮注入入口的新调用链继续。\n"
+            "以下为 FinishRound 落盘的单轮报告。已审计文件、已走调用链、已否决方向不要再分析一遍；"
+            "从本轮注入入口的新调用链继续，不要按历史摘要里的建议改方向。\n"
         )
         round_cap = settings.round_report_inject_max_chars
         for num, path in reports:
-            text = _read_capped(path, round_cap) or "（空）"
+            text = _read_round_for_inject(path, round_cap)
             parts.append(f"### 第 {num} 轮 · workspace/rounds/{path.name}\n{text}\n")
     else:
         summaries = list_recent_worker_round_summaries(project_id)
@@ -239,11 +269,12 @@ def inject_worker_prior_block(project_id: int) -> str:
             n = len(summaries)
             parts.append(
                 f"## 最近 {n} 轮挖掘摘要（不要重复已尝试路径）\n"
-                "尚无 FinishRound 报告，改注入最近的轮次压缩摘要。已完成工作与已尝试路径不要再走一遍。\n"
+                "尚无 FinishRound 报告，改注入最近的轮次压缩摘要。已完成工作与已尝试路径不要再走一遍；"
+                "从本轮注入入口继续，不要按历史摘要里的建议改方向。\n"
             )
             round_cap = settings.round_report_inject_max_chars
             for num, path in summaries:
-                text = _read_capped(path, round_cap) or "（空）"
+                text = _read_round_for_inject(path, round_cap)
                 parts.append(f"### 第 {num} 轮压缩摘要 · docs/summaries/{path.name}\n{text}\n")
 
     if not parts:

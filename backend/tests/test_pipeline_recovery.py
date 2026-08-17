@@ -7,7 +7,13 @@ from datetime import timedelta
 
 from sqlalchemy.exc import OperationalError
 
-from app.agent.compression import inject_summary_block, latest_summary, write_summary
+from app.agent.compression import (
+    inject_summary_block,
+    inject_worker_prior_block,
+    latest_summary,
+    strip_followup_section,
+    write_summary,
+)
 from app.config import settings
 from app.services.ingest import build_file_index
 from app.services.paths import docs_dir, old_vulns_dir, tool_exec_errors_path, workspace_dir
@@ -292,9 +298,21 @@ def _write_round_report(project: int, n: int, text: str) -> None:
     (rounds / f"round-{n}.md").write_text(text, encoding="utf-8")
 
 
-def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):
-    from app.agent.compression import inject_worker_prior_block
+def test_strip_followup_section_keeps_later_h2():
+    text = (
+        "## 已排除\n- 旧路径 A\n\n"
+        "## 建议后续方向\n- 去看 SqlUtils\n\n"
+        "## 备注\n- 保留\n"
+    )
+    out = strip_followup_section(text)
+    assert "去看 SqlUtils" not in out
+    assert "旧路径 A" in out
+    assert "## 备注" in out
+    assert "保留" in out
+    assert "建议后续方向" not in out
 
+
+def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):
     _write_recon_docs(project)
     for n in range(1, 13):
         _write_round_report(project, n, f"[round={n}] 已审 LoginController。")
@@ -316,9 +334,29 @@ def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):
     assert "### 第 2 轮 ·" not in block
 
 
-def test_worker_prior_block_falls_back_to_compression_summaries(tmp_env, project):
-    from app.agent.compression import inject_worker_prior_block, write_summary
+def test_worker_prior_block_strips_followup_from_all_rounds(tmp_env, project):
+    _write_recon_docs(project)
+    _write_round_report(
+        project,
+        1,
+        "## 已排除\n- 旧路径 A\n\n## 建议后续方向\n- 去看 SqlUtils\n",
+    )
+    _write_round_report(
+        project,
+        2,
+        "## 已排除\n- SqlUtils 已排除\n\n## 建议后续方向\n- 去看 QuartzJobController\n",
+    )
 
+    block = inject_worker_prior_block(project)
+    assert "旧路径 A" in block
+    assert "SqlUtils 已排除" in block
+    assert "去看 SqlUtils" not in block
+    assert "去看 QuartzJobController" not in block
+    assert "## 建议后续方向" not in block
+    assert "不要按历史摘要里的建议改方向" in block
+
+
+def test_worker_prior_block_falls_back_to_compression_summaries(tmp_env, project):
     _write_recon_docs(project)
     for n in range(1, 4):
         write_summary(project, "worker-round", f"压缩摘要轮 {n} 已走 /admin。")

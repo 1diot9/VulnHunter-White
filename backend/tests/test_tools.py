@@ -1204,3 +1204,39 @@ def test_finish_round_after_injected_entry_is_marked(tmp_env, project):
     report = workspace_dir(project) / "rounds" / "round-3.md"
     assert report.read_text(encoding="utf-8") == "入口已查清"
 
+
+def test_finish_round_strips_followup_section(tmp_env, project):
+    from app.services.paths import src_dir, workspace_dir
+    from app.tools.phase_worker import FINISH_FILE_ENTRY_MSG
+
+    src = src_dir(project)
+    (src / "app" / "Helper.java").write_text("class Helper {}\n", encoding="utf-8")
+    build_file_index(project)
+    ctx = ToolContext(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        file_path="app/Main.java",
+    )
+    ctx.state["round_id"] = 4
+    registry.dispatch(ctx, "FinishFile", {"path": "app/Helper.java"})
+    entry = registry.dispatch(ctx, "FinishFile", {"path": "app/Main.java"})
+    assert entry["ok"] is True
+    assert entry["message"] == FINISH_FILE_ENTRY_MSG
+
+    done = registry.dispatch(
+        ctx,
+        "FinishRound",
+        {
+            "report": (
+                "## 已排除\n- 旧路径 A\n\n"
+                "## 建议后续方向\n- 去看 QuartzJobController\n"
+            )
+        },
+    )
+    assert done["ok"] is True
+    text = (workspace_dir(project) / "rounds" / "round-4.md").read_text(encoding="utf-8")
+    assert "旧路径 A" in text
+    assert "去看 QuartzJobController" not in text
+    assert "## 建议后续方向" not in text
+

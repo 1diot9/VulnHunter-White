@@ -366,11 +366,12 @@ def _finish_round(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": FINISH_ROUND_NEED_ENTRY.format(injected=injected)}
     report = args.get("report") or args.get("summary") or ""
     if report:
+        from ..agent.compression import strip_followup_section
         from .sandbox import assert_writable
 
         path = assert_writable(ctx.project_id, f"workspace/rounds/round-{ctx.state.get('round_id', 0)}.md")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(report), encoding="utf-8")
+        path.write_text(strip_followup_section(str(report)), encoding="utf-8")
     ctx.state["round_finished"] = True
     ctx.state["finished_files_this_round"] = []
     return {"ok": True, "message": "本轮审计结束"}
@@ -524,7 +525,7 @@ def register_worker_tools() -> None:
             name="FinishRound",
             description=(
                 "仅当一开始注入的入口文件已完整分析后结束本轮。"
-                "须附 report，结构对齐 templates/round-report.md（本轮入口、挖掘方向、已尝试、已排除、建议后续方向）。"
+                "须附 report，结构对齐 templates/round-report.md（本轮入口、挖掘方向、已尝试、已排除）。不要写建议后续方向。"
                 "中途 FinishFile 非入口文件后禁止立刻调用；须先 FinishFile 该注入入口。"
             ),
             parameters={
@@ -535,8 +536,7 @@ def register_worker_tools() -> None:
                         "description": (
                             "本轮挖掘摘要（中文），结构对齐 templates/round-report.md，"
                             "须含 ## 本轮入口、## 本轮挖掘方向、## 已尝试、"
-                            "## 已排除（后续轮不要再走）、## 建议后续方向。"
-                            "建议后续方向只写此刻仍未覆盖、且不在更早轮已尝试/已排除里的方向。"
+                            "## 已排除（后续轮不要再走）。不要写建议后续方向。"
                         ),
                     },
                     "summary": {
