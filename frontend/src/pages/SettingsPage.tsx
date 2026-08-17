@@ -25,6 +25,9 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false)
   const [probeOk, setProbeOk] = useState<boolean | null>(null)
   const [probeMsg, setProbeMsg] = useState('')
+  const [fofaTesting, setFofaTesting] = useState(false)
+  const [fofaOk, setFofaOk] = useState<boolean | null>(null)
+  const [fofaMsg, setFofaMsg] = useState('')
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -101,6 +104,35 @@ export default function SettingsPage() {
       setProbeMsg(String(e))
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function testFofa() {
+    setFofaTesting(true)
+    setFofaOk(null)
+    setFofaMsg('')
+    try {
+      const body: { key?: string; base_url?: string } = {}
+      if (fofaKey.trim()) body.key = fofaKey.trim()
+      if (fofaBaseUrl.trim()) body.base_url = fofaBaseUrl.trim()
+      const out = await api.testFofa(body)
+      if (!out.ok) {
+        setFofaOk(false)
+        setFofaMsg(out.error || '连通失败')
+        return
+      }
+      const parts = ['连通正常']
+      if (out.username) parts.push(`账号 ${out.username}`)
+      if (out.fcoin != null) parts.push(`F点 ${out.fcoin}`)
+      if (out.isvip) parts.push('VIP')
+      if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
+      setFofaOk(true)
+      setFofaMsg(parts.join(' · '))
+    } catch (e) {
+      setFofaOk(false)
+      setFofaMsg(String(e))
+    } finally {
+      setFofaTesting(false)
     }
   }
 
@@ -285,6 +317,21 @@ export default function SettingsPage() {
             onChange={(e) => setFofaKey(e.target.value)}
             placeholder="FOFA API key"
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" disabled={fofaTesting} onClick={testFofa}>
+              {fofaTesting ? '测试中…' : '连通测试'}
+            </Button>
+          </div>
+          {fofaMsg ? (
+            <div className="flex items-start gap-2 text-sm">
+              {fofaOk != null ? <Badge variant={fofaOk ? 'success' : 'destructive'}>{fofaOk ? '成功' : '失败'}</Badge> : null}
+              <span className={fofaOk === false ? 'text-red-300' : 'text-slate-300'}>{fofaMsg}</span>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">
+              连通测试走 FOFA info/my，校验 Key 与剩余 F 点。使用当前表单值，空 Key 则用已保存配置，不会自动保存。
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={save}>保存</Button>

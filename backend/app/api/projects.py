@@ -29,6 +29,7 @@ from ..services.pipeline import (
     control_phase,
     get_phase_states,
     note_audit_mode_changed,
+    note_verifier_enabled,
     request_cancel,
     request_pause,
     request_phase_pause,
@@ -317,6 +318,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         if body.verifier_enabled is True and not old_verifier:
             queued = enqueue_confirmed_frontend(project_id)
             live_log.system(project_id, f"已开启 Verifier，排队 {queued} 条前台漏洞")
+            note_verifier_enabled(project_id)
             if p.status == "completed" and queued > 0:
                 p.status = "auditing"
                 p.phase = "verifier"

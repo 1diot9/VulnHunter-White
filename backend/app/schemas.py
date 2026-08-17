@@ -82,6 +82,23 @@ class LlmTestOut(BaseModel):
     reply: str | None = None
 
 
+class FofaProbeIn(BaseModel):
+    """Unsaved form values for FOFA connectivity test."""
+
+    key: str | None = None
+    base_url: str | None = None
+
+
+class FofaTestOut(BaseModel):
+    ok: bool
+    latency_ms: int | None = None
+    username: str = ""
+    fcoin: int | None = None
+    isvip: bool | None = None
+    error: str | None = None
+    account_error: bool = False
+
+
 MANUAL_LAB_PROMPT_MAX = 20000
 
 
@@ -187,6 +204,8 @@ class VulnDetail(VulnOut):
     expected_evidence: str | None = None
     report_md: str | None = None
     merged_from_ids: list[int] = Field(default_factory=list)
+    verifier_poc: str | None = None
+    verifier_response: str | None = None
 
 
 class VulnTrackingIn(BaseModel):

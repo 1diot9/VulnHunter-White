@@ -4,6 +4,7 @@ import {
   formatSeverity,
   formatSubmissionTier,
   formatTrackingStatus,
+  formatVerifierStatus,
 } from './utils'
 
 export type VulnGroup = {
@@ -283,6 +284,9 @@ export function vulnMatchesQuery(
     v.tracking_status,
     formatTrackingStatus(v.tracking_status),
     formatAttackSurface(v.attack_surface, v.required_account),
+    v.verifier_status,
+    formatVerifierStatus(v.verifier_status),
+    v.verifier_verified_url,
     projectName,
     String(v.id),
     `#${v.id}`,

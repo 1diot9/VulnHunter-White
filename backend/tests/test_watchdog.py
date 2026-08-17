@@ -32,8 +32,9 @@ def test_tool_call_resets_no_tool_counter():
 
 def test_repeated_identical_tool_calls():
     w = AgentWatchdog()
-    assert w.max_same_tool_calls == 3
+    assert w.max_same_tool_calls == 4
     call = {"name": "Read", "arguments": {"path": "a.java"}}
+    assert w.observe_tools([call]) is None
     assert w.observe_tools([call]) is None
     assert w.observe_tools([call]) is None
     reason = w.observe_tools([call])
@@ -138,10 +139,13 @@ def test_reviewer_lab_no_tool_nudge():
     assert w.note_no_tools() == LAB_NO_TOOL_NUDGE
     w2 = AgentWatchdog(phase="reviewer")
     assert "ConfirmVuln" in w2.note_no_tools()
+    w3 = AgentWatchdog(phase="verifier")
+    assert "FofaSearch" in w3.note_no_tools()
+    assert "FinishVerifier" in w3.note_no_tools()
 
 
 def test_fix_and_reviewer_have_no_finish_nudge():
-    for phase in ("fix", "reviewer", "recon-mark", "recon"):
+    for phase in ("fix", "reviewer", "recon-mark", "recon", "verifier"):
         w = AgentWatchdog(phase=phase)
         for _ in range(60):
             assert w.note_turn() is None

@@ -259,6 +259,12 @@ def note_audit_mode_changed(project_id: int, mode: str) -> None:
     )
 
 
+def note_verifier_enabled(project_id: int) -> None:
+    """Enabling Verifier mid-run should not inherit a leftover phase-pause bit."""
+    if not _pause_event(project_id).is_set():
+        _phase_pause_event(project_id, "verifier").clear()
+
+
 def request_resume(project_id: int) -> None:
     _pause_event(project_id).clear()
     for phase in CONTROL_PHASES:
@@ -2243,7 +2249,13 @@ def _run_reviewer_once(project_id: int) -> None:
 
 
 def _run_verifier_once(project_id: int) -> None:
-    from .verifier import extract_fofa_query, pick_pending_verifier_vuln, read_report_md
+    from .verifier import (
+        extract_fofa_query,
+        internet_test_block_reason_for_vuln,
+        mark_internet_unsafe_skipped,
+        pick_pending_verifier_vuln,
+        read_report_md,
+    )
 
     cancel = _cancel_event(project_id)
     try:
@@ -2282,6 +2294,15 @@ def _run_verifier_once(project_id: int) -> None:
             return
         vuln_id = vuln.id
         report_md = read_report_md(project_id, vuln_id)
+        unsafe = internet_test_block_reason_for_vuln(vuln, report_md)
+        if unsafe:
+            mark_internet_unsafe_skipped(project_id, vuln_id, unsafe)
+            live_log.system(
+                project_id,
+                f"漏洞 #{vuln_id} 跳过互联网复测：{unsafe}",
+                phase="verifier",
+            )
+            return
         fofa_query = extract_fofa_query(report_md) or "（报告内未解析到 FOFA 语句，请 Read 后自行提炼）"
         payload = {
             "title": vuln.title,

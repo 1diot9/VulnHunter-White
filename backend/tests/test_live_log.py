@@ -86,6 +86,8 @@ def test_event_matches_phase_groups_fix_under_worker():
     assert event_matches_phase({"phase": "reviewer", "kind": "agent"}, "reviewer-review")
     assert not event_matches_phase({"phase": "reviewer-lab", "kind": "agent"}, "reviewer-review")
     assert not event_matches_phase({"kind": "system", "text": "x"}, "reviewer")
+    assert event_matches_phase({"phase": "verifier", "kind": "agent"}, "verifier")
+    assert not event_matches_phase({"phase": "verifier", "kind": "agent"}, "reviewer")
     assert not event_matches_phase({"phase": "worker", "kind": "agent"}, "recon")
 
 

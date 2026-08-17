@@ -44,6 +44,21 @@ export function formatTrackingStatus(value: string | null | undefined): string {
   }
 }
 
+export function formatVerifierStatus(value: string | null | undefined): string | null {
+  switch (value) {
+    case 'pending':
+      return '互联网验证中'
+    case 'verified':
+      return '互联网已复现'
+    case 'failed':
+      return '互联网未复现'
+    case 'skipped':
+      return '互联网验证跳过'
+    default:
+      return null
+  }
+}
+
 export const AUDIT_MODE_OPTIONS = [
   {
     value: 'bounty' as const,

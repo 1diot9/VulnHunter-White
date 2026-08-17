@@ -5,7 +5,8 @@ import json
 from fastapi import APIRouter
 
 from ..models import AppSettings, SessionLocal
-from ..schemas import LlmModelListOut, LlmProbeIn, LlmTestOut, SettingsOut, SettingsUpdate
+from ..schemas import FofaProbeIn, FofaTestOut, LlmModelListOut, LlmProbeIn, LlmTestOut, SettingsOut, SettingsUpdate
+from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.llm_settings import (
     load_providers_raw,
@@ -75,3 +76,8 @@ def probe_llm_models(body: LlmProbeIn) -> LlmModelListOut:
 @router.post("/llm/test", response_model=LlmTestOut)
 def probe_llm_test(body: LlmProbeIn) -> LlmTestOut:
     return test_connectivity(body)
+
+
+@router.post("/fofa/test", response_model=FofaTestOut)
+def probe_fofa_test(body: FofaProbeIn) -> FofaTestOut:
+    return test_fofa_connectivity(body)

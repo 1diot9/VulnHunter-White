@@ -123,6 +123,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["audit_mode"] == "bounty"
         assert created.json()["manual_lab"] is False
         assert created.json()["manual_lab_prompt"] == ""
+        assert created.json()["verifier_enabled"] is False
         full = client.post(
             "/api/projects",
             json={
@@ -274,6 +275,7 @@ def test_project_file_progress_counts(tmp_env, project):
         assert body["lab_setup_done"] is False
         assert body["manual_lab"] is False
         assert body["manual_lab_prompt"] == ""
+        assert body["verifier_enabled"] is False
         assert body["files_total"] == 4
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
@@ -638,6 +640,7 @@ def test_phase_control_endpoints(tmp_env, project, monkeypatch):
         body = client.get(f"/api/projects/{project}").json()
         assert "phase_states" in body
         assert "worker" in body["phase_states"]
+        assert "verifier" in body["phase_states"]
         bad = client.post(f"/api/projects/{project}/phases/nope/pause")
         assert bad.status_code == 400
         paused = client.post(f"/api/projects/{project}/phases/worker/pause")

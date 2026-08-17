@@ -146,6 +146,8 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             expected_evidence=v.expected_evidence,
             report_md=report_md,
             merged_from_ids=merged_from,
+            verifier_poc=getattr(v, "verifier_poc", None),
+            verifier_response=getattr(v, "verifier_response", None),
         )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -11,6 +12,7 @@ import httpx
 
 from ..config import settings
 from ..models import AppSettings, SessionLocal
+from ..schemas import FofaProbeIn, FofaTestOut
 from .http_client import http_client
 
 FOFA_DEFAULT_BASE = "https://fofa.info"
@@ -224,6 +226,74 @@ def search(
         "sample": sample,
         "guidance": (
             f"默认返回最多 {FOFA_DEFAULT_SIZE} 条。按报告 PoC 逐个复测，"
-            "任一目标成功即 FinishVerifier(verdict=success, verified_url=...)，不要扫完一片。"
+            "任一目标成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=...)，不要扫完一片。"
         ),
     }
+
+
+def _short_error(text: str, limit: int = 300) -> str:
+    t = " ".join((text or "").split())
+    if len(t) > limit:
+        return t[: limit - 1] + "…"
+    return t
+
+
+def test_connectivity(body: FofaProbeIn) -> FofaTestOut:
+    """Ping FOFA /api/v1/info/my using the form key, else the saved/env key."""
+    form_key = (body.key or "").strip()
+    api_key = form_key or resolve_fofa_key()
+    if not api_key:
+        return FofaTestOut(ok=False, error="未配置 FOFA Key，请先填写或保存")
+    try:
+        base = assert_safe_fofa_base((body.base_url or "").strip() or resolve_fofa_base_url())
+    except FofaError as e:
+        return FofaTestOut(ok=False, error=str(e), account_error=e.account_error)
+    started = time.perf_counter()
+    try:
+        with http_client(timeout=15.0) as client:
+            resp = client.get(f"{base}/api/v1/info/my", params={"key": api_key})
+            try:
+                data = resp.json()
+            except Exception:
+                latency = int((time.perf_counter() - started) * 1000)
+                return FofaTestOut(
+                    ok=False,
+                    latency_ms=latency,
+                    error=f"FOFA 返回非 JSON (HTTP {resp.status_code}): {_short_error(resp.text, 160)}",
+                )
+    except httpx.TimeoutException:
+        return FofaTestOut(ok=False, error="请求超时，请检查 FOFA Base URL、代理或网络")
+    except httpx.ConnectError:
+        return FofaTestOut(ok=False, error="无法连接 FOFA，请检查 Base URL 与代理")
+    except httpx.HTTPError as e:
+        return FofaTestOut(ok=False, error=f"FOFA 请求失败: {type(e).__name__}: {e}")
+    latency = int((time.perf_counter() - started) * 1000)
+    if not isinstance(data, dict):
+        return FofaTestOut(ok=False, latency_ms=latency, error="FOFA 返回格式异常")
+    if resp.status_code >= 400 or data.get("error"):
+        errmsg = str(data.get("errmsg") or data.get("message") or f"HTTP {resp.status_code}")
+        account = _is_account_error(errmsg)
+        return FofaTestOut(
+            ok=False,
+            latency_ms=latency,
+            error=_short_error(f"FOFA 错误: {errmsg}"),
+            account_error=account,
+        )
+    username = str(data.get("username") or "").strip()
+    fcoin_raw = data.get("fcoin")
+    if fcoin_raw is None:
+        fcoin_raw = data.get("fofa_point")
+    try:
+        fcoin = int(fcoin_raw) if fcoin_raw is not None else None
+    except (TypeError, ValueError):
+        fcoin = None
+    isvip = data.get("isvip")
+    if isvip is not None:
+        isvip = bool(isvip)
+    return FofaTestOut(
+        ok=True,
+        latency_ms=latency,
+        username=username,
+        fcoin=fcoin,
+        isvip=isvip,
+    )

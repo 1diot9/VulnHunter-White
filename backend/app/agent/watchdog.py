@@ -30,7 +30,7 @@ LAB_NO_TOOL_NUDGE = (
 
 VERIFIER_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。请立刻 Read 漏洞报告，用 FofaSearch 搜最多 10 个同款目标，"
-    "按报告 PoC 复测；任一成功即 FinishVerifier(verdict=success)。不要空转。"
+    "按报告 PoC 复测；任一成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=...)。不要空转。"
 )
 
 NO_TOOL_NUDGE = (

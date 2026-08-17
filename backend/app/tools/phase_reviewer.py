@@ -407,10 +407,13 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         db.commit()
         status = vuln.status
     queued = False
+    skip_reason = ""
     if surface == "frontend" and status in ("confirmed", "static_only"):
         from ..services.verifier import enqueue_frontend_vuln
 
-        queued = enqueue_frontend_vuln(ctx.project_id, int(vuln_id))
+        result = enqueue_frontend_vuln(ctx.project_id, int(vuln_id))
+        queued = bool(result.get("queued"))
+        skip_reason = str(result.get("reason") or "")
     ctx.state["review_done"] = True
     ctx.state["review_verdict"] = status
     out: dict[str, Any] = {
@@ -432,6 +435,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
     if queued:
         out["message"] = "已确认前台漏洞，已排队 Verifier 做互联网复测"
+    elif skip_reason:
+        out["verifier_skip_reason"] = skip_reason
+        out["message"] = f"已确认前台漏洞。未做互联网复测：{skip_reason}"
     if account:
         out["required_account_label"] = _ACCOUNT_LABELS[account]
     return out

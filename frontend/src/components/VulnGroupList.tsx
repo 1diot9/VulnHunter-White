@@ -13,6 +13,7 @@ import {
   formatSeverityScore,
   formatSubmissionTier,
   formatTrackingStatus,
+  formatVerifierStatus,
   severityScoreBadgeClass,
 } from '../lib/utils'
 
@@ -29,6 +30,7 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
   const score = formatSeverityScore(v.severity_score)
   const tier = formatSubmissionTier(v.submission_tier)
+  const verifier = formatVerifierStatus(v.verifier_status)
   return (
     <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', nested && 'mt-0.5 gap-1')}>
       {nested ? (
@@ -74,6 +76,14 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       </Badge>
       {surface ? (
         <span className={cn('text-xs text-slate-400', nested && 'text-[11px] text-slate-500')}>{surface}</span>
+      ) : null}
+      {verifier ? (
+        <Badge
+          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
+          variant={v.verifier_status === 'verified' ? 'success' : v.verifier_status === 'failed' ? 'destructive' : 'outline'}
+        >
+          {verifier}
+        </Badge>
       ) : null}
     </div>
   )
@@ -129,6 +139,16 @@ function VulnRow({
           {v.title}
         </div>
         <StatusBadges v={v} nested={nested} />
+        {v.verifier_status === 'verified' && v.verifier_verified_url ? (
+          <div
+            className={cn(
+              'mt-1 break-all text-xs text-emerald-300/90',
+              nested && 'mt-0.5 text-[10px] text-emerald-400/70',
+            )}
+          >
+            复现目标 {v.verifier_verified_url}
+          </div>
+        ) : null}
         <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
           #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
           {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}

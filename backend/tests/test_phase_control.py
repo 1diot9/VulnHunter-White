@@ -34,6 +34,7 @@ def test_project_pause_pauses_all_phases(tmp_env, project):
     assert pipeline._phase_is_paused(project, "recon")
     assert pipeline._phase_is_paused(project, "worker")
     assert pipeline._phase_is_paused(project, "reviewer")
+    assert pipeline._phase_is_paused(project, "verifier")
     assert pipeline.get_phase_states(project)["project_paused"] is True
 
 

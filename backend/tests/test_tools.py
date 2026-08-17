@@ -713,6 +713,7 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
         project_id=project, role="worker", phase="worker", worker_id="worker-2-def"
     )
     reviewer = ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=9)
+    verifier = ToolContext(project_id=project, role="verifier", phase="verifier", vuln_id=9)
     fixer = ToolContext(project_id=project, role="fix", phase="fix", vuln_id=9)
 
     r_recon = registry.dispatch(
@@ -727,6 +728,9 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
     r_rev = registry.dispatch(
         reviewer, "TodoWrite", {"todos": [{"id": "1", "content": "review", "status": "pending"}]}
     )
+    r_ver = registry.dispatch(
+        verifier, "TodoWrite", {"todos": [{"id": "1", "content": "verify", "status": "pending"}]}
+    )
     r_fix = registry.dispatch(
         fixer, "TodoWrite", {"todos": [{"id": "1", "content": "fix", "status": "pending"}]}
     )
@@ -735,6 +739,7 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
     assert r_wa["path"] == "workspace/todos-worker-worker-1-abc.json"
     assert r_wb["path"] == "workspace/todos-worker-worker-2-def.json"
     assert r_rev["path"] == "workspace/todos-reviewer-9.json"
+    assert r_ver["path"] == "workspace/todos-verifier-9.json"
     assert r_fix["path"] == "workspace/todos-fix-9.json"
 
     ws = workspace_dir(project)
@@ -742,11 +747,13 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
     wa_todos = json.loads((ws / "todos-worker-worker-1-abc.json").read_text(encoding="utf-8"))
     wb_todos = json.loads((ws / "todos-worker-worker-2-def.json").read_text(encoding="utf-8"))
     rev_todos = json.loads((ws / "todos-reviewer-9.json").read_text(encoding="utf-8"))
+    ver_todos = json.loads((ws / "todos-verifier-9.json").read_text(encoding="utf-8"))
     fix_todos = json.loads((ws / "todos-fix-9.json").read_text(encoding="utf-8"))
     assert recon_todos[0]["content"] == "recon-task"
     assert wa_todos[0]["content"] == "worker-a"
     assert wb_todos[0]["content"] == "worker-b"
     assert rev_todos[0]["content"] == "review"
+    assert ver_todos[0]["content"] == "verify"
     assert fix_todos[0]["content"] == "fix"
     assert not (ws / "todos.json").exists()
     assert todo_relpath(recon) != todo_relpath(worker_a)
@@ -790,6 +797,10 @@ def test_openai_tools_for_role_contains_expected():
     assert "Write" in lab_names
     assert "ConfirmVuln" not in lab_names
     assert "ReturnToWorker" not in lab_names
+    verifier_names = {t["function"]["name"] for t in registry.openai_tools_for_role("verifier")}
+    assert "FofaSearch" in verifier_names
+    assert "FinishVerifier" in verifier_names
+    assert "ConfirmVuln" not in verifier_names
     injected_shells = recon_names & SHELL_TOOLS
     assert injected_shells == {native_shell_tool()}
 

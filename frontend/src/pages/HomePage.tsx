@@ -5,11 +5,12 @@ import { AuditModeSelect } from '../components/AuditModeSelect'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import PhaseFlow from '../components/PhaseFlow'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatAuditMode, formatDateTime, formatFileProgress, formatTokenUsage } from '../lib/utils'
+import { formatAuditMode, formatDateTime, formatFileProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 export default function HomePage() {
@@ -107,7 +108,9 @@ export default function HomePage() {
       </Card>
 
       <div className="flex w-full flex-col gap-3">
-        {projects.map((p) => (
+        {projects.map((p) => {
+          const runStatus = formatProjectRunStatus(p.status, p.project_paused)
+          return (
           <Card key={p.id} className="w-full">
             <CardHeader>
               <div className="min-w-0">
@@ -120,6 +123,21 @@ export default function HomePage() {
                   {formatAuditMode(p.audit_mode)} · {p.identity || p.source_url || p.source_type} · {formatDateTime(p.created_at)}
                 </CardDescription>
               </div>
+              <CardAction>
+                <Badge
+                  variant={
+                    runStatus === '已完成'
+                      ? 'success'
+                      : runStatus === '已停止'
+                        ? 'destructive'
+                        : runStatus === '已暂停'
+                          ? 'warning'
+                          : 'info'
+                  }
+                >
+                  {runStatus}
+                </Badge>
+              </CardAction>
             </CardHeader>
             <CardContent className="space-y-3">
               <PhaseFlow
@@ -147,7 +165,8 @@ export default function HomePage() {
               {p.error ? <p className="text-xs text-red-300">{p.error}</p> : null}
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
         {projects.length === 0 ? (
           <Card className="w-full">
             <CardContent className="text-sm text-muted-foreground">暂无项目，先导入一个 Web 源码仓。</CardContent>

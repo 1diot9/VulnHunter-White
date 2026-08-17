@@ -30,6 +30,7 @@ INITIAL_DOCS = (
     "reviewer-lab-retry-loop.md",
     "reviewer-lab-retry-timeout.md",
     "reviewer-lab-retry-other.md",
+    "verifier.md",
 )
 
 
@@ -279,6 +280,23 @@ def test_reviewer_lab_prompt_is_setup_only():
     assert "do not review vulnerabilities" in docker
 
 
+def test_verifier_prompt_requires_fofa_and_one_success():
+    text = load_prompt("verifier.md")
+    assert "FofaSearch" in text
+    assert "FinishVerifier" in text
+    assert "10" in text
+    assert "任一" in text or "任一目标" in text
+    assert "poc" in text
+    assert "response" in text
+    initial = load_prompt("initial/verifier.md")
+    assert "FofaSearch" in initial
+    assert "FinishVerifier" in initial
+    assert "${fofa_query}" in initial
+    assert "poc=" in initial
+    assert "response=" in initial
+    assert "增删改" in text or "禁止" in text
+
+
 def test_old_vuln_prompt_persist_is_not_completion():
     text = load_prompt("recon-old-vuln.md")
     assert "只落盘，不会结束本会话" in text
@@ -286,4 +304,4 @@ def test_old_vuln_prompt_persist_is_not_completion():
     assert "索引齐全后系统会结束" not in text
     initial = load_prompt("initial/recon-old-vuln.md")
     assert "落盘不会结束本会话" in initial
-    assert "WriteOldVuln(done=true)" in initial
+    assert "WriteOldVuln(done=true" in initial

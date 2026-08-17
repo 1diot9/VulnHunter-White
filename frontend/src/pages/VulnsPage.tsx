@@ -23,6 +23,7 @@ import {
   formatSeverityScore,
   formatSubmissionTier,
   formatTrackingStatus,
+  formatVerifierStatus,
   severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -118,6 +119,7 @@ export default function VulnsPage() {
   const detailScore = formatSeverityScore(detail?.severity_score)
   const detailTier = formatSubmissionTier(detail?.submission_tier)
   const detailTracking = formatTrackingStatus(detail?.tracking_status)
+  const detailVerifier = formatVerifierStatus(detail?.verifier_status)
   const detailProject =
     detail?.project_name ||
     (detail ? projectNameById.get(detail.project_id) : undefined) ||
@@ -371,7 +373,51 @@ export default function VulnsPage() {
                     <Badge variant="outline">{detail.evidence_level}</Badge>
                   ) : null}
                   {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
+                  {detailVerifier ? (
+                    <Badge
+                      variant={
+                        detail.verifier_status === 'verified'
+                          ? 'success'
+                          : detail.verifier_status === 'failed'
+                            ? 'destructive'
+                            : 'outline'
+                      }
+                    >
+                      {detailVerifier}
+                    </Badge>
+                  ) : null}
+                  {detail.verifier_verified_url ? (
+                    <span className="text-xs text-slate-400">{detail.verifier_verified_url}</span>
+                  ) : null}
                 </div>
+                {detail.verifier_status === 'skipped' ? (
+                  <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
+                    未做互联网复测。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的类型不会打互联网目标；其它原因见下方报告「互联网验证」。
+                  </div>
+                ) : null}
+                {detail.verifier_status === 'verified' ? (
+                  <div className="space-y-2 rounded border border-emerald-900/50 bg-emerald-950/20 px-3 py-2">
+                    <div className="text-xs font-medium text-emerald-300/90">互联网复现证据</div>
+                    <div className="space-y-1 text-sm">
+                      <div className="text-xs text-slate-400">打通目标</div>
+                      <div className="break-all text-slate-200">
+                        {detail.verifier_verified_url || '（未记录 URL）'}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">使用的 PoC</div>
+                      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
+                        {detail.verifier_poc || '（未记录对该目标发出的请求）'}
+                      </pre>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">实际响应</div>
+                      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
+                        {detail.verifier_response || '（未记录该目标的响应）'}
+                      </pre>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"

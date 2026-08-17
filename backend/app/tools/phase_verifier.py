@@ -12,6 +12,9 @@ from ..services.verifier import (
     VERIFIER_FAILED,
     VERIFIER_SKIPPED,
     VERIFIER_VERIFIED,
+    clip_evidence,
+    format_verifier_report,
+    internet_test_block_reason,
     verifier_report_path,
     verifier_report_rel,
 )
@@ -41,8 +44,31 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if verdict not in _VERDICTS:
         return call_fail("verdict 须为 success|fail|no_targets|skipped")
     verified_url = str(args.get("verified_url") or "").strip()
-    if verdict == "success" and not verified_url:
-        return call_fail("success 必须提供 verified_url（实际打通的那个同款目标）")
+    poc = clip_evidence(args.get("poc"))
+    response = clip_evidence(args.get("response"))
+    if verdict == "success":
+        if not verified_url:
+            return call_fail("success 必须提供 verified_url（实际打通的那个同款目标）")
+        if not poc:
+            return call_fail("success 必须提供 poc（对该目标实际发出的请求或脚本，原样粘贴）")
+        if not response:
+            return call_fail("success 必须提供 response（该目标的真实 HTTP 响应/回显，原样粘贴）")
+        with SessionLocal() as db:
+            vuln = db.get(Vuln, int(vuln_id))
+            vtype = vuln.vuln_type if vuln else ""
+            title = vuln.title if vuln else ""
+            http_request = vuln.http_request if vuln else ""
+            stored_poc = vuln.poc_code if vuln else ""
+            expected = vuln.expected_evidence if vuln else ""
+        unsafe = internet_test_block_reason(
+            vuln_type=vtype,
+            title=title or "",
+            http_request=http_request or "",
+            poc_code="\n".join(p for p in (stored_poc, poc) if p),
+            expected_evidence=expected or "",
+        )
+        if unsafe:
+            return call_fail(unsafe)
     fofa_query = str(args.get("fofa_query") or "").strip()
     notes = str(args.get("notes") or "").strip()
     if not notes:
@@ -52,19 +78,18 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         tested_count = 0
     status = _VERDICTS[verdict]
-    body_lines = [
-        f"- 结论：{verdict}",
-        f"- FOFA 语法：`{fofa_query or '（未提供）'}`",
-        f"- 实测条数：{tested_count}",
-    ]
-    if verified_url:
-        body_lines.append(f"- 打通目标：{verified_url}")
-    body_lines.append("")
-    body_lines.append(notes)
-    body = "\n".join(body_lines)
+    body = format_verifier_report(
+        verdict=verdict,
+        fofa_query=fofa_query,
+        tested_count=tested_count,
+        verified_url=verified_url,
+        poc=poc,
+        response=response,
+        notes=notes,
+    )
     rel = verifier_report_rel(int(vuln_id))
     report_path = verifier_report_path(ctx.project_id, int(vuln_id))
-    report_path.write_text(f"# Verifier · 漏洞 #{int(vuln_id)}\n\n{body}\n", encoding="utf-8")
+    report_path.write_text(f"# Verifier · 漏洞 #{int(vuln_id)}\n\n{body}", encoding="utf-8")
     upsert_report_section(vuln_dir(ctx.project_id, int(vuln_id)) / "report.md", _REVIEW_HEADING, body)
     with SessionLocal() as db:
         vuln = db.get(Vuln, int(vuln_id))
@@ -72,6 +97,8 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return call_fail("漏洞不存在")
         vuln.verifier_status = status
         vuln.verifier_verified_url = verified_url or None
+        vuln.verifier_poc = poc or None
+        vuln.verifier_response = response or None
         db.commit()
     ctx.state["verifier_done"] = True
     ctx.state["verifier_verdict"] = verdict
@@ -82,7 +109,7 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "verifier_status": status,
         "verified_url": verified_url or None,
         "report_path": rel,
-        "message": "已记录互联网验证结论，本轮结束。",
+        "message": "已记录互联网验证结论（目标 / PoC / 响应），本轮结束。",
     }
 
 
@@ -119,7 +146,9 @@ def register_verifier_tools() -> None:
             description=(
                 "提交互联网验证结论并结束本轮。任一 FOFA 目标按报告复测成功即 verdict=success；"
                 "搜到了但都没打通=fail；无样本=no_targets；无 key/网络不可用=skipped。"
-                "成功必须带 verified_url。不要在成功后再继续扫。"
+                "成功必须带 verified_url、poc（实际发出的请求/脚本）、response（该目标真实响应）。"
+                "任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞禁止互联网复测，应 verdict=skipped。"
+                "不要在成功后再继续扫。"
             ),
             parameters={
                 "type": "object",
@@ -133,9 +162,17 @@ def register_verifier_tools() -> None:
                         "type": "string",
                         "description": "实际打通的同款目标 URL，success 时必填",
                     },
+                    "poc": {
+                        "type": "string",
+                        "description": "对该目标实际发出的请求或脚本（curl/http/python 原样），success 时必填",
+                    },
+                    "response": {
+                        "type": "string",
+                        "description": "该目标的真实 HTTP 状态行、关键响应头与正文（原样粘贴），success 时必填",
+                    },
                     "fofa_query": {"type": "string", "description": "最终使用的 FOFA 语法"},
                     "tested_count": {"type": "integer", "description": "实际发过复测请求的目标数"},
-                    "notes": {"type": "string", "description": "测了哪些目标、证据摘要、失败原因"},
+                    "notes": {"type": "string", "description": "测了哪些目标、为何成功或失败"},
                 },
                 "required": ["verdict", "notes"],
             },

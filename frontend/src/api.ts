@@ -87,6 +87,8 @@ export type VulnDetail = Vuln & {
   expected_evidence: string | null
   report_md: string | null
   merged_from_ids?: number[]
+  verifier_poc?: string | null
+  verifier_response?: string | null
 }
 
 export type VulnFollowUpMessage = {
@@ -222,6 +224,21 @@ export type LlmTest = {
   latency_ms: number | null
   error: string | null
   reply: string | null
+}
+
+export type FofaProbeBody = {
+  key?: string | null
+  base_url?: string | null
+}
+
+export type FofaTest = {
+  ok: boolean
+  latency_ms: number | null
+  username: string
+  fcoin: number | null
+  isvip: boolean | null
+  error: string | null
+  account_error: boolean
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -371,6 +388,12 @@ export const api = {
     }),
   testLlm: (body: LlmProbeBody) =>
     request<LlmTest>('/api/settings/llm/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  testFofa: (body: FofaProbeBody) =>
+    request<FofaTest>('/api/settings/fofa/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
