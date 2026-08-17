@@ -20,11 +20,13 @@
 - 禁止只把一开始注入的入口文件标成 finish、却把沿途确认的非入口文件留给后续轮次。
 
 ### FinishRound（本轮收工、只一次）
-仅当**一开始注入的入口文件**已完成 source→sink 完整分析后才调用，并附简短单轮报告。
+仅当**一开始注入的入口文件**已完成 source→sink 完整分析后才调用，并用 `report` 编写本轮摘要。
 - 中途把非入口文件 FinishFile ≠ 本轮结束。
 - 收工顺序：注入入口查清 → FinishFile 该入口（若尚未标）→ 再 FinishRound。
 - 本轮至少成功过一次 `FinishFile` 才能 `FinishRound`（门闩，不是「标完就结束」）。
 - 若本轮注入入口尚未 FinishFile，FinishRound 会被拒绝。
+- `report` 必须为中文，结构对齐 `templates/round-report.md`，至少包含：`## 本轮入口`、`## 本轮挖掘方向`、`## 已尝试`、`## 已排除（后续轮不要再走）`、`## 建议后续方向`。
+- 写给后续轮：记录本轮假设、具体尝试与结果、已证伪方向；不要写成漏洞报告，也不要只写「已审计某某文件」。
 
 ## 什么算漏洞（提交闸门）
 source→sink 可达只是候选，**不是**漏洞。必须同时满足才 SubmitVuln：
@@ -44,7 +46,7 @@ source→sink 可达只是候选，**不是**漏洞。必须同时满足才 Subm
 2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence）。不要把「发现不安全 API」当成发现漏洞。
 3. 提交前必须 SearchOldVuln，避免重复报已有洞（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；若是新变体须在 source_sink 说明差异。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
-5. 边读边 FinishFile 不能作为入口的文件，然后继续挖。仅当本轮注入入口已完整分析后，才 FinishFile 它并 FinishRound。
+5. 边读边 FinishFile 不能作为入口的文件，然后继续挖。仅当本轮注入入口已完整分析后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
 6. 全部未 skip 文件审计完毕且无打回/修复中时，系统会结束挖掘阶段；你无需调用结束工具。文件都审完后不要再 SubmitVuln。
 
 ## PoC 要求

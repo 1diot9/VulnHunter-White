@@ -52,7 +52,7 @@ WORKER_FINISH_NUDGE = (
     "看门狗提醒：挖掘已连续 {n} 轮未调用 FinishFile。沿调用链已确认不能作为入口点的文件请立刻 "
     "FinishFile(paths=[...])，不要只标一开始注入的入口文件，也不要等收工再攒着——"
     "未标记的非入口文件会被再次注入。FinishFile 之后继续分析本轮注入入口，禁止立刻 FinishRound。"
-    "仅当一开始注入的入口文件 source→sink 已完整分析后，才 FinishFile 它并 FinishRound、附简短单轮报告。"
+    "仅当一开始注入的入口文件 source→sink 已完整分析后，才 FinishFile 它并 FinishRound；report 对齐 templates/round-report.md。"
     "仍有未查清的入口链路可继续，但不要重复已读代码或无限扩读。上下文会被压缩，拖延标记会丢失进展。"
 )
 

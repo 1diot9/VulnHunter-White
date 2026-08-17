@@ -150,6 +150,9 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "不要重新梳理项目结构" in worker
     assert "不要重复分析项目结构" in initial
     assert "不要重复尝试摘要中已走过的路径" in initial
+    assert "templates/round-report.md" in worker
+    assert "## 本轮挖掘方向" in worker
+    assert "templates/round-report.md" in initial
 
 
 def test_worker_prompt_requires_asset_search_fingerprints():

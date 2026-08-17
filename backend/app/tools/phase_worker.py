@@ -401,13 +401,24 @@ def register_worker_tools() -> None:
             name="FinishRound",
             description=(
                 "仅当一开始注入的入口文件已完整分析后结束本轮。"
+                "须附 report，结构对齐 templates/round-report.md（本轮入口、挖掘方向、已尝试、已排除、建议后续方向）。"
                 "中途 FinishFile 非入口文件后禁止立刻调用；须先 FinishFile 该注入入口。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "report": {"type": "string"},
-                    "summary": {"type": "string"},
+                    "report": {
+                        "type": "string",
+                        "description": (
+                            "本轮挖掘摘要（中文），结构对齐 templates/round-report.md，"
+                            "须含 ## 本轮入口、## 本轮挖掘方向、## 已尝试、"
+                            "## 已排除（后续轮不要再走）、## 建议后续方向。"
+                        ),
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "report 的别名，同样对齐 templates/round-report.md。",
+                    },
                 },
             },
             handler=_finish_round,

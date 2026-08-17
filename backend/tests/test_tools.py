@@ -942,6 +942,7 @@ def test_worker_finish_tools_decouple_file_and_round():
     }
     assert "禁止立刻 FinishRound" in tools["FinishFile"]
     assert "禁止立刻" in tools["FinishRound"]
+    assert "templates/round-report.md" in tools["FinishRound"]
     assert "本轮须已 FinishFile" not in tools["FinishRound"]
 
 
