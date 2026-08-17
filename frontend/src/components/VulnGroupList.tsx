@@ -12,6 +12,7 @@ import {
   formatSeverity,
   formatSeverityScore,
   formatSubmissionTier,
+  formatTrackingStatus,
   severityScoreBadgeClass,
 } from '../lib/utils'
 
@@ -49,6 +50,14 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       >
         {STATUS_LABEL[v.status] || v.status}
       </Badge>
+      {v.tracking_status === 'submitted' || v.tracking_status === 'ignored' ? (
+        <Badge
+          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
+          variant={v.tracking_status === 'submitted' ? 'success' : 'outline'}
+        >
+          {formatTrackingStatus(v.tracking_status)}
+        </Badge>
+      ) : null}
       {score ? (
         <Badge
           variant="outline"
@@ -93,8 +102,14 @@ function VulnRow({
           ? cn(
               'rounded-r-md border-l-[3px] border-cyan-700 bg-slate-950/80 px-2 py-1 text-slate-500',
               active && 'border-cyan-400 bg-cyan-950/40 text-slate-300',
+              v.tracking_status === 'submitted' && 'border-emerald-600/80 bg-emerald-500/20 text-slate-300',
             )
-          : cn('px-2.5 py-2.5', active && 'bg-muted'),
+          : cn(
+              'px-2.5 py-2.5',
+              active && v.tracking_status !== 'submitted' && 'bg-muted',
+              v.tracking_status === 'submitted' && 'bg-emerald-500/20',
+              v.tracking_status === 'ignored' && 'opacity-60',
+            ),
       )}
     >
       {onToggleSelect ? (
@@ -131,6 +146,7 @@ export default function VulnGroupList({
   projectNameById,
   tierFilter = 'all',
   emptyText = '暂无数据',
+  expandAll = false,
 }: {
   vulns: Vuln[]
   activeId?: number | null
@@ -139,12 +155,18 @@ export default function VulnGroupList({
   projectNameById?: Map<number, string>
   tierFilter?: VulnTierFilter
   emptyText?: string
+  expandAll?: boolean
 }) {
   const groups = useMemo(
     () => filterVulnGroups(groupVulnsByRootCause(vulns), tierFilter),
     [vulns, tierFilter],
   )
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (!expandAll) return
+    setExpanded(new Set(groups.filter((g) => g.others.length > 0).map((g) => g.id)))
+  }, [expandAll, groups])
 
   useEffect(() => {
     if (activeId == null) return
@@ -175,7 +197,12 @@ export default function VulnGroupList({
         const hasOthers = group.others.length > 0
         return (
           <div key={group.id}>
-            <div className="flex items-start">
+          <div
+            className={cn(
+              'flex items-start',
+              group.primary.tracking_status === 'submitted' && 'bg-emerald-500/20',
+            )}
+          >
               <div className="flex w-7 shrink-0 justify-center pt-2.5">
                 {hasOthers ? (
                   <button

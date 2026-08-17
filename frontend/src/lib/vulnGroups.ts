@@ -1,4 +1,10 @@
 import type { Vuln } from '../api'
+import {
+  formatAttackSurface,
+  formatSeverity,
+  formatSubmissionTier,
+  formatTrackingStatus,
+} from './utils'
 
 export type VulnGroup = {
   id: string
@@ -242,6 +248,49 @@ export function groupVulnsByRootCause(vulns: Vuln[]): VulnGroup[] {
     })
   }
   return groups
+}
+
+const SEARCH_STATUS_LABEL: Record<string, string> = {
+  pending_review: '待审',
+  confirmed: '已确认',
+  false_positive: '误报',
+  static_only: '仅静态',
+  returned: '已打回',
+  merged: '已并入',
+}
+
+export function vulnMatchesQuery(
+  v: Vuln,
+  query: string,
+  projectNameById?: Map<number, string>,
+): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!tokens.length) return true
+  const projectName = v.project_name || projectNameById?.get(v.project_id) || `项目 ${v.project_id}`
+  const haystack = [
+    v.title,
+    v.vuln_type,
+    v.cwe,
+    v.file_path,
+    v.line_no != null ? String(v.line_no) : '',
+    v.root_cause_key,
+    v.severity,
+    formatSeverity(v.severity),
+    v.status,
+    SEARCH_STATUS_LABEL[v.status] || '',
+    v.submission_tier,
+    formatSubmissionTier(v.submission_tier),
+    v.tracking_status,
+    formatTrackingStatus(v.tracking_status),
+    formatAttackSurface(v.attack_surface, v.required_account),
+    projectName,
+    String(v.id),
+    `#${v.id}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+  return tokens.every((token) => haystack.includes(token))
 }
 
 export function filterVulnGroups(groups: VulnGroup[], tier: VulnTierFilter = 'all'): VulnGroup[] {

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Project, type Vuln, type VulnDetail } from '../api'
+import { SearchIcon, XIcon } from 'lucide-react'
+import { api, type Project, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,14 +13,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
 import VulnGroupList from '../components/VulnGroupList'
-import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
+import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
 import {
   formatAttackSurface,
   formatDateTime,
   formatSeverity,
   formatSeverityScore,
   formatSubmissionTier,
+  formatTrackingStatus,
   severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -35,6 +38,13 @@ const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
   untiered: '未分层',
 }
 
+const TRACKING_FILTER_LABEL: Record<'all' | VulnTrackingStatus, string> = {
+  all: '全部标记',
+  none: '未标记',
+  submitted: '已提交',
+  ignored: '已忽略',
+}
+
 export default function VulnsPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -42,11 +52,14 @@ export default function VulnsPage() {
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'false_positive' | 'pending_review'>('all')
   const [surfaceFilter, setSurfaceFilter] = useState<'all' | 'frontend' | 'backend'>('all')
   const [tierFilter, setTierFilter] = useState<VulnTierFilter>('all')
+  const [trackingFilter, setTrackingFilter] = useState<'all' | VulnTrackingStatus>('all')
   const [projectId, setProjectId] = useState<number | undefined>()
   const [projects, setProjects] = useState<Project[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
   const [detail, setDetail] = useState<VulnDetail | null>(null)
   const [selected, setSelected] = useState<number[]>([])
+  const [marking, setMarking] = useState(false)
+  const [search, setSearch] = useState('')
 
   const projectNameById = useMemo(() => {
     const map = new Map<number, string>()
@@ -60,6 +73,9 @@ export default function VulnsPage() {
         projectId,
         filter === 'all' ? undefined : filter,
         surfaceFilter === 'all' ? undefined : surfaceFilter,
+        undefined,
+        undefined,
+        trackingFilter === 'all' ? undefined : trackingFilter,
       )
       .then(setVulns)
       .catch(() => {})
@@ -68,11 +84,11 @@ export default function VulnsPage() {
     api.listProjects().then(setProjects).catch(() => {})
   }, [])
 
-  useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter])
+  useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter, trackingFilter])
 
   useEffect(() => {
     setSelected([])
-  }, [filter, projectId, surfaceFilter, tierFilter])
+  }, [filter, projectId, surfaceFilter, tierFilter, trackingFilter])
 
   useEffect(() => {
     if (!detailId) {
@@ -82,17 +98,26 @@ export default function VulnsPage() {
     api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
   }, [detailId])
 
+  const searchedVulns = useMemo(
+    () => vulns.filter((v) => vulnMatchesQuery(v, search, projectNameById)),
+    [vulns, search, projectNameById],
+  )
   const visibleVulns = useMemo(
-    () => filterVulnGroups(groupVulnsByRootCause(vulns), tierFilter).flatMap((g) => [g.primary, ...g.others]),
-    [vulns, tierFilter],
+    () =>
+      filterVulnGroups(groupVulnsByRootCause(searchedVulns), tierFilter).flatMap((g) => [
+        g.primary,
+        ...g.others,
+      ]),
+    [searchedVulns, tierFilter],
   )
   const cveCandidateIds = useMemo(
-    () => vulns.filter((v) => v.submission_tier === 'cve_candidate').map((v) => v.id),
-    [vulns],
+    () => searchedVulns.filter((v) => v.submission_tier === 'cve_candidate').map((v) => v.id),
+    [searchedVulns],
   )
   const detailSurface = formatAttackSurface(detail?.attack_surface, detail?.required_account)
   const detailScore = formatSeverityScore(detail?.severity_score)
   const detailTier = formatSubmissionTier(detail?.submission_tier)
+  const detailTracking = formatTrackingStatus(detail?.tracking_status)
   const detailProject =
     detail?.project_name ||
     (detail ? projectNameById.get(detail.project_id) : undefined) ||
@@ -122,19 +147,104 @@ export default function VulnsPage() {
     await downloadIds(ids, 'vulns-cve-candidates.zip')
   }
 
+  function applyTracking(updated: Array<Pick<Vuln, 'id' | 'tracking_status'>>) {
+    const byId = new Map(updated.map((v) => [v.id, (v.tracking_status ?? 'none') as VulnTrackingStatus]))
+    setVulns((prev) =>
+      prev.map((v) => {
+        const next = byId.get(v.id)
+        return next == null ? v : { ...v, tracking_status: next }
+      }),
+    )
+    setDetail((cur) => {
+      if (!cur) return cur
+      const next = byId.get(cur.id)
+      return next == null ? cur : { ...cur, tracking_status: next }
+    })
+  }
+
+  async function markIds(ids: number[], tracking_status: VulnTrackingStatus) {
+    if (!ids.length || marking) return
+    setMarking(true)
+    try {
+      if (ids.length === 1) {
+        applyTracking([await api.updateVulnTracking(ids[0], tracking_status)])
+      } else {
+        applyTracking(await api.markVulns(ids, tracking_status))
+      }
+      await refresh()
+    } catch {
+      /* ignore transient */
+    } finally {
+      setMarking(false)
+    }
+  }
+
+  async function markSelected(tracking_status: VulnTrackingStatus) {
+    await markIds(selected, tracking_status)
+  }
+
+  async function markDetail(tracking_status: VulnTrackingStatus) {
+    if (!detail) return
+    await markIds([detail.id], tracking_status)
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">漏洞产出</h1>
-          <p className="text-sm text-slate-400">按项目、状态与价值分层筛选；同根因报告折叠在危害最大的条目下。</p>
+          <p className="text-sm text-slate-400">
+            按项目、状态、价值分层与提交标记筛选；同根因报告折叠在危害最大的条目下。
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            disabled={!selected.length || marking}
+            onClick={() => markSelected('submitted')}
+          >
+            标记已提交
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!selected.length || marking}
+            onClick={() => markSelected('ignored')}
+          >
+            标记已忽略
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!selected.length || marking}
+            onClick={() => markSelected('none')}
+          >
+            取消标记
+          </Button>
           <Button variant="outline" onClick={downloadCveCandidates} disabled={!cveCandidateIds.length && !selected.length}>
             仅下载有 CVE 价值
           </Button>
           <Button onClick={download}>批量下载</Button>
         </div>
+      </div>
+
+      <div className="relative">
+        <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          className="pr-8 pl-8"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索标题、路径、类型、编号、项目…"
+          aria-label="搜索漏洞"
+        />
+        {search ? (
+          <button
+            type="button"
+            className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            aria-label="清除搜索"
+            onClick={() => setSearch('')}
+          >
+            <XIcon className="size-4" />
+          </button>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -179,6 +289,24 @@ export default function VulnsPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select
+          value={trackingFilter}
+          onValueChange={(value) => {
+            if (value == null) return
+            setTrackingFilter(value as typeof trackingFilter)
+          }}
+        >
+          <SelectTrigger className="w-auto min-w-32">
+            <SelectValue>{TRACKING_FILTER_LABEL[trackingFilter]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
+            {(Object.keys(TRACKING_FILTER_LABEL) as Array<keyof typeof TRACKING_FILTER_LABEL>).map((k) => (
+              <SelectItem key={k} value={k}>
+                {TRACKING_FILTER_LABEL[k]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {(
           [
             ['all', '全部'],
@@ -195,10 +323,12 @@ export default function VulnsPage() {
 
       <Card className="max-h-[calc(100vh-13rem)] gap-0 divide-y divide-border overflow-auto py-0">
         <VulnGroupList
-          vulns={vulns}
+          vulns={searchedVulns}
           tierFilter={tierFilter}
           activeId={detailId}
           selectedIds={selected}
+          expandAll={Boolean(search.trim())}
+          emptyText={search.trim() ? '无匹配漏洞' : '暂无数据'}
           onToggleSelect={(id, checked) =>
             setSelected((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)))
           }
@@ -234,10 +364,33 @@ export default function VulnsPage() {
                   ) : null}
                   <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
                   <Badge variant="info">{detail.status}</Badge>
+                  {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (
+                    <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
+                  ) : null}
                   {detail.evidence_level && detail.evidence_level !== 'static_only' ? (
                     <Badge variant="outline">{detail.evidence_level}</Badge>
                   ) : null}
                   {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={detail.tracking_status === 'submitted' ? 'default' : 'outline'}
+                    disabled={marking}
+                    onClick={() =>
+                      markDetail(detail.tracking_status === 'submitted' ? 'none' : 'submitted')
+                    }
+                  >
+                    {detail.tracking_status === 'submitted' ? '取消已提交' : '标记已提交'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={detail.tracking_status === 'ignored' ? 'default' : 'outline'}
+                    disabled={marking}
+                    onClick={() => markDetail(detail.tracking_status === 'ignored' ? 'none' : 'ignored')}
+                  >
+                    {detail.tracking_status === 'ignored' ? '取消已忽略' : '标记已忽略'}
+                  </Button>
                 </div>
                 {detail.submission_reason ? (
                   <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
