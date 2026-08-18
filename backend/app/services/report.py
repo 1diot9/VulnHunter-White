@@ -83,11 +83,67 @@ def extract_asset_queries(text: str) -> tuple[str, str]:
     )
 
 
+_HINT_SKIP_RE = re.compile(
+    r"(暂未明确|待补|待根据|待确认|待运行|第一段|第二段|TODO|TBD)",
+    re.IGNORECASE,
+)
+_VULN_TITLE_RE = re.compile(
+    r"(注入|未授权|漏洞|XSS|SQLi|RCE|SSRF|上传|遍历|绕过)",
+    re.IGNORECASE,
+)
+_VENDOR_SECTION_RE = re.compile(
+    r"(?ms)^##\s+漏洞厂商全称\s*\n+(.+?)(?=\n##\s|\Z)"
+)
+_PRODUCT_SECTION_RE = re.compile(
+    r"(?ms)^##\s+已知受影响产品及版本\s*\n+(.+?)(?=\n##\s|\Z)"
+)
+
+
 def is_placeholder_query(raw: object) -> bool:
     value = _normalize_query(raw)
     if not value or value in {"-", "n/a", "N/A"}:
         return True
     return bool(_PLACEHOLDER_QUERY_RE.search(value))
+
+
+def _hint_line(raw: str) -> str:
+    line = ""
+    for row in str(raw or "").splitlines():
+        text = row.strip().lstrip("-* ").strip()
+        if text:
+            line = text
+            break
+    line = re.sub(r"[`*_]+", "", line)
+    line = re.sub(r"\s+", " ", line).strip()
+    if len(line) > 80:
+        line = line[:80].strip()
+    return line
+
+
+def extract_product_hints(report_md: str) -> list[str]:
+    """Vendor / product names from the report, skipping placeholders and vuln titles."""
+    body = report_md or ""
+    hints: list[str] = []
+    for pattern in (_VENDOR_SECTION_RE, _PRODUCT_SECTION_RE):
+        match = pattern.search(body)
+        if not match:
+            continue
+        value = _hint_line(match.group(1))
+        if not value or _HINT_SKIP_RE.search(value) or value in {"-", "n/a", "N/A"}:
+            continue
+        if value not in hints:
+            hints.append(value)
+    h1 = _H1_RE.search(body)
+    if h1:
+        title = _hint_line(h1.group(1).lstrip("#"))
+        if (
+            title
+            and not _HINT_SKIP_RE.search(title)
+            and not _VULN_TITLE_RE.search(title)
+            and title not in hints
+        ):
+            hints.append(title)
+    return hints
 
 
 def fingerprint_query_error(raw: object, *, label: str) -> str | None:

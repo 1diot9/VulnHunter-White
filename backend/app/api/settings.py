@@ -8,6 +8,8 @@ from ..models import AppSettings, SessionLocal
 from ..schemas import (
     FofaProbeIn,
     FofaTestOut,
+    GithubProbeIn,
+    GithubTestOut,
     LiveLogPurgeIn,
     LiveLogPurgeOut,
     LlmModelListOut,
@@ -17,6 +19,7 @@ from ..schemas import (
     SettingsUpdate,
 )
 from ..services.fofa import test_connectivity as test_fofa_connectivity
+from ..services.github_probe import test_connectivity as test_github_connectivity
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.llm_settings import (
     load_providers_raw,
@@ -97,6 +100,11 @@ def probe_llm_test(body: LlmProbeIn) -> LlmTestOut:
 @router.post("/fofa/test", response_model=FofaTestOut)
 def probe_fofa_test(body: FofaProbeIn) -> FofaTestOut:
     return test_fofa_connectivity(body)
+
+
+@router.post("/github/test", response_model=GithubTestOut)
+def probe_github_test(body: GithubProbeIn) -> GithubTestOut:
+    return test_github_connectivity(body)
 
 
 @router.post("/logs/purge", response_model=LiveLogPurgeOut)

@@ -4,6 +4,9 @@
 
 源码已导入 `src/`。在项目 `env/` 下搭建 Web 靶场（规范见后文 docker 说明）：
 - 优先复用 `src/` 里已有的 Dockerfile / compose / 官方镜像
+- 自建镜像必须打成 `${lab_image}`；mysql/redis 等官方镜像保持原名，不要改成 vulnhunter-*
+- 对外 Web 容器名必须是 `${lab_container}`；依赖容器 `${lab_container}-<role>`（如 `-db`、`-mysql`）
+- compose 项目名必须是 `${lab_compose_project}`（文件里写 `name:`，或 `docker compose -p`），不要用目录名 `env`
 - 写出 `env/env.json`（`accepted`、`runtime`、`image`、`container_name`、端口、`target_url`、`lab_state`、`credentials`、`status`）
 - 容器可访问且 `accepted=true`、`status=running` 后，系统会写 `docs/lab.md`
 - 业务端口与调试端口分离；调试端口绑定 127.0.0.1

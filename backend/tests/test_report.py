@@ -215,3 +215,10 @@ def test_is_placeholder_query():
     assert is_placeholder_query("待运行环境确认")
     assert is_placeholder_query("待根据应用标题、稳定 body/header 特征、favicon hash 等确认")
     assert not is_placeholder_query('title="XXOA办公系统" && body="Copyright"')
+
+
+def test_extract_product_hints_skips_placeholders():
+    from app.services.report import extract_product_hints
+
+    text = "# SQLI in login\n\n## 漏洞厂商全称\n暂未明确\n\n## 已知受影响产品及版本\nXXOA 办公系统\n"
+    assert extract_product_hints(text) == ["XXOA 办公系统"]

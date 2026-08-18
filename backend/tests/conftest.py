@@ -44,6 +44,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.llm_settings as llm_settings
     import app.services.old_vuln_crawl as old_vuln_crawl
     import app.services.github_issues as github_issues
+    import app.services.github_probe as github_probe
     import app.services.pipeline as pipeline
     import app.services.verifier as verifier_service
     import app.services.vuln_followup as vuln_followup
@@ -70,6 +71,7 @@ def tmp_env(tmp_path, monkeypatch):
         llm_settings,
         old_vuln_crawl,
         github_issues,
+        github_probe,
         vuln_followup,
         ghsa_service,
         fofa_service,

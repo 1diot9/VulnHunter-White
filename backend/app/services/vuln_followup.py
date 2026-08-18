@@ -111,7 +111,7 @@ def _load_active_context(project_id: int, vuln_id: int) -> dict[str, Any] | None
     return None
 
 
-def _latest_reviewer_context(project_id: int, vuln_id: int) -> dict[str, Any] | None:
+def latest_reviewer_context(project_id: int, vuln_id: int) -> dict[str, Any] | None:
     return _load_archived_context(project_id, vuln_id) or _load_active_context(project_id, vuln_id)
 
 
@@ -157,7 +157,7 @@ def _save_thread(project_id: int, vuln_id: int, messages: list[dict[str, Any]]) 
 
 def list_followups(vuln_id: int) -> dict[str, Any]:
     vuln = _get_vuln(vuln_id)
-    ctx = _latest_reviewer_context(vuln.project_id, vuln.id)
+    ctx = latest_reviewer_context(vuln.project_id, vuln.id)
     thread = _load_thread(vuln.project_id, vuln.id)
     return {
         "vuln_id": vuln.id,
@@ -173,7 +173,7 @@ def ask_followup(vuln_id: int, question: str) -> dict[str, Any]:
     if not question:
         raise ValueError("追问内容不能为空")
     vuln = _get_vuln(vuln_id)
-    ctx = _latest_reviewer_context(vuln.project_id, vuln.id)
+    ctx = latest_reviewer_context(vuln.project_id, vuln.id)
     if not ctx:
         raise ReviewerContextMissing("暂无该漏洞的 Reviewer 上下文归档，需等待新审核轮次完成后再追问")
     thread = _load_thread(vuln.project_id, vuln.id)

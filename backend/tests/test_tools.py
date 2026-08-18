@@ -131,6 +131,74 @@ def test_submit_vuln_requires_fields(tmp_env, project):
     assert "缺少必填" in out["error"]
 
 
+def test_submit_vuln_rejects_hardcoded_http_poc(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "RCE",
+            "vuln_type": "rce",
+            "cwe": "CWE-78",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> exec",
+            "auth_premise": "未授权",
+            "http_request": "GET /x HTTP/1.1\nHost: x\n",
+            "poc_code": "import requests\nprint(requests.get('http://127.0.0.1:18080/x').text)\n",
+            "expected_evidence": "id",
+        },
+    )
+    assert out["ok"] is False
+    assert "-u/--url" in out["error"]
+
+
+def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):
+    from app.services.poc_script import read_poc_code
+    from app.services.paths import vuln_dir
+
+    payload = {
+        "title": "RCE in ping",
+        "vuln_type": "rce",
+        "cwe": "CWE-78",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "ping -> exec",
+        "auth_premise": "未授权",
+        "http_request": "GET /ping?cmd=id HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "uid=",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    assert out["ok"] is True
+    vuln_id = out["vuln_id"]
+    rewritten = (
+        "import argparse\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('-u', '--url', required=True)\n"
+        "p.add_argument('-c', '--cmd', default='id')\n"
+        "print(p.parse_args())\n"
+    )
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "poc_code": rewritten,
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        row = db.get(models.Vuln, vuln_id)
+        assert row.poc_code == rewritten
+    assert "--cmd" in (vuln_dir(project, vuln_id) / "poc.py").read_text(encoding="utf-8")
+    assert "--cmd" in (read_poc_code(project, vuln_id) or "")
+
+
 def test_submit_and_confirm_flow(tmp_env, project):
     payload = {
         "title": "SQLI in login",
@@ -481,6 +549,53 @@ def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
     assert conf["ok"] is True
     assert conf["evidence_level"] == "dynamic"
     assert conf["status"] == "confirmed"
+
+
+def test_collect_lab_fingerprints_allows_static_only(tmp_env, project, monkeypatch):
+    from app.services.lab import save_env
+
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["status"] == "static_only"
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+
+    def fake_fetch(url: str, *, timeout: float = 8.0):
+        html = b"<html><head><title>DemoCMS</title></head><body>ok</body></html>"
+        return 200, {"content-type": "text/html"}, html, url
+
+    monkeypatch.setattr("app.services.asset_proof.fetch_bytes", fake_fetch)
+    applied = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vuln_id),
+        "CollectLabFingerprints",
+        {"apply": True},
+    )
+    assert applied["ok"] is True, applied
+    assert applied["applied"] is True
 
 
 def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project):
@@ -913,25 +1028,26 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "MarkWeight" not in recon_names
     old_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln")}
     assert "WriteOldVuln" in old_names
+    assert "Grep" not in old_names
+    assert "Glob" not in old_names
     assert "SearchGHSA" not in old_names
+    assert "SearchGitHubIssues" not in old_names
     denied_ghsa = registry.dispatch(_ctx(project, "recon_old_vuln"), "SearchGHSA", {"query": "halo"})
     assert denied_ghsa["ok"] is False
     assert "无权" in denied_ghsa["error"]
+    denied_issues = registry.dispatch(_ctx(project, "recon_old_vuln"), "SearchGitHubIssues", {"query": "RCE"})
+    assert denied_issues["ok"] is False
+    assert "无权" in denied_issues["error"]
     assert "WebSearch" in old_names
-    assert "Grep" not in old_names
-    assert "Glob" not in old_names
-    denied_grep = registry.dispatch(_ctx(project, "recon_old_vuln"), "Grep", {"pattern": "eval"})
-    assert denied_grep["ok"] is False
-    assert "无权" in denied_grep["error"]
     assert "MarkSource" not in old_names
     assert "AddSourceExt" not in old_names
     assert "Write" not in old_names
     ghsa_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln_ghsa")}
     assert "WriteOldVuln" in ghsa_names
-    assert "SearchGHSA" in ghsa_names
-    assert "SearchGitHubIssues" in ghsa_names
     assert "Grep" not in ghsa_names
     assert "Glob" not in ghsa_names
+    assert "SearchGHSA" in ghsa_names
+    assert "SearchGitHubIssues" in ghsa_names
     assert "WebSearch" in ghsa_names
     ext_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_source_ext")}
     assert "AddSourceExt" in ext_names
@@ -939,12 +1055,22 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "MarkWeight" not in ext_names
     mark_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_mark")}
     assert mark_names == {"MarkSource", "MarkWeight", "MarkSkip"}
+    mark_tools = {
+        t["function"]["name"]: t["function"]["description"]
+        for t in registry.openai_tools_for_role("recon_mark")
+    }
+    assert "WebSocket" in mark_tools["MarkSource"]
+    assert "不要只标 HTTP" in mark_tools["MarkSource"]
+    assert "70–90" in mark_tools["MarkWeight"]
     worker_names = {t["function"]["name"] for t in registry.openai_tools_for_role("worker")}
     assert "FinishAudit" not in worker_names
     assert "FinishRound" in worker_names
     assert "AppendAffectedLocations" in worker_names
     assert "AddSourceExt" not in worker_names
     assert ROLE_ACL["worker"].isdisjoint({"FinishRecon", "FinishAudit", "ConfirmVuln", "WriteOldVuln"})
+    assert "FinishSink" not in ROLE_ACL["worker"]
+    assert "FinishSinkTriage" not in ROLE_ACL["worker"]
+    assert "FinishBypass" not in ROLE_ACL["worker"]
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
@@ -1263,15 +1389,30 @@ def test_recon_old_vuln_cannot_write(tmp_env, project):
 
 
 def test_recon_old_vuln_cannot_read_source(tmp_env, project):
-    src = tmp_env / "data" / "projects" / str(project.id) / "src" / "App.java"
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text("class App {}\n", encoding="utf-8")
-    for role in ("recon_old_vuln", "recon_old_vuln_ghsa"):
-        out = registry.dispatch(_ctx(project, role), "Read", {"path": "src/App.java"})
-        assert out["ok"] is False, role
-        assert "源码" in out["error"]
-        docs = registry.dispatch(_ctx(project, role), "Read", {"path": "docs/code-map.md"})
-        assert docs["ok"] is True, role
+    denied_grep = registry.dispatch(
+        _ctx(project, "recon_old_vuln"),
+        "Grep",
+        {"pattern": "TODO", "path": "src"},
+    )
+    assert denied_grep["ok"] is False
+    assert "无权" in denied_grep["error"]
+    out = registry.dispatch(
+        _ctx(project, "recon_old_vuln"),
+        "Read",
+        {"path": "src/app/Main.java"},
+    )
+    assert out["ok"] is False
+    assert "禁止读源码" in (out.get("error") or "")
+    docs = docs_dir(project)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "code-map.md").write_text("# map\n", encoding="utf-8")
+    allowed = registry.dispatch(
+        _ctx(project, "recon_old_vuln"),
+        "Read",
+        {"path": "docs/code-map.md"},
+    )
+    assert allowed["ok"] is True
+    assert any("map" in str(f.get("content") or "") for f in allowed.get("files") or [])
 
 
 def test_write_ready_env_json_generates_lab_doc(tmp_env, project):

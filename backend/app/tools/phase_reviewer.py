@@ -17,9 +17,11 @@ from ..services.asset_proof import (
     apply_asset_proof,
     collect_lab_fingerprints,
     maybe_enrich_asset_proof,
+    upgrade_project_fingerprints,
 )
 from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
+from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import upsert_report_section
 from ..services.root_cause import (
     canonical_root_cause_key,
@@ -352,6 +354,11 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     note = args.get("note") or ""
+    poc_code = args.get("poc_code")
+    if poc_code:
+        poc_blocked = poc_cli_block_reason(str(poc_code))
+        if poc_blocked:
+            return {"ok": False, "error": poc_blocked}
     with SessionLocal() as db:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
@@ -421,6 +428,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.submission_reason = submission.reason
         vuln.root_cause_key = submission.root_cause_key
         stamp_root_cause_on_parent(db, vuln)
+        if poc_code:
+            vuln.poc_code = str(poc_code)
+            write_poc_code(ctx.project_id, int(vuln_id), str(poc_code))
         if note:
             vuln.return_reason = None
         upsert_report_section(
@@ -481,7 +491,9 @@ def _collect_lab_fingerprints(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not collected.get("ok"):
         extras = {k: v for k, v in collected.items() if k not in {"ok", "error"}}
         return call_fail(str(collected.get("error") or "采集失败"), **extras)
+    upgrade_project_fingerprints(ctx.project_id, collected, origin="lab")
     if not bool(args.get("apply")):
+        collected["project_fingerprint_updated"] = True
         return collected
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
@@ -490,8 +502,12 @@ def _collect_lab_fingerprints(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
             return call_fail("漏洞不存在")
-        if vuln.status not in ("pending_review", "returned"):
-            return call_fail(f"仅 pending_review/returned 可回写资产证明，当前为 {vuln.status}")
+        if vuln.status not in ("pending_review", "returned", "static_only") and not (
+            vuln.status == "confirmed" and (vuln.evidence_level or "") == "static_only"
+        ):
+            return call_fail(
+                f"仅 pending_review/returned/static_only 可回写资产证明，当前为 {vuln.status}"
+            )
     applied = apply_asset_proof(
         ctx.project_id,
         int(vuln_id),
@@ -504,7 +520,8 @@ def _collect_lab_fingerprints(ctx, args: dict[str, Any]) -> dict[str, Any]:
     collected["path"] = applied["path"]
     collected["fofa"] = applied["fofa"]
     collected["x"] = applied["x"]
-    collected["message"] = f"已写入 {applied['path']} 的「互联网资产证明」"
+    upgrade_project_fingerprints(ctx.project_id, collected, origin="lab")
+    collected["message"] = f"已写入 {applied['path']} 的「互联网资产证明」，并升级项目共享指纹"
     return collected
 
 
@@ -586,8 +603,8 @@ def register_reviewer_tools() -> None:
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
                 "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
-                "有漏洞环境时顺带完善「互联网资产证明」：可先 CollectLabFingerprints，"
-                "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会按靶场自动补全。"
+                "有漏洞环境时若项目指纹仍缺，用 CollectLabFingerprints 升级项目共享指纹，"
+                "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会写入 docs/app-fingerprints.json 的共享指纹。"
             ),
             parameters={
                 "type": "object",
@@ -663,6 +680,13 @@ def register_reviewer_tools() -> None:
                             "禁止「或」/||。"
                         ),
                     },
+                    "poc_code": {
+                        "type": "string",
+                        "description": (
+                            "可选。若把 poc.py 改成 CLI 参数化（-u/--url，RCE 加 -c/--cmd），"
+                            "在此传入完整脚本，系统会回写 vulns/{id}/poc.py。"
+                        ),
+                    },
                     "note": {"type": "string"},
                 },
                 "required": [
@@ -681,10 +705,10 @@ def register_reviewer_tools() -> None:
         ToolSpec(
             name="CollectLabFingerprints",
             description=(
-                "从当前漏洞环境采集应用指纹（标题、header、body 稳定片段、favicon icon_hash），"
-                "并给出可复制的 FOFA / X 情报社区测绘语句。"
-                "有 Docker 靶场或人工靶场地址时，审核确认前应调用；"
-                "apply=true 时直接写回本条 pending 报告的「互联网资产证明」。"
+                "从当前漏洞环境采集应用指纹并**升级项目共享指纹**（docs/app-fingerprints.json），"
+                "全项目只识别一次，后续漏洞复用。"
+                "有 Docker 靶场或人工靶场地址时，仅当共享指纹仍缺标题/hash 才调用；"
+                "apply=true 时同时写回本条 pending 报告的「互联网资产证明」。"
                 "不要把漏洞路径当唯一指纹，不要编造 hash。"
             ),
             parameters={

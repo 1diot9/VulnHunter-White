@@ -8,6 +8,7 @@ from typing import Any
 
 from ..models import Project, SessionLocal, Vuln
 from ..vuln_types import normalize_vuln_type
+from .fofa import FOFA_DEFAULT_SIZE, FOFA_MAX_PAGES, FOFA_MAX_TARGETS
 from .paths import docs_dir, fofa_cache_path, vuln_dir
 from .report import upsert_report_section
 
@@ -20,6 +21,8 @@ VERIFIER_STATUSES = frozenset(
     {VERIFIER_NONE, VERIFIER_PENDING, VERIFIER_VERIFIED, VERIFIER_FAILED, VERIFIER_SKIPPED}
 )
 CONFIRMED_STATUSES = frozenset({"confirmed", "static_only"})
+FOFA_MAX_ATTEMPTS = 3
+VERIFIER_SUCCESS_MIN = 3
 _FOFA_BLOCK = re.compile(
     r"####\s*FOFA\s*\n+```(?:text|fofa)?\n(.*?)```",
     re.IGNORECASE | re.DOTALL,
@@ -122,9 +125,7 @@ def format_verifier_report(
 ) -> str:
     """Human-readable 互联网验证 section: target list, PoC, and response."""
     rows = list(targets or [])
-    success_n = sum(1 for t in rows if t.get("status") == "success")
-    fail_n = sum(1 for t in rows if t.get("status") == "fail")
-    untested_n = sum(1 for t in rows if t.get("status") == "untested")
+    success_n, fail_n, untested_n = target_status_counts(rows)
     lines = [
         f"- 结论：{verdict}",
         f"- FOFA 语法：`{fofa_query or '（未提供）'}`",
@@ -155,6 +156,14 @@ def format_verifier_report(
 
 def _md_cell(text: str) -> str:
     return (text or "").replace("|", "\\|").replace("\n", " ").strip() or "—"
+
+
+def target_status_counts(targets: list[dict[str, Any]] | None) -> tuple[int, int, int]:
+    rows = list(targets or [])
+    success_n = sum(1 for t in rows if t.get("status") == "success")
+    fail_n = sum(1 for t in rows if t.get("status") == "fail")
+    untested_n = sum(1 for t in rows if t.get("status") == "untested")
+    return success_n, fail_n, untested_n
 
 
 def target_key(raw: Any) -> str:
@@ -256,6 +265,36 @@ def merge_verifier_targets(
     return [by_key[k] for k in order]
 
 
+def fofa_row_key(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return target_key(raw.get("host")) or target_key(raw.get("ip"))
+    return target_key(raw)
+
+
+def merge_fofa_samples(
+    existing: list[Any] | None,
+    incoming: list[Any] | None,
+) -> tuple[list[Any], list[Any]]:
+    """Append FOFA hits that are not already in the shared sample. Returns (merged, new_rows)."""
+    by_key: dict[str, Any] = {}
+    order: list[str] = []
+    for item in existing or []:
+        key = fofa_row_key(item)
+        if not key or key in by_key:
+            continue
+        by_key[key] = item
+        order.append(key)
+    new_rows: list[Any] = []
+    for item in incoming or []:
+        key = fofa_row_key(item)
+        if not key or key in by_key:
+            continue
+        by_key[key] = item
+        order.append(key)
+        new_rows.append(item)
+    return [by_key[k] for k in order], new_rows
+
+
 def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
     """Return the project-wide FOFA search cache, or None if this project has not searched yet."""
     path = fofa_cache_path(project_id)
@@ -275,12 +314,84 @@ def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
         size = int(data.get("size") or 0)
     except (TypeError, ValueError):
         size = 0
+    try:
+        attempts = int(data.get("attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    attempted = data.get("attempt_queries")
+    if not isinstance(attempted, list):
+        attempted = [query] if query else []
+    frozen = bool(data.get("frozen"))
+    if sample:
+        frozen = True
+    elif attempts >= FOFA_MAX_ATTEMPTS:
+        frozen = True
+    page = _clamp_fofa_page(data.get("page"))
+    expanded = page >= FOFA_MAX_PAGES
     return {
         "query": query,
         "size": size,
         "returned": int(data.get("returned") or len(sample)),
         "sample": sample,
+        "attempts": max(attempts, len(attempted)),
+        "attempt_queries": [str(q).strip() for q in attempted if str(q).strip()],
+        "frozen": frozen,
+        "page": page,
+        "expanded": expanded,
     }
+
+
+def _clamp_fofa_page(raw: Any) -> int:
+    try:
+        page = int(raw or 1)
+    except (TypeError, ValueError):
+        page = 1
+    return max(1, page)
+
+
+def fofa_page(cache: dict[str, Any] | None) -> int:
+    return _clamp_fofa_page((cache or {}).get("page"))
+
+
+def fofa_pages_left(cache: dict[str, Any] | None) -> int:
+    return max(0, FOFA_MAX_PAGES - fofa_page(cache))
+
+
+def fofa_cache_has_targets(cache: dict[str, Any] | None) -> bool:
+    return bool(cache and cache.get("sample"))
+
+
+def fofa_cache_expanded(cache: dict[str, Any] | None) -> bool:
+    """True when FOFA pagination has reached the last allowed page."""
+    return fofa_page(cache) >= FOFA_MAX_PAGES
+
+
+def fofa_can_expand(cache: dict[str, Any] | None) -> bool:
+    return fofa_cache_has_targets(cache) and not fofa_cache_expanded(cache)
+
+
+def fofa_expand_hint(cache: dict[str, Any] | None) -> str:
+    """Tell the agent whether to keep expanding or stop at the 5-round cap."""
+    page = fofa_page(cache)
+    left = fofa_pages_left(cache)
+    if left <= 0:
+        return (
+            f"已搜满 {FOFA_MAX_PAGES} 轮 FOFA（每轮 {FOFA_DEFAULT_SIZE} 个，最多 {FOFA_MAX_TARGETS} 个目标）。"
+            f"测完仍不足 {VERIFIER_SUCCESS_MIN} 个成功则 fail。"
+        )
+    return (
+        f"本批测完仍不足 {VERIFIER_SUCCESS_MIN} 个成功时，保留已成功的，"
+        f"FofaSearch(expand=true) 再搜 {FOFA_DEFAULT_SIZE} 个新目标"
+        f"（当前第 {page}/{FOFA_MAX_PAGES} 轮，还可补搜 {left} 轮，最多 {FOFA_MAX_TARGETS} 个目标）。"
+    )
+
+
+def fofa_search_exhausted(cache: dict[str, Any] | None) -> bool:
+    if not cache:
+        return False
+    if fofa_cache_has_targets(cache):
+        return True
+    return bool(cache.get("frozen")) or int(cache.get("attempts") or 0) >= FOFA_MAX_ATTEMPTS
 
 
 def save_project_fofa_cache(
@@ -289,14 +400,37 @@ def save_project_fofa_cache(
     query: str,
     sample: list[Any] | None,
     size: int = 0,
+    attempts: int | None = None,
+    attempt_queries: list[str] | None = None,
+    frozen: bool | None = None,
+    page: int | None = None,
+    expanded: bool | None = None,
 ) -> dict[str, Any]:
-    """Freeze the first successful FOFA search so later vulns reuse it."""
+    """Persist FOFA search state. Freeze when samples exist or rewrite attempts are exhausted.
+
+    ``expanded`` is kept for callers; the stored flag is derived from page (>= FOFA_MAX_PAGES).
+    """
+    del expanded
     rows = list(sample or [])
+    existing = load_project_fofa_cache(project_id) or {}
+    queries = list(attempt_queries if attempt_queries is not None else existing.get("attempt_queries") or [])
+    q = str(query or "").strip()
+    if q and q not in queries:
+        queries.append(q)
+    n_attempts = int(attempts) if attempts is not None else max(int(existing.get("attempts") or 0), len(queries))
+    is_frozen = bool(frozen) if frozen is not None else bool(rows) or n_attempts >= FOFA_MAX_ATTEMPTS
+    page_n = _clamp_fofa_page(page if page is not None else existing.get("page"))
+    is_expanded = page_n >= FOFA_MAX_PAGES
     payload = {
-        "query": str(query or "").strip(),
+        "query": q or str(existing.get("query") or ""),
         "size": int(size or 0),
         "returned": len(rows),
         "sample": rows,
+        "attempts": n_attempts,
+        "attempt_queries": queries,
+        "frozen": is_frozen,
+        "page": page_n,
+        "expanded": is_expanded,
     }
     path = fofa_cache_path(project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,12 +441,14 @@ def save_project_fofa_cache(
 def seed_fofa_state(state: dict[str, Any], project_id: int) -> None:
     """Copy project FOFA cache into the agent loop so FinishVerifier works without re-search."""
     cache = load_project_fofa_cache(project_id)
-    if not cache:
+    if not cache or not fofa_cache_has_targets(cache):
         return
     if not str(state.get("fofa_query") or "").strip() and cache.get("query"):
         state["fofa_query"] = cache["query"]
-    if not state.get("fofa_targets"):
-        state["fofa_targets"] = list(cache.get("sample") or [])
+    cached_sample = list(cache.get("sample") or [])
+    current = list(state.get("fofa_targets") or [])
+    if not current or len(cached_sample) > len(current):
+        state["fofa_targets"] = cached_sample
         state["fofa_cached"] = True
 
 
@@ -320,30 +456,44 @@ def resolve_fofa_sample(project_id: int, state: dict[str, Any] | None = None) ->
     state = state or {}
     query = str(state.get("fofa_query") or "").strip()
     sample = list(state.get("fofa_targets") or [])
-    if query and sample:
-        return query, sample
     cache = load_project_fofa_cache(project_id)
-    if not cache:
-        return query, sample
-    if not query:
-        query = str(cache.get("query") or "").strip()
-    if not sample:
-        sample = list(cache.get("sample") or [])
+    if cache:
+        if not query:
+            query = str(cache.get("query") or "").strip()
+        cache_sample = list(cache.get("sample") or [])
+        if not sample or len(cache_sample) > len(sample):
+            sample = cache_sample
     return query, sample
 
 
 def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
-    if not cache:
-        return (
-            "本项目尚无共享 FOFA 结果。本条漏洞 FofaSearch 一次即可（默认 10 条），"
-            "结果写入 docs/fofa-targets.json，后续漏洞直接复用。不要搜第二次。"
+    if fofa_cache_has_targets(cache):
+        query = (cache or {}).get("query") or "（未记录）"
+        n = (cache or {}).get("returned") or len((cache or {}).get("sample") or [])
+        sample_json = json.dumps((cache or {}).get("sample") or [], ensure_ascii=False)
+        extra = (
+            f"凑满 {VERIFIER_SUCCESS_MIN} 个成功即可 FinishVerifier(verdict=success)，其余标 untested。"
+            + fofa_expand_hint(cache)
         )
-    query = cache.get("query") or "（未记录）"
-    n = cache.get("returned") or len(cache.get("sample") or [])
-    sample_json = json.dumps(cache.get("sample") or [], ensure_ascii=False)
+        return (
+            f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条）。不要为换语法再搜。"
+            f"直接用下列目标按本条报告复测：\n{sample_json}\n{extra}"
+        )
+    if fofa_search_exhausted(cache):
+        tried = "；".join((cache or {}).get("attempt_queries") or []) or "（未记录）"
+        return (
+            f"本项目 FOFA 已改写 {FOFA_MAX_ATTEMPTS} 次仍无样本（尝试过：{tried}）。"
+            "禁止再 FofaSearch，FinishVerifier(verdict=no_targets)。"
+        )
+    attempts = int((cache or {}).get("attempts") or 0)
+    left = max(0, FOFA_MAX_ATTEMPTS - attempts)
     return (
-        f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条）。禁止再调用 FofaSearch。"
-        f"直接用下列目标按本条报告复测：\n{sample_json}"
+        "本项目尚无共享 FOFA 命中。请用项目应用指纹（docs/app-fingerprints.json / 报告内语句）FofaSearch；"
+        f"0 条或占位语句时可改写语法再搜，最多共 {FOFA_MAX_ATTEMPTS} 次（还剩 {left} 次）。"
+        "有样本后写入 docs/fofa-targets.json，后续漏洞直接复用。"
+        f"首批默认 {FOFA_DEFAULT_SIZE} 个，凑满 {VERIFIER_SUCCESS_MIN} 个成功即结束；"
+        f"不足则保留成功的，FofaSearch(expand=true) 再搜下一轮"
+        f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。"
     )
 
 

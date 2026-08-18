@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
@@ -20,6 +22,12 @@ from ..schemas import (
     VulnTrackingIn,
 )
 from ..services.paths import project_root, vuln_dir
+from ..services.pipeline import (
+    DynamicVerifyRequestError,
+    dynamic_verify_flags,
+    request_dynamic_verify,
+)
+from ..services.poc_script import read_poc_code
 from ..services.report import stamp_produced_at
 from ..services import vuln_followup
 from ..services.verifier import parse_verifier_targets
@@ -27,6 +35,7 @@ from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, norm
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
+_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
 
 
@@ -39,14 +48,34 @@ class DownloadBody(BaseModel):
     ids: list[int]
 
 
+def _report_file(v: Vuln) -> Path:
+    if v.report_path:
+        return project_root(v.project_id) / v.report_path
+    return vuln_dir(v.project_id, v.id) / "report.md"
+
+
+def _read_report_md(v: Vuln) -> str | None:
+    path = _report_file(v)
+    if not path.is_file():
+        return None
+    return stamp_produced_at(path.read_text(encoding="utf-8", errors="ignore"), v.created_at)
+
+
+def _report_download_filename(vuln_id: int, title: str | None) -> str:
+    slug = _UNSAFE_FILENAME_RE.sub("_", (title or "").strip())
+    slug = re.sub(r"\s+", " ", slug).strip(" ._")
+    if len(slug) > 80:
+        slug = slug[:80].rstrip(" ._")
+    if slug:
+        return f"vuln-{vuln_id}-{slug}.md"
+    return f"vuln-{vuln_id}.md"
+
+
 def _report_score(v: Vuln) -> int | None:
     if v.severity_score is not None:
         return int(v.severity_score)
-    if v.report_path:
-        path = project_root(v.project_id) / v.report_path
-    else:
-        path = vuln_dir(v.project_id, v.id) / "report.md"
-    if not path.exists():
+    path = _report_file(v)
+    if not path.is_file():
         return None
     match = _SCORE_RE.search(path.read_text(encoding="utf-8", errors="ignore"))
     return int(match.group(1)) if match else None
@@ -121,14 +150,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
         v = db.query(Vuln).options(joinedload(Vuln.project)).filter(Vuln.id == vuln_id).first()
         if not v:
             raise HTTPException(404, "漏洞不存在")
-        report_md = None
-        if v.report_path:
-            p = project_root(v.project_id) / v.report_path
-            if p.exists():
-                report_md = stamp_produced_at(
-                    p.read_text(encoding="utf-8", errors="ignore"),
-                    v.created_at,
-                )
+        report_md = _read_report_md(v)
         merged_from = [
             row.id
             for row in (
@@ -138,12 +160,13 @@ def get_vuln(vuln_id: int) -> VulnDetail:
                 .all()
             )
         ]
+        can_dynamic, queued_dynamic = dynamic_verify_flags(v, project=v.project)
         return VulnDetail(
             **_vuln_out(v).model_dump(),
             source_sink=v.source_sink,
             auth_premise=v.auth_premise,
             http_request=v.http_request,
-            poc_code=v.poc_code,
+            poc_code=read_poc_code(v.project_id, v.id, fallback=v.poc_code),
             expected_evidence=v.expected_evidence,
             report_md=report_md,
             merged_from_ids=merged_from,
@@ -151,7 +174,40 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             verifier_response=getattr(v, "verifier_response", None),
             verifier_targets=parse_verifier_targets(getattr(v, "verifier_targets", None)),
             verifier_fofa_query=getattr(v, "verifier_fofa_query", None),
+            can_dynamic_verify=can_dynamic,
+            dynamic_verify_queued=queued_dynamic,
         )
+
+
+@router.get("/{vuln_id}/download")
+def download_vuln_report(vuln_id: int) -> Response:
+    with SessionLocal() as db:
+        v = db.get(Vuln, vuln_id)
+        if not v:
+            raise HTTPException(404, "漏洞不存在")
+        text = _read_report_md(v)
+        if text is None:
+            raise HTTPException(404, "报告不存在")
+        filename = _report_download_filename(v.id, v.title)
+        ascii_name = f"vuln-{v.id}.md"
+        return Response(
+            content=text.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{ascii_name}"; '
+                    f"filename*=UTF-8''{quote(filename)}"
+                ),
+            },
+        )
+
+
+@router.post("/{vuln_id}/dynamic-verify")
+def start_dynamic_verify(vuln_id: int) -> dict:
+    try:
+        return request_dynamic_verify(vuln_id)
+    except DynamicVerifyRequestError as e:
+        raise HTTPException(e.status_code, str(e)) from e
 
 
 @router.get("/{vuln_id}/follow-ups", response_model=VulnFollowUpThread)

@@ -54,7 +54,7 @@ summary: "{{summary}}"
 -
 
 ### 完整 PoC 描述
-（文字 + 请求包，请勿只放截图。可运行脚本见同目录 `poc.py`。）
+（文字 + 请求包，请勿只放截图。可运行脚本见同目录 `poc.py`，须支持对任意目标复测：`python poc.py -u <目标>`；RCE 另支持 `-c/--cmd` 并打印回显。）
 
 ```http
 
@@ -81,7 +81,10 @@ summary: "{{summary}}"
 若该文档尚不存在，写「动态环境尚未落盘，见 `docs/lab.md`」。
 
 ### 漏洞触发操作
--
+```text
+python poc.py -u http://目标:端口
+python poc.py -u http://目标:端口 -c "id"
+```
 
 ### 预期证据
 （说明成功利用后应观察到的响应、日志、文件或权限变化。）

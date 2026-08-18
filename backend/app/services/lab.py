@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -12,6 +13,92 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from .paths import docs_dir, env_dir
+
+_LAB_PREFIX = "vulnhunter"
+_LAB_IMAGE_TAG = "lab"
+_LAB_ROLE_RE = re.compile(r"[^a-z0-9]+")
+_MAX_NAME_SLUG = 48
+
+
+def _lab_role_suffix(role: str | None) -> str:
+    if not role:
+        return ""
+    cleaned = _LAB_ROLE_RE.sub("-", str(role).strip().lower()).strip("-")
+    if not cleaned:
+        return ""
+    return f"-{cleaned[:32]}"
+
+
+def _slug_project_name(name: str | None) -> str:
+    cleaned = _LAB_ROLE_RE.sub("-", str(name or "").strip().lower()).strip("-")
+    return cleaned[:_MAX_NAME_SLUG].strip("-")
+
+
+def _lookup_project_name(project_id: int) -> str:
+    try:
+        from ..models import Project, SessionLocal
+
+        with SessionLocal() as db:
+            row = db.get(Project, int(project_id))
+            return str(row.name or "") if row else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _resolve_project_name(project_id: int, project_name: str | None) -> str:
+    if project_name is not None:
+        return project_name
+    return _lookup_project_name(project_id)
+
+
+def _legacy_lab_compose_project(project_id: int) -> str:
+    return f"{_LAB_PREFIX}-{int(project_id)}"
+
+
+def _lab_base_name(project_id: int, project_name: str | None = None) -> str:
+    """Compose/container prefix: {project-name}-{id}, else vulnhunter-{id}."""
+    slug = _slug_project_name(_resolve_project_name(project_id, project_name))
+    pid = int(project_id)
+    if slug:
+        return f"{slug}-{pid}"
+    return _legacy_lab_compose_project(pid)
+
+
+def lab_compose_project(project_id: int, *, project_name: str | None = None) -> str:
+    """Compose project name: {project-name}-{id}, or vulnhunter-{id} if unsanitizable."""
+    return _lab_base_name(project_id, project_name)
+
+
+def lab_container_name(
+    project_id: int,
+    role: str | None = None,
+    *,
+    project_name: str | None = None,
+) -> str:
+    """Web container {name}-{id}; sidecars {name}-{id}-{role}."""
+    return f"{lab_compose_project(project_id, project_name=project_name)}{_lab_role_suffix(role)}"
+
+
+def lab_image_name(
+    project_id: int,
+    role: str | None = None,
+    *,
+    project_name: str | None = None,
+) -> str:
+    """Image tag for images built for this lab (not official mysql/redis/…)."""
+    return f"{lab_container_name(project_id, role, project_name=project_name)}:{_LAB_IMAGE_TAG}"
+
+
+def lab_naming(project_id: int, *, project_name: str | None = None) -> dict[str, str]:
+    pid = int(project_id)
+    name = _resolve_project_name(pid, project_name)
+    container = lab_container_name(pid, project_name=name)
+    return {
+        "project_id": str(pid),
+        "lab_image": lab_image_name(pid, project_name=name),
+        "lab_container": container,
+        "lab_compose_project": lab_compose_project(pid, project_name=name),
+    }
 
 
 def env_json_path(project_id: int) -> Path:
@@ -244,7 +331,12 @@ def _docker_run(args: list[str], *, cwd: Path | None = None, timeout: int = 60) 
 
 
 def _container_candidates(project_id: int, env: dict[str, Any]) -> list[str]:
-    candidates = [env.get("container_id"), env.get("container_name"), f"vulnhunter-{project_id}"]
+    candidates = [
+        env.get("container_id"),
+        env.get("container_name"),
+        lab_container_name(project_id),
+        _legacy_lab_compose_project(project_id),
+    ]
     out: list[str] = []
     for item in candidates:
         if item and item not in out:
@@ -371,7 +463,11 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
 
         env = remap_ports_if_needed(env)
         if compose:
-            proc = _docker_run(["compose", "-f", str(compose), "up", "-d"], cwd=ed, timeout=600)
+            proc = _docker_run(
+                ["compose", "-p", lab_compose_project(project_id), "-f", str(compose), "up", "-d"],
+                cwd=ed,
+                timeout=600,
+            )
             if proc.returncode != 0:
                 return {"ok": False, "error": proc.stderr or proc.stdout, "env": env}
             inspected = _inspect_container(_container_candidates(project_id, env))
@@ -383,7 +479,7 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
             write_lab_doc_if_ready(project_id, env, via="compose")
             return {"ok": True, "env": env, "via": "compose"}
         image = env.get("image")
-        name = env.get("container_name") or f"vulnhunter-{project_id}"
+        name = env.get("container_name") or lab_container_name(project_id)
         if image:
             proc = _docker_run(["start", name])
             if proc.returncode != 0:

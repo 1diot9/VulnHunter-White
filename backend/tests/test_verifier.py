@@ -35,6 +35,10 @@ def _db():
     return SessionLocal()
 
 
+def _success_targets(*hosts: str) -> list[dict]:
+    return [{"host": h, "status": "success", "note": "回显一致"} for h in hosts]
+
+
 def _submit_and_confirm(
     project,
     surface="frontend",
@@ -117,6 +121,7 @@ def test_fofa_search_default_size_and_sample(tmp_env, monkeypatch):
     assert out["returned"] == 2
     assert seen["params"]["size"] == str(FOFA_DEFAULT_SIZE)
     assert seen["params"]["size"] == "10"
+    assert seen["params"]["page"] == "1"
     assert "key" not in json.dumps(out)
     assert out["sample"][0]["host"] == "host1.example"
 
@@ -302,8 +307,13 @@ def test_finish_verifier_success(tmp_env, project):
             "poc": poc,
             "response": response,
             "fofa_query": 'title="demo"',
-            "tested_count": 2,
-            "notes": "第 2 个目标回显与报告一致",
+            "tested_count": 3,
+            "targets": _success_targets(
+                "http://a.example",
+                "http://b.example",
+                "http://hit.example",
+            ),
+            "notes": "3 个目标回显与报告一致",
         },
     )
     assert out["ok"] is True
@@ -393,6 +403,8 @@ def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch
                     ["host1.example", "1.1.1.1", "80", "Title A", "example.com", "Org", "http"],
                     ["host2.example", "1.1.1.2", "443", "Title B", "example.com", "Org", "https"],
                     ["host3.example", "1.1.1.3", "8080", "Title C", "example.com", "Org", "http"],
+                    ["host4.example", "1.1.1.4", "80", "Title D", "example.com", "Org", "http"],
+                    ["host5.example", "1.1.1.5", "80", "Title E", "example.com", "Org", "http"],
                 ],
             },
         )
@@ -405,7 +417,7 @@ def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch
     ctx = _ctx(project, "verifier", vuln_id=vuln_id)
     searched = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
     assert searched["ok"] is True
-    assert len(ctx.state["fofa_targets"]) == 3
+    assert len(ctx.state["fofa_targets"]) == 5
     poc = "GET /api/x HTTP/1.1\nHost: host1.example\n\n"
     response = "HTTP/1.1 200 OK\n\n{\"secret\":\"yes\"}"
     out = registry.dispatch(
@@ -416,23 +428,31 @@ def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch
             "verified_url": "http://host1.example/api/x",
             "poc": poc,
             "response": response,
-            "targets": [{"host": "host1.example", "status": "success", "note": "回显一致"}],
-            "notes": "第一个打通即停，其余未测",
+            "targets": [
+                {"host": "host1.example", "status": "success", "note": "回显一致"},
+                {"host": "host2.example", "status": "success", "note": "回显一致"},
+                {"host": "host3.example", "status": "success", "note": "回显一致"},
+            ],
+            "notes": "3 个打通即停，其余未测",
         },
     )
     assert out["ok"] is True
     statuses = {t["host"]: t["status"] for t in out["targets"]}
     assert statuses["http://host1.example"] == "success"
-    assert statuses["https://host2.example"] == "untested"
-    assert statuses["http://host3.example"] == "untested"
+    assert statuses["https://host2.example"] == "success"
+    assert statuses["http://host3.example"] == "success"
+    assert statuses["http://host4.example"] == "untested"
+    assert statuses["http://host5.example"] == "untested"
     from app.services.paths import vuln_dir
 
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "### FOFA 目标" in report
     assert "| 成功 | http://host1.example |" in report
-    assert "| 未测 | https://host2.example |" in report
-    assert "| 未测 | http://host3.example |" in report
-    assert "共 3（成功 1 · 失败 0 · 未测 2）" in report
+    assert "| 成功 | https://host2.example |" in report
+    assert "| 成功 | http://host3.example |" in report
+    assert "| 未测 | http://host4.example |" in report
+    assert "| 未测 | http://host5.example |" in report
+    assert "共 5（成功 3 · 失败 0 · 未测 2）" in report
     assert "### FOFA 搜索语法" in report
     assert 'title="demo"' in report
 
@@ -442,8 +462,10 @@ def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch
         detail = client.get(f"/api/vulns/{vuln_id}").json()
         hosts = {t["host"]: t["status"] for t in detail["verifier_targets"]}
         assert hosts["http://host1.example"] == "success"
-        assert hosts["https://host2.example"] == "untested"
-        assert hosts["http://host3.example"] == "untested"
+        assert hosts["https://host2.example"] == "success"
+        assert hosts["http://host3.example"] == "success"
+        assert hosts["http://host4.example"] == "untested"
+        assert hosts["http://host5.example"] == "untested"
         assert detail["verifier_fofa_query"] == 'title="demo"'
 
 
@@ -460,6 +482,7 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
                 "results": [
                     ["shared.example", "1.1.1.1", "80", "Shared", "example.com", "Org", "http"],
                     ["other.example", "1.1.1.2", "443", "Other", "example.com", "Org", "https"],
+                    ["third.example", "1.1.1.3", "80", "Third", "example.com", "Org", "http"],
                 ],
             },
         )
@@ -487,7 +510,7 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
     cache = load_project_fofa_cache(project)
     assert cache is not None
     assert cache["query"] == 'title="demo"'
-    assert len(cache["sample"]) == 2
+    assert len(cache["sample"]) == 3
 
     second_ctx = _ctx(project, "verifier", vuln_id=vuln2)
     second = registry.dispatch(second_ctx, "FofaSearch", {"query": 'title="should-not-hit-api"'})
@@ -507,7 +530,12 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
             "verified_url": "http://shared.example/api/x",
             "poc": poc,
             "response": response,
-            "notes": "复用项目共享 FOFA 目标，第一条打通",
+            "targets": _success_targets(
+                "http://shared.example",
+                "https://other.example",
+                "http://third.example",
+            ),
+            "notes": "复用项目共享 FOFA 目标，3 个打通",
         },
     )
     assert out["ok"] is True, out
@@ -518,9 +546,328 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
     assert "### FOFA 搜索语法" in report
     assert 'title="demo"' in report
     assert "| 成功 | http://shared.example |" in report
-    assert "| 未测 | https://other.example |" in report
+    assert "| 成功 | https://other.example |" in report
+    assert "| 成功 | http://third.example |" in report
     with _db() as db:
         assert db.get(Vuln, vuln2).verifier_fofa_query == 'title="demo"'
+
+
+def test_fofa_search_empty_allows_rewrite(tmp_env, project, monkeypatch):
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = dict(request.url.params).get("qbase64") or ""
+        queries.append(q)
+        if len(queries) == 1:
+            return httpx.Response(200, json={"error": False, "size": 0, "results": []})
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 1,
+                "results": [["hit.example", "1.1.1.1", "80", "Hit", "example.com", "Org", "http"]],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    first = registry.dispatch(ctx, "FofaSearch", {"query": 'title="too-narrow"'})
+    assert first["ok"] is True
+    assert first["returned"] == 0
+    assert first.get("cached") is False
+    cache = load_project_fofa_cache(project)
+    assert cache is not None
+    assert not cache.get("sample")
+    assert cache.get("frozen") is not True
+    same = registry.dispatch(ctx, "FofaSearch", {"query": 'title="too-narrow"'})
+    assert same["ok"] is False
+    assert "已经搜过" in same["error"]
+    second = registry.dispatch(ctx, "FofaSearch", {"query": 'title="SharedApp"'})
+    assert second["ok"] is True
+    assert second["returned"] == 1
+    assert second["sample"][0]["host"] == "hit.example"
+    frozen = load_project_fofa_cache(project)
+    assert frozen["frozen"] is True
+    third = registry.dispatch(ctx, "FofaSearch", {"query": 'title="should-not-hit"'})
+    assert third.get("cached") is True
+    assert third["query"] == 'title="SharedApp"'
+
+
+def test_finish_verifier_success_requires_three_targets(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://hit.example/api/x",
+            "poc": "GET /api/x HTTP/1.1\nHost: hit.example\n\n",
+            "response": "HTTP/1.1 200 OK\n\nsecret",
+            "fofa_query": 'title="demo"',
+            "targets": [{"host": "http://hit.example", "status": "success"}],
+            "notes": "只打通 1 个",
+        },
+    )
+    assert out["ok"] is False
+    assert "3 个" in out["error"]
+
+
+def test_finish_verifier_fail_requires_expand_when_first_batch_short(tmp_env, project, monkeypatch):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 2,
+                "results": [
+                    ["host1.example", "1.1.1.1", "80", "A", "example.com", "Org", "http"],
+                    ["host2.example", "1.1.1.2", "443", "B", "example.com", "Org", "https"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    searched = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert searched["ok"] is True
+    out = registry.dispatch(
+        ctx,
+        "FinishVerifier",
+        {
+            "verdict": "fail",
+            "fofa_query": 'title="demo"',
+            "targets": [
+                {"host": "host1.example", "status": "fail", "note": "404"},
+                {"host": "host2.example", "status": "fail", "note": "404"},
+            ],
+            "notes": "首批都失败，不该直接 fail",
+        },
+    )
+    assert out["ok"] is False
+    assert "expand" in out["error"]
+
+
+def test_fofa_search_expand_appends_new_page(tmp_env, project, monkeypatch):
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = dict(request.url.params).get("page") or "1"
+        pages.append(page)
+        if page == "1":
+            results = [
+                ["host1.example", "1.1.1.1", "80", "A", "example.com", "Org", "http"],
+                ["host2.example", "1.1.1.2", "443", "B", "example.com", "Org", "https"],
+            ]
+        else:
+            results = [
+                ["host2.example", "1.1.1.2", "443", "B-dup", "example.com", "Org", "https"],
+                ["host3.example", "1.1.1.3", "80", "C", "example.com", "Org", "http"],
+                ["host4.example", "1.1.1.4", "80", "D", "example.com", "Org", "http"],
+            ]
+        return httpx.Response(200, json={"error": False, "size": 10, "results": results})
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    first = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert first["ok"] is True
+    assert first.get("cached") is False
+    assert pages == ["1"]
+    expanded = registry.dispatch(
+        ctx,
+        "FofaSearch",
+        {"query": 'title="demo"', "expand": True},
+    )
+    assert expanded["ok"] is True
+    assert expanded.get("expanded") is not True
+    assert expanded.get("page") == 2
+    assert pages == ["1", "2"]
+    hosts = [row["host"] for row in expanded["sample"]]
+    assert hosts == ["host1.example", "host2.example", "host3.example", "host4.example"]
+    new_hosts = [row["host"] for row in expanded.get("new_sample") or []]
+    assert new_hosts == ["host3.example", "host4.example"]
+    cache = load_project_fofa_cache(project)
+    assert cache is not None
+    assert cache.get("expanded") is not True
+    assert cache.get("page") == 2
+    assert len(cache["sample"]) == 4
+    assert expanded.get("pages_left") == 3
+
+    again = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+    assert again.get("cached") is not True
+    assert pages == ["1", "2", "3"]
+
+    out = registry.dispatch(
+        ctx,
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://host4.example/api/x",
+            "poc": "GET /api/x HTTP/1.1\nHost: host4.example\n\n",
+            "response": "HTTP/1.1 200 OK\n\nsecret",
+            "targets": [
+                {"host": "host1.example", "status": "success", "note": "首批命中"},
+                {"host": "host2.example", "status": "fail", "note": "404"},
+                {"host": "host3.example", "status": "success", "note": "补搜命中"},
+                {"host": "host4.example", "status": "success", "note": "补搜命中"},
+            ],
+            "notes": "首批 1 个成功，补搜后再打通 2 个，凑满 3 个",
+        },
+    )
+    assert out["ok"] is True, out
+    statuses = {t["host"]: t["status"] for t in out["targets"]}
+    assert statuses["http://host1.example"] == "success"
+    assert statuses["https://host2.example"] == "fail"
+    assert statuses["http://host3.example"] == "success"
+    assert statuses["http://host4.example"] == "success"
+
+
+def test_fofa_search_expand_allows_five_pages_then_fail(tmp_env, project, monkeypatch):
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = dict(request.url.params).get("page") or "1"
+        pages.append(page)
+        n = int(page)
+        results = [
+            [f"host{n}a.example", f"1.1.{n}.1", "80", f"A{n}", "example.com", "Org", "http"],
+            [f"host{n}b.example", f"1.1.{n}.2", "80", f"B{n}", "example.com", "Org", "http"],
+        ]
+        return httpx.Response(200, json={"error": False, "size": 10, "results": results})
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    first = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert first["ok"] is True
+    assert first.get("page") == 1
+
+    def _fail_all(note: str):
+        cache = load_project_fofa_cache(project)
+        targets = [
+            {"host": row["host"], "status": "fail", "note": note}
+            for row in (cache or {}).get("sample") or []
+        ]
+        return registry.dispatch(
+            ctx,
+            "FinishVerifier",
+            {
+                "verdict": "fail",
+                "fofa_query": 'title="demo"',
+                "targets": targets,
+                "notes": note,
+            },
+        )
+
+    blocked = _fail_all("第 1 轮全失败")
+    assert blocked["ok"] is False
+    assert "expand" in blocked["error"]
+
+    for expected_page in (2, 3, 4):
+        out = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+        assert out["ok"] is True
+        assert out.get("cached") is not True
+        assert out.get("page") == expected_page
+        blocked = _fail_all(f"第 {expected_page} 轮仍不足")
+        assert blocked["ok"] is False
+        assert "expand" in blocked["error"]
+
+    fifth = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+    assert fifth["ok"] is True
+    assert fifth.get("page") == 5
+    assert fifth.get("expanded") is True
+    assert fifth.get("pages_left") == 0
+    cache = load_project_fofa_cache(project)
+    assert cache is not None
+    assert cache.get("page") == 5
+    assert cache.get("expanded") is True
+    assert len(cache["sample"]) == 10
+
+    sixth = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+    assert sixth.get("cached") is True
+    assert pages == ["1", "2", "3", "4", "5"]
+
+    done = _fail_all("5 轮都失败")
+    assert done["ok"] is True, done
+    assert done["verdict"] == "fail"
+
+
+def test_legacy_expanded_cache_can_still_turn_pages(tmp_env, project, monkeypatch):
+    from app.services.paths import fofa_cache_path
+    from app.services.verifier import save_project_fofa_cache
+
+    save_project_fofa_cache(
+        project,
+        query='title="demo"',
+        sample=[
+            {
+                "host": "host1.example",
+                "ip": "1.1.1.1",
+                "port": "80",
+                "title": "A",
+                "protocol": "http",
+            }
+        ],
+        size=1,
+        frozen=True,
+        page=2,
+    )
+    path = fofa_cache_path(project)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["expanded"] = True
+    data["page"] = 2
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 10,
+                "results": [
+                    ["host3.example", "1.1.1.3", "80", "C", "example.com", "Org", "http"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    loaded = load_project_fofa_cache(project)
+    assert loaded is not None
+    assert loaded.get("page") == 2
+    assert loaded.get("expanded") is not True
+
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    out = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+    assert out["ok"] is True
+    assert out.get("cached") is not True
+    assert out.get("page") == 3
+    hosts = [row["host"] for row in out["sample"]]
+    assert "host1.example" in hosts
+    assert "host3.example" in hosts
 
 
 def test_finish_verifier_success_requires_url(tmp_env, project):

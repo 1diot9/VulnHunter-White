@@ -403,10 +403,6 @@ export default function PhaseFlow({
     done: branchOf('done'),
   }
   const workerPaths = branches.worker
-  const spacerCount = Math.max(
-    ...PHASES.filter((p) => p.id !== 'worker').map((p) => branches[p.id].length),
-    0,
-  )
   const workerHints: Record<string, string> = {
     mine: '历史漏洞收集完毕后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
@@ -415,71 +411,60 @@ export default function PhaseFlow({
 
   return (
     <TooltipProvider delay={200}>
-      <div className="relative">
-        <div className="flex flex-nowrap items-center gap-2">
-          {PHASES.map((p, i) => (
-            <Fragment key={p.id}>
-              <div className="relative">
-                <div className={p.id === 'worker' && workerPaths.length > 1 ? 'flex items-center' : 'flex h-6 items-center'}>
-                  {p.id === 'worker' && workerPaths.length > 0 ? (
-                    <div className="flex flex-col gap-1">
-                      {workerPaths.map((item) => (
-                        <FlowTip
-                          key={item.id}
-                          hint={workerHints[item.id] || p.hint}
-                          render={
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              onClick={() => onSelect?.(item.id)}
-                              className="h-auto rounded-md p-0"
-                            />
-                          }
-                        >
-                          {item.node}
-                        </FlowTip>
-                      ))}
+      <div className="flex flex-nowrap items-start gap-2 overflow-x-auto">
+        {PHASES.map((p, i) => (
+          <Fragment key={p.id}>
+            <div className="shrink-0">
+              {p.id === 'worker' && workerPaths.length > 0 ? (
+                <div className="flex flex-col gap-1">
+                  {workerPaths.map((item, index) => (
+                    <div key={item.id} className={index === 0 ? 'flex h-6 items-center' : undefined}>
+                      <FlowTip
+                        hint={workerHints[item.id] || p.hint}
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => onSelect?.(item.id)}
+                            className="h-auto rounded-md p-0"
+                          />
+                        }
+                      >
+                        {item.node}
+                      </FlowTip>
                     </div>
-                  ) : (
-                    <FlowTip
-                      hint={p.hint}
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => onSelect?.(p.id)}
-                          className="h-auto rounded-md p-0"
-                        />
-                      }
-                    >
-                      <Badge variant={badgeVariant(phaseTone(p.id, state))}>
-                        {p.label}
-                        {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
-                        {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
-                      </Badge>
-                    </FlowTip>
-                  )}
+                  ))}
                 </div>
-                <div className="absolute left-0 top-full">
-                  <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id]} />
+              ) : (
+                <div className="flex h-6 items-center">
+                  <FlowTip
+                    hint={p.hint}
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => onSelect?.(p.id)}
+                        className="h-auto rounded-md p-0"
+                      />
+                    }
+                  >
+                    <Badge variant={badgeVariant(phaseTone(p.id, state))}>
+                      {p.label}
+                      {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
+                      {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
+                    </Badge>
+                  </FlowTip>
                 </div>
-              </div>
-              {i < PHASES.length - 1 ? <span className="text-slate-600">→</span> : null}
-            </Fragment>
-          ))}
-        </div>
-        {spacerCount > 0 ? (
-          <div className="invisible pointer-events-none" aria-hidden>
-            <PhaseBranch
-              items={Array.from({ length: spacerCount }, (_, i) => ({
-                id: `spacer-${i}`,
-                node: <span className="inline-flex h-5" />,
-              }))}
-            />
-          </div>
-        ) : null}
+              )}
+              <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id]} />
+            </div>
+            {i < PHASES.length - 1 ? (
+              <span className="flex h-6 shrink-0 items-center text-slate-600">→</span>
+            ) : null}
+          </Fragment>
+        ))}
       </div>
     </TooltipProvider>
   )

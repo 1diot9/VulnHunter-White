@@ -6,7 +6,11 @@ import subprocess
 from app.services.lab import (
     find_free_port,
     finish_manual_lab,
+    lab_compose_project,
+    lab_container_name,
     lab_doc_path,
+    lab_image_name,
+    lab_naming,
     lab_setup_finished,
     load_env,
     mark_lab_setup_finished,
@@ -20,6 +24,46 @@ from app.services.lab import (
 def test_find_free_port():
     p = find_free_port(start=19000, end=19100)
     assert 19000 <= p < 19100
+
+
+def test_lab_resource_names_fallback_without_project_name():
+    assert lab_compose_project(7, project_name="") == "vulnhunter-7"
+    assert lab_container_name(7, project_name="") == "vulnhunter-7"
+    assert lab_container_name(7, "mysql", project_name="") == "vulnhunter-7-mysql"
+    assert lab_container_name(7, " XXL_Job ", project_name="") == "vulnhunter-7-xxl-job"
+    assert lab_image_name(7, project_name="") == "vulnhunter-7:lab"
+    assert lab_image_name(7, "executor", project_name="") == "vulnhunter-7-executor:lab"
+    names = lab_naming(7, project_name="")
+    assert names["lab_image"] == "vulnhunter-7:lab"
+    assert names["lab_container"] == "vulnhunter-7"
+    assert names["lab_compose_project"] == "vulnhunter-7"
+
+
+def test_lab_resource_names_include_sanitized_project_name():
+    assert lab_compose_project(7, project_name="XXL-JOB") == "xxl-job-7"
+    assert lab_container_name(7, project_name="XXL-JOB") == "xxl-job-7"
+    assert lab_container_name(7, "mysql", project_name="XXL-JOB") == "xxl-job-7-mysql"
+    assert lab_container_name(7, " XXL_Job ", project_name="My App / Foo") == "my-app-foo-7-xxl-job"
+    assert lab_image_name(7, project_name="XXL-JOB") == "xxl-job-7:lab"
+    assert lab_image_name(7, "executor", project_name="XXL-JOB") == "xxl-job-7-executor:lab"
+    assert lab_compose_project(7, project_name="若依管理系统") == "vulnhunter-7"
+    assert lab_compose_project(7, project_name="若依RuoYi") == "ruoyi-7"
+    long_name = "A" * 80
+    assert lab_compose_project(7, project_name=long_name) == f"{'a' * 48}-7"
+    names = lab_naming(7, project_name="My App")
+    assert names["lab_image"] == "my-app-7:lab"
+    assert names["lab_container"] == "my-app-7"
+    assert names["lab_compose_project"] == "my-app-7"
+
+
+def test_lab_resource_names_lookup_project(project):
+    assert lab_compose_project(project) == f"demo-{project}"
+    assert lab_container_name(project) == f"demo-{project}"
+    assert lab_container_name(project, "mysql") == f"demo-{project}-mysql"
+    assert lab_image_name(project) == f"demo-{project}:lab"
+    names = lab_naming(project)
+    assert names["lab_container"] == f"demo-{project}"
+    assert names["lab_compose_project"] == f"demo-{project}"
 
 
 def test_remap_when_busy(monkeypatch):
@@ -52,7 +96,7 @@ def _inspect_json(project_id: int, *, running: bool, host_port: int) -> str:
         [
             {
                 "Id": "abc123",
-                "Name": f"/vulnhunter-{project_id}",
+                "Name": f"/{lab_container_name(project_id)}",
                 "Config": {"Image": "demo:old"},
                 "State": {"Running": running, "Status": "running" if running else "exited"},
                 "NetworkSettings": {
@@ -114,7 +158,7 @@ def test_recreate_lab_reuses_running_container_without_remapping(project, monkey
     doc = lab_doc_path(project).read_text(encoding="utf-8")
     assert "# 动态环境搭建" in doc
     assert "http://127.0.0.1:18080/login" in doc
-    assert "docker start vulnhunter-" in doc
+    assert f"docker start {lab_container_name(project)}" in doc
 
 
 def test_recreate_lab_starts_stopped_container_and_refreshes_ports(project, monkeypatch):
@@ -144,7 +188,7 @@ def test_recreate_lab_starts_stopped_container_and_refreshes_ports(project, monk
             return _completed(command, stdout=_inspect_json(project, running=running["value"], host_port=18123))
         if command[:2] == ["docker", "start"]:
             running["value"] = True
-            return _completed(command, stdout=f"vulnhunter-{project}\n")
+            return _completed(command, stdout=f"{lab_container_name(project)}\n")
         return _completed(command, returncode=1, stderr="unexpected")
 
     monkeypatch.setattr(lab.subprocess, "run", fake_run)
@@ -195,6 +239,53 @@ def test_recreate_lab_reports_start_failure_for_existing_container(project, monk
     assert "port is already allocated" in result["error"]
     assert saved["status"] == "exited"
     assert not lab_doc_path(project).exists()
+
+
+def test_recreate_lab_compose_uses_canonical_project_name(project, monkeypatch):
+    from app.services import lab
+    from app.services.paths import env_dir
+
+    compose_path = env_dir(project) / "docker-compose.yml"
+    compose_path.write_text("services:\n  app:\n    image: demo:old\n", encoding="utf-8")
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": lab_image_name(project),
+            "container_name": lab_container_name(project),
+            "container_port": 8080,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    started = {"compose": False}
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(command)
+        if command[:2] == ["docker", "compose"]:
+            started["compose"] = True
+            return _completed(command, stdout="started\n")
+        if command[:2] == ["docker", "inspect"]:
+            if not started["compose"]:
+                return _completed(command, returncode=1, stderr="missing")
+            return _completed(command, stdout=_inspect_json(project, running=True, host_port=18080))
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = recreate_lab(project)
+
+    compose_calls = [c for c in calls if c[:2] == ["docker", "compose"]]
+    assert result["ok"] is True
+    assert result["via"] == "compose"
+    assert compose_calls
+    assert compose_calls[0][2:6] == ["-p", lab_compose_project(project), "-f", str(compose_path)]
+    assert compose_calls[0][-2:] == ["up", "-d"]
+    assert load_env(project)["container_name"] == lab_container_name(project)
 
 
 def test_lab_setup_finished_only_after_mark(project):

@@ -12,7 +12,7 @@ from app.agent.checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from app.agent.loop import INTERRUPT_RESUME, AgentLoop
+from app.agent.loop import INTERRUPT_RESUME, TRANSIENT_RESUME, AgentLoop, TransientError
 from app.models import utcnow
 from app.services import pipeline
 from app.services.ingest import build_file_index
@@ -136,6 +136,57 @@ def test_new_round_starts_fresh_prompt(tmp_env, project, monkeypatch):
     assert not any((m.get("content") or "") == INTERRUPT_RESUME for m in sent)
 
 
+def test_transient_error_keeps_context_and_continues(tmp_env, project, monkeypatch):
+    n = {"i": 0}
+    captured: list[list[dict]] = []
+
+    def fake_chat(self, messages, tools, remaining):
+        n["i"] += 1
+        captured.append(list(messages))
+        if n["i"] == 1:
+            raise TransientError("incomplete chunked read")
+        return _done_chat(self, messages, tools, remaining)
+
+    monkeypatch.setattr(AgentLoop, "_chat", fake_chat)
+    run_id = pipeline._new_phase_run(project, "worker", "worker")
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        phase_run_id=run_id,
+        stop_when=lambda st: True,
+    )
+    result = loop.run()
+    assert result.ok
+    assert n["i"] == 2
+    assert captured[1][-1]["content"] == TRANSIENT_RESUME
+    assert captured[1][1]["content"] == "task"
+
+
+def test_transient_error_exhausted_stops(tmp_env, project, monkeypatch):
+    def fake_chat(self, messages, tools, remaining):
+        raise TransientError("peer closed")
+
+    monkeypatch.setattr(AgentLoop, "_chat", fake_chat)
+    monkeypatch.setattr(AgentLoop, "_rescue_conclude", lambda self, messages: None)
+    run_id = pipeline._new_phase_run(project, "worker", "worker")
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        phase_run_id=run_id,
+        stop_when=lambda st: True,
+    )
+    result = loop.run()
+    assert not result.ok
+    assert result.stop_reason == "transient_error"
+    assert "peer closed" in (result.error or "")
+
+
 def test_inprocess_pause_continues_same_messages(tmp_env, project, monkeypatch):
     captured: list[list[dict]] = []
     pause = threading.Event()
@@ -179,6 +230,37 @@ def test_inprocess_pause_continues_same_messages(tmp_env, project, monkeypatch):
     assert sent[2]["content"] == "I was looking at login"
     assert sent[0]["content"] == "sys"
     assert sent[1]["content"] == "orig-task"
+
+
+def test_paused_loop_stops_when_phase_run_abandoned(tmp_env, project, monkeypatch):
+    pause = threading.Event()
+    pause.set()
+    monkeypatch.setattr(AgentLoop, "_chat", _done_chat)
+    run_id = pipeline._new_phase_run(project, "worker", "worker", file_path="app/Main.java")
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="orig-task",
+        phase_run_id=run_id,
+        pause_event=pause,
+        messages=_sample_messages(),
+        stop_when=lambda st: True,
+        file_path="app/Main.java",
+    )
+
+    def _abandon_and_resume() -> None:
+        time.sleep(0.15)
+        pipeline._finish_phase_run(run_id, "cancelled", "用户重置启发式挖掘进度")
+        pause.clear()
+
+    t = threading.Thread(target=_abandon_and_resume, daemon=True)
+    t.start()
+    result = loop.run()
+    t.join(timeout=2)
+    assert result.cancelled
+    assert result.stop_reason == "cancelled"
 
 
 def test_prepare_resume_keeps_checkpointed_claim_and_fix(tmp_env, project):

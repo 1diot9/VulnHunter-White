@@ -37,6 +37,9 @@ export default function SettingsPage() {
   const [fofaTesting, setFofaTesting] = useState(false)
   const [fofaOk, setFofaOk] = useState<boolean | null>(null)
   const [fofaMsg, setFofaMsg] = useState('')
+  const [githubTesting, setGithubTesting] = useState(false)
+  const [githubOk, setGithubOk] = useState<boolean | null>(null)
+  const [githubMsg, setGithubMsg] = useState('')
   const [logDays, setLogDays] = useState(7)
   const [logConfirmOpen, setLogConfirmOpen] = useState(false)
   const [logPurging, setLogPurging] = useState(false)
@@ -148,6 +151,38 @@ export default function SettingsPage() {
       setFofaMsg(String(e))
     } finally {
       setFofaTesting(false)
+    }
+  }
+
+  async function testGithub() {
+    setGithubTesting(true)
+    setGithubOk(null)
+    setGithubMsg('')
+    try {
+      const body: { github_pat?: string; http_proxy: string } = {
+        http_proxy: httpProxy.trim(),
+      }
+      if (githubPat.trim()) body.github_pat = githubPat.trim()
+      const out = await api.testGithub(body)
+      if (!out.ok) {
+        setGithubOk(false)
+        setGithubMsg(out.error || '连通失败')
+        return
+      }
+      const parts = ['连通正常']
+      if (out.authenticated && out.login) parts.push(`账号 ${out.login}`)
+      else parts.push('匿名')
+      if (out.rate_remaining != null && out.rate_limit != null) {
+        parts.push(`限额 ${out.rate_remaining}/${out.rate_limit}`)
+      }
+      if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
+      setGithubOk(true)
+      setGithubMsg(parts.join(' · '))
+    } catch (e) {
+      setGithubOk(false)
+      setGithubMsg(String(e))
+    } finally {
+      setGithubTesting(false)
     }
   }
 
@@ -335,6 +370,21 @@ export default function SettingsPage() {
             onChange={(e) => setGithubPat(e.target.value)}
             placeholder="ghp_..."
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" disabled={githubTesting} onClick={testGithub}>
+              {githubTesting ? '测试中…' : '连通测试'}
+            </Button>
+          </div>
+          {githubMsg ? (
+            <div className="flex items-start gap-2 text-sm">
+              {githubOk != null ? <Badge variant={githubOk ? 'success' : 'destructive'}>{githubOk ? '成功' : '失败'}</Badge> : null}
+              <span className={githubOk === false ? 'text-red-300' : 'text-slate-300'}>{githubMsg}</span>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">
+              连通测试访问 api.github.com。有 PAT 则校验令牌与额度，无 PAT 则测匿名访问（GHSA / Issues）。使用当前表单的 PAT 与出站代理，不会自动保存。
+            </div>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label>FOFA Base URL</Label>
@@ -371,7 +421,7 @@ export default function SettingsPage() {
           )}
         </div>
         <div className="space-y-1.5">
-          <Label>出站代理（WebSearch / GHSA / FOFA）</Label>
+          <Label>出站代理（WebSearch / GHSA / GitHub Issues / FOFA）</Label>
           <Input
             value={httpProxy}
             onChange={(e) => setHttpProxy(e.target.value)}

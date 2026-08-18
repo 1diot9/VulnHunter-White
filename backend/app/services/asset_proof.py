@@ -1,22 +1,30 @@
-"""Collect FOFA / X-intel search fingerprints from a running lab target."""
+"""Collect FOFA / X-intel fingerprints: lab, source, or web — stored once per project."""
 
 from __future__ import annotations
 
 import base64
 import html as html_lib
+import json
+import os
 import re
+import threading
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from ..models import Project, SessionLocal
+from .ingest import IGNORE_DIR_NAMES
 from .lab import load_env
-from .paths import vuln_dir
+from .paths import app_fingerprints_path, docs_dir, src_dir, vuln_dir
 from .report import (
     extract_asset_queries,
     fingerprint_query_error,
     is_placeholder_query,
+    replace_search_fingerprint_section,
     write_search_fingerprint_section,
 )
 
@@ -98,6 +106,34 @@ _IMAGE_MAGIC = (
     b"\xff\xd8\xff",  # JPEG
     b"RIFF",  # WEBP container
 )
+_HTML_SUFFIXES = {
+    ".html",
+    ".htm",
+    ".jsp",
+    ".jspx",
+    ".vue",
+    ".tsx",
+    ".jsx",
+    ".ftl",
+    ".vm",
+    ".cshtml",
+    ".erb",
+    ".hbs",
+    ".njk",
+    ".phtml",
+    ".asp",
+    ".aspx",
+}
+_ICON_NAMES = frozenset({"favicon.ico", "favicon.png", "favicon.gif", "favicon.jpg", "logo.ico"})
+_MAX_SOURCE_FILES = 400
+_MAX_SOURCE_BYTES = 256_000
+_ORIGIN_RANK = {"lab": 3, "source": 2, "web": 1, "manual": 1, "": 0}
+_CLAUSE_FIELD_RE = re.compile(
+    r'\b(title|body|header|icon_hash|app|product)\s*=\s*"([^"]{1,160})"',
+    re.IGNORECASE,
+)
+_fingerprint_locks: dict[int, threading.Lock] = {}
+_fingerprint_locks_guard = threading.Lock()
 
 
 def murmurhash3_32(data: bytes, seed: int = 0) -> int:
@@ -383,6 +419,320 @@ def suggest_queries(
     return _join_query(fofa_parts), _join_query(x_parts)
 
 
+def _fingerprint_lock(project_id: int) -> threading.Lock:
+    with _fingerprint_locks_guard:
+        lock = _fingerprint_locks.get(int(project_id))
+        if lock is None:
+            lock = threading.Lock()
+            _fingerprint_locks[int(project_id)] = lock
+        return lock
+
+
+def fingerprints_usable(cache: dict[str, Any] | None) -> bool:
+    if not cache:
+        return False
+    return not is_placeholder_query(cache.get("fofa"))
+
+
+def load_project_fingerprints(project_id: int) -> dict[str, Any] | None:
+    path = app_fingerprints_path(project_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_project_fingerprints(project_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    fofa = " ".join(str(payload.get("fofa") or "").split()).strip()
+    x_query = " ".join(str(payload.get("x") or "").split()).strip()
+    data = {
+        "fofa": fofa,
+        "x": x_query,
+        "origin": str(payload.get("origin") or "").strip(),
+        "product": str(payload.get("product") or "").strip(),
+        "title": str(payload.get("title") or "").strip(),
+        "icon_hash": str(payload.get("icon_hash") or "").strip(),
+        "body_markers": list(payload.get("body_markers") or []),
+        "static_paths": list(payload.get("static_paths") or []),
+        "collected": True,
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    path = app_fingerprints_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+def _origin_rank(origin: str) -> int:
+    primary = str(origin or "").split("+", 1)[0]
+    return _ORIGIN_RANK.get(primary, 0)
+
+
+def project_product_hints(project_id: int, extra: list[str] | None = None) -> list[str]:
+    """Product/vendor names for one-time web fingerprint search."""
+    from .old_vuln_crawl import default_product_keyword, load_crawl_spec
+
+    hints: list[str] = []
+    spec = load_crawl_spec(project_id)
+    for raw in (spec.get("keyword"), default_product_keyword(project_id)):
+        text = " ".join(str(raw or "").split()).strip()
+        if text and text not in hints:
+            hints.append(text)
+    code_map = docs_dir(project_id) / "code-map.md"
+    if code_map.is_file():
+        try:
+            body = code_map.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            body = ""
+        for line in body.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                if title and title not in hints:
+                    hints.append(title)
+                break
+    for item in extra or []:
+        text = " ".join(str(item or "").split()).strip()
+        if text and text not in hints:
+            hints.append(text)
+    return hints
+
+
+def _clauses_to_parts(query: str) -> dict[str, Any]:
+    title = ""
+    icon_hash = ""
+    markers: list[str] = []
+    paths: list[str] = []
+    for field, value in _CLAUSE_FIELD_RE.findall(query or ""):
+        key = field.lower()
+        if key == "title" and not title:
+            title = value
+        elif key == "icon_hash" and not icon_hash:
+            icon_hash = value
+        elif key in {"body", "app", "product"} and value not in markers:
+            token = value.split("?")[0]
+            if token.startswith("/") or "." in token.rsplit("/", 1)[-1]:
+                if token not in paths:
+                    paths.append(token)
+            elif value != title:
+                markers.append(value)
+    return {
+        "title": title,
+        "icon_hash": icon_hash,
+        "body_markers": markers,
+        "static_paths": paths,
+    }
+
+
+def _merge_fingerprint_payloads(*items: dict[str, Any]) -> dict[str, Any]:
+    title = ""
+    icon_hash = ""
+    header = ""
+    markers: list[str] = []
+    paths: list[str] = []
+    origins: list[str] = []
+    product = ""
+    fallback_fofa = ""
+    fallback_x = ""
+    for item in items:
+        if not item:
+            continue
+        origin = str(item.get("origin") or "").strip()
+        if origin and origin not in origins:
+            origins.append(origin)
+        if not product:
+            product = str(item.get("product") or item.get("query") or "").strip()
+        if not title and item.get("title") and not _is_generic_title(str(item.get("title") or "")):
+            title = str(item["title"])
+        if not icon_hash and item.get("icon_hash"):
+            icon_hash = str(item["icon_hash"])
+        if not header and item.get("header"):
+            header = str(item["header"])
+        for marker in item.get("body_markers") or []:
+            if marker and marker not in markers:
+                markers.append(str(marker))
+        for path in item.get("static_paths") or []:
+            if path and path not in paths:
+                paths.append(str(path))
+        parsed = _clauses_to_parts(str(item.get("fofa") or ""))
+        if not title and parsed["title"] and not _is_generic_title(parsed["title"]):
+            title = parsed["title"]
+        if not icon_hash and parsed["icon_hash"]:
+            icon_hash = parsed["icon_hash"]
+        for marker in parsed["body_markers"]:
+            if marker not in markers:
+                markers.append(marker)
+        for path in parsed["static_paths"]:
+            if path not in paths:
+                paths.append(path)
+        if not fallback_fofa and item.get("fofa") and not is_placeholder_query(item.get("fofa")):
+            fallback_fofa = str(item["fofa"])
+            fallback_x = str(item.get("x") or "")
+    fofa, x_query = suggest_queries(
+        title=title,
+        body_markers=markers,
+        static_paths=paths,
+        header=header,
+        icon_hash=icon_hash,
+    )
+    if not fofa:
+        fofa, x_query = fallback_fofa, fallback_x
+    return {
+        "ok": bool(fofa),
+        "fofa": fofa,
+        "x": x_query,
+        "origin": "+".join(origins) if origins else "",
+        "product": product,
+        "title": title,
+        "icon_hash": icon_hash,
+        "body_markers": markers[:4],
+        "static_paths": paths[:4],
+    }
+
+
+def collect_source_fingerprints(project_id: int) -> dict[str, Any]:
+    """Extract title / copyright / static paths / repo favicon hash from src/ (no HTTP)."""
+    root = src_dir(project_id)
+    titles: list[str] = []
+    markers: list[str] = []
+    static_paths: list[str] = []
+    icon_hash = ""
+    icon_rel = ""
+    html_seen = 0
+    if root.is_dir():
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [name for name in dirnames if name not in IGNORE_DIR_NAMES]
+            for name in filenames:
+                full = Path(dirpath) / name
+                lowered = name.lower()
+                suffix = full.suffix.lower()
+                if lowered in _ICON_NAMES and not icon_hash:
+                    try:
+                        data = full.read_bytes()
+                    except OSError:
+                        data = b""
+                    if _looks_like_image(data):
+                        icon_hash = fofa_icon_hash(data)
+                        try:
+                            icon_rel = str(full.relative_to(root)).replace("\\", "/")
+                        except ValueError:
+                            icon_rel = name
+                if suffix not in _HTML_SUFFIXES:
+                    continue
+                html_seen += 1
+                if html_seen > _MAX_SOURCE_FILES:
+                    continue
+                try:
+                    raw = full.read_bytes()[:_MAX_SOURCE_BYTES]
+                except OSError:
+                    continue
+                html = _decode_html(raw)
+                match = _TITLE_RE.search(html)
+                title = _clean_text(match.group(1) if match else "", limit=80)
+                if title and not _is_generic_title(title):
+                    titles.append(title)
+                for marker in _body_markers(html, title):
+                    if marker not in markers:
+                        markers.append(marker)
+                for path in _static_paths(html):
+                    if path not in static_paths:
+                        static_paths.append(path)
+    title = ""
+    if titles:
+        counted = Counter(titles)
+        title = sorted(counted.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
+    fofa, x_query = suggest_queries(
+        title=title,
+        body_markers=markers,
+        static_paths=static_paths,
+        icon_hash=icon_hash,
+    )
+    return {
+        "ok": bool(fofa),
+        "origin": "source",
+        "title": title,
+        "icon_hash": icon_hash,
+        "icon_path": icon_rel,
+        "body_markers": markers[:4],
+        "static_paths": static_paths[:4],
+        "fofa": fofa,
+        "x": x_query,
+        "files_scanned": html_seen,
+        "guidance": "源码指纹已采集；写入项目共享 docs/app-fingerprints.json 后，各漏洞报告直接复用。",
+    }
+
+
+def ensure_project_fingerprints(project_id: int, *, force: bool = False) -> dict[str, Any]:
+    """Collect application fingerprints once per project (source + web). Later callers reuse the cache."""
+    from .fingerprint_search import search_app_fingerprints
+
+    with _fingerprint_lock(project_id):
+        cached = load_project_fingerprints(project_id)
+        if not force and cached and cached.get("collected"):
+            return cached
+        source = collect_source_fingerprints(project_id)
+        extras = [str(source.get("title") or "")]
+        hints = project_product_hints(project_id, extras)
+        web: dict[str, Any] = {}
+        product = ""
+        for hint in hints:
+            found = search_app_fingerprints(hint)
+            if found.get("ok") and (found.get("fofa") or found.get("clauses")):
+                found["origin"] = "web"
+                found["product"] = hint
+                web = found
+                product = hint
+                break
+        merged = _merge_fingerprint_payloads(source, web)
+        if product:
+            merged["product"] = product
+        elif hints:
+            merged["product"] = hints[0]
+        if not merged.get("origin"):
+            merged["origin"] = "source" if source.get("ok") else ("web" if web else "")
+        merged["collected"] = True
+        return save_project_fingerprints(project_id, merged)
+
+
+def overlay_project_fingerprints(text: str, project_id: int) -> str:
+    """Replace a report's asset-proof section with the project-wide fingerprint."""
+    cache = load_project_fingerprints(project_id)
+    if not fingerprints_usable(cache):
+        return text
+    return replace_search_fingerprint_section(
+        text or "",
+        fofa=cache.get("fofa"),
+        x=cache.get("x"),
+    )
+
+
+def upgrade_project_fingerprints(
+    project_id: int,
+    payload: dict[str, Any],
+    *,
+    origin: str,
+) -> dict[str, Any]:
+    """Write a better fingerprint (lab/manual) over a weaker cache."""
+    incoming = dict(payload)
+    incoming["origin"] = origin
+    incoming["ok"] = True
+    with _fingerprint_lock(project_id):
+        cached = load_project_fingerprints(project_id)
+        if fingerprints_usable(cached) and _origin_rank(str(cached.get("origin") or "")) >= _origin_rank(origin):
+            if origin != "lab":
+                return cached
+            if str(cached.get("origin") or "").startswith("lab"):
+                return cached
+        if fingerprints_usable(incoming):
+            incoming["origin"] = origin
+            return save_project_fingerprints(project_id, incoming)
+        merged = _merge_fingerprint_payloads(incoming, cached or {})
+        merged["origin"] = origin
+        return save_project_fingerprints(project_id, merged)
+
+
 def collect_lab_fingerprints(
     project_id: int,
     *,
@@ -453,8 +803,7 @@ def collect_lab_fingerprints(
         "fofa": fofa,
         "x": x_query,
         "guidance": (
-            "用采集到的稳定特征完善报告「互联网资产证明」。"
-            "可将 fofa / x 传入 ConfirmVuln(fofa_fingerprint, x_fingerprint)；"
+            "已采集运行环境指纹。这是项目级应用指纹，写入 docs/app-fingerprints.json 后所有漏洞复用；"
             "不要把漏洞路径、PoC 参数或一次性业务数据当作唯一指纹。"
         ),
     }
@@ -501,7 +850,7 @@ def maybe_enrich_asset_proof(
     fofa: object = None,
     x: object = None,
 ) -> dict[str, Any]:
-    """Fill placeholder FOFA/X queries from the live lab when a target exists."""
+    """Fill this report from the project-wide fingerprint; collect/upgrade at most once."""
     fofa_arg = " ".join(str(fofa or "").split()).strip()
     x_arg = " ".join(str(x or "").split()).strip()
     for label, value in (("FOFA ", fofa_arg), ("X 情报社区 ", x_arg)):
@@ -516,16 +865,34 @@ def maybe_enrich_asset_proof(
     chosen_fofa = fofa_arg or current_fofa
     chosen_x = x_arg or current_x
     collected: dict[str, Any] | None = None
-    need_collect = (not fofa_arg and is_placeholder_query(current_fofa)) or (
-        not x_arg and is_placeholder_query(current_x)
-    )
-    if need_collect and has_lab_target(project_id):
+    from_lab = False
+    if fofa_arg and not is_placeholder_query(fofa_arg):
+        upgrade_project_fingerprints(
+            project_id,
+            {"fofa": fofa_arg, "x": x_arg or chosen_x, "ok": True},
+            origin="manual",
+        )
+    elif not is_placeholder_query(current_fofa) and not fingerprints_usable(load_project_fingerprints(project_id)):
+        upgrade_project_fingerprints(
+            project_id,
+            {"fofa": current_fofa, "x": current_x, "ok": True},
+            origin="manual",
+        )
+    cache = ensure_project_fingerprints(project_id)
+    if (
+        has_lab_target(project_id)
+        and not str(cache.get("origin") or "").startswith("lab")
+        and is_placeholder_query(chosen_fofa)
+    ):
         collected = collect_lab_fingerprints(project_id)
-        if collected.get("ok"):
-            if is_placeholder_query(chosen_fofa) and collected.get("fofa"):
-                chosen_fofa = str(collected["fofa"])
-            if is_placeholder_query(chosen_x) and collected.get("x"):
-                chosen_x = str(collected["x"])
+        if collected.get("ok") and collected.get("fofa"):
+            cache = upgrade_project_fingerprints(project_id, collected, origin="lab")
+            from_lab = True
+    cache = load_project_fingerprints(project_id) or cache
+    if fingerprints_usable(cache) and not fofa_arg:
+        chosen_fofa = str(cache.get("fofa") or chosen_fofa)
+        if not x_arg:
+            chosen_x = str(cache.get("x") or chosen_x)
     changed = bool(fofa_arg or x_arg) or chosen_fofa != current_fofa or chosen_x != current_x
     if not changed:
         return {"ok": True, "updated": False, "fofa": current_fofa, "x": current_x}
@@ -545,5 +912,6 @@ def maybe_enrich_asset_proof(
         "updated": True,
         "fofa": applied["fofa"],
         "x": applied["x"],
-        "from_lab": bool(collected and collected.get("ok")),
+        "from_lab": from_lab,
+        "from_project": fingerprints_usable(cache),
     }

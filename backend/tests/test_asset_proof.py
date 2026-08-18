@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from app.services.asset_proof import (
     collect_lab_fingerprints,
+    collect_source_fingerprints,
+    ensure_project_fingerprints,
     fofa_icon_hash,
+    load_project_fingerprints,
     maybe_enrich_asset_proof,
     murmurhash3_32,
     suggest_queries,
@@ -27,6 +30,17 @@ SEVERITY_FACTORS = {
 
 def test_murmurhash3_32_empty():
     assert murmurhash3_32(b"") == 0
+
+
+def test_parse_fingerprint_clauses_from_snippets():
+    from app.services.fingerprint_search import parse_fingerprint_clauses, search_app_fingerprints
+
+    text = 'FOFA: title="用友U8" && icon_hash="-247388890" body="/u8g/"'
+    clauses = parse_fingerprint_clauses(text)
+    assert any(c.startswith('title=') for c in clauses)
+    assert any("icon_hash=" in c for c in clauses)
+    out = search_app_fingerprints("login")
+    assert out["ok"] is False
 
 
 def test_suggest_queries_skips_generic_title():
@@ -249,3 +263,105 @@ def test_maybe_enrich_skips_when_queries_already_good(tmp_env, project, monkeypa
     assert out["ok"] is True, out
     assert out["updated"] is False
     assert out["fofa"] == 'title="Kept" && body="stable"'
+
+
+def test_collect_source_fingerprints_from_templates(tmp_env, project):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    (src / "templates").mkdir(parents=True, exist_ok=True)
+    (src / "templates" / "login.html").write_text(
+        '<html><head><title>XXOA办公系统</title>'
+        '<link rel="stylesheet" href="/static/xxoa-app.css"></head>'
+        "<body>Copyright 2020 XX科技</body></html>",
+        encoding="utf-8",
+    )
+    favicon = b"\x00\x00\x01\x00" + b"icon-bytes-here"
+    (src / "favicon.ico").write_bytes(favicon)
+    out = collect_source_fingerprints(project)
+    assert out["ok"] is True, out
+    assert out["title"] == "XXOA办公系统"
+    assert out["icon_hash"] == fofa_icon_hash(favicon)
+    assert 'title="XXOA办公系统"' in out["fofa"]
+    assert "icon_hash=" in out["fofa"]
+
+
+def test_ensure_project_fingerprints_runs_once(tmp_env, project, monkeypatch):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    (src / "index.html").write_text(
+        "<html><head><title>DemoCMS</title></head><body>Copyright DemoCMS</body></html>",
+        encoding="utf-8",
+    )
+    hits = {"n": 0}
+
+    def fake_search(query: str):
+        hits["n"] += 1
+        return {
+            "ok": True,
+            "query": query,
+            "fofa": 'title="DemoCMS" && icon_hash="-111"',
+            "x": 'title="DemoCMS"',
+            "clauses": ['title="DemoCMS"', 'icon_hash="-111"'],
+        }
+
+    monkeypatch.setattr("app.services.fingerprint_search.search_app_fingerprints", fake_search)
+    first = ensure_project_fingerprints(project)
+    second = ensure_project_fingerprints(project)
+    assert first["collected"] is True
+    assert first["fofa"] == second["fofa"]
+    assert 'title="DemoCMS"' in first["fofa"]
+    assert hits["n"] == 1
+    cached = load_project_fingerprints(project)
+    assert cached is not None
+    assert cached["fofa"] == first["fofa"]
+
+
+def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.fingerprint_search.search_app_fingerprints",
+        lambda query: {"ok": False, "error": "skip", "query": query},
+    )
+    first = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "SQLI in login",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "login -> query",
+            "auth_premise": "未授权",
+            "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+            "poc_code": "print('poc')\n",
+            "expected_evidence": "error based",
+            "fofa_fingerprint": 'title="SharedApp" && body="/static/app.css"',
+            "x_fingerprint": 'app="SharedApp" && title="SharedApp"',
+        },
+    )
+    assert first["ok"] is True
+    cache = load_project_fingerprints(project)
+    assert cache is not None
+    assert 'title="SharedApp"' in cache["fofa"]
+    second = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "IDOR list",
+            "vuln_type": "idor",
+            "cwe": "CWE-639",
+            "file_path": "app/Main.java",
+            "line_no": 2,
+            "source_sink": "id -> row",
+            "auth_premise": "未授权",
+            "http_request": "GET /item?id=1 HTTP/1.1\nHost: x\n",
+            "poc_code": "print('poc')\n",
+            "expected_evidence": "other user data",
+        },
+    )
+    assert second["ok"] is True
+    report = (vuln_dir(project, second["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert 'title="SharedApp"' in report
+    assert "待根据应用标题" not in report.split("## 互联网资产证明", 1)[1].split("##", 1)[0]

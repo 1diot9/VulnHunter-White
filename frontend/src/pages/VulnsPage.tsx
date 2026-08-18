@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { SearchIcon, XIcon } from 'lucide-react'
+import { DownloadIcon, Loader2Icon, SearchIcon, XIcon } from 'lucide-react'
 import { api, type Project, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,7 @@ import {
   formatTrackingStatus,
   formatVerifierStatus,
   formatVerifierTargetStatus,
+  saveBlob,
   severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -62,6 +63,8 @@ export default function VulnsPage() {
   const [selected, setSelected] = useState<number[]>([])
   const [marking, setMarking] = useState(false)
   const [search, setSearch] = useState('')
+  const [dynamicBusy, setDynamicBusy] = useState(false)
+  const [dynamicError, setDynamicError] = useState('')
 
   const projectNameById = useMemo(() => {
     const map = new Map<number, string>()
@@ -95,9 +98,13 @@ export default function VulnsPage() {
   useEffect(() => {
     if (!detailId) {
       setDetail(null)
+      setDynamicError('')
+      setDynamicBusy(false)
       return
     }
-    api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
+    return startVisibilityPoll(() => {
+      api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
+    }, 5000)
   }, [detailId])
 
   const searchedVulns = useMemo(
@@ -131,11 +138,16 @@ export default function VulnsPage() {
 
   async function downloadIds(ids: number[], filename: string) {
     if (!ids.length) return
-    const blob = await api.downloadVulns(ids)
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = filename
-    a.click()
+    saveBlob(await api.downloadVulns(ids), filename)
+  }
+
+  async function downloadReport(id: number) {
+    try {
+      const { blob, filename } = await api.downloadVulnReport(id)
+      saveBlob(blob, filename)
+    } catch {
+      /* ignore transient */
+    }
   }
 
   async function download() {
@@ -189,6 +201,27 @@ export default function VulnsPage() {
   async function markDetail(tracking_status: VulnTrackingStatus) {
     if (!detail) return
     await markIds([detail.id], tracking_status)
+  }
+
+  async function startDynamicVerify() {
+    if (!detail || dynamicBusy || detail.dynamic_verify_queued) return
+    setDynamicBusy(true)
+    setDynamicError('')
+    try {
+      await api.requestDynamicVerify(detail.id)
+      const next = await api.getVuln(detail.id)
+      setDetail(next)
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err || '')
+      try {
+        const data = JSON.parse(text)
+        setDynamicError(String(data.detail || text))
+      } catch {
+        setDynamicError(text || '启动动态验证失败')
+      }
+    } finally {
+      setDynamicBusy(false)
+    }
   }
 
   return (
@@ -491,7 +524,40 @@ export default function VulnsPage() {
                   >
                     {detail.tracking_status === 'ignored' ? '取消已忽略' : '标记已忽略'}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!detail.report_md}
+                    onClick={() => downloadReport(detail.id)}
+                  >
+                    <DownloadIcon data-icon="inline-start" />
+                    下载报告
+                  </Button>
+                  {detail.can_dynamic_verify || detail.dynamic_verify_queued ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={dynamicBusy || Boolean(detail.dynamic_verify_queued)}
+                      onClick={() => startDynamicVerify()}
+                    >
+                      {dynamicBusy || detail.dynamic_verify_queued ? (
+                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                      ) : null}
+                      {detail.dynamic_verify_queued || dynamicBusy ? '动态验证中…' : '追加动态验证'}
+                    </Button>
+                  ) : null}
                 </div>
+                {dynamicError ? (
+                  <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {dynamicError}
+                  </div>
+                ) : null}
+                {detail.dynamic_verify_queued ? (
+                  <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
+                    已接续原审核轮次，正在静态结论上追加动态验证。完成后证据等级会从 static_only 更新为
+                    dynamic 或 mcp。
+                  </div>
+                ) : null}
                 {detail.submission_reason ? (
                   <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
                     <div className="text-xs text-slate-400">分层理由</div>
@@ -528,7 +594,12 @@ export default function VulnsPage() {
                   <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.http_request}</pre>
                 ) : null}
                 {detail.poc_code ? (
-                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-400">
+                      {"PoC：python poc.py -u <目标>；RCE 可加 -c <命令>，有回显会打印"}
+                    </div>
+                    <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
+                  </div>
                 ) : null}
                 <VulnFollowUpPanel vulnId={detail.id} />
               </div>

@@ -307,3 +307,68 @@ def test_chat_drops_stream_options_on_400(monkeypatch):
     assert "stream_options" in captured[0]
     assert "stream_options" not in captured[1]
     assert captured[1]["stream"] is True
+
+
+def test_chat_retries_incomplete_chunked_read(monkeypatch):
+    logs: list[str] = []
+
+    class _BoomThenOk(_FakeClient):
+        def __init__(self):
+            super().__init__(
+                _FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            )
+            self.n = 0
+
+        def stream(self, method, url, headers=None, json=None):
+            self.n += 1
+            self.captured = {"method": method, "url": url, "json": json, "headers": headers}
+            if self.n == 1:
+
+                class _Bad:
+                    status_code = 200
+                    headers = {}
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *exc):
+                        return False
+
+                    def iter_lines(self):
+                        raise RuntimeError(
+                            "peer closed connection without sending complete message body "
+                            "(incomplete chunked read)"
+                        )
+
+                return _Bad()
+            return self.response
+
+    client = _BoomThenOk()
+    monkeypatch.setattr("app.agent.loop.chat_http_client", lambda timeout=None: client)
+    monkeypatch.setattr("app.agent.loop.live_log.system", lambda *a, **k: logs.append(a[-1] if a else k.get("text", "")))
+    monkeypatch.setattr("app.agent.loop._interruptible_sleep", lambda *a, **k: 0.0)
+    monkeypatch.setattr("app.agent.loop.llm_gate.note_rate_limit", lambda retry_after=None: None)
+    loop = AgentLoop(
+        project_id=1,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+        llm=ResolvedLlm(
+            base_url="http://llm.test/v1",
+            wire_api="chat",
+            model="glm-5.2",
+            api_key="k",
+            source="test",
+        ),
+    )
+    data, _usage, _ra = loop._chat([{"role": "user", "content": "hi"}], [], remaining=1800)
+    assert data["choices"][0]["message"]["content"] == "ok"
+    assert client.n == 2
+    assert any("incomplete chunked read" in t for t in logs)
+    assert any("正在重新请求模型（2/3）" in t for t in logs)

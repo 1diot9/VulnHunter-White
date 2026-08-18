@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRightIcon } from 'lucide-react'
-import type { Vuln } from '../api'
+import { ChevronRightIcon, DownloadIcon } from 'lucide-react'
+import { api, type Vuln } from '../api'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
 import {
@@ -14,6 +15,7 @@ import {
   formatSubmissionTier,
   formatTrackingStatus,
   formatVerifierStatus,
+  saveBlob,
   severityScoreBadgeClass,
 } from '../lib/utils'
 
@@ -89,6 +91,15 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   )
 }
 
+async function downloadReport(id: number) {
+  try {
+    const { blob, filename } = await api.downloadVulnReport(id)
+    saveBlob(blob, filename)
+  } catch {
+    /* ignore transient */
+  }
+}
+
 function VulnRow({
   v,
   active,
@@ -154,6 +165,18 @@ function VulnRow({
           {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
         </div>
       </Link>
+      <Button
+        type="button"
+        variant="ghost"
+        size={nested ? 'icon-xs' : 'icon-sm'}
+        className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-100"
+        aria-label={`下载 #${v.id} 报告`}
+        onClick={() => {
+          void downloadReport(v.id)
+        }}
+      >
+        <DownloadIcon />
+      </Button>
     </div>
   )
 }

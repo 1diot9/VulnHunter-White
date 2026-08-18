@@ -217,6 +217,15 @@ def test_create_zip_audit_mode_and_invalid(tmp_env, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["audit_mode"] == "full"
+        assert created.json()["heuristic_lite"] is False
+        lite = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"heuristic_lite": "true"},
+        )
+        assert lite.status_code == 200
+        assert lite.json()["heuristic_lite"] is True
+        assert lite.json()["heuristic_enabled"] is True
         bad = client.post(
             "/api/projects/upload",
             files={"file": ("src.zip", raw, "application/zip")},
@@ -398,7 +407,7 @@ def test_project_file_progress_counts(tmp_env, project):
         db.add_all(
             [
                 FileWeight(project_id=project, path="a.java", weight=None, skipped=False, audited=False),
-                FileWeight(project_id=project, path="b.java", weight=0, skipped=True, audited=False),
+                FileWeight(project_id=project, path="b.java", weight=0, skipped=True, audited=True),
                 FileWeight(project_id=project, path="c.java", weight=50, skipped=False, audited=False),
                 FileWeight(project_id=project, path="d.java", weight=100, skipped=False, audited=True),
                 PhaseRun(project_id=project, phase="worker", role="worker"),
@@ -420,6 +429,9 @@ def test_project_file_progress_counts(tmp_env, project):
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
         assert body["files_audited"] == 1
+        assert body["files_weight100"] == 1
+        assert body["files_weight100_audited"] == 1
+        assert body["heuristic_lite"] is False
         assert body["worker_rounds"] == 2
         assert body["weight_exts"] == [{"ext": ".java", "agent_added": False, "files": 4}]
         subs = body["recon_subphases"]
@@ -542,6 +554,35 @@ def test_vulns_list_and_download(tmp_env, project):
         assert dl.status_code == 200
         assert dl.headers["content-type"].startswith("application/zip")
         assert len(dl.content) > 20
+        one = client.get(f"/api/vulns/{vid}/download")
+        assert one.status_code == 200
+        assert one.headers["content-type"].startswith("text/markdown")
+        disposition = one.headers["content-disposition"]
+        assert "attachment" in disposition
+        assert f'filename="vuln-{vid}.md"' in disposition
+        assert f"vuln-{vid}-RCE%20demo.md" in disposition
+        assert "**产出时间**：" in one.text
+        assert client.get("/api/vulns/999999/download").status_code == 404
+
+
+def test_download_single_vuln_report_missing_file(tmp_env, project):
+    from app.main import app
+    from app.api.vulns import _report_download_filename
+    from app.models import SessionLocal, Vuln
+
+    assert _report_download_filename(3, 'a/b:c*?"<>|') == "vuln-3-a_b_c.md"
+    assert _report_download_filename(3, "  ..  ") == "vuln-3.md"
+
+    with SessionLocal() as db:
+        v = Vuln(project_id=project, title="No report", vuln_type="xss", severity="low", status="pending_review")
+        db.add(v)
+        db.commit()
+        vid = v.id
+
+    with TestClient(app) as client:
+        missing = client.get(f"/api/vulns/{vid}/download")
+        assert missing.status_code == 404
+        assert "报告不存在" in missing.text
 
 
 def test_vuln_tracking_status_mark_and_filter(tmp_env, project):
@@ -695,6 +736,100 @@ def test_vuln_followups_continue_archived_reviewer_context(tmp_env, project, mon
         assert "刚才说的校验具体缺在哪？" in joined
         assert followup_messages[-1]["role"] == "user"
         assert followup_messages[-1]["content"] == "刚才说的校验具体缺在哪？"
+
+
+def test_dynamic_verify_continues_archived_reviewer_round(tmp_env, project, monkeypatch):
+    from app.agent.checkpoint import LoopCheckpoint, load_checkpoint, save_checkpoint
+    from app.main import app
+    from app.models import PhaseRun, Project, SessionLocal, Vuln
+    from app.services import pipeline
+    from app.services.paths import vuln_dir
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "_ensure_reviewer", lambda pid, cancel: None)
+
+    with SessionLocal() as db:
+        vuln = Vuln(
+            project_id=project,
+            title="Static SQLI",
+            vuln_type="sqli",
+            severity="high",
+            status="static_only",
+            evidence_level="static_only",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        run = PhaseRun(project_id=project, phase="reviewer", role="reviewer", vuln_id=vuln.id)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        vid = vuln.id
+        run_id = run.id
+
+    (vuln_dir(project, vid) / "report.md").write_text("# Static SQLI\n\n静态已确认。\n", encoding="utf-8")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt="仅静态 Reviewer",
+            user_prompt="请审核漏洞",
+            messages=[
+                {"role": "system", "content": "仅静态 Reviewer"},
+                {"role": "user", "content": "请审核漏洞"},
+                {"role": "assistant", "content": "静态结论：默认可利用。"},
+            ],
+            state={"review_done": True, "review_verdict": "static_only"},
+            vuln_id=vid,
+        )
+    )
+    pipeline._finish_phase_run(run_id, "completed")
+
+    with TestClient(app) as client:
+        off = client.get(f"/api/vulns/{vid}")
+        assert off.status_code == 200
+        assert off.json()["can_dynamic_verify"] is False
+        blocked = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert blocked.status_code == 400
+        assert "开启动态验证" in blocked.json()["detail"]
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project)
+            proj.dynamic_verify_enabled = True
+            proj.status = "completed"
+            db.commit()
+
+        ready = client.get(f"/api/vulns/{vid}")
+        assert ready.json()["can_dynamic_verify"] is True
+        assert ready.json()["dynamic_verify_queued"] is False
+
+        queued = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert queued.status_code == 200
+        body = queued.json()
+        assert body["ok"] is True
+        assert body["vuln_id"] == vid
+        new_run = body["phase_run_id"]
+        assert new_run != run_id
+
+        cp = load_checkpoint(project, new_run)
+        assert cp is not None
+        assert cp.vuln_id == vid
+        assert cp.state["dynamic_followup"] is True
+        assert cp.state["review_done"] is False
+        assert any("静态结论：默认可利用" in str(m.get("content") or "") for m in cp.messages)
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project)
+            assert proj.status == "reviewing"
+            assert proj.phase == "reviewer"
+
+        again = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert again.status_code == 409
+        detail = client.get(f"/api/vulns/{vid}")
+        assert detail.json()["dynamic_verify_queued"] is True
+        assert detail.json()["can_dynamic_verify"] is True
 
 
 def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
@@ -854,7 +989,7 @@ def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monke
 
 def test_reset_progress_endpoint(tmp_env, project, monkeypatch):
     from app.main import app
-    from app.models import FileWeight, Project, SessionLocal, Vuln
+    from app.models import BypassTarget, FileWeight, Project, SessionLocal, Sink, Vuln
     from app.services import pipeline
     from app.services.paths import docs_dir, workspace_dir
 
@@ -864,9 +999,21 @@ def test_reset_progress_endpoint(tmp_env, project, monkeypatch):
     rounds = workspace_dir(project) / "rounds"
     rounds.mkdir(parents=True, exist_ok=True)
     (rounds / "round-2.md").write_text("旧轮次\n", encoding="utf-8")
+    (rounds / "fast-round-2.md").write_text("Sink 轮次\n", encoding="utf-8")
+    (rounds / "bypass-round-2.md").write_text("绕过轮次\n", encoding="utf-8")
     with SessionLocal() as db:
         db.add(FileWeight(project_id=project, path="app/Main.java", weight=80, skipped=False, audited=True))
         db.add(Vuln(project_id=project, title="保留洞", vuln_type="xss", status="confirmed"))
+        db.add(Sink(project_id=project, file_path="app/Main.java", line_start=1, status="done", verdict="noise"))
+        db.add(
+            BypassTarget(
+                project_id=project,
+                file_path="docs/old-vulns/cve.md",
+                title="旧洞",
+                status="done",
+                verdict="still_patched",
+            )
+        )
         p = db.get(Project, project)
         p.status = "auditing"
         p.recon_done = True
@@ -892,11 +1039,17 @@ def test_reset_progress_endpoint(tmp_env, project, monkeypatch):
 
     assert (docs_dir(project) / "code-map.md").is_file()
     assert not (rounds / "round-2.md").exists()
+    assert (rounds / "fast-round-2.md").is_file()
+    assert (rounds / "bypass-round-2.md").is_file()
     with SessionLocal() as db:
         fw = db.query(FileWeight).filter(FileWeight.project_id == project, FileWeight.path == "app/Main.java").one()
         assert fw.audited is False
         assert fw.weight == 80
         assert db.query(Vuln).filter(Vuln.project_id == project, Vuln.title == "保留洞").one().status == "confirmed"
+        sink = db.query(Sink).filter(Sink.project_id == project).one()
+        assert sink.status == "done"
+        bypass = db.query(BypassTarget).filter(BypassTarget.project_id == project).one()
+        assert bypass.status == "done"
 
 
 def test_project_phase_reports(tmp_env, project):

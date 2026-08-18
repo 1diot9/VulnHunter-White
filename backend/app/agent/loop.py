@@ -33,6 +33,9 @@ from .watchdog import AgentWatchdog, identical_tool_nudge
 INTERRUPT_RESUME = (
     "刚才因暂停或进程中断。请从中断处继续完成任务，不要无故重来。"
 )
+TRANSIENT_RESUME = (
+    "上一轮模型请求因网络中断失败，请基于已有工具结果继续，不要从头再分析。"
+)
 CHAT_WAIT_LOG_AFTER = 20.0
 CHAT_WAIT_LOG_EVERY = 30.0
 
@@ -198,6 +201,7 @@ class AgentLoop:
         self._resumed = resumed
         self._announce_next_chat = bool(resumed)
         self._rate_limit_retries = 0
+        self._transient_retries = 0
 
     @classmethod
     def from_checkpoint(
@@ -210,6 +214,7 @@ class AgentLoop:
         context_window: int | None = None,
         timeout_sec: int | None = None,
         llm: ResolvedLlm | None = None,
+        resumed: bool = True,
     ) -> AgentLoop:
         loop = cls(
             project_id=cp.project_id,
@@ -227,13 +232,14 @@ class AgentLoop:
             stop_when=stop_when,
             llm=llm,
             messages=list(cp.messages),
-            resumed=True,
+            resumed=resumed,
             file_path=cp.file_path,
         )
         loop.state = dict(cp.state or {})
         loop.watchdog = AgentWatchdog.restore(cp.watchdog)
         loop._last_prompt_tokens = cp.last_prompt_tokens
         loop._rate_limit_retries = cp.rate_limit_retries
+        loop._transient_retries = cp.transient_retries
         return loop
 
     def _cancelled(self) -> bool:
@@ -241,6 +247,19 @@ class AgentLoop:
 
     def _paused(self) -> bool:
         return self.pause_event is not None and self.pause_event.is_set()
+
+    def _phase_run_active(self) -> bool:
+        """False if this run was cancelled/finished externally (e.g. heuristic reset)."""
+        if not self.phase_run_id:
+            return True
+        try:
+            with SessionLocal() as db:
+                pr = db.get(PhaseRun, self.phase_run_id)
+                if not pr:
+                    return False
+                return pr.status in ("running", "paused")
+        except Exception:  # noqa: BLE001
+            return True
 
     def _wait_while_paused(self) -> bool:
         if self.pause_event is None:
@@ -273,6 +292,7 @@ class AgentLoop:
                     last_prompt_tokens=self._last_prompt_tokens,
                     timeout_sec=self.timeout_sec,
                     rate_limit_retries=self._rate_limit_retries,
+                    transient_retries=self._transient_retries,
                 ),
                 status=status,
             )
@@ -320,6 +340,10 @@ class AgentLoop:
                 self._persist(messages, status="paused")
                 paused_at = time.time()
                 if not self._wait_while_paused():
+                    result.cancelled = True
+                    result.stop_reason = "cancelled"
+                    return result
+                if not self._phase_run_active():
                     result.cancelled = True
                     result.stop_reason = "cancelled"
                     return result
@@ -380,13 +404,29 @@ class AgentLoop:
                 self._persist(messages)
                 continue
             except TransientError as e:
-                # already retried inside _chat
-                result.error = str(e)
-                result.stop_reason = "transient_error"
-                live_log.error(self.project_id, str(e), phase=self.phase)
-                self._rescue_conclude(messages)
-                return result
+                if self._transient_retries >= settings.request_backoff_retries:
+                    result.error = str(e)
+                    result.stop_reason = "transient_error"
+                    live_log.error(self.project_id, str(e), phase=self.phase)
+                    self._rescue_conclude(messages)
+                    return result
+                self._transient_retries += 1
+                live_log.system(
+                    self.project_id,
+                    (
+                        f"模型请求中断，保留上下文继续"
+                        f"（{self._transient_retries}/{settings.request_backoff_retries}）: {e}"
+                    ),
+                    phase=self.phase,
+                    role=self.role,
+                )
+                last = messages[-1] if messages else {}
+                if last.get("role") != "user" or last.get("content") != TRANSIENT_RESUME:
+                    messages.append({"role": "user", "content": TRANSIENT_RESUME})
+                self._persist(messages)
+                continue
 
+            self._transient_retries = 0
             self._accumulate_tokens(result, usage)
             self._last_prompt_tokens = usage.get("prompt_tokens", 0)
             live_log.tokens(
@@ -622,6 +662,14 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
+                if attempt > 0:
+                    live_log.system(
+                        self.project_id,
+                        f"正在重新请求模型（{attempt + 1}/{settings.request_backoff_retries}）",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                    self._announce_next_chat = False
                 if self._announce_next_chat:
                     live_log.system(
                         self.project_id,
@@ -703,6 +751,7 @@ class AgentLoop:
                     self.project_id,
                     f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
                     phase=self.phase,
+                    role=self.role,
                 )
                 _interruptible_sleep(float(backoff), self.cancel_event)
             except Exception as e:  # noqa: BLE001
@@ -712,6 +761,7 @@ class AgentLoop:
                     self.project_id,
                     f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
                     phase=self.phase,
+                    role=self.role,
                 )
                 _interruptible_sleep(float(backoff), self.cancel_event)
         raise TransientError(str(last_err) if last_err else "chat failed")
@@ -731,17 +781,23 @@ class AgentLoop:
         def _hb() -> None:
             if stop_hb.wait(CHAT_WAIT_LOG_AFTER):
                 return
-            while not first_payload.is_set():
+            while not stop_hb.is_set():
                 elapsed = int(time.time() - started)
-                live_log.system(
-                    self.project_id,
-                    f"仍在等待模型响应（已 {elapsed}s，估计 {est_tokens} token）",
-                    phase=self.phase,
-                    role=self.role,
-                )
-                if stop_hb.wait(CHAT_WAIT_LOG_EVERY):
-                    return
                 if first_payload.is_set():
+                    live_log.system(
+                        self.project_id,
+                        f"仍在接收流式响应（已 {elapsed}s）",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                else:
+                    live_log.system(
+                        self.project_id,
+                        f"仍在等待模型响应（已 {elapsed}s，估计 {est_tokens} token）",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                if stop_hb.wait(CHAT_WAIT_LOG_EVERY):
                     return
 
         def _on_first_payload() -> None:

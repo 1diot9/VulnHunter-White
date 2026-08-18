@@ -17,6 +17,8 @@ from .http_client import http_client
 
 FOFA_DEFAULT_BASE = "https://fofa.info"
 FOFA_DEFAULT_SIZE = 10
+FOFA_MAX_PAGES = 5
+FOFA_MAX_TARGETS = FOFA_DEFAULT_SIZE * FOFA_MAX_PAGES
 FOFA_MAX_SIZE = 30
 FOFA_FIELDS = "host,ip,port,title,domain,org,protocol"
 _DEFAULT_HOSTS = {"fofa.info", "api.fofa.info"}
@@ -121,10 +123,21 @@ def _cell(row: list[Any], i: int) -> str:
     return str(row[i])
 
 
+def clamp_page(page: Any, *, default: int = 1) -> int:
+    try:
+        n = int(page)
+    except (TypeError, ValueError):
+        n = default
+    if n <= 0:
+        n = default
+    return n
+
+
 def search(
     query: str,
     *,
     size: int = FOFA_DEFAULT_SIZE,
+    page: int = 1,
     key: str | None = None,
     base_url: str | None = None,
 ) -> dict[str, Any]:
@@ -146,6 +159,7 @@ def search(
             "guidance": "在设置页填写 FOFA Key，或设置环境变量 VULNHUNTER_FOFA_KEY。没有 key 时 FinishVerifier(verdict=skipped)。",
         }
     safe_size = clamp_size(size)
+    safe_page = clamp_page(page)
     try:
         base = assert_safe_fofa_base(base_url if base_url is not None else resolve_fofa_base_url())
     except FofaError as e:
@@ -154,7 +168,7 @@ def search(
         "key": api_key,
         "qbase64": _qbase64(q),
         "fields": FOFA_FIELDS,
-        "page": "1",
+        "page": str(safe_page),
         "size": str(safe_size),
         "full": "false",
     }
@@ -221,14 +235,17 @@ def search(
     return {
         "ok": True,
         "query": q,
+        "page": safe_page,
         "size": int(data.get("size") or 0),
         "returned": len(sample),
         "sample": sample,
         "guidance": (
-            f"默认返回最多 {FOFA_DEFAULT_SIZE} 条。本项目只搜一次，结果给全部漏洞共享。"
-            "按报告 PoC 逐个复测，任一目标成功即 FinishVerifier(verdict=success, "
-            "verified_url=..., poc=..., response=..., fofa_query=本次语法, targets=全部样本)。"
-            "targets 里已测标 success/fail，其余标 untested；不要为了填表扫完一片。"
+            f"每页最多 {FOFA_DEFAULT_SIZE} 条。首批按报告复测，凑满 3 个成功即 "
+            "FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., "
+            "fofa_query=本次语法, targets=全部样本)。"
+            "targets 里已测标 success/fail，达 3 个成功后其余标 untested；"
+            f"当前这批测完仍不足 3 个则保留成功的，FofaSearch(expand=true) 再搜下一页"
+            f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。"
         ),
     }
 

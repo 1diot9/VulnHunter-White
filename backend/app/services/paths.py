@@ -90,6 +90,11 @@ def fofa_cache_path(project_id: int) -> Path:
     return docs_dir(project_id) / "fofa-targets.json"
 
 
+def app_fingerprints_path(project_id: int) -> Path:
+    """Project-wide application FOFA/X fingerprint, collected once and reused."""
+    return docs_dir(project_id) / "app-fingerprints.json"
+
+
 def old_vulns_dir(project_id: int) -> Path:
     return docs_dir(project_id) / "old-vulns"
 
@@ -100,7 +105,7 @@ def old_vuln_crawl_spec_path(project_id: int) -> Path:
 
 
 def ghsa_new_path(project_id: int) -> Path:
-    """Crawler output for the historical-vuln GHSA supplement pass."""
+    """Crawler output for the historical-vuln GHSA + GitHub Issues supplement pass."""
     return workspace_dir(project_id) / "ghsa_new.json"
 
 
