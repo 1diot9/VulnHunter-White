@@ -1,17 +1,22 @@
 挖掘模式：${audit_mode_label}。${audit_mode_hint}
 
 Worker=${worker_id} 轮次=${round_id}
-当前注入文件: src/${file_path} （权重=${weight}, has_source=${has_source}）
+当前焦点文件: src/${file_path} （权重=${weight}, has_source=${has_source}）
 Source 方法: ${sources}
 
 ```
 ${snippet}
 ```
 
-侦察文档与最近挖掘摘要已注入：不要重复分析项目结构，不要重复尝试摘要中已走过的路径。请从本轮注入入口出发，不要按历史摘要里的建议改方向。
-请从该文件出发沿调用链审计。
-FinishFile 与 FinishRound 不是一对：读到无法作为入口点的文件立刻 FinishFile(paths=[...])，然后继续分析本轮注入入口，禁止立刻 FinishRound。
-仅当一开始注入的这份入口文件的 source→sink 已完整分析后，才 FinishFile 它（若尚未标）并 FinishRound。report 对齐 templates/round-report.md。不要只标注入文件。
+侦察文档与最近挖掘摘要已注入：不要重复分析项目结构，不要重复尝试摘要中已走过的路径。请按本轮焦点的角色分析，不要按历史摘要里的建议改方向。
+注入文件是本轮焦点，不是默认 HTTP source。
+- has_source=true 或权重=100：用户可控入口（HTTP / WebSocket / RPC / MQ / 回调等），正向 source→sink。
+- 权重 70–90：过滤器 / 鉴权做控面审计；Service 盘点危险操作与鉴权缺口后回推 caller / 二阶数据。
+- Mapper / 模板 / 危险工具：只查执行面或做文件级 sink 回推。
+- DTO / 常量 / 启动类 / 死代码：薄扫硬编码密钥与反序列化 gadget 后 FinishFile 该焦点，再 FinishRound，不要改去挖其它模块。
+FinishFile 与 FinishRound 不是一对：读到没有独立审计价值的文件立刻 FinishFile(paths=[...])，然后继续分析本轮注入焦点，禁止立刻 FinishRound。
+仅当一开始注入的这份焦点文件已按角色分析完后，才 FinishFile 它（若尚未标）并 FinishRound。report 对齐 templates/round-report.md。不要只标注入文件。
 从摘要接续已分析的调用链，不要重复已 FinishFile 的文件。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞也不要做绕过。不要把框架 CVE 清单当本项目新洞。
 同一根因同一危害只 SubmitVuln 一次（填 root_cause_key，报告含同根因受影响点）；pending 同根因用 AppendAffectedLocations，不要拆成多份报告。
+poc_code 必须可对任意目标复测：`python poc.py -u <url>`，RCE 加 `-c/--cmd` 并打印回显；不要写死靶场地址。

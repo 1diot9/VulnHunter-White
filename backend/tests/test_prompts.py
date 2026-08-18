@@ -56,7 +56,7 @@ def test_render_prompt_does_not_rescan_values():
     snippet = "price = ${project_id} + {$not_a_placeholder}"
     text = render_prompt("initial/worker.md", snippet=snippet, project_id=7, file_path="a.py")
     assert "price = ${project_id} + {$not_a_placeholder}" in text
-    assert "当前注入文件: src/a.py" in text
+    assert "当前焦点文件: src/a.py" in text
 
 
 def test_render_prompt_missing_file():
@@ -254,6 +254,33 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "templates/round-report.md" in initial
     assert "AddSourceExt" not in worker
     assert "AddSourceExt" not in initial
+    assert "按角色选择挖掘方向" in worker
+    assert "当前焦点文件" in initial
+    assert "控面" in worker
+    assert "回推" in worker
+    assert "薄扫" in worker
+    assert "WebSocket" in worker
+
+
+def test_recon_mark_weights_non_http_entries():
+    mark = load_prompt("recon-mark.md")
+    initial = load_prompt("initial/recon-mark.md")
+    recon = load_prompt("recon.md")
+    recon_initial = load_prompt("initial/recon.md")
+    assert "WebSocket" in mark
+    assert "RPC" in mark
+    assert "MQ" in mark
+    assert "MarkSource" in mark
+    assert "不要只标 HTTP" in mark
+    assert "70–90" in mark
+    assert "40–60" in mark
+    assert "10–30" in mark
+    assert "WebSocket" in initial
+    assert "不要只标 HTTP" in initial
+    assert "非 HTTP" in recon
+    assert "WebSocket" in recon
+    assert "WebSocket" in recon_initial
+    assert "不要只标 HTTP" in recon_initial
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():
@@ -275,7 +302,8 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "FOFA" in worker
     assert "X 情报社区" in worker
     assert "icon_hash" in worker
-    assert "cert.subject" in worker
+    assert "docs/app-fingerprints.json" in worker
+    assert "不要每条漏洞重新识别" in worker
     assert "docs/lab.md" in worker
     assert "不允许出现「或」" in worker
 

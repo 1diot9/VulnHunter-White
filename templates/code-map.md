@@ -15,5 +15,8 @@ summary: "{{summary}}"
 ## HTTP 入口
 -
 
+## 非 HTTP 入口
+- WebSocket / RPC / MQ 消费 / 回调 / 执行器开放接口：
+
 ## 关键依赖
 -
