@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from app.agent.watchdog import (
+    IDENTICAL_ABORT_NUDGE,
+    IDENTICAL_REDIRECT_NUDGE,
     IDENTICAL_TOOL_NUDGE,
+    MAX_IDENTICAL_THRESHOLD_HITS,
     NO_TOOL_NUDGE,
     RECON_OLD_VULN_PERSIST_NUDGE,
     RECON_PERSIST_INTERVAL,
     WORKER_FINISH_INTERVAL,
     WORKER_FINISH_NUDGE,
     AgentWatchdog,
+    identical_abort_nudge,
+    identical_redirect_nudge,
     identical_tool_nudge,
 )
 
@@ -41,11 +46,42 @@ def test_repeated_identical_tool_calls():
     assert reason is not None
     assert "repeated identical tool call" in reason
     assert "Read" in reason
-    # does not latch: a different call is allowed
+    assert w.identical_threshold_hits == 1
+    assert w.recent_tool_keys == []
+    assert not w.identical_loop_exhausted()
+    # window reset: same call is allowed again until the next threshold
+    assert w.observe_tools([call]) is None
     assert w.observe_tools([{"name": "Read", "arguments": {"path": "b.java"}}]) is None
     assert w.reason is None
-    # same call again after a change is not yet a full window
+
+
+def test_identical_threshold_redirects_then_aborts_after_five_hits():
+    w = AgentWatchdog(max_same_tool_calls=2, max_identical_threshold_hits=5)
+    call = {"name": "PowerShell", "arguments": {"command": "docker exec db mysql"}}
+    for hit in range(1, 5):
+        assert w.observe_tools([call]) is None
+        reason = w.observe_tools([call])
+        assert reason is not None
+        assert w.identical_threshold_hits == hit
+        assert w.recent_tool_keys == []
+        assert not w.identical_loop_exhausted()
     assert w.observe_tools([call]) is None
+    reason = w.observe_tools([call])
+    assert reason is not None
+    assert w.identical_threshold_hits == 5
+    assert w.identical_loop_exhausted()
+
+
+def test_identical_threshold_hits_accumulate_across_different_calls():
+    w = AgentWatchdog(max_same_tool_calls=2, max_identical_threshold_hits=5)
+    a = {"name": "PowerShell", "arguments": {"command": "a"}}
+    b = {"name": "PowerShell", "arguments": {"command": "b"}}
+    assert w.observe_tools([a]) is None
+    assert w.observe_tools([a]) is not None
+    assert w.identical_threshold_hits == 1
+    assert w.observe_tools([b]) is None
+    assert w.observe_tools([b]) is not None
+    assert w.identical_threshold_hits == 2
 
 
 def test_identical_tool_nudge_text():
@@ -53,6 +89,14 @@ def test_identical_tool_nudge_text():
     assert msg == IDENTICAL_TOOL_NUDGE.format(name="PowerShell", n=3)
     assert "未执行" in msg
     assert "不要原样重试" in msg
+    redirect = identical_redirect_nudge("PowerShell", 2, 5)
+    assert redirect == IDENTICAL_REDIRECT_NUDGE.format(name="PowerShell", hit=2, max_hits=5)
+    assert "导向" in redirect
+    assert "2/5" in redirect
+    abort = identical_abort_nudge("PowerShell", 5)
+    assert abort == IDENTICAL_ABORT_NUDGE.format(name="PowerShell", hits=5)
+    assert "终止" in abort
+    assert MAX_IDENTICAL_THRESHOLD_HITS == 5
 
 
 def test_distinct_tool_calls_are_not_loops():
@@ -196,6 +240,20 @@ def test_idle_turns_restored_from_snapshot():
     assert restored.idle_turns == 2
     assert restored.note_turn(["Grep"]) is not None
     assert AgentWatchdog.restore({}).idle_turns == 0
+
+
+def test_identical_hits_restored_from_snapshot():
+    w = AgentWatchdog(max_same_tool_calls=2)
+    call = {"name": "Read", "arguments": {"path": "a.java"}}
+    w.observe_tools([call])
+    w.observe_tools([call])
+    restored = AgentWatchdog.restore(w.snapshot())
+    assert restored.identical_threshold_hits == 1
+    assert restored.max_identical_threshold_hits == MAX_IDENTICAL_THRESHOLD_HITS
+    assert restored.recent_tool_keys == []
+    assert restored.observe_tools([call]) is None
+    assert restored.observe_tools([call]) is not None
+    assert restored.identical_threshold_hits == 2
 
 
 def test_bypass_finish_nudge_and_no_tool():

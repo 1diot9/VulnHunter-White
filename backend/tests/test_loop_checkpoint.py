@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -378,3 +379,60 @@ def test_adopt_resumable_then_release(tmp_env, project):
     assert cp2 is not None
     pipeline._release_adopted(project, run_id)
     clear_checkpoint(project, run_id)
+
+
+def test_identical_tool_loop_redirects_then_aborts(tmp_env, project, monkeypatch):
+    from app.tools import registry
+
+    dispatched = {"n": 0}
+    chats = {"n": 0}
+
+    def fake_chat(self, messages, tools, remaining):
+        chats["n"] += 1
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "type": "function",
+                                "function": {
+                                    "name": "PowerShell",
+                                    "arguments": json.dumps({"command": "echo same"}),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }, _usage(), None
+
+    def fake_dispatch(_ctx, _name, _args):
+        dispatched["n"] += 1
+        return {"ok": True, "stdout": "ok"}
+
+    monkeypatch.setattr(AgentLoop, "_chat", fake_chat)
+    monkeypatch.setattr(AgentLoop, "_rescue_conclude", lambda self, messages: None)
+    monkeypatch.setattr(registry, "dispatch", fake_dispatch)
+    run_id = pipeline._new_phase_run(project, "reviewer", "reviewer")
+    loop = AgentLoop(
+        project_id=project,
+        role="reviewer",
+        phase="reviewer",
+        system_prompt="sys",
+        user_prompt="task",
+        phase_run_id=run_id,
+        timeout_sec=60,
+    )
+    loop.watchdog.max_same_tool_calls = 2
+    loop.watchdog.max_identical_threshold_hits = 5
+    result = loop.run()
+    assert result.loop_aborted is True
+    assert result.ok is False
+    assert result.stop_reason == "identical_tool_loop"
+    assert "终止" in (result.error or "")
+    assert dispatched["n"] == 5
+    assert chats["n"] == 10
+    assert loop.watchdog.identical_threshold_hits == 5

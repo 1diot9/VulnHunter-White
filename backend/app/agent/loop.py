@@ -28,7 +28,12 @@ from .compression import (
     needs_compress,
     write_summary,
 )
-from .watchdog import AgentWatchdog, identical_tool_nudge
+from .watchdog import (
+    AgentWatchdog,
+    identical_abort_nudge,
+    identical_redirect_nudge,
+    identical_tool_nudge,
+)
 
 INTERRUPT_RESUME = (
     "刚才因暂停或进程中断。请从中断处继续完成任务，不要无故重来。"
@@ -529,9 +534,19 @@ class AgentLoop:
                     parsed_calls[0]["name"] if parsed_calls else "unknown"
                 )
                 err_text = identical_tool_nudge(tool_name, self.watchdog.max_same_tool_calls)
+                hit = self.watchdog.identical_threshold_hits
+                max_hits = self.watchdog.max_identical_threshold_hits
+                aborting = self.watchdog.identical_loop_exhausted()
                 live_log.system(
                     self.project_id,
-                    f"看门狗拦截：{loop_reason}，已提醒修改后重试",
+                    (
+                        f"看门狗终止：{loop_reason}，本轮已 {hit} 次触达阈值，结束本轮"
+                        if aborting
+                        else (
+                            f"看门狗导向：{loop_reason}（本轮第 {hit}/{max_hits} 次），"
+                            "已重置拦截窗口"
+                        )
+                    ),
                     phase=self.phase,
                     role=self.role,
                 )
@@ -553,6 +568,17 @@ class AgentLoop:
                             "content": json.dumps(tool_result, ensure_ascii=False),
                         }
                     )
+                if aborting:
+                    abort_text = identical_abort_nudge(tool_name, hit)
+                    messages.append({"role": "user", "content": abort_text})
+                    self._persist(messages)
+                    result.ok = False
+                    result.loop_aborted = True
+                    result.stop_reason = "identical_tool_loop"
+                    result.error = abort_text
+                    self._rescue_conclude(messages)
+                    return result
+                redirect = identical_redirect_nudge(tool_name, hit, max_hits)
                 if persist_nudge:
                     live_log.system(
                         self.project_id,
@@ -560,7 +586,8 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
-                    messages.append({"role": "user", "content": persist_nudge})
+                    redirect = f"{redirect}\n\n{persist_nudge}"
+                messages.append({"role": "user", "content": redirect})
                 self._persist(messages)
                 continue
 

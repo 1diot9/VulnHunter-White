@@ -1,12 +1,14 @@
-"""Watchdog: require tool calls; reject identical-tool loops without aborting.
+"""Watchdog: require tool calls; redirect identical-tool streaks; abort after repeats.
 
 Phase timeout is the wall-clock bound. Recon / worker / reviewer all share
 AgentLoop, so this applies to every phase. A text-only turn yields no new
 code or environment info — nudge the model to call tools instead of
 killing the run after N rounds.
 
-Identical tool+args streaks are not executed: the loop returns an error so
-the model can change arguments or switch tools. The session keeps running.
+Identical tool+args streaks are intercepted once at the consecutive-call
+threshold: the loop returns an error, injects a redirect, then clears the
+window so the same call is not blocked forever. Hitting that threshold
+five times in one round aborts the session.
 
 Historical-vuln recon sessions get a persist reminder after N consecutive
 turns without WriteOldVuln. Worker mining gets a FinishFile reminder after
@@ -66,6 +68,19 @@ IDENTICAL_TOOL_NUDGE = (
     "看门狗拦截：连续 {n} 次调用了完全相同的工具（{name}）且参数未变，本次未执行。"
     "请根据已有结果修改参数、换工具或继续下一步，不要原样重试。"
 )
+
+IDENTICAL_REDIRECT_NUDGE = (
+    "看门狗导向：刚才因连续相同工具调用被拦截（{name}）。"
+    "请立刻换参数、换工具或根据已有结果进入下一步，不要原样重试。"
+    "拦截窗口已重置，下一次相同调用会重新执行。"
+    "这是本轮第 {hit}/{max_hits} 次触达阈值；满 {max_hits} 次将终止本轮。"
+)
+
+IDENTICAL_ABORT_NUDGE = (
+    "看门狗终止：本轮已 {hits} 次因完全相同的工具调用（{name}）触达拦截阈值，判定死循环，结束本轮。"
+)
+
+MAX_IDENTICAL_THRESHOLD_HITS = 5
 
 RECON_PERSIST_INTERVAL = 50
 RECON_PERSIST_PHASES = frozenset({"recon-old-vuln", "recon-old-vuln-ghsa", "recon-source-ext"})
@@ -141,12 +156,14 @@ PERSIST_TOOLS: dict[str, frozenset[str]] = {
 @dataclass
 class AgentWatchdog:
     max_same_tool_calls: int = 4
+    max_identical_threshold_hits: int = MAX_IDENTICAL_THRESHOLD_HITS
     persist_nudge_interval: int = RECON_PERSIST_INTERVAL
     worker_finish_interval: int = WORKER_FINISH_INTERVAL
     phase: str = ""
     turn_count: int = 0
     idle_turns: int = 0
     consecutive_no_tool_turns: int = 0
+    identical_threshold_hits: int = 0
     recent_tool_keys: list[str] = field(default_factory=list)
     reason: str | None = None
 
@@ -228,6 +245,8 @@ class AgentWatchdog:
             "recent_tool_keys": list(self.recent_tool_keys),
             "reason": self.reason,
             "max_same_tool_calls": self.max_same_tool_calls,
+            "max_identical_threshold_hits": self.max_identical_threshold_hits,
+            "identical_threshold_hits": self.identical_threshold_hits,
             "persist_nudge_interval": self.persist_nudge_interval,
             "worker_finish_interval": self.worker_finish_interval,
         }
@@ -237,19 +256,27 @@ class AgentWatchdog:
         data = data or {}
         wd = cls(
             max_same_tool_calls=int(data.get("max_same_tool_calls") or 4),
+            max_identical_threshold_hits=int(
+                data.get("max_identical_threshold_hits") or MAX_IDENTICAL_THRESHOLD_HITS
+            ),
             persist_nudge_interval=int(data.get("persist_nudge_interval") or RECON_PERSIST_INTERVAL),
             worker_finish_interval=int(data.get("worker_finish_interval") or WORKER_FINISH_INTERVAL),
             phase=str(data.get("phase") or ""),
             turn_count=int(data.get("turn_count") or 0),
             idle_turns=int(data.get("idle_turns") or 0),
             consecutive_no_tool_turns=int(data.get("consecutive_no_tool_turns") or 0),
+            identical_threshold_hits=int(data.get("identical_threshold_hits") or 0),
             recent_tool_keys=list(data.get("recent_tool_keys") or []),
             reason=data.get("reason"),
         )
         return wd
 
+    def identical_loop_exhausted(self) -> bool:
+        limit = self.max_identical_threshold_hits
+        return limit > 0 and self.identical_threshold_hits >= limit
+
     def observe_tools(self, tool_calls: list[dict[str, Any]]) -> str | None:
-        """Return a nudge if the latest window is one identical call; do not latch/abort."""
+        """Intercept one identical window, then reset so the next call can run."""
         if not tool_calls:
             return None
         self.consecutive_no_tool_turns = 0
@@ -266,7 +293,10 @@ class AgentWatchdog:
         if window > 0 and len(self.recent_tool_keys) >= window:
             recent = self.recent_tool_keys[-window:]
             if len(set(recent)) == 1:
-                self.reason = f"repeated identical tool call: {recent[0].split(':')[0]}"
+                tool_name = recent[0].split(":")[0]
+                self.identical_threshold_hits += 1
+                self.reason = f"repeated identical tool call: {tool_name}"
+                self.recent_tool_keys.clear()
                 return self.reason
         self.reason = None
         return None
@@ -274,3 +304,15 @@ class AgentWatchdog:
 
 def identical_tool_nudge(name: str, n: int = 4) -> str:
     return IDENTICAL_TOOL_NUDGE.format(name=name or "unknown", n=n)
+
+
+def identical_redirect_nudge(name: str, hit: int, max_hits: int = MAX_IDENTICAL_THRESHOLD_HITS) -> str:
+    return IDENTICAL_REDIRECT_NUDGE.format(
+        name=name or "unknown",
+        hit=hit,
+        max_hits=max_hits,
+    )
+
+
+def identical_abort_nudge(name: str, hits: int = MAX_IDENTICAL_THRESHOLD_HITS) -> str:
+    return IDENTICAL_ABORT_NUDGE.format(name=name or "unknown", hits=hits)
