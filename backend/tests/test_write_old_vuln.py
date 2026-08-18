@@ -9,22 +9,35 @@ def _ctx(project_id: int, role: str = "recon_old_vuln") -> ToolContext:
     return ToolContext(project_id=project_id, role=role, phase=role)
 
 
+def _entry(**kwargs):
+    payload = {
+        "title": "Demo CVE",
+        "summary": "short summary",
+        "content": "body",
+        "fix_status": "unpatched",
+    }
+    payload.update(kwargs)
+    return payload
+
+
 def test_write_old_vuln_creates_doc_and_index(tmp_env, project):
     out = registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {
-            "title": "Demo CVE",
-            "summary": "short summary",
-            "content": "## 漏洞点\nlogin 注入\n",
-            "cve": "CVE-2024-0001",
-            "cwe": "CWE-89",
-        },
+        _entry(
+            title="Demo CVE",
+            summary="short summary",
+            content="## 漏洞点\nlogin 注入\n",
+            cve="CVE-2024-0001",
+            cwe="CWE-89",
+            fix_status="unpatched",
+        ),
     )
     assert out["ok"] is True, out
     assert out["created"] is True
     assert out["indexed"] == 1
     assert out["done"] is False
+    assert out["fix_status"] == "unpatched"
     assert recon_old_vuln_llm_ready(project) is False
     assert recon_old_vulns_ready(project) is False
     old = old_vulns_dir(project)
@@ -32,46 +45,97 @@ def test_write_old_vuln_creates_doc_and_index(tmp_env, project):
     assert written.exists()
     text = written.read_text(encoding="utf-8")
     assert "title: Demo CVE" in text
+    assert "fix_status: unpatched" in text
     assert "login 注入" in text
     index = (old / "index.md").read_text(encoding="utf-8")
     assert "Demo CVE" in index
+    assert "未修复" in index
     assert "CVE-2024-0001.md" in index
+    assert "修复状态" in index
+
+
+def test_write_old_vuln_defaults_fix_status_from_source(tmp_env, project):
+    web = registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {"title": "No status", "summary": "s", "content": "body", "cve": "CVE-0", "source": "websearch"},
+    )
+    assert web["ok"] is True, web
+    assert web["fix_status"] == "patched"
+    text = (old_vulns_dir(project) / "CVE-0.md").read_text(encoding="utf-8")
+    assert "fix_status: patched" in text
+    assert "source: websearch" in text
+
+    issue = registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        {
+            "title": "Open issue",
+            "summary": "rce",
+            "content": "still open",
+            "source": "github_issue",
+        },
+    )
+    assert issue["ok"] is True, issue
+    assert issue["fix_status"] == "unpatched"
+    issue_text = (old_vulns_dir(project) / "Open-issue.md").read_text(encoding="utf-8")
+    assert "fix_status: unpatched" in issue_text
+    assert "source: github_issue" in issue_text
+
+
+def test_write_old_vuln_normalizes_chinese_fix_status(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project),
+        "WriteOldVuln",
+        _entry(title="Old CVE", content="fixed in 2.0", cve="CVE-7", fix_status="已修复"),
+    )
+    assert out["ok"] is True, out
+    assert out["fix_status"] == "patched"
+    text = (old_vulns_dir(project) / "CVE-7.md").read_text(encoding="utf-8")
+    assert "fix_status: patched" in text
+    index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "已修复" in index
 
 
 def test_write_old_vuln_incremental_second_doc(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "First", "summary": "a", "content": "body-a", "cve": "CVE-1"},
+        _entry(title="First", summary="a", content="body-a", cve="CVE-1", fix_status="patched"),
     )
     out = registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "Second", "summary": "b", "content": "body-b", "cve": "CVE-2"},
+        _entry(title="Second", summary="b", content="body-b", cve="CVE-2", fix_status="unpatched"),
     )
     assert out["ok"] is True
     assert out["indexed"] == 2
     listed = registry.dispatch(_ctx(project, "worker"), "SearchOldVuln", {"query": ""})
-    titles = {d["title"] for d in listed["docs"]}
-    assert titles == {"First", "Second"}
+    by_title = {d["title"]: d for d in listed["docs"]}
+    assert set(by_title) == {"First", "Second"}
+    assert by_title["First"]["fix_status"] == "patched"
+    assert by_title["First"]["fix_status_label"] == "已修复"
+    assert by_title["Second"]["fix_status"] == "unpatched"
+    assert by_title["Second"]["fix_status_label"] == "未修复"
 
 
 def test_write_old_vuln_overwrite_same_title(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "Same", "summary": "old", "content": "v1", "cve": "CVE-9"},
+        _entry(title="Same", summary="old", content="v1", cve="CVE-9", fix_status="unpatched"),
     )
     out = registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "Same", "summary": "new", "content": "v2 patched", "cve": "CVE-9"},
+        _entry(title="Same", summary="new", content="v2 patched", cve="CVE-9", fix_status="patched"),
     )
     assert out["created"] is False
     assert out["indexed"] == 1
     text = (old_vulns_dir(project) / "CVE-9.md").read_text(encoding="utf-8")
     assert "v2 patched" in text
     assert "summary: new" in text
+    assert "fix_status: patched" in text
 
 
 def test_write_old_vuln_no_findings_ends_llm_pass_only(tmp_env, project):
@@ -97,21 +161,21 @@ def test_write_old_vuln_acl_recon_old_vuln_roles(tmp_env, project):
     denied_worker = registry.dispatch(
         _ctx(project, "worker"),
         "WriteOldVuln",
-        {"title": "x", "summary": "y", "content": "z"},
+        _entry(title="x", summary="y", content="z"),
     )
     assert denied_worker["ok"] is False
     assert "无权" in denied_worker["error"]
     denied_map = registry.dispatch(
         _ctx(project, "recon"),
         "WriteOldVuln",
-        {"title": "x", "summary": "y", "content": "z"},
+        _entry(title="x", summary="y", content="z"),
     )
     assert denied_map["ok"] is False
     assert "无权" in denied_map["error"]
     allowed_ghsa = registry.dispatch(
         _ctx(project, "recon_old_vuln_ghsa"),
         "WriteOldVuln",
-        {"title": "ghsa", "summary": "s", "content": "body", "cve": "CVE-8"},
+        _entry(title="ghsa", summary="s", content="body", cve="CVE-8"),
     )
     assert allowed_ghsa["ok"] is True
 
@@ -131,7 +195,7 @@ def test_write_old_vuln_done_after_entries_ends_llm_pass(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "First", "summary": "a", "content": "body-a", "cve": "CVE-1"},
+        _entry(title="First", summary="a", content="body-a", cve="CVE-1"),
     )
     assert recon_old_vulns_ready(project) is False
     out = registry.dispatch(_ctx(project), "WriteOldVuln", {"done": True, "keyword": "demo"})
@@ -149,17 +213,18 @@ def test_write_old_vuln_done_appends_skip_note(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "App CVE", "summary": "own", "content": "call site Foo.bar", "cve": "CVE-1"},
+        _entry(title="App CVE", summary="own", content="call site Foo.bar", cve="CVE-1", fix_status="patched"),
     )
     out = registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"done": True, "note": "已跳过已修复的 Spring/Tomcat 传递依赖 CVE，未单独建档"},
+        {"done": True, "note": "已跳过仅传递依赖的 Spring/Tomcat CVE，未单独建档"},
     )
     assert out["ok"] is True
     assert out["done"] is True
     index = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
     assert "App CVE" in index
+    assert "已修复" in index
     assert "检索说明" in index
     assert "Spring/Tomcat" in index
     assert "llm_complete: true" in index
@@ -169,14 +234,14 @@ def test_write_old_vuln_last_entry_can_declare_done(tmp_env, project):
     out = registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {
-            "title": "Only",
-            "summary": "s",
-            "content": "body",
-            "cve": "CVE-9",
-            "done": True,
-            "note": "已跳过未使用的 Undertow CVE",
-        },
+        _entry(
+            title="Only",
+            summary="s",
+            content="body",
+            cve="CVE-9",
+            done=True,
+            note="已跳过未使用的 Undertow CVE",
+        ),
     )
     assert out["ok"] is True
     assert out["done"] is True
@@ -191,7 +256,7 @@ def test_write_old_vuln_no_findings_after_entries_keeps_docs(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "Kept", "summary": "s", "content": "body", "cve": "CVE-3"},
+        _entry(title="Kept", summary="s", content="body", cve="CVE-3"),
     )
     out = registry.dispatch(_ctx(project), "WriteOldVuln", {"no_findings": True})
     assert out["ok"] is True
@@ -206,21 +271,22 @@ def test_write_old_vuln_ghsa_pass_completes_phase(tmp_env, project):
     registry.dispatch(
         _ctx(project),
         "WriteOldVuln",
-        {"title": "LLM", "summary": "a", "content": "body", "cve": "CVE-1", "done": True},
+        _entry(title="LLM", summary="a", content="body", cve="CVE-1", done=True, fix_status="patched"),
     )
     assert recon_old_vuln_llm_ready(project) is True
     assert recon_old_vulns_ready(project) is False
     out = registry.dispatch(
         _ctx(project, "recon_old_vuln_ghsa"),
         "WriteOldVuln",
-        {
-            "title": "GHSA extra",
-            "summary": "from crawler",
-            "content": "call site Bar.baz",
-            "cve": "CVE-2",
-            "done": True,
-            "note": "已核验爬虫候选",
-        },
+        _entry(
+            title="GHSA extra",
+            summary="from crawler",
+            content="call site Bar.baz",
+            cve="CVE-2",
+            done=True,
+            note="已核验爬虫候选",
+            fix_status="unpatched",
+        ),
     )
     assert out["ok"] is True
     assert recon_old_vulns_ready(project) is True
@@ -229,3 +295,5 @@ def test_write_old_vuln_ghsa_pass_completes_phase(tmp_env, project):
     assert "LLM" in index
     assert "GHSA extra" in index
     assert "已核验爬虫候选" in index
+    assert "已修复" in index
+    assert "未修复" in index

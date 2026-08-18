@@ -34,11 +34,13 @@ def test_collect_skip_keys_from_old_vuln_docs(tmp_env, project):
     old = old_vulns_dir(project)
     old.mkdir(parents=True, exist_ok=True)
     (old / "CVE-2024-0001.md").write_text(
-        "---\ntitle: Demo\ncve: CVE-2024-0001\n---\n\nbody\n",
+        "---\ntitle: Demo\ncve: CVE-2024-0001\n---\n\n"
+        "also https://github.com/halo-dev/halo/issues/42\n",
         encoding="utf-8",
     )
     keys = collect_old_vuln_skip_keys(project)
     assert "CVE-2024-0001" in keys
+    assert "HALO-DEV/HALO#42" in keys
 
 
 def test_run_old_vuln_ghsa_crawl_writes_new_only(tmp_env, project, monkeypatch):
@@ -71,11 +73,11 @@ def test_run_old_vuln_ghsa_crawl_writes_new_only(tmp_env, project, monkeypatch):
 
 
 def test_mark_complete_after_empty_crawl(tmp_env, project):
-    mark_old_vuln_search_complete(project, note="GHSA 爬虫无新候选，沿用 LLM 检索结果")
+    mark_old_vuln_search_complete(project, note="GHSA / GitHub Issues 爬虫无新候选，沿用 LLM 检索结果")
     assert recon_old_vulns_ready(project) is True
     text = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
     assert "\ncomplete: true\n" in text
-    assert "GHSA 爬虫无新候选" in text
+    assert "GitHub Issues" in text
 
 
 def test_run_recon_old_vulns_llm_then_ghsa(tmp_env, project, monkeypatch):
@@ -95,3 +97,91 @@ def test_run_recon_old_vulns_llm_then_ghsa(tmp_env, project, monkeypatch):
     )
     assert pipeline._run_recon_old_vulns(project, __import__("threading").Event()) is True
     assert order == ["recon-old-vuln", "ghsa-run"]
+
+
+def test_run_old_vuln_crawl_merges_github_issues(tmp_env, project, monkeypatch):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        row = db.get(models.Project, project)
+        row.identity = "halo-dev/halo"
+        db.commit()
+    save_crawl_spec(project, keyword="halo")
+
+    def fake_ghsa(keyword, **kwargs):
+        return (
+            [{"identifier": "CVE-2024-0001", "title": "ghsa", "source": "ghsa"}],
+            {"fetched": 1, "errors": [], "packages": ["halo"]},
+        )
+
+    def fake_issues(repo, **kwargs):
+        assert repo == "halo-dev/halo"
+        return (
+            [
+                {
+                    "identifier": "CVE-2024-0001",
+                    "title": "same cve in issue",
+                    "source": "github_issue",
+                },
+                {
+                    "identifier": "halo-dev/halo#99",
+                    "title": "Unauth RCE",
+                    "summary": "no cve yet",
+                    "source": "github_issue",
+                    "source_url": "https://github.com/halo-dev/halo/issues/99",
+                },
+            ],
+            {"fetched": 2, "errors": [], "repo": repo},
+        )
+
+    monkeypatch.setattr("app.services.old_vuln_crawl.crawl_ghsa", fake_ghsa)
+    monkeypatch.setattr("app.services.old_vuln_crawl.crawl_github_issues", fake_issues)
+    result = run_old_vuln_ghsa_crawl(project)
+    assert result.ok is True
+    assert result.issue_count == 1
+    assert result.ghsa_count == 1
+    assert result.new_count == 2
+    payload = json.loads(ghsa_new_path(project).read_text(encoding="utf-8"))
+    ids = [v["identifier"] for v in payload["vulnerabilities"]]
+    assert "CVE-2024-0001" in ids
+    assert "halo-dev/halo#99" in ids
+    assert payload["meta"]["repo"] == "halo-dev/halo"
+
+
+def test_run_recon_old_vuln_ghsa_runs_session_for_issues_only(tmp_env, project, monkeypatch):
+    from app.services.old_vuln_crawl import GhsaCrawlResult
+
+    called: list[str] = []
+
+    def fake_gated(pid, cancel, **kwargs):
+        called.append(kwargs["phase"])
+        assert kwargs["prompt_vars"]["issues_count"] == 2
+        assert kwargs["prompt_vars"]["ghsa_count"] == 0
+        assert kwargs["prompt_vars"]["issues_repo"] == "halo-dev/halo"
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_recon_gated_session", fake_gated)
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.run_old_vuln_ghsa_crawl",
+        lambda pid: GhsaCrawlResult(
+            ok=True, keyword="halo", new_count=2, ghsa_count=0, issue_count=2, repo="halo-dev/halo"
+        ),
+    )
+    assert pipeline._run_recon_old_vuln_ghsa(project, __import__("threading").Event()) is True
+    assert called == ["recon-old-vuln-ghsa"]
+
+
+def test_run_recon_old_vuln_ghsa_skips_session_when_empty(tmp_env, project, monkeypatch):
+    from app.services.old_vuln_crawl import GhsaCrawlResult
+
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.run_old_vuln_ghsa_crawl",
+        lambda pid: GhsaCrawlResult(ok=True, keyword="halo", new_count=0, ghsa_count=0, issue_count=0),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_recon_gated_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip LLM")),
+    )
+    assert pipeline._run_recon_old_vuln_ghsa(project, __import__("threading").Event()) is True
+    assert recon_old_vulns_ready(project) is True

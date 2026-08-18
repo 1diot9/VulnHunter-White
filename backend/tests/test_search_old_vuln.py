@@ -30,7 +30,7 @@ def test_search_old_vuln_list_and_expand(tmp_env, project):
     old = old_vulns_dir(project)
     old.mkdir(parents=True, exist_ok=True)
     (old / "demo.md").write_text(
-        "---\ntitle: Demo CVE\nsummary: short summary\n---\n\n# body detail\n",
+        "---\ntitle: Demo CVE\nsummary: short summary\nfix_status: unpatched\n---\n\n# body detail\n",
         encoding="utf-8",
     )
     ctx = _ctx(project)
@@ -40,6 +40,8 @@ def test_search_old_vuln_list_and_expand(tmp_env, project):
     assert listed["docs"][0]["title"] == "Demo CVE"
     assert listed["docs"][0]["kind"] == "old"
     assert listed["docs"][0]["kind_label"] == "侦察旧漏洞"
+    assert listed["docs"][0]["fix_status"] == "unpatched"
+    assert listed["docs"][0]["fix_status_label"] == "未修复"
     assert "body" not in listed["docs"][0]
 
     full = registry.dispatch(ctx, "SearchOldVuln", {"title": "Demo CVE"})

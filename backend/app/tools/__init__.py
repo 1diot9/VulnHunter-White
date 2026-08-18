@@ -78,8 +78,6 @@ ROLE_ACL: dict[str, frozenset[str]] = {
     "recon_old_vuln": frozenset(
         {
             "Read",
-            "Grep",
-            "Glob",
             "TodoWrite",
             "WebSearch",
             "SearchOldVuln",
@@ -89,13 +87,12 @@ ROLE_ACL: dict[str, frozenset[str]] = {
     "recon_old_vuln_ghsa": frozenset(
         {
             "Read",
-            "Grep",
-            "Glob",
             "TodoWrite",
             "WebSearch",
             "SearchOldVuln",
             "WriteOldVuln",
             "SearchGHSA",
+            "SearchGitHubIssues",
         }
     ),
     "recon_mark": frozenset(

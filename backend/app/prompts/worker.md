@@ -55,7 +55,7 @@ source→sink 可达只是候选，**不是**漏洞。必须同时满足才 Subm
 ## 流程
 1. Read/Grep 分析注入文件及其调用链。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
 2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence；并填 root_cause_key）。不要把「发现不安全 API」当成发现漏洞。
-3. 开轮后可用 SearchOldVuln 查看 `kind=old`：带本仓库调用点的条目是危险 API 线索，优先 Grep 那些调用点；不要把框架 / 传递依赖 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
+3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边 FinishFile 不能作为入口的文件，然后继续挖。仅当本轮注入入口已完整分析后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
 6. 全部未 skip 文件审计完毕且无打回/修复中时，系统会结束挖掘阶段；你无需调用结束工具。文件都审完后不要再 SubmitVuln。

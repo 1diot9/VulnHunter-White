@@ -18,6 +18,7 @@ from .ghsa_service import (
     merge_key,
     write_ghsa_output,
 )
+from .github_issues import crawl_github_issues, issue_keys_from_text, resolve_project_github_repo
 from .live_log import live_log
 from .paths import ghsa_new_path, old_vuln_crawl_spec_path, old_vulns_dir, src_dir
 
@@ -40,6 +41,9 @@ class GhsaCrawlResult:
     new_count: int = 0
     skipped: int = 0
     fetched: int = 0
+    ghsa_count: int = 0
+    issue_count: int = 0
+    repo: str = ""
     path: str = "workspace/ghsa_new.json"
     error: str = ""
     errors: list[str] = field(default_factory=list)
@@ -153,6 +157,7 @@ def collect_old_vuln_skip_keys(project_id: int) -> set[str]:
             keys.add(merge_key(m.group(0)))
         for m in re.finditer(r"GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}", blob, re.I):
             keys.add(merge_key(m.group(0)))
+        keys.update(issue_keys_from_text(text))
     return {k for k in keys if k and k != "UNKNOWN"}
 
 
@@ -174,65 +179,127 @@ def resolve_crawl_inputs(project_id: int) -> tuple[str, list[str], tuple[str, ..
 
 
 def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
-    """Crawl GHSA for the product slug; write workspace/ghsa_new.json (new vs LLM pass)."""
+    """Crawl GHSA + GitHub Issues; write workspace/ghsa_new.json (new vs LLM pass)."""
     keyword, affects, ecosystems = resolve_crawl_inputs(project_id)
+    repo = resolve_project_github_repo(project_id)
     out_path = ghsa_new_path(project_id)
     rel = "workspace/ghsa_new.json"
-    if not keyword:
+    if not keyword and not repo:
         write_ghsa_output(
             out_path,
             [],
             keyword="",
-            meta={"error": "无产品关键词", "packages": [], "fetched": 0, "errors": []},
+            meta={"error": "无产品关键词且无 GitHub 仓库", "packages": [], "fetched": 0, "errors": []},
         )
-        return GhsaCrawlResult(ok=False, keyword="", error="无产品关键词，无法启动 GHSA 爬虫", path=rel)
+        return GhsaCrawlResult(
+            ok=False,
+            keyword="",
+            error="无产品关键词，无法启动 GHSA / Issues 爬虫",
+            path=rel,
+        )
 
     live_log.system(
         project_id,
-        f"启动 GHSA 爬虫补漏（关键词 {keyword}"
+        "启动 GHSA / GitHub Issues 爬虫补漏（"
+        + (f"关键词 {keyword}" if keyword else "无关键词")
+        + (f"；仓库 {repo}" if repo else "；无 GitHub 仓库，跳过 Issues")
         + (f"；额外包 {', '.join(affects)}" if affects else "")
-        + f"；生态 {','.join(ecosystems)}）",
+        + (f"；生态 {','.join(ecosystems)}" if keyword else "")
+        + "）",
         source="crawler",
         phase="recon-old-vuln-ghsa",
         role="recon_old_vuln_ghsa",
     )
-    try:
-        vulns, meta = crawl_ghsa(
-            keyword,
-            ecosystems=ecosystems,
-            since_days=DEFAULT_SINCE_DAYS,
-            affects=affects,
-        )
-    except Exception as exc:  # noqa: BLE001
-        write_ghsa_output(
-            out_path,
-            [],
-            keyword=keyword,
-            meta={"error": str(exc), "packages": [keyword, *affects], "fetched": 0, "errors": [str(exc)]},
-        )
-        live_log.error(
-            project_id,
-            f"GHSA 爬虫失败: {exc}",
-            phase="recon-old-vuln-ghsa",
-            role="recon_old_vuln_ghsa",
-        )
-        return GhsaCrawlResult(
-            ok=False,
-            keyword=keyword,
-            error=str(exc),
-            path=rel,
-            packages=[keyword, *affects],
-            errors=[str(exc)],
-        )
+
+    ghsa_vulns: list[dict[str, Any]] = []
+    ghsa_meta: dict[str, Any] = {"fetched": 0, "errors": [], "packages": [keyword, *affects] if keyword else []}
+    ghsa_exc: str = ""
+    if keyword:
+        try:
+            ghsa_vulns, ghsa_meta = crawl_ghsa(
+                keyword,
+                ecosystems=ecosystems,
+                since_days=DEFAULT_SINCE_DAYS,
+                affects=affects,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ghsa_exc = str(exc)
+            ghsa_meta = {
+                "error": ghsa_exc,
+                "packages": [keyword, *affects],
+                "fetched": 0,
+                "errors": [ghsa_exc],
+            }
+            live_log.error(
+                project_id,
+                f"GHSA 爬虫失败: {exc}",
+                phase="recon-old-vuln-ghsa",
+                role="recon_old_vuln_ghsa",
+            )
+        else:
+            for rec in ghsa_vulns:
+                rec.setdefault("source", "ghsa")
+
+    issue_vulns: list[dict[str, Any]] = []
+    issue_meta: dict[str, Any] = {"fetched": 0, "errors": [], "repo": repo or ""}
+    if repo:
+        try:
+            issue_vulns, issue_meta = crawl_github_issues(repo, since_days=DEFAULT_SINCE_DAYS)
+        except Exception as exc:  # noqa: BLE001
+            issue_meta = {"error": str(exc), "repo": repo, "fetched": 0, "errors": [str(exc)]}
+            live_log.error(
+                project_id,
+                f"GitHub Issues 爬虫失败: {exc}",
+                phase="recon-old-vuln-ghsa",
+                role="recon_old_vuln_ghsa",
+            )
+    else:
+        issue_meta = {"repo": "", "fetched": 0, "errors": [], "skipped": "无 GitHub 仓库"}
 
     skip = collect_old_vuln_skip_keys(project_id)
-    new_vulns, skipped = filter_new_vulns(vulns, skip)
-    meta = {**meta, "skipped": skipped, "new": len(new_vulns)}
+    combined: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for rec in list(ghsa_vulns) + list(issue_vulns):
+        key = merge_key(str(rec.get("identifier") or ""))
+        if not key or key == "UNKNOWN" or key in seen:
+            continue
+        seen.add(key)
+        combined.append(rec)
+    new_vulns, skipped = filter_new_vulns(combined, skip)
+    ghsa_new = sum(1 for v in new_vulns if str(v.get("source") or "ghsa") != "github_issue")
+    issue_new = sum(1 for v in new_vulns if str(v.get("source") or "") == "github_issue")
+    errors = [
+        str(e)
+        for e in list(ghsa_meta.get("errors") or []) + list(issue_meta.get("errors") or [])
+        if e
+    ]
+    if ghsa_exc and ghsa_exc not in errors:
+        errors.insert(0, ghsa_exc)
+    fetched = int(ghsa_meta.get("fetched") or 0) + int(issue_meta.get("fetched") or 0)
+    meta = {
+        **ghsa_meta,
+        "skipped": skipped,
+        "new": len(new_vulns),
+        "ghsa_fetched": int(ghsa_meta.get("fetched") or 0),
+        "ghsa_new": ghsa_new,
+        "issues": issue_meta,
+        "issues_fetched": int(issue_meta.get("fetched") or 0),
+        "issues_new": issue_new,
+        "repo": repo or "",
+        "fetched": fetched,
+        "errors": errors,
+    }
     write_ghsa_output(out_path, new_vulns, keyword=keyword, meta=meta)
-    errors = [str(e) for e in (meta.get("errors") or []) if e]
+
+    ghsa_failed = bool(keyword) and bool(ghsa_exc)
+    issues_failed = bool(repo) and bool(issue_meta.get("error"))
+    ok = not ghsa_failed and not issues_failed
+    warn = "; ".join(errors[:3]) if errors and not new_vulns else ""
+
     live_log.system(
         project_id,
-        f"GHSA 爬虫完成：拉取 {meta.get('fetched', 0)} 条，去重后新候选 {len(new_vulns)} 条"
+        f"GHSA / Issues 爬虫完成：GHSA 拉取 {meta.get('ghsa_fetched', 0)} 条、Issues 拉取 {meta.get('issues_fetched', 0)} 条，"
+        f"去重后新候选 {len(new_vulns)} 条（GHSA {ghsa_new} / Issues {issue_new}）"
         + (f"；跳过已落盘 {skipped}" if skipped else "")
         + (f"；警告 {len(errors)}" if errors else ""),
         source="crawler",
@@ -240,13 +307,16 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
         role="recon_old_vuln_ghsa",
     )
     return GhsaCrawlResult(
-        ok=True,
+        ok=ok,
         keyword=keyword,
         new_count=len(new_vulns),
         skipped=skipped,
-        fetched=int(meta.get("fetched") or 0),
+        fetched=fetched,
+        ghsa_count=ghsa_new,
+        issue_count=issue_new,
+        repo=repo or "",
         path=rel,
         errors=errors,
-        packages=list(meta.get("packages") or [keyword, *affects]),
-        error="; ".join(errors[:3]) if errors and not new_vulns else "",
+        packages=list(ghsa_meta.get("packages") or ([keyword, *affects] if keyword else [])),
+        error=warn or (ghsa_exc if ghsa_failed and not new_vulns else ""),
     )

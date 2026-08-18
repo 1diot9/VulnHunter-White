@@ -1,1 +1,1 @@
-上一轮因死循环中止，请新开继续历史漏洞 **LLM 检索**。只补符合口径的条目（项目自身洞，或本仓库有调用点且仍可能打到的组件洞）；不要把已修复/未使用/仅传递依赖的 CVE 一条一文落盘。缺正文的立刻 WriteOldVuln（落盘不会结束本会话）。不要调用 SearchGHSA。本轮完成再 WriteOldVuln(done=true, keyword=产品短名, note=跳过说明)。不要改写 code-map/auth。
+上一轮因死循环中止，请新开继续历史漏洞 **LLM 检索**。只收集本项目公开 CVE/公告（source=websearch，patched）；不要读源码，不要搜未修复洞。不要扫框架 CVE 清单。缺正文的立刻 WriteOldVuln（落盘不会结束本会话）。不要调用 SearchGHSA / SearchGitHubIssues。本轮完成再 WriteOldVuln(done=true, keyword=产品短名, note=跳过说明)。不要改写 code-map/auth。

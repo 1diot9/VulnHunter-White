@@ -1,1 +1,1 @@
-上一轮超时，请从已有落盘接续 LLM 检索。SearchOldVuln 核对 kind=old 后只补缺：符合口径的立刻 WriteOldVuln（落盘不会结束本会话）。不要补已修复/未使用/仅传递依赖的组件 CVE。不要调用 SearchGHSA。本轮完成再 WriteOldVuln(done=true, keyword=产品短名, note=跳过说明)。不要把 kind=found 写入 old-vulns。
+上一轮超时，请从已有落盘接续 LLM 检索。SearchOldVuln 核对 kind=old 后只补缺：符合口径立刻 WriteOldVuln（落盘不会结束本会话）。不要读源码。只收本项目公开历史洞（patched）；未修复留给第二轮未关闭 Issues。不要调用 SearchGHSA / SearchGitHubIssues。本轮完成再 WriteOldVuln(done=true, keyword=产品短名, note=跳过说明)。不要把 kind=found 写入 old-vulns。

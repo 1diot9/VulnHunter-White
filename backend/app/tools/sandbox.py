@@ -32,6 +32,15 @@ def resolve_under(root: Path, rel: str) -> Path:
     return target
 
 
+def is_src_path(project_id: int, path: Path) -> bool:
+    src = src_dir(project_id).resolve()
+    try:
+        path.resolve().relative_to(src)
+        return True
+    except ValueError:
+        return False
+
+
 def is_old_vulns_path(project_id: int, path: Path) -> bool:
     old = old_vulns_dir(project_id).resolve()
     try:

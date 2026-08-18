@@ -70,14 +70,18 @@ def _github_headers() -> dict[str, str]:
 
 
 class _GitHubRateLimiter:
-    """Pace to GitHub's primary hourly limit; wait out 429 / remaining=0."""
+    """Pace to GitHub rate limits; wait out 429 / remaining=0.
 
-    def __init__(self) -> None:
+    Core REST uses a 3600s window (default). Search API uses a 60s window.
+    """
+
+    def __init__(self, *, window_seconds: float = 3600.0) -> None:
         limit = _default_primary_limit()
+        self._window = float(window_seconds) if window_seconds > 0 else 3600.0
         self._limit = limit
         self._remaining: int | None = None
         self._reset_epoch: float | None = None
-        self._min_interval = 3600.0 / max(1, limit)
+        self._min_interval = self._window / max(1, limit)
         self._next_allowed_at = 0.0
 
     def wait_before_request(self) -> None:
@@ -93,7 +97,7 @@ class _GitHubRateLimiter:
         reset_raw = headers.get("x-ratelimit-reset")
         if limit_raw and limit_raw.isdigit():
             self._limit = max(1, int(limit_raw))
-            self._min_interval = 3600.0 / self._limit
+            self._min_interval = self._window / self._limit
         if remaining_raw is not None and remaining_raw.isdigit():
             self._remaining = int(remaining_raw)
         if reset_raw and reset_raw.isdigit():
@@ -131,6 +135,34 @@ class _GitHubRateLimiter:
         time.sleep(wait)
         self._next_allowed_at = time.monotonic()
         return wait
+
+
+def github_get(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    client: httpx.Client,
+    limiter: _GitHubRateLimiter,
+) -> httpx.Response:
+    """GET with PAT headers and primary/search rate-limit retries."""
+    headers = _github_headers()
+    r: httpx.Response | None = None
+    for attempt in range(_RATE_LIMIT_MAX_RETRIES):
+        limiter.wait_before_request()
+        r = client.get(url, headers=headers, params=params)
+        limiter.observe(r)
+        if _is_rate_limited(r):
+            if attempt + 1 >= _RATE_LIMIT_MAX_RETRIES:
+                raise httpx.HTTPStatusError(
+                    f"GitHub rate limit exceeded after {_RATE_LIMIT_MAX_RETRIES} retries",
+                    request=r.request,
+                    response=r,
+                )
+            limiter.sleep_for_rate_limit(r)
+            continue
+        break
+    assert r is not None
+    return r
 
 
 def _is_rate_limited(response: httpx.Response) -> bool:
@@ -245,6 +277,8 @@ def advisory_to_record(
         "title": title,
         "summary": text or title,
         "component": (keyword or "").strip() or None,
+        "source": "ghsa",
+        "fix_status": "patched",
         "source_url": source_url,
         "affected_versions": _affected_versions(adv, ecosystem),
         "ghsa_id": adv.get("ghsa_id"),
@@ -269,7 +303,6 @@ def fetch_advisories_for_package(
         client = http_client(timeout=45.0)
     assert client is not None
     rate = limiter or _GitHubRateLimiter()
-    headers = _github_headers()
     out: list[dict[str, Any]] = []
     after: str | None = None
     try:
@@ -285,22 +318,7 @@ def fetch_advisories_for_package(
             }
             if after:
                 params["after"] = after
-            r: httpx.Response | None = None
-            for attempt in range(_RATE_LIMIT_MAX_RETRIES):
-                rate.wait_before_request()
-                r = client.get(GHSA_ADVISORIES, headers=headers, params=params)
-                rate.observe(r)
-                if _is_rate_limited(r):
-                    if attempt + 1 >= _RATE_LIMIT_MAX_RETRIES:
-                        raise httpx.HTTPStatusError(
-                            f"GitHub rate limit exceeded after {_RATE_LIMIT_MAX_RETRIES} retries",
-                            request=r.request,
-                            response=r,
-                        )
-                    rate.sleep_for_rate_limit(r)
-                    continue
-                break
-            assert r is not None
+            r = github_get(GHSA_ADVISORIES, params=params, client=client, limiter=rate)
             if r.status_code == 404:
                 break
             if r.status_code != 200:

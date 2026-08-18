@@ -13,5 +13,5 @@ ${snippet}
 FinishFile 与 FinishRound 不是一对：读到无法作为入口点的文件立刻 FinishFile(paths=[...])，然后继续分析本轮注入入口，禁止立刻 FinishRound。
 仅当一开始注入的这份入口文件的 source→sink 已完整分析后，才 FinishFile 它（若尚未标）并 FinishRound。report 对齐 templates/round-report.md。不要只标注入文件。
 从摘要接续已分析的调用链，不要重复已 FinishFile 的文件。
-SearchOldVuln 的 kind=old 里带调用点的条目是危险 API 线索；不要把框架 CVE 清单当本项目新洞。
+SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞也不要做绕过。不要把框架 CVE 清单当本项目新洞。
 同一根因同一危害只 SubmitVuln 一次（填 root_cause_key，报告含同根因受影响点）；pending 同根因用 AppendAffectedLocations，不要拆成多份报告。

@@ -81,6 +81,20 @@ def test_sleep_for_rate_limit_honors_retry_after(monkeypatch, tmp_env) -> None:
     assert slept == [12.0]
 
 
+def test_search_limiter_uses_minute_window(monkeypatch, tmp_env) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
+    limiter = _GitHubRateLimiter(window_seconds=60.0)
+    assert abs(limiter._min_interval - 60.0 / _RATE_LIMIT_AUTH) < 1e-9
+    resp = MagicMock()
+    resp.headers = {
+        "x-ratelimit-limit": "30",
+        "x-ratelimit-remaining": "29",
+        "x-ratelimit-reset": str(int(time.time()) + 60),
+    }
+    limiter.observe(resp)
+    assert abs(limiter._min_interval - 60.0 / 30) < 1e-9
+
+
 def test_filter_new_vulns_skips_known_cve() -> None:
     skip = {merge_key("CVE-2024-1"), merge_key("GHSA-aaaa-bbbb-cccc")}
     kept, skipped = filter_new_vulns(

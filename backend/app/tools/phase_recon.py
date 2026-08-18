@@ -13,7 +13,13 @@ from ..services.ingest import EXTRA_SOURCE_EXTS, expand_file_index
 from ..services.old_vuln_crawl import save_crawl_spec
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
-from .common import _parse_frontmatter
+from .common import (
+    _default_fix_status,
+    _fix_status_label,
+    _normalize_fix_status,
+    _normalize_old_vuln_source,
+    _parse_frontmatter,
+)
 
 
 def _doc_nonempty(path: Path) -> bool:
@@ -132,13 +138,13 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     elif not old_done:
         if recon_old_vuln_llm_ready(project_id):
             errors.append(
-                "历史漏洞 GHSA 补漏尚未结束；核验爬虫候选后逐条 WriteOldVuln，"
+                "历史漏洞 GHSA / Issues 补漏尚未结束；核验爬虫候选后逐条 WriteOldVuln，"
                 "全部核验完再 WriteOldVuln(done=true)"
             )
         else:
             errors.append(
                 "历史漏洞 LLM 检索尚未结束；逐条 WriteOldVuln 只落盘、不会结束本会话，"
-                "本轮结束后再 WriteOldVuln(done=true)，随后系统会跑 GHSA 爬虫补漏"
+                "本轮结束后再 WriteOldVuln(done=true)，随后系统会跑 GHSA / GitHub Issues 爬虫补漏"
             )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
@@ -571,11 +577,11 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
 _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
 _WRITE_NOW_HINT = (
     "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
-    "只收录本项目自身洞，或本仓库有调用点且仍可能打到的组件洞；"
-    "已修复/未使用/仅传递依赖不要建档。"
+    "本阶段只收集、不读源码：WebSearch/GHSA 标 patched；未关闭 GitHub Issues 标 unpatched。"
+    "框架 CVE 清单、安全政策帖、错误产品不要建档。"
     "落盘不会结束本会话；本轮检索结束后再 WriteOldVuln(done=true, note=跳过说明)。"
 )
-_LLM_PASS_DONE_HINT = "LLM 检索已声明结束，系统将结束本会话并启动 GHSA 爬虫补漏。"
+_LLM_PASS_DONE_HINT = "LLM 检索已声明结束，系统将结束本会话并启动 GHSA / GitHub Issues 爬虫补漏。"
 _SEARCH_DONE_HINT = "检索已声明结束，系统将结束本会话。"
 _INDEX_NOTE_MARKERS = ("\n\n检索说明", "\n\n经 WebSearch", "\n\n经 LLM", "\n\n经 GHSA")
 
@@ -655,10 +661,12 @@ def _rebuild_old_vuln_index(
         meta, _ = _parse_frontmatter(text)
         title = str(meta.get("title") or fp.stem).replace("|", "\\|").replace("\n", " ")
         summary = str(meta.get("summary") or "").replace("|", "\\|").replace("\n", " ")
-        rows.append(f"| {title} | {summary} | {fp.name} |")
+        status = _normalize_fix_status(meta.get("fix_status"))
+        status_label = _fix_status_label(status)
+        rows.append(f"| {title} | {summary} | {status_label} | {fp.name} |")
     count = len(rows)
     if not rows:
-        rows = ["| （暂无） | 经检索未写入历史漏洞 |  |"]
+        rows = ["| （暂无） | 经检索未写入历史漏洞 |  |  |"]
     body = (
         "---\n"
         "title: 历史漏洞索引\n"
@@ -667,8 +675,8 @@ def _rebuild_old_vuln_index(
         f"llm_complete: {'true' if llm_complete else 'false'}\n"
         "---\n\n"
         "# 历史漏洞索引\n\n"
-        "| 标题 | 摘要 | 文件 |\n"
-        "|------|------|------|\n"
+        "| 标题 | 摘要 | 修复状态 | 文件 |\n"
+        "|------|------|----------|------|\n"
         + "\n".join(rows)
         + "\n"
     )
@@ -751,7 +759,7 @@ def _conclude_old_vuln_search(
 
 
 def mark_old_vuln_search_complete(project_id: int, *, note: str = "") -> dict[str, Any]:
-    """Pipeline helper: GHSA crawler found nothing new, close the historical-vuln phase."""
+    """Pipeline helper: GHSA / Issues crawler found nothing new, close the historical-vuln phase."""
     old_dir = old_vulns_dir(project_id)
     old_dir.mkdir(parents=True, exist_ok=True)
     return _conclude_old_vuln_search(
@@ -802,7 +810,7 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not summary:
         return {"ok": False, "error": "缺少 summary"}
     if not content.strip():
-        return {"ok": False, "error": "缺少 content（请写入本仓库调用点/影响版本/补丁等正文）"}
+        return {"ok": False, "error": "缺少 content（请写入公告/Issue 摘要、影响版本、参考链接等正文）"}
 
     extra_meta, body = _parse_frontmatter(content) if content.lstrip().startswith("---") else ({}, content)
     if not isinstance(extra_meta, dict):
@@ -810,12 +818,19 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     cve = str(args.get("cve") or extra_meta.get("cve") or "").strip()
     cwe = str(args.get("cwe") or extra_meta.get("cwe") or "").strip()
     filename = str(args.get("filename") or args.get("file") or args.get("path") or "").strip()
+    source = _normalize_old_vuln_source(args.get("source") or extra_meta.get("source"))
+    fix_status = _normalize_fix_status(args.get("fix_status") or extra_meta.get("fix_status"))
+    if not fix_status:
+        fix_status = _default_fix_status(source)
     meta: dict[str, Any] = {
         "title": title,
         "summary": summary,
         "cve": cve,
         "cwe": cwe,
+        "fix_status": fix_status,
     }
+    if source:
+        meta["source"] = source
     for key in ("severity", "component", "affected_version"):
         val = args.get(key) or extra_meta.get(key)
         if val:
@@ -858,6 +873,8 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "created": created,
         "indexed": indexed,
+        "fix_status": fix_status,
+        "source": source,
         "done": conclude,
         "llm_complete": True if conclude else recon_old_vuln_llm_ready(ctx.project_id),
         "complete": bool(complete) if conclude else recon_old_vulns_ready(ctx.project_id),
@@ -959,11 +976,10 @@ def register_recon_tools() -> None:
             name="WriteOldVuln",
             description=(
                 "立即写入一条历史漏洞到 docs/old-vulns/ 并自动更新 index.md。"
-                "只收录本项目自身公开洞，或本仓库源码确有危险 API 调用点、版本仍可能受影响、默认部署可能打到的组件洞。"
-                "已修复、未使用、仅传递依赖的 CVE 不要建档，结束时用 done+note 写进索引。"
-                "每确认一条就调用；禁止调查完再一次性写入，否则上下文压缩会丢失内容。"
+                "本阶段只收集、不读源码。WebSearch/GHSA 公开洞标 patched；未关闭 GitHub Issues 标 unpatched（可省略，按 source 默认）。"
+                "不要扫框架 CVE 清单。每确认一条就调用；禁止调查完再一次性写入。"
                 "逐条落盘不会结束本会话。本轮结束后设 done=true；无符合口径的条目时设 no_findings=true。"
-                "LLM 检索轮结束时可带 keyword（产品短名）和 affects（相关包），供随后 GHSA 爬虫补漏。"
+                "LLM 检索轮结束时可带 keyword（产品短名）和 affects（相关包），供随后 GHSA / GitHub Issues 爬虫补漏。"
             ),
             parameters={
                 "type": "object",
@@ -972,7 +988,7 @@ def register_recon_tools() -> None:
                     "summary": {"type": "string", "description": "一句话摘要"},
                     "content": {
                         "type": "string",
-                        "description": "Markdown 正文（本仓库调用点/版本与默认可达性/影响版本/补丁/参考链接）",
+                        "description": "Markdown 正文（公告/Issue 摘要、影响版本、参考链接；不要写源码调用点分析）",
                     },
                     "cve": {"type": "string"},
                     "cwe": {"type": "string"},
@@ -980,6 +996,17 @@ def register_recon_tools() -> None:
                     "vuln_type": {"type": "string"},
                     "component": {"type": "string"},
                     "affected_version": {"type": "string"},
+                    "fix_status": {
+                        "type": "string",
+                        "description": (
+                            "patched=已修复历史洞（WebSearch/GHSA 默认）；"
+                            "unpatched=未关闭 GitHub Issue（source=github_issue 时默认）。可省略"
+                        ),
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "来源：websearch / ghsa / github_issue。github_issue 默认 unpatched，其余默认 patched",
+                    },
                     "filename": {"type": "string", "description": "可选文件名，默认由 CVE/标题生成"},
                     "keyword": {
                         "type": "string",
@@ -1005,7 +1032,7 @@ def register_recon_tools() -> None:
                     },
                     "note": {
                         "type": "string",
-                        "description": "结束说明：跳过的已修复/未使用/仅传递依赖 CVE，或无发现时的检索说明",
+                        "description": "结束说明：跳过的框架 CVE 清单、错误产品或安全政策帖",
                     },
                 },
             },

@@ -918,12 +918,20 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert denied_ghsa["ok"] is False
     assert "无权" in denied_ghsa["error"]
     assert "WebSearch" in old_names
+    assert "Grep" not in old_names
+    assert "Glob" not in old_names
+    denied_grep = registry.dispatch(_ctx(project, "recon_old_vuln"), "Grep", {"pattern": "eval"})
+    assert denied_grep["ok"] is False
+    assert "无权" in denied_grep["error"]
     assert "MarkSource" not in old_names
     assert "AddSourceExt" not in old_names
     assert "Write" not in old_names
     ghsa_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln_ghsa")}
     assert "WriteOldVuln" in ghsa_names
     assert "SearchGHSA" in ghsa_names
+    assert "SearchGitHubIssues" in ghsa_names
+    assert "Grep" not in ghsa_names
+    assert "Glob" not in ghsa_names
     assert "WebSearch" in ghsa_names
     ext_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_source_ext")}
     assert "AddSourceExt" in ext_names
@@ -1251,6 +1259,18 @@ def test_recon_old_vuln_cannot_write(tmp_env, project):
     )
     assert out["ok"] is False
     assert "无权" in out["error"]
+
+
+def test_recon_old_vuln_cannot_read_source(tmp_env, project):
+    src = tmp_env / "data" / "projects" / str(project.id) / "src" / "App.java"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("class App {}\n", encoding="utf-8")
+    for role in ("recon_old_vuln", "recon_old_vuln_ghsa"):
+        out = registry.dispatch(_ctx(project, role), "Read", {"path": "src/App.java"})
+        assert out["ok"] is False, role
+        assert "源码" in out["error"]
+        docs = registry.dispatch(_ctx(project, role), "Read", {"path": "docs/code-map.md"})
+        assert docs["ok"] is True, role
 
 
 def test_write_ready_env_json_generates_lab_doc(tmp_env, project):

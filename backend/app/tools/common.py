@@ -17,12 +17,13 @@ import yaml
 
 from ..config import settings
 from ..services.ghsa_service import search_advisories
+from ..services.github_issues import search_github_issues
 from ..services.http_client import http_client
 from ..services.ingest import IGNORE_DIR_NAMES
 from ..services.lab import write_lab_doc_if_ready
 from ..services.paths import env_dir, old_vulns_dir, project_root, src_dir, vuln_dir
 from . import ToolSpec, registry
-from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell
+from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell, is_src_path
 
 _SHELL_TIMEOUT_DEFAULT = 120
 _SHELL_TIMEOUT_MAX = 180
@@ -175,6 +176,12 @@ def read_text_window(
     return out
 
 
+def _is_old_vuln_collect_role(ctx) -> bool:
+    role = str(getattr(ctx, "role", "") or "").replace("_", "-").strip().lower()
+    phase = str(getattr(ctx, "phase", "") or "").replace("_", "-").strip().lower()
+    return role.endswith("old-vuln") or role.endswith("old-vuln-ghsa") or phase.endswith("old-vuln") or phase.endswith("old-vuln-ghsa")
+
+
 def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     paths = args.get("paths") or args.get("path")
     if isinstance(paths, str):
@@ -191,6 +198,10 @@ def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     for p in paths:
         try:
             target = assert_readable(ctx.project_id, p)
+            if _is_old_vuln_collect_role(ctx) and is_src_path(ctx.project_id, target):
+                results.append({"path": p, "error": "历史漏洞阶段只收集，禁止读源码"})
+                local_errors += 1
+                continue
             if not target.exists():
                 results.append({"path": p, "error": "文件不存在"})
                 local_errors += 1
@@ -665,6 +676,20 @@ def _search_ghsa_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _search_github_issues_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    per_page = args.get("per_page") or 20
+    try:
+        per_page_i = int(per_page)
+    except (TypeError, ValueError):
+        per_page_i = 20
+    return search_github_issues(
+        repo=args.get("repo"),
+        query=args.get("query"),
+        project_id=ctx.project_id,
+        per_page=per_page_i,
+    )
+
+
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not text.startswith("---"):
         return {}, text
@@ -686,10 +711,66 @@ KIND_LABELS = {
     KIND_OLD: "侦察旧漏洞",
     KIND_FOUND: "本项目已提交",
 }
+FIX_STATUS_PATCHED = "patched"
+FIX_STATUS_UNPATCHED = "unpatched"
+FIX_STATUS_VALUES = (FIX_STATUS_PATCHED, FIX_STATUS_UNPATCHED)
+FIX_STATUS_LABELS = {
+    FIX_STATUS_PATCHED: "已修复",
+    FIX_STATUS_UNPATCHED: "未修复",
+}
+OLD_VULN_SOURCE_ISSUE = "github_issue"
+OLD_VULN_SOURCE_GHSA = "ghsa"
+OLD_VULN_SOURCE_WEB = "websearch"
+_OLD_VULN_SOURCE_ALIASES = {
+    "github_issue": OLD_VULN_SOURCE_ISSUE,
+    "issue": OLD_VULN_SOURCE_ISSUE,
+    "issues": OLD_VULN_SOURCE_ISSUE,
+    "ghsa": OLD_VULN_SOURCE_GHSA,
+    "advisory": OLD_VULN_SOURCE_GHSA,
+    "websearch": OLD_VULN_SOURCE_WEB,
+    "web": OLD_VULN_SOURCE_WEB,
+}
+_FIX_STATUS_ALIASES = {
+    "patched": FIX_STATUS_PATCHED,
+    "fixed": FIX_STATUS_PATCHED,
+    "repaired": FIX_STATUS_PATCHED,
+    "已修复": FIX_STATUS_PATCHED,
+    "unpatched": FIX_STATUS_UNPATCHED,
+    "unfixed": FIX_STATUS_UNPATCHED,
+    "open": FIX_STATUS_UNPATCHED,
+    "未修复": FIX_STATUS_UNPATCHED,
+}
 
 
 def _kind_label(kind: str) -> str:
     return KIND_LABELS.get(kind, kind)
+
+
+def _normalize_fix_status(raw: Any) -> str | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    mapped = _FIX_STATUS_ALIASES.get(text) or _FIX_STATUS_ALIASES.get(text.lower())
+    return mapped if mapped in FIX_STATUS_VALUES else None
+
+
+def _normalize_old_vuln_source(raw: Any) -> str | None:
+    text = str(raw or "").strip().lower().replace("-", "_")
+    if not text:
+        return None
+    return _OLD_VULN_SOURCE_ALIASES.get(text)
+
+
+def _default_fix_status(source: str | None) -> str:
+    if source == OLD_VULN_SOURCE_ISSUE:
+        return FIX_STATUS_UNPATCHED
+    return FIX_STATUS_PATCHED
+
+
+def _fix_status_label(status: str | None) -> str:
+    if not status:
+        return "未标注"
+    return FIX_STATUS_LABELS.get(status, "未标注")
 
 
 def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
@@ -700,6 +781,11 @@ def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
         "kind": entry["kind"],
         "kind_label": _kind_label(entry["kind"]),
     }
+    if entry.get("kind") == KIND_OLD:
+        fix_status = _normalize_fix_status(entry.get("fix_status"))
+        if fix_status:
+            out["fix_status"] = fix_status
+            out["fix_status_label"] = entry.get("fix_status_label") or _fix_status_label(fix_status)
     if entry.get("kind") == KIND_FOUND:
         for key in (
             "vuln_id",
@@ -737,6 +823,8 @@ def _search_blob(entry: dict[str, Any]) -> str:
         entry.get("vuln_type") or "",
         entry.get("cwe") or "",
         entry.get("status") or "",
+        entry.get("fix_status") or "",
+        entry.get("fix_status_label") or "",
         entry.get("submission_tier") or "",
         entry.get("root_cause_key") or "",
         str(entry.get("merged_into_id") or ""),
@@ -765,6 +853,7 @@ def _old_vuln_entries(project_id: int) -> list[dict[str, Any]]:
             continue
         text = fp.read_text(encoding="utf-8", errors="ignore")
         meta, body = _parse_frontmatter(text)
+        fix_status = _normalize_fix_status(meta.get("fix_status"))
         entries.append(
             {
                 "kind": KIND_OLD,
@@ -773,6 +862,8 @@ def _old_vuln_entries(project_id: int) -> list[dict[str, Any]]:
                 "file": fp.name,
                 "content": body,
                 "meta": meta,
+                "fix_status": fix_status or "",
+                "fix_status_label": _fix_status_label(fix_status),
             }
         )
     return entries
@@ -1006,7 +1097,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索（本项目历史漏洞；组件 CVE 仅当本仓库有对应危险 API 调用且版本仍可能受影响）。符合口径的立刻 WriteOldVuln；落盘不会结束本会话。LLM 检索轮不要代替随后的 GHSA 爬虫。",
+            description="网络搜索本项目已公开的历史漏洞（CVE/公告）。本轮只收集，不要读源码；命中标 fix_status=patched。未修复洞留给随后的 GitHub Issues 爬虫。符合口径立刻 WriteOldVuln；落盘不会结束本会话。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1021,7 +1112,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="SearchGHSA",
-            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞 LLM 检索轮不要用；GHSA 补漏轮在爬虫结果不足时作兜底。",
+            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞 LLM 检索轮不要用；GHSA / Issues 补漏轮在爬虫结果不足时作兜底。命中按已修复历史洞落盘（fix_status=patched），不要读源码判断是否已修。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1037,10 +1128,35 @@ def register_common_tools() -> None:
     )
     registry.register(
         ToolSpec(
+            name="SearchGitHubIssues",
+            description=(
+                "搜索本仓库未关闭的 GitHub Issues（自动加 is:open）。"
+                "仅用于未修复洞：未关闭即默认 unpatched。历史漏洞 LLM 检索轮不要用；补漏轮在爬虫结果不足时再搜。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "额外关键词，如 CVE、RCE、未授权；与 repo:owner/name is:issue is:open 组合",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "可选 owner/repo；省略则用项目 GitHub 身份",
+                    },
+                    "per_page": {"type": "integer"},
+                },
+            },
+            handler=_search_github_issues_handler,
+            parallel_safe=True,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="SearchOldVuln",
             description=(
-                "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，项目自身或仍可能打到的组件调用点）"
-                "与本项目已提交报告（kind=found）。默认返回标题与摘要；kind=found 会带上 submission_tier、root_cause_key。"
+                "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，含已修复 patched 与未修复 unpatched）"
+                "与本项目已提交报告（kind=found）。默认返回标题与摘要；kind=old 带 fix_status；kind=found 会带上 submission_tier、root_cause_key。"
                 "传入 title 可看全文。提交前查重；Reviewer 标 duplicate_grouped 时必须原样复用已有 root_cause_key。"
                 "kind=found 含 merged_into_id：已并入条目勿再交相同受影响点。"
             ),

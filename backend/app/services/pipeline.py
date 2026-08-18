@@ -1727,11 +1727,11 @@ def _run_recon_old_vuln_ghsa(project_id: int, cancel: threading.Event) -> bool:
     if result.ok and result.new_count == 0:
         mark_old_vuln_search_complete(
             project_id,
-            note="GHSA 爬虫无新候选，沿用 LLM 检索结果",
+            note="GHSA / GitHub Issues 爬虫无新候选，沿用 LLM 检索结果",
         )
         live_log.system(
             project_id,
-            "GHSA 无新候选，历史漏洞检索已结束，进入盖章轮",
+            "GHSA / GitHub Issues 无新候选，历史漏洞检索已结束，进入盖章轮",
             phase="recon-old-vuln-ghsa",
             role="recon_old_vuln_ghsa",
         )
@@ -1748,12 +1748,17 @@ def _run_recon_old_vuln_ghsa(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-old-vuln-ghsa-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-ghsa-retry-timeout.md",
         retry_other_doc="recon-old-vuln-ghsa-retry-other.md",
-        done_log="历史漏洞 GHSA 补漏已结束，进入盖章轮",
-        fail_error="recon 历史漏洞 GHSA 补漏未在重试上限内完成",
-        fail_status="Recon 历史漏洞 GHSA 补漏未完成，将自动再拉起",
-        fail_log="Recon 历史漏洞 GHSA 补漏重试用尽，等待调度器再拉起",
-        extra_label="历史漏洞/GHSA补漏",
-        prompt_vars={"ghsa_count": result.new_count, "ghsa_error": ghsa_error},
+        done_log="历史漏洞 GHSA / Issues 补漏已结束，进入盖章轮",
+        fail_error="recon 历史漏洞 GHSA / Issues 补漏未在重试上限内完成",
+        fail_status="Recon 历史漏洞 GHSA / Issues 补漏未完成，将自动再拉起",
+        fail_log="Recon 历史漏洞 GHSA / Issues 补漏重试用尽，等待调度器再拉起",
+        extra_label="历史漏洞/GHSA与Issues补漏",
+        prompt_vars={
+            "ghsa_count": result.ghsa_count,
+            "issues_count": result.issue_count,
+            "issues_repo": result.repo,
+            "ghsa_error": ghsa_error,
+        },
     )
 
 

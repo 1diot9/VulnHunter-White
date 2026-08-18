@@ -335,6 +335,10 @@ def test_verifier_prompt_requires_fofa_and_one_success():
 
 def test_old_vuln_prompt_persist_is_not_completion():
     text = load_prompt("recon-old-vuln.md")
+    assert "不要读源码" in text
+    assert "fix_status" in text
+    assert "patched" in text
+    assert "unpatched" in text
     assert "只落盘，不会结束本会话" in text
     assert "WriteOldVuln(done=true)" in text
     assert "SearchGHSA" in text
@@ -343,9 +347,16 @@ def test_old_vuln_prompt_persist_is_not_completion():
     initial = load_prompt("initial/recon-old-vuln.md")
     assert "落盘不会结束本会话" in initial
     assert "WriteOldVuln(done=true" in initial
+    assert "fix_status" in initial
     assert "SearchGHSA" in initial
     ghsa = load_prompt("recon-old-vuln-ghsa.md")
     assert "ghsa_new.json" in ghsa
+    assert "github_issue" in ghsa
+    assert "SearchGitHubIssues" in ghsa
+    assert "fix_status" in ghsa
+    assert "不要读源码" in ghsa
     assert "WriteOldVuln(done=true" in ghsa
     ghsa_initial = load_prompt("initial/recon-old-vuln-ghsa.md")
     assert "ghsa_new.json" in ghsa_initial
+    assert "GitHub Issues" in ghsa_initial
+    assert "${issues_count}" in ghsa_initial
