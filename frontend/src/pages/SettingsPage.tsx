@@ -377,7 +377,9 @@ export default function SettingsPage() {
             onChange={(e) => setHttpProxy(e.target.value)}
             placeholder="留空则直连，例如 http://127.0.0.1:10808"
           />
-          <div className="text-xs text-slate-500">仅工具出站 HTTP 使用。保存空值表示直连。</div>
+          <div className="text-xs text-slate-500">
+            仅工具出站 HTTP 使用。保存空值表示直连。代理连不上时自动改走直连。
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label>Chat 代理</Label>
@@ -386,6 +388,7 @@ export default function SettingsPage() {
             onChange={(e) => setChatProxy(e.target.value)}
             placeholder="留空则 Chat Completions 直连"
           />
+          <div className="text-xs text-slate-500">代理不可用时自动直连，不必先清空。</div>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={save}>保存</Button>

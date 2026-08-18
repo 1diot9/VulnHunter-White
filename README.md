@@ -24,7 +24,7 @@ pytest
 
 ### 代理
 
-设置页配置出站代理（WebSearch / SearchGHSA / SearchGitHubIssues / FOFA）；**留空则直连**，不再默认走 `10808`。Chat Completions 默认直连，需要时在设置页填 Chat 代理。设置页尚未保存过时，可用 `.env` 的 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY` 回退。
+设置页配置出站代理（WebSearch / SearchGHSA / SearchGitHubIssues / FOFA）；**留空则直连**，不再默认走 `10808`。Chat Completions 默认直连，需要时在设置页填 Chat 代理。代理连不上时自动改走直连。设置页尚未保存过时，可用 `.env` 的 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY` 回退。
 
 ### Debug MCP
 

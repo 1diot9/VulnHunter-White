@@ -100,6 +100,7 @@ def tmp_env(tmp_path, monkeypatch):
     from app.tools import register_all_tools
 
     register_all_tools()
+    http_client_mod.reset_proxy_skip()
     pipeline.reset_runtime_state()
     from app.services.live_log import live_log
 

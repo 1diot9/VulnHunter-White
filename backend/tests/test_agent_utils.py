@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import httpx
+import pytest
+
 from app.agent.compression import estimate_tokens, needs_compress
 from app.agent.loop import (
     _content_text,
@@ -8,7 +16,17 @@ from app.agent.loop import (
     _reasoning_text,
 )
 from app.config import settings
-from app.services.http_client import chat_http_client, chat_http_timeout, http_client, proxy_url
+from app.services.http_client import (
+    FallbackClient,
+    chat_http_client,
+    chat_http_timeout,
+    http_client,
+    is_proxy_unavailable,
+    proxy_is_skipped,
+    proxy_tcp_reachable,
+    proxy_url,
+    reset_proxy_skip,
+)
 from app.services.llm_gate import LlmRequestGate
 
 
@@ -113,6 +131,104 @@ def test_chat_http_client_uses_explicit_chat_proxy(tmp_env, monkeypatch):
     with chat_http_client() as client:
         assert client.trust_env is False
         assert _has_proxy_transport(client)
+
+
+def test_is_proxy_unavailable_classifies_transport_errors():
+    req = httpx.Request("GET", "https://example.invalid/")
+    assert is_proxy_unavailable(httpx.ProxyError("bad proxy")) is True
+    assert is_proxy_unavailable(httpx.ConnectError("connection refused")) is True
+    assert is_proxy_unavailable(httpx.ConnectTimeout("connect timed out")) is True
+    assert is_proxy_unavailable(httpx.ReadTimeout("read timed out")) is False
+    assert is_proxy_unavailable(httpx.TimeoutException("generic timeout")) is False
+    assert is_proxy_unavailable(httpx.HTTPStatusError("boom", request=req, response=httpx.Response(502))) is False
+
+
+def _closed_tcp_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = int(s.getsockname()[1])
+    s.close()
+    return port
+
+
+def _start_local_http() -> tuple[HTTPServer, str]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[:2]
+    return httpd, f"http://{host}:{port}/"
+
+
+def test_fallback_client_uses_direct_when_proxy_down():
+    reset_proxy_skip()
+    httpd, url = _start_local_http()
+    proxy = f"http://127.0.0.1:{_closed_tcp_port()}"
+    try:
+        assert proxy_tcp_reachable(proxy, timeout=0.5) is False
+        started = time.monotonic()
+        with FallbackClient(timeout=3.0, follow_redirects=True, trust_env=False, proxy=proxy) as client:
+            r = client.get(url)
+            with client.stream("GET", url) as streamed:
+                body = streamed.read()
+        elapsed = time.monotonic() - started
+        assert r.status_code == 200
+        assert r.text == "ok"
+        assert streamed.status_code == 200
+        assert body == b"ok"
+        assert proxy_is_skipped(proxy)
+        assert elapsed < 10.0
+        with FallbackClient(timeout=3.0, follow_redirects=True, trust_env=False, proxy=proxy) as client:
+            r = client.get(url)
+        assert r.status_code == 200
+        assert r.text == "ok"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_http_client_falls_back_when_settings_proxy_down(tmp_env):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    reset_proxy_skip()
+    httpd, url = _start_local_http()
+    proxy = f"http://127.0.0.1:{_closed_tcp_port()}"
+    try:
+        with TestClient(app) as api:
+            api.put("/api/settings", json={"http_proxy": proxy, "chat_proxy": proxy})
+            with http_client(timeout=3.0) as hc:
+                r = hc.get(url)
+            assert r.status_code == 200
+            assert r.text == "ok"
+            reset_proxy_skip()
+            with chat_http_client(timeout=3.0) as hc:
+                r = hc.get(url)
+            assert r.status_code == 200
+            assert r.text == "ok"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_direct_client_still_raises_when_origin_down():
+    reset_proxy_skip()
+    dead = f"http://127.0.0.1:{_closed_tcp_port()}/"
+    with http_client(timeout=2.0) as client:
+        with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
+            client.get(dead)
 
 
 def test_llm_gate_rate_limit_sets_cooldown(monkeypatch):
