@@ -23,6 +23,8 @@ VULN_TYPES: tuple[str, ...] = (
     "privilege_escalation",
     "dos",
     "xss",
+    "stored_xss",
+    "hardcoded_secret",
     "info_disclosure",
     "other",
 )
@@ -47,6 +49,8 @@ VULN_TYPE_LABELS: dict[str, str] = {
     "privilege_escalation": "越权",
     "dos": "DoS",
     "xss": "XSS",
+    "stored_xss": "存储型XSS",
+    "hardcoded_secret": "硬编码密钥",
     "info_disclosure": "信息泄露",
     "other": "其他",
 }
@@ -303,6 +307,24 @@ _ALIAS_MAP: dict[str, str] = {
     "反射xss": "xss",
     "reflected_xss": "xss",
     "reflected xss": "xss",
+    "dom_xss": "xss",
+    "dom xss": "xss",
+    "stored_xss": "stored_xss",
+    "stored xss": "stored_xss",
+    "persistent_xss": "stored_xss",
+    "persistent xss": "stored_xss",
+    "存储xss": "stored_xss",
+    "存储型xss": "stored_xss",
+    "hardcoded_secret": "hardcoded_secret",
+    "hardcoded_credentials": "hardcoded_secret",
+    "hardcoded credentials": "hardcoded_secret",
+    "hard coded credentials": "hardcoded_secret",
+    "hard_coded_credentials": "hardcoded_secret",
+    "hardcoded_key": "hardcoded_secret",
+    "hardcoded key": "hardcoded_secret",
+    "jwt_secret": "hardcoded_secret",
+    "硬编码密钥": "hardcoded_secret",
+    "硬编码凭据": "hardcoded_secret",
     "info_disclosure": "info_disclosure",
     "信息泄露": "info_disclosure",
     "other": "other",
@@ -324,7 +346,15 @@ _INFER_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"auth(entication)?\s*bypass|认证绕过|鉴权绕过", re.I), "auth_bypass"),
     (re.compile(r"\bssrf\b", re.I), "ssrf"),
     (re.compile(r"privilege\s*escalation|\bidor\b|越权", re.I), "privilege_escalation"),
-    (re.compile(r"\bxss\b|反射xss", re.I), "xss"),
+    (re.compile(r"stored\s*xss|存储(型)?\s*xss|persistent\s*xss", re.I), "stored_xss"),
+    (
+        re.compile(
+            r"hard[-_ ]?coded\s*(secret|key|credential)|硬编码(密钥|凭据)|jwt\s*secret",
+            re.I,
+        ),
+        "hardcoded_secret",
+    ),
+    (re.compile(r"\bxss\b|反射xss|dom\s*xss", re.I), "xss"),
     (re.compile(r"\bdos\b|拒绝服务", re.I), "dos"),
     (re.compile(r"information\s*disclosure|信息泄露", re.I), "info_disclosure"),
 ]
@@ -476,6 +506,16 @@ def suggest_submission_tier(*, calibration: SeverityCalibration) -> str:
     return "low_impact"
 
 
+_STORED_XSS_HINT = re.compile(r"stored\s*xss|存储(型)?\s*xss|persistent\s*xss", re.I)
+
+
+def refine_vuln_type(vuln_type: str, *, title: str = "", source_sink: str = "") -> str:
+    """Keep generic xss unless the report text clearly says stored/persistent XSS."""
+    if vuln_type == "xss" and _STORED_XSS_HINT.search(f"{title}\n{source_sink}"):
+        return "stored_xss"
+    return vuln_type
+
+
 def infer_vuln_type_from_text(*parts: str | None) -> str:
     text = " ".join(p for p in parts if p)
     if not text.strip():
@@ -488,8 +528,10 @@ def infer_vuln_type_from_text(*parts: str | None) -> str:
 
 def resolve_vuln_type(item: dict[str, Any]) -> str:
     raw_type = item.get("vuln_type") or item.get("type") or item.get("category")
+    title = str(item.get("title") or item.get("identifier") or "")
+    summary = str(item.get("summary") or item.get("source_sink") or "")
     if raw_type:
-        return normalize_vuln_type(str(raw_type))
+        return refine_vuln_type(normalize_vuln_type(str(raw_type)), title=title, source_sink=summary)
     return infer_vuln_type_from_text(
         item.get("identifier"),
         item.get("title"),

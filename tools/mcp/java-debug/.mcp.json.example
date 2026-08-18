@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "java-debug-mcp": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "D:\\AI\\MCP_Tools\\Java-debug-mcp\\scripts\\run-mcp.bat"
+      ],
+      "env": {
+        "JAVA_TOOL_OPTIONS": "-Dfile.encoding=UTF-8"
+      }
+    }
+  }
+}

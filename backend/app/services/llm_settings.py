@@ -89,6 +89,19 @@ def roles_for_api(row: AppSettings | None) -> dict[str, LlmRoleAssignment]:
     return out
 
 
+def _proxy_for_api(row: AppSettings, field: str, *env_attrs: str) -> str:
+    stored = getattr(row, field, None)
+    if stored is not None:
+        return str(stored).strip()
+    from ..config import settings as app_settings
+
+    for attr in env_attrs:
+        val = (getattr(app_settings, attr, None) or "").strip()
+        if val:
+            return val
+    return ""
+
+
 def settings_out_from_row(row: AppSettings) -> SettingsOut:
     return SettingsOut(
         llm_providers=providers_for_api(row),
@@ -101,6 +114,8 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         default_base_url=(row.default_base_url or "").strip(),
         default_api_key_set=bool((row.default_api_key or "").strip()),
         context_window=int(row.context_window or 128000),
+        http_proxy=_proxy_for_api(row, "http_proxy", "https_proxy", "http_proxy"),
+        chat_proxy=_proxy_for_api(row, "chat_proxy", "chat_proxy"),
     )
 
 

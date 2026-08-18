@@ -24,11 +24,6 @@ goto :parse_args
 
 echo [VulnHunter] starting...
 
-if not defined HTTP_PROXY set "HTTP_PROXY=http://127.0.0.1:10808"
-if not defined HTTPS_PROXY set "HTTPS_PROXY=http://127.0.0.1:10808"
-if not defined VULNHUNTER_HTTP_PROXY set "VULNHUNTER_HTTP_PROXY=%HTTP_PROXY%"
-if not defined VULNHUNTER_HTTPS_PROXY set "VULNHUNTER_HTTPS_PROXY=%HTTPS_PROXY%"
-
 if not exist "%ROOT%backend\.venv\Scripts\python.exe" (
   echo [VulnHunter] creating backend venv...
   python -m venv "%ROOT%backend\.venv"

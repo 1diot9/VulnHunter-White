@@ -1,6 +1,6 @@
 # VulnHunter
 
-白盒审计 Agent：导入 GitHub / zip Web 项目，Recon ∥ Reviewer 环境搭建 → 启发式 Worker → Reviewer 审核（静态 + MCP/普通动态）；可选 Verifier 对已确认前台漏洞做 FOFA 互联网复测。
+白盒审计 Agent：导入 GitHub / zip Web 项目，Recon → 启发式 Worker → Reviewer 审核（默认仅静态；可选动态验证含 MCP/HTTP PoC）；可选 Verifier 对已确认前台漏洞做 FOFA 互联网复测。
 
 ## 一键启停
 
@@ -24,7 +24,11 @@ pytest
 
 ### 代理
 
-默认出站 HTTP（WebSearch / SearchGHSA）走 `http://127.0.0.1:10808`（可用 `.env` / `VULNHUNTER_HTTP_PROXY` 覆盖）。Chat Completions **默认直连**，不读系统代理；需要时再设 `VULNHUNTER_CHAT_PROXY`。
+设置页配置出站代理（WebSearch / SearchGHSA / FOFA）；**留空则直连**，不再默认走 `10808`。Chat Completions 默认直连，需要时在设置页填 Chat 代理。设置页尚未保存过时，可用 `.env` 的 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY` 回退。
+
+### Debug MCP
+
+Java / Node / Python debug MCP 源码在 `tools/mcp/`（相对仓库根目录）。未构建时 Reviewer 走普通动态验证。详见 `tools/mcp/README.md`。
 
 ## 手动启动
 
@@ -52,11 +56,14 @@ npm run dev
 
 - 凡 Web 项目均可审计（不限语言）
 - v1 仅启发式挖掘；创建项目时选择赏金模式（默认）或全量模式
-- 赏金模式按可利用高危害类型收口；全量模式保留低危害难利用项（CORS、反射 XSS、缺速率限制等）
-- 动态验证：有 Java/Node/Python debug MCP 则优先；否则普通动态（HTTP PoC + docker exec/日志）
+- 赏金模式按可利用高危害类型收口（含存储型 XSS、源码硬编码密钥）；全量模式保留低危害难利用项（CORS、反射 XSS、缺速率限制等）
+- 可选动态验证：创建项目时默认关闭（只做静态复核）。勾选后 Reviewer 才搭建 Docker 靶场，并用 HTTP PoC / debug MCP 动态复现；有 Java/Node/Python debug MCP 则优先，否则普通动态（HTTP PoC + docker exec/日志）
 - 可选 Verifier：创建项目时默认关闭，也可在项目设置中开启。Reviewer 确认前台漏洞后，用 FOFA 默认搜 10 个同款目标并按报告复测，任一成功即结束。一个审计项目只搜一次 FOFA，结果给全部漏洞共享；报告会列出全部目标并标注成功 / 失败 / 未测，复现成功须附上搜索语法。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞不测互联网目标
 - LLM 报错对齐 AutoPoc：429 休眠续跑、超时 conclude、死循环新开、阶段最多再试 2 次
+- 全局 LLM 总线程数默认 6：所有运行中项目的侦察 / 挖掘 / 审核等会话合计占用，超出排队顺序放行
+- 设置页可手动清理 X 天前的实时日志（SSE）
 - 历史漏洞：SearchGHSA + WebSearch + SearchOldVuln；只建档项目自身洞与仍可能打到的组件调用点
+- 可重置 Worker 挖掘进度（保留漏洞产出与侦察文档），用于更换模型重审，或切换全量模式继续挖其他类型
 
 ## 目录
 

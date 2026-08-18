@@ -324,8 +324,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
         return {"ok": False, "error": "缺少 vuln_id"}
-    evidence = (args.get("evidence_level") or "dynamic").strip()
-    if evidence not in ("dynamic", "static_only", "mcp"):
+    evidence_raw = str(args.get("evidence_level") or "").strip()
+    if evidence_raw and evidence_raw not in ("dynamic", "static_only", "mcp"):
         return {"ok": False, "error": "evidence_level 须为 dynamic|static_only|mcp"}
     surface = _normalize_attack_surface(args.get("attack_surface"))
     if not surface:
@@ -359,11 +359,16 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if vuln.status == "merged":
             return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         proj = db.get(Project, ctx.project_id)
+        dynamic_on = bool(proj and proj.dynamic_verify_enabled)
+        evidence = evidence_raw or ("dynamic" if dynamic_on else "static_only")
+        if not dynamic_on and evidence in ("dynamic", "mcp"):
+            evidence = "static_only"
         mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if mode == AUDIT_MODE_BOUNTY:
             blocked = bounty_confirm_block_reason(
                 vuln_type=str(vuln.vuln_type or ""),
                 submission_tier=submission.tier,
+                file_path=str(vuln.file_path or ""),
             )
             if blocked:
                 return {"ok": False, "error": blocked}
@@ -570,10 +575,12 @@ def register_reviewer_tools() -> None:
                 "确认漏洞，并按审核证据校准最终严重度与价值分层。"
                 "只确认默认/官方部署下攻击者可单独利用、且能打出可观察有害冲击的问题；"
                 "不要把仅 sink 可达、靠 docker exec 种文件/组合独立写原语才成立、"
-                "或项目配置/文档里的默认密码弱口令标成漏洞。"
+                "或项目配置/文档/.env/compose 里用户可改的默认密码弱口令标成漏洞。"
+                "源码中的硬编码密钥（JWT/AES/DES secret 等）可以确认。"
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp。"
+                "项目未开启动态验证时必须 static_only；开启后可标 dynamic/mcp。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
@@ -588,7 +595,7 @@ def register_reviewer_tools() -> None:
                     "vuln_id": {"type": "integer"},
                     "evidence_level": {
                         "type": "string",
-                        "description": "dynamic | static_only | mcp，默认 dynamic",
+                        "description": "dynamic | static_only | mcp。未开启动态验证时默认且仅允许 static_only；开启后默认 dynamic",
                     },
                     "attack_surface": {
                         "type": "string",

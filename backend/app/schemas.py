@@ -33,8 +33,7 @@ class LlmRoleAssignment(BaseModel):
 class SettingsOut(BaseModel):
     llm_providers: list[LlmProviderOut] = Field(default_factory=list)
     llm_roles: dict[str, LlmRoleAssignment] = Field(default_factory=dict)
-    worker_concurrency: int = 1
-    fix_concurrency: int = 1
+    llm_thread_limit: int = 6
     github_pat_set: bool = False
     fofa_key_set: bool = False
     fofa_base_url: str = "https://fofa.info"
@@ -42,13 +41,14 @@ class SettingsOut(BaseModel):
     default_base_url: str = ""
     default_api_key_set: bool = False
     context_window: int = 128000
+    http_proxy: str = ""
+    chat_proxy: str = ""
 
 
 class SettingsUpdate(BaseModel):
     llm_providers: list[LlmProviderIn] | None = None
     llm_roles: dict[str, LlmRoleAssignment] | None = None
-    worker_concurrency: int | None = None
-    fix_concurrency: int | None = None
+    llm_thread_limit: int | None = None
     github_pat: str | None = None
     fofa_key: str | None = None
     fofa_base_url: str | None = None
@@ -56,6 +56,8 @@ class SettingsUpdate(BaseModel):
     default_base_url: str | None = None
     default_api_key: str | None = None
     context_window: int | None = None
+    http_proxy: str | None = None
+    chat_proxy: str | None = None
 
 
 class LlmProbeIn(BaseModel):
@@ -99,6 +101,18 @@ class FofaTestOut(BaseModel):
     account_error: bool = False
 
 
+class LiveLogPurgeIn(BaseModel):
+    older_than_days: int = Field(ge=0, le=3650)
+
+
+class LiveLogPurgeOut(BaseModel):
+    ok: bool = True
+    older_than_days: int
+    projects: int = 0
+    files: int = 0
+    bytes: int = 0
+
+
 MANUAL_LAB_PROMPT_MAX = 20000
 
 
@@ -117,6 +131,7 @@ class ProjectCreate(BaseModel):
     manual_lab: bool = False
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool = False
+    dynamic_verify_enabled: bool = False
 
 
 class ProjectUpdate(BaseModel):
@@ -124,6 +139,13 @@ class ProjectUpdate(BaseModel):
     manual_lab: bool | None = None
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool | None = None
+    dynamic_verify_enabled: bool | None = None
+
+
+class WeightExtOut(BaseModel):
+    ext: str
+    agent_added: bool = False
+    files: int = 0
 
 
 class ProjectOut(BaseModel):
@@ -139,6 +161,7 @@ class ProjectOut(BaseModel):
     manual_lab: bool = False
     manual_lab_prompt: str = ""
     verifier_enabled: bool = False
+    dynamic_verify_enabled: bool = False
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -150,6 +173,7 @@ class ProjectOut(BaseModel):
     files_weighted: int = 0
     files_skipped: int = 0
     files_audited: int = 0
+    weight_exts: list[WeightExtOut] = Field(default_factory=list)
     worker_rounds: int = 0
     tokens_input: int = 0
     tokens_output: int = 0

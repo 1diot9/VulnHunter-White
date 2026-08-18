@@ -417,6 +417,72 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     assert "不要另写新键" in dup_new_key["error"]
 
 
+def test_confirm_defaults_static_only_when_dynamic_off(tmp_env, project):
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    coerced = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert coerced["ok"] is True
+    assert coerced["evidence_level"] == "static_only"
+    assert coerced["status"] == "static_only"
+
+
+def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.dynamic_verify_enabled = True
+        db.commit()
+    payload = {
+        "title": "SQLI in login",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "login -> query",
+        "auth_premise": "未授权",
+        "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "error based",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True
+    assert conf["evidence_level"] == "dynamic"
+    assert conf["status"] == "confirmed"
+
+
 def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project):
     xss = registry.dispatch(
         _ctx(project, "worker"),
@@ -467,6 +533,82 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
     assert hard["ok"] is False
     assert "赏金模式" in hard["error"]
     assert "低危害" in hard["error"]
+
+
+def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, project):
+    stored = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "Comment stored XSS",
+            "vuln_type": "xss",
+            "cwe": "CWE-79",
+            "file_path": "app/Comment.java",
+            "line_no": 12,
+            "source_sink": "comment -> 存储型XSS HTML",
+            "auth_premise": "登录用户",
+            "http_request": "POST /comment HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "script persists",
+        },
+    )
+    assert stored["ok"] is True
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        row = db.get(models.Vuln, stored["vuln_id"])
+        assert row.vuln_type == "stored_xss"
+    confirmed = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": stored["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "user",
+            **SEVERITY_FACTORS,
+            "submission_reason": "存储型 XSS 可在其他用户浏览器执行",
+            "root_cause_key": "stored_xss:Comment",
+        },
+    )
+    assert confirmed["ok"] is True
+
+    secret = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "Hardcoded JWT secret",
+            "vuln_type": "hardcoded_secret",
+            "cwe": "CWE-798",
+            "file_path": "app/JwtHelper.java",
+            "line_no": 8,
+            "source_sink": "SECRET constant -> JWT sign",
+            "auth_premise": "未授权",
+            "http_request": "GET / HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "forged token accepted",
+        },
+    )
+    assert secret["ok"] is True
+
+    config_secret = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "Default password in yml",
+            "vuln_type": "hardcoded_secret",
+            "cwe": "CWE-798",
+            "file_path": "src/main/resources/application.yml",
+            "line_no": 4,
+            "source_sink": "spring.datasource.password",
+            "auth_premise": "未授权",
+            "http_request": "GET / HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "default password",
+        },
+    )
+    assert config_secret["ok"] is False
+    assert "赏金模式" in config_secret["error"]
+    assert "配置文件" in config_secret["error"]
 
 
 def test_full_mode_allows_xss_submit(tmp_env, project):

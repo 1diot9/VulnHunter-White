@@ -4,9 +4,11 @@ import { api, type Project } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { GithubLink } from '../components/GithubLink'
+import { DynamicVerifyToggle } from '../components/DynamicVerifyToggle'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import PhaseFlow from '../components/PhaseFlow'
+import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,6 +24,7 @@ export default function HomePage() {
   const [auditMode, setAuditMode] = useState<'bounty' | 'full'>('bounty')
   const [manualLab, setManualLab] = useState(false)
   const [manualLabPrompt, setManualLabPrompt] = useState('')
+  const [dynamicVerifyEnabled, setDynamicVerifyEnabled] = useState(false)
   const [verifierEnabled, setVerifierEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -36,9 +39,10 @@ export default function HomePage() {
     setError('')
     try {
       await api.createGithub(url.trim(), '', auditMode, {
-        manual_lab: manualLab,
-        manual_lab_prompt: manualLab ? manualLabPrompt : '',
+        manual_lab: dynamicVerifyEnabled && manualLab,
+        manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
+        dynamic_verify_enabled: dynamicVerifyEnabled,
       })
       setUrl('')
       await refresh()
@@ -55,9 +59,10 @@ export default function HomePage() {
     setError('')
     try {
       await api.uploadZip(file, '', auditMode, {
-        manual_lab: manualLab,
-        manual_lab_prompt: manualLab ? manualLabPrompt : '',
+        manual_lab: dynamicVerifyEnabled && manualLab,
+        manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
+        dynamic_verify_enabled: dynamicVerifyEnabled,
       })
       await refresh()
     } catch (e) {
@@ -71,19 +76,22 @@ export default function HomePage() {
     <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。创建时选择挖掘模式，默认赏金模式。</p>
+        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。创建时选择挖掘模式，默认赏金模式；动态验证与互联网验证默认关闭。</p>
       </div>
 
       <Card className="w-full">
         <CardContent className="w-full">
         <div className="space-y-3">
           <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
-          <ManualLabToggle
-            enabled={manualLab}
-            prompt={manualLabPrompt}
-            onEnabledChange={setManualLab}
-            onPromptChange={setManualLabPrompt}
-          />
+          <DynamicVerifyToggle enabled={dynamicVerifyEnabled} onEnabledChange={setDynamicVerifyEnabled} />
+          {dynamicVerifyEnabled ? (
+            <ManualLabToggle
+              enabled={manualLab}
+              prompt={manualLabPrompt}
+              onEnabledChange={setManualLab}
+              onPromptChange={setManualLabPrompt}
+            />
+          ) : null}
           <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
           <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
             <Input
@@ -172,6 +180,7 @@ export default function HomePage() {
                 reconSubphases={p.recon_subphases}
                 labSetupDone={p.lab_setup_done}
                 manualLab={Boolean(p.manual_lab_prompt)}
+                dynamicVerifyEnabled={p.dynamic_verify_enabled}
                 verifierEnabled={p.verifier_enabled}
                 verifierPending={p.verifier_pending}
               />
@@ -182,6 +191,7 @@ export default function HomePage() {
                 <span>{formatFileProgress(p)}</span>
                 <span>{formatTokenUsage(p)}</span>
               </div>
+              <WeightExtBadges exts={p.weight_exts} />
               {p.error ? <p className="text-xs text-red-300">{p.error}</p> : null}
             </CardContent>
           </Card>

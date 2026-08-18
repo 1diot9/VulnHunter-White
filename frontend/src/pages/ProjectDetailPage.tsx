@@ -2,12 +2,15 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
+import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
+import { ResetProgressButton } from '../components/ResetProgressButton'
 import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
 import PhaseFlow from '../components/PhaseFlow'
 import VulnGroupList from '../components/VulnGroupList'
+import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -88,6 +91,7 @@ function PhaseRunControls({
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const state = project.phase_states?.[phase]
+  const completed = project.status === 'completed'
   const paused = Boolean(state?.paused || project.project_paused)
   const label = phase === 'recon' ? '侦察' : phase === 'reviewer' ? '审核' : phase === 'verifier' ? '验证' : '挖掘'
   const run = async (kind: 'pause' | 'resume' | 'restart') => {
@@ -103,7 +107,12 @@ function PhaseRunControls({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs text-slate-500">{label}</span>
-      <Button variant="outline" disabled={busy != null || paused} onClick={() => run('pause')}>
+      <Button
+        variant="outline"
+        disabled={busy != null || paused || completed}
+        title={completed ? '已完成项目不可暂停' : undefined}
+        onClick={() => run('pause')}
+      >
         {busy === 'pause' ? '暂停中…' : '暂停'}
       </Button>
       <Button variant="outline" disabled={busy != null} onClick={() => run('resume')}>
@@ -409,6 +418,7 @@ export default function ProjectDetailPage() {
               reconSubphases={project.recon_subphases}
               labSetupDone={project.lab_setup_done}
               manualLab={Boolean(project.manual_lab_prompt)}
+              dynamicVerifyEnabled={project.dynamic_verify_enabled}
               verifierEnabled={project.verifier_enabled}
               verifierPending={project.verifier_pending}
               onSelect={(pid) => {
@@ -420,12 +430,18 @@ export default function ProjectDetailPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <ProjectSettingsButton project={project} onSaved={setProject} />
-          <Button variant="outline" onClick={() => api.pause(projectId)}>
+          <Button
+            variant="outline"
+            disabled={project.status === 'completed'}
+            title={project.status === 'completed' ? '已完成项目不可暂停' : undefined}
+            onClick={() => api.pause(projectId)}
+          >
             全部暂停
           </Button>
           <Button variant="outline" onClick={() => api.resume(projectId)}>
             全部续跑
           </Button>
+          <ResetProgressButton project={project} onReset={setProject} />
           <Button variant="destructive" onClick={() => api.cancel(projectId)}>
             停止
           </Button>
@@ -440,7 +456,7 @@ export default function ProjectDetailPage() {
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
           <Badge variant="info">{project.status}</Badge>
-          {project.status === 'paused' ? (
+          {project.status === 'paused' || project.status === 'completed' ? (
             <AuditModeSelect
               value={project.audit_mode}
               showHint={false}
@@ -455,9 +471,12 @@ export default function ProjectDetailPage() {
               }}
             />
           ) : (
-            <Badge variant="outline" title={formatAuditModeHint(project.audit_mode)}>
-              {formatAuditMode(project.audit_mode)}
-            </Badge>
+            <span className="inline-flex items-center gap-2">
+              <Badge variant="outline" title={formatAuditModeHint(project.audit_mode)}>
+                {formatAuditMode(project.audit_mode)}
+              </Badge>
+              <BountyScopeButton />
+            </span>
           )}
           <span>tokens {formatTokens(project.tokens_total)}</span>
           <span>{formatFileProgress(project)}</span>
@@ -465,9 +484,12 @@ export default function ProjectDetailPage() {
             洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}
           </span>
         </div>
+        <WeightExtBadges exts={project.weight_exts} />
         <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
           {formatAuditModeHint(project.audit_mode)}
-          {project.status === 'paused' ? ' 暂停时可更改，续跑后按新规则生效。' : ''}
+          {project.status === 'paused' || project.status === 'completed'
+            ? ' 暂停或完成后可更改，续跑后按新规则生效。'
+            : ''}
         </p>
       </div>
 
@@ -536,7 +558,10 @@ export default function ProjectDetailPage() {
                   ) : null}
                   {k === 'reviewer' ? (
                     <div className="vh-phase-subs">
-                      {REVIEWER_LOG_TABS.map(([sk, slabel]) => (
+                      {(project.dynamic_verify_enabled
+                        ? REVIEWER_LOG_TABS
+                        : REVIEWER_LOG_TABS.filter(([sk]) => sk !== 'reviewer-lab')
+                      ).map(([sk, slabel]) => (
                         <Button
                           key={sk}
                           className="h-6 px-2 text-[11px]"

@@ -7,6 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.exc import OperationalError
@@ -45,7 +46,7 @@ from ..services.lab import (
 from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
-from ..services.paths import ensure_project_dirs, src_dir
+from ..services.paths import ensure_project_dirs, src_dir, summaries_dir, workspace_dir
 from ..services.vuln_followup import archive_reviewer_checkpoint
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
@@ -95,6 +96,7 @@ CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "verifier": ("verifier",),
 }
 CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
+WORKER_PROGRESS_RESET_STATUSES = ("paused", "completed", "cancelled", "error")
 
 
 def _is_sqlite_locked(exc: BaseException) -> bool:
@@ -247,12 +249,16 @@ def request_cancel(project_id: int) -> None:
 
 
 def request_pause(project_id: int) -> None:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if proj and proj.status == "completed":
+            return
     _pause_event(project_id).set()
     for phase in CONTROL_PHASES:
         _phase_pause_event(project_id, phase).set()
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        if proj:
+        if proj and proj.status != "completed":
             proj.status = "paused"
             db.commit()
     live_log.system(project_id, "用户暂停全部阶段")
@@ -276,6 +282,15 @@ def note_verifier_enabled(project_id: int) -> None:
         _phase_pause_event(project_id, "verifier").clear()
 
 
+def note_dynamic_verify_changed(project_id: int, *, enabled: bool) -> None:
+    """Next Reviewer round should pick up the new static/dynamic gate."""
+    _force_new_run.add((project_id, "reviewer"))
+    _abandon_phase_checkpoints(project_id, "reviewer")
+    _bump_phase_generation(project_id, "reviewer")
+    if enabled and not _pause_event(project_id).is_set():
+        _phase_pause_event(project_id, "reviewer").clear()
+
+
 def request_resume(project_id: int) -> None:
     _pause_event(project_id).clear()
     for phase in CONTROL_PHASES:
@@ -296,6 +311,10 @@ def _enabled_control_phases(project_id: int) -> tuple[str, ...]:
 
 
 def request_phase_pause(project_id: int, phase: str) -> dict[str, Any]:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if proj and proj.status == "completed":
+            return get_phase_states(project_id)
     control = control_phase(phase)
     _phase_pause_event(project_id, control).set()
     if all(_phase_pause_event(project_id, p).is_set() for p in _enabled_control_phases(project_id)):
@@ -372,6 +391,90 @@ def request_phase_restart(project_id: int, phase: str) -> dict[str, Any]:
     )
     start_audit(project_id)
     return get_phase_states(project_id)
+
+
+def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
+    """Reset Worker file progress so a new model / audit mode can re-mine.
+
+    Keeps vulns, recon docs, file weights/skips, lab, and reviewer/verifier state.
+    Clears audited/claim flags, Worker checkpoints, round reports, and summaries
+    that would tell the next Worker to skip already-tried paths.
+    Project stays paused so the user can switch mode or model, then resume.
+    """
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status not in WORKER_PROGRESS_RESET_STATUSES:
+            raise ValueError("请先全部暂停项目，再重置挖掘进度")
+        recon_done = bool(proj.recon_done)
+        audited = (
+            db.query(FileWeight)
+            .filter(FileWeight.project_id == project_id, FileWeight.audited.is_(True))
+            .count()
+        )
+        db.query(FileWeight).filter(FileWeight.project_id == project_id).update(
+            {
+                FileWeight.audited: False,
+                FileWeight.claimed_by: None,
+                FileWeight.claimed_at: None,
+                FileWeight.audit_attempts: 0,
+            },
+            synchronize_session=False,
+        )
+        proj.status = "paused"
+        proj.phase = "worker" if recon_done else "recon"
+        proj.error = None
+        db.commit()
+
+    n_fix = _reset_fixing_to_returned(project_id, except_ids=set())
+    n_rounds = _clear_worker_progress_files(project_id)
+    _abandon_phase_checkpoints(project_id, "worker", reason="用户重置挖掘进度")
+    with _lock:
+        _pending_inject.pop((project_id, "worker"), None)
+        _force_new_run.add((project_id, "worker"))
+    _bump_phase_generation(project_id, "worker")
+    _pause_event(project_id).set()
+    for phase in CONTROL_PHASES:
+        _phase_pause_event(project_id, phase).set()
+    live_log.system(
+        project_id,
+        "已重置挖掘进度：文件恢复未审计，轮次摘要已清；漏洞产出与侦察文档保留。"
+        + (f" fixing→returned {n_fix}。" if n_fix else "")
+        + f" 已审计文件 {audited}，轮次文件 {n_rounds}。"
+        " 项目保持暂停，可更换模型或切换挖掘模式后全部续跑。",
+        phase="worker",
+    )
+    return get_phase_states(project_id)
+
+
+def _clear_worker_progress_files(project_id: int) -> int:
+    """Delete Worker round reports, compression summaries, and worker/fix todos."""
+    n = 0
+    rounds = workspace_dir(project_id) / "rounds"
+    if rounds.is_dir():
+        n += _unlink_glob(rounds, "round-*.md")
+    summaries = summaries_dir(project_id)
+    if summaries.is_dir():
+        n += _unlink_glob(summaries, "worker-*.md")
+        n += _unlink_glob(summaries, "fix-*.md")
+    ws = workspace_dir(project_id)
+    n += _unlink_glob(ws, "todos-worker-*.json")
+    n += _unlink_glob(ws, "todos-fix-*.json")
+    return n
+
+
+def _unlink_glob(directory: Path, pattern: str) -> int:
+    n = 0
+    for path in directory.glob(pattern):
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+            n += 1
+        except OSError:
+            pass
+    return n
 
 
 def _start_log_session(
@@ -453,10 +556,10 @@ def _collect_inject_targets(project_id: int, phase: str) -> list[dict[str, Any]]
     return out
 
 
-def _abandon_phase_checkpoints(project_id: int, phase: str) -> None:
+def _abandon_phase_checkpoints(project_id: int, phase: str, *, reason: str = "用户新跑") -> None:
     for pr in _resumable_for_control(project_id, phase):
         _release_adopted(project_id, pr.id)
-        _finish_phase_run(pr.id, "cancelled", "用户新跑")
+        _finish_phase_run(pr.id, "cancelled", reason)
 
 
 def _prepare_phase_resume(project_id: int, phase: str) -> None:
@@ -828,11 +931,31 @@ def _read_verifier_enabled(project_id: int) -> bool:
         return bool(proj and proj.verifier_enabled)
 
 
+def _read_dynamic_verify_enabled(project_id: int) -> bool:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return bool(proj and proj.dynamic_verify_enabled)
+
+
+def _reviewer_has_lab_work(project_id: int) -> bool:
+    if not _read_dynamic_verify_enabled(project_id):
+        return False
+    return not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
+
+
 _ASSET_PROOF_LAB_HINT = (
     "有可访问的漏洞环境时，审核中顺带完善报告「互联网资产证明」："
     "先 CollectLabFingerprints 采集标题/body/header/favicon，"
     "将 FOFA 与 X 情报社区语句写入本条报告（apply=true 或 ConfirmVuln 传 fofa_fingerprint/x_fingerprint）。"
     "不要把「待运行环境确认」留到确认后，也不要为此 ReturnToWorker。"
+)
+
+
+_STATIC_REVIEW_NOTE = (
+    "本项目仅静态验证：不要搭建 Docker、不要对靶场发请求或运行 poc.py、"
+    "不要 docker exec / debug MCP。"
+    "ConfirmVuln 必须 evidence_level=static_only。"
+    "无运行环境，互联网资产证明允许保留「待运行环境确认」，不要编造 hash。"
 )
 
 
@@ -846,6 +969,8 @@ def _docker_lab_note(project_id: int) -> str | None:
 
 
 def _reviewer_lab_note(project_id: int) -> str:
+    if not _read_dynamic_verify_enabled(project_id):
+        return _STATIC_REVIEW_NOTE
     _enabled, prompt = _read_manual_lab(project_id)
     docker_note = _docker_lab_note(project_id)
     if prompt:
@@ -873,12 +998,14 @@ def _reviewer_lab_note(project_id: int) -> str:
 
 def _next_reviewer_step(project_id: int, pending: int) -> str:
     """Prefer reviewing with a manual lab note; otherwise finish Docker lab first."""
-    lab_pending = not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
+    lab_pending = _reviewer_has_lab_work(project_id)
     review_work = (
         pending > 0
         or bool(list_resumable_runs(project_id, "reviewer"))
         or _should_skip_checkpoint(project_id, "reviewer")
     )
+    if not lab_pending:
+        return "review"
     if review_work and (_read_manual_lab(project_id)[1] or not lab_pending):
         return "review"
     if lab_pending:
@@ -898,7 +1025,10 @@ def _audit_mode_vars(project_id: int) -> dict[str, str]:
 def _phase_system_prompt(project_id: int, name: str) -> str:
     base = load_prompt(name).rstrip()
     overlay = load_prompt(f"modes/{_read_audit_mode(project_id)}.md").strip()
-    return f"{base}\n\n{overlay}\n"
+    parts = [base, overlay]
+    if name == "reviewer.md" and not _read_dynamic_verify_enabled(project_id):
+        parts.append(load_prompt("verify/static.md").strip())
+    return "\n\n".join(parts) + "\n"
 
 
 def _initial_prompt(name: str, **kwargs: object) -> str:
@@ -1193,7 +1323,7 @@ def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
         )
     if _phase_is_paused(project_id, "reviewer"):
         return
-    has_lab_work = not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
+    has_lab_work = _reviewer_has_lab_work(project_id)
     has_review_work = (
         pending > 0
         or bool(list_resumable_runs(project_id, "reviewer"))
@@ -1238,9 +1368,9 @@ def _run_reviewer_loop(project_id: int) -> None:
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
-            if pending <= 0 and lab_setup_finished(project_id) and not list_resumable_runs(
+            if pending <= 0 and not _reviewer_has_lab_work(project_id) and not list_resumable_runs(
                 project_id, "reviewer"
-            ) and not list_resumable_runs(project_id, "reviewer-lab") and not _should_skip_checkpoint(
+            ) and not _should_skip_checkpoint(
                 project_id, "reviewer"
             ):
                 cancel.wait(timeout=5.0)
@@ -2110,6 +2240,9 @@ def _lab_system_prompt() -> str:
 def _run_reviewer_lab(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
+        if not _read_dynamic_verify_enabled(project_id):
+            _finish_resumable_phase(project_id, "reviewer-lab")
+            return
         if lab_setup_finished(project_id):
             _finish_resumable_phase(project_id, "reviewer-lab")
             return
@@ -2306,7 +2439,11 @@ def _run_reviewer_once(project_id: int) -> None:
             }
 
         lab_note = _reviewer_lab_note(project_id)
-        debug_plan = reviewer_debug_plan(project_id)
+        debug_plan = (
+            {"enabled": False, "preferred": "static_only"}
+            if not _read_dynamic_verify_enabled(project_id)
+            else {**reviewer_debug_plan(project_id), "enabled": True}
+        )
 
         with SessionLocal() as db:
             proj = db.get(Project, project_id)

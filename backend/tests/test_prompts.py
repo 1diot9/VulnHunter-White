@@ -171,6 +171,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     bounty_worker = load_prompt("modes/bounty.md")
     assert "赏金模式" in bounty_worker
     assert "不要 Confirm、不要标 `low_impact`" in bounty_worker
+    assert "存储型 XSS" in bounty_worker
+    assert "源码硬编码密钥" in bounty_worker
     assert "应用自身提供的配置选项" in bounty_worker
     assert "不要 docker" in bounty_worker
     assert "禁止主动搭建漏洞利用环境" not in bounty_worker
@@ -191,6 +193,15 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     full_overlay = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "全量模式" in full_overlay
     assert "双层审核" in full_overlay
+    assert "仅静态" in full_overlay
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.dynamic_verify_enabled = True
+        db.commit()
+    dynamic_overlay = pipeline._phase_system_prompt(project, "reviewer.md")
+    assert "仅静态" not in dynamic_overlay
+    assert "动态验证阶梯" in dynamic_overlay
 
     initial = pipeline._initial_prompt(
         "worker.md",
@@ -204,6 +215,13 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     )
     assert "赏金模式" in initial
     assert "${audit_mode_hint}" not in initial
+
+
+def test_static_verify_overlay_prompt():
+    text = load_prompt("verify/static.md")
+    assert "仅静态" in text
+    assert "evidence_level=static_only" in text
+    assert "debug MCP" in text
 
 
 def test_worker_prompts_decouple_finish_file_and_round():

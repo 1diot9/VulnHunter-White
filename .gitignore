@@ -7,6 +7,8 @@ data/
 *.db
 node_modules/
 frontend/dist/
+tools/mcp/**/target/
+tools/mcp/**/dist/
 .DS_Store
 *.log
 .idea/

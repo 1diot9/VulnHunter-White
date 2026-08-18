@@ -6,7 +6,9 @@ import re
 import shutil
 import subprocess
 import zipfile
-from pathlib import Path
+from collections import Counter, defaultdict
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from ..models import FileWeight, Project, SessionLocal
 from .paths import ensure_project_dirs, force_rmtree, project_root, src_dir
@@ -160,6 +162,41 @@ def normalize_source_ext(ext: str) -> str | None:
 
 def is_indexable_ext(ext: str) -> bool:
     return ext in SOURCE_EXTS or ext in EXTRA_SOURCE_EXTS
+
+
+def path_source_ext(path: str) -> str | None:
+    """Return the lowercase suffix of an indexed path, or None if missing."""
+    name = PurePosixPath(str(path or "").replace("\\", "/")).name
+    suffix = Path(name).suffix.lower()
+    return suffix or None
+
+
+def indexed_weight_exts(db, project_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Distinct FileWeight suffixes per project; extras beyond SOURCE_EXTS are Agent-added."""
+    ids = list(dict.fromkeys(int(i) for i in project_ids))
+    out: dict[int, list[dict[str, Any]]] = {pid: [] for pid in ids}
+    if not ids:
+        return out
+    counts: dict[int, Counter[str]] = defaultdict(Counter)
+    for pid, path in (
+        db.query(FileWeight.project_id, FileWeight.path).filter(FileWeight.project_id.in_(ids)).all()
+    ):
+        ext = path_source_ext(str(path or ""))
+        if not ext:
+            continue
+        counts[int(pid)][ext] += 1
+    for pid, counter in counts.items():
+        rows = [
+            {
+                "ext": ext,
+                "agent_added": ext not in SOURCE_EXTS,
+                "files": int(n),
+            }
+            for ext, n in counter.items()
+        ]
+        rows.sort(key=lambda r: (bool(r["agent_added"]), -int(r["files"]), str(r["ext"])))
+        out[pid] = rows
+    return out
 
 
 def is_test_path(rel: str) -> bool:

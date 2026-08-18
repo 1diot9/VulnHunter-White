@@ -78,7 +78,7 @@ export const AUDIT_MODE_OPTIONS = [
     label: '赏金模式',
     short: '只报默认可利用的高危害漏洞',
     hint:
-      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权等）。CORS、反射 XSS、缺速率限制等低危害项不入库；利用须在默认配置或应用自身配置下成立。',
+      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令不算硬编码密钥。利用须在默认配置或应用自身配置下成立。',
   },
   {
     value: 'full' as const,
@@ -90,6 +90,36 @@ export const AUDIT_MODE_OPTIONS = [
 ] as const
 
 export type AuditMode = (typeof AUDIT_MODE_OPTIONS)[number]['value']
+
+export const BOUNTY_SCOPE_ROWS = [
+  { type: 'RCE', included: true, note: '命令注入、代码执行等' },
+  { type: 'SSTI', included: true, note: '' },
+  { type: '反序列化 / JNDI', included: true, note: '' },
+  { type: 'SQL 注入', included: true, note: '' },
+  { type: 'XML 注入 / XXE', included: true, note: '' },
+  { type: '任意文件操作', included: true, note: '读 / 写 / 删 / 改 / 复制 / 解压穿越等' },
+  { type: '文件上传', included: true, note: '' },
+  { type: '文件包含 / 目录遍历', included: true, note: '' },
+  { type: '能打内网的 SSRF', included: true, note: '内网、云元数据或本机敏感口' },
+  { type: '敏感信息泄露', included: true, note: '' },
+  { type: '认证绕过', included: true, note: '' },
+  { type: '越权', included: true, note: '' },
+  { type: 'DoS', included: true, note: '' },
+  { type: '存储型 XSS', included: true, note: '须持久化后在其他用户浏览器执行；不要把反射 XSS 写成存储型' },
+  { type: '源码硬编码密钥', included: true, note: '仅程序常量中的 JWT / AES / DES / HMAC secret、私钥' },
+  { type: '其他实际危害', included: true, note: '须证明代码执行、敏感数据泄露、越权读写删或任意文件操作等' },
+  { type: '仅公网 SSRF', included: false, note: '打不到内网 / 元数据 / 本机敏感口' },
+  { type: '反射 XSS / DOM XSS / Self-XSS', included: false, note: '' },
+  { type: 'CORS / 安全头缺失', included: false, note: '含 ACAO 反射、CSP、X-Frame-Options 等' },
+  { type: '开放重定向', included: false, note: '除非能升级为鉴权劫持、token 盗取等实际危害' },
+  { type: '缺速率限制 / 验证码爆破', included: false, note: '无进一步危害时不收录' },
+  { type: '弱随机 / 可预测 token', included: false, note: '除非直接导致认证绕过' },
+  { type: '配置文件默认口令', included: false, note: 'application.yml、.env、compose、文档里用户可改的口令或密钥' },
+  { type: '纯配置加固建议', included: false, note: '信息性扫描项' },
+] as const
+
+export const BOUNTY_SCOPE_PREMISE =
+  '利用须在默认配置，或只改应用自身配置选项下成立。禁止种文件、改非应用配置、组合第二个独立漏洞。全量模式额外收录上表「不收录」中仍能打出差异的项，由 Reviewer 标为低危害难利用。'
 
 export function formatAuditMode(value: string | null | undefined): string {
   return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.label ?? AUDIT_MODE_OPTIONS[0].label

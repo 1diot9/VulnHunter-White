@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -9,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 
 type DeleteProjectButtonProps = {
   projectId: number
@@ -27,20 +29,30 @@ export function DeleteProjectButton({
 }: DeleteProjectButtonProps) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [acked, setAcked] = useState(false)
   const [error, setError] = useState('')
 
   const close = () => {
     if (busy) return
     setOpen(false)
+    setAcked(false)
     setError('')
   }
 
+  function openDialog() {
+    setError('')
+    setAcked(false)
+    setOpen(true)
+  }
+
   async function confirmDelete() {
+    if (!acked || busy) return
     setBusy(true)
     setError('')
     try {
       await api.deleteProject(projectId)
       setOpen(false)
+      setAcked(false)
       onDeleted?.()
     } catch (e) {
       setError(String(e))
@@ -52,35 +64,49 @@ export function DeleteProjectButton({
   return (
     <>
       <Button
+        type="button"
         variant={variant}
         size={size}
-        onClick={() => {
-          setError('')
-          setOpen(true)
-        }}
+        onClick={openDialog}
       >
         删除
       </Button>
       <Dialog
         open={open}
         onOpenChange={(next) => {
-          if (!next) close()
-          else setOpen(true)
+          if (next) openDialog()
+          else close()
         }}
       >
-        <DialogContent showCloseButton={!busy}>
+        <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
           <DialogHeader>
-            <DialogTitle>删除项目</DialogTitle>
+            <DialogTitle>确认删除项目</DialogTitle>
             <DialogDescription>
               将永久删除「{projectName}」及其源码工作区、阶段日志和漏洞报告，此操作不可恢复。请再次确认。
             </DialogDescription>
           </DialogHeader>
+          <Label className="items-start font-normal">
+            <Checkbox
+              className="mt-0.5"
+              checked={acked}
+              disabled={busy}
+              onCheckedChange={(checked) => setAcked(checked === true)}
+            />
+            <span className="min-w-0 text-sm leading-relaxed">
+              我已了解，确认永久删除该项目及其全部数据
+            </span>
+          </Label>
           {error ? <p className="text-sm text-red-300">{error}</p> : null}
           <DialogFooter>
-            <Button variant="outline" disabled={busy} onClick={close}>
+            <Button type="button" variant="outline" disabled={busy} onClick={close}>
               取消
             </Button>
-            <Button variant="destructive" disabled={busy} onClick={confirmDelete}>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy || !acked}
+              onClick={() => void confirmDelete()}
+            >
               {busy ? '删除中…' : '确认删除'}
             </Button>
           </DialogFooter>

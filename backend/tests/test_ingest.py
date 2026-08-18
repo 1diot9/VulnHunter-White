@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from app.services.ingest import build_file_index, detect_identity, expand_file_index, is_test_path
+from app.services.ingest import (
+    build_file_index,
+    detect_identity,
+    expand_file_index,
+    indexed_weight_exts,
+    is_test_path,
+    path_source_ext,
+)
 from app.services.paths import src_dir
 
 
@@ -8,6 +15,12 @@ def test_is_test_path():
     assert is_test_path("tests/a_test.py")
     assert is_test_path("src/foo.test.ts")
     assert not is_test_path("app/Main.java")
+
+
+def test_path_source_ext():
+    assert path_source_ext("app/Main.java") == ".java"
+    assert path_source_ext("app\\job.FTL") == ".ftl"
+    assert path_source_ext("Makefile") is None
 
 
 def test_build_file_index_skips_deps_and_tests(tmp_env, project):
@@ -65,6 +78,13 @@ def test_expand_file_index_appends_templates_without_wiping(tmp_env, project):
 
     again = expand_file_index(project, [".ftl"])
     assert again["added_count"] == 0
+
+    with Session() as db:
+        exts = indexed_weight_exts(db, [project])[project]
+    by_ext = {row["ext"]: row for row in exts}
+    assert by_ext[".java"]["agent_added"] is False
+    assert by_ext[".ftl"] == {"ext": ".ftl", "agent_added": True, "files": 2}
+    assert by_ext[".xml"] == {"ext": ".xml", "agent_added": True, "files": 1}
 
 
 def test_detect_identity_from_package_json(tmp_env, project):

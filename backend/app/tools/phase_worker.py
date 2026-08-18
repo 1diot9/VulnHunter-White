@@ -14,7 +14,7 @@ from ..services.affected_locations import (
 )
 from ..services.paths import vuln_dir
 from ..services.report import ensure_search_fingerprint_section, write_report_md
-from ..vuln_types import PENDING_SEVERITY, normalize_root_cause_key, normalize_vuln_type
+from ..vuln_types import PENDING_SEVERITY, normalize_root_cause_key, normalize_vuln_type, refine_vuln_type
 from . import ToolSpec, registry
 
 
@@ -152,19 +152,24 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     missing = [f for f in REQUIRED_SUBMIT_FIELDS if args.get(f) in (None, "")]
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
-    vtype = normalize_vuln_type(str(args.get("vuln_type")))
+    vtype = refine_vuln_type(
+        normalize_vuln_type(str(args.get("vuln_type"))),
+        title=str(args.get("title") or ""),
+        source_sink=str(args.get("source_sink") or ""),
+    )
     intended = bool(args.get("intended_behavior") or False)
     try:
         line_no = int(args.get("line_no"))
     except (TypeError, ValueError):
         return {"ok": False, "error": "line_no 必须是整数"}
     root_key = normalize_root_cause_key(args.get("root_cause_key"))
+    file_path = str(args.get("file_path") or "").replace("\\", "/")
 
     with SessionLocal() as db:
         proj = db.get(Project, ctx.project_id)
         mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if mode == AUDIT_MODE_BOUNTY:
-            blocked = bounty_submit_block_reason(vtype)
+            blocked = bounty_submit_block_reason(vtype, file_path=file_path)
             if blocked:
                 return {"ok": False, "error": blocked}
         vuln = Vuln(
@@ -173,7 +178,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             vuln_type=vtype,
             severity=PENDING_SEVERITY,
             cwe=str(args["cwe"]).strip(),
-            file_path=str(args["file_path"]).replace("\\", "/"),
+            file_path=file_path,
             line_no=line_no,
             source_sink=str(args["source_sink"]),
             auth_premise=str(args["auth_premise"]),
@@ -449,7 +454,8 @@ def register_worker_tools() -> None:
                 "提交待审核漏洞（必填字段齐全才入库）。"
                 "仅当默认/官方部署下，攻击者只凭自身权限与 HTTP 输入就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
-                "或只是配置/文档/compose 里的默认密码弱口令的不要提交。"
+                "或只是配置/文档/compose/.env 里用户可改的默认密码弱口令的不要提交。"
+                "源码常量中的硬编码密钥（JWT/AES/DES secret 等）可以提交。"
                 "同一根因同一危害只交一份：先 Grep 同类其余方法写入报告「同根因受影响点」；"
                 "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"
                 "应填写 root_cause_key（类型:稳定锚点）。"

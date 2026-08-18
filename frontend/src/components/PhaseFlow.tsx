@@ -17,7 +17,7 @@ const PHASES = [
   {
     id: 'reviewer',
     label: '审核',
-    hint: '独立验证 Worker 提交的漏洞是否成立，并分层为有 CVE 价值或低危害难利用。',
+    hint: '独立验证 Worker 提交的漏洞。默认仅静态复核；勾选动态验证后才搭靶场并做 HTTP/MCP 复现。',
   },
   {
     id: 'verifier',
@@ -66,6 +66,7 @@ type FlowState = {
   reconSubphases?: ReconSubphaseView[]
   labSetupDone?: boolean
   manualLab?: boolean
+  dynamicVerifyEnabled?: boolean
   verifierEnabled?: boolean
   verifierPending?: number
 }
@@ -99,6 +100,12 @@ function phaseTone(id: string, s: FlowState): Tone {
     return 'neutral'
   }
   if (id === 'reviewer') {
+    const dynamicOn = Boolean(s.dynamicVerifyEnabled)
+    if (!dynamicOn) {
+      if ((s.vulnPending ?? 0) === 0 && (completed || workerFinished(s))) return 'success'
+      if (s.phase === 'reviewer' || s.status === 'reviewing' || (s.vulnPending ?? 0) > 0) return 'info'
+      return 'neutral'
+    }
     if (s.labSetupDone && (s.vulnPending ?? 0) === 0 && (s.status === 'completed' || s.phase === 'done')) {
       return 'success'
     }
@@ -189,6 +196,7 @@ export default function PhaseFlow({
   reconSubphases,
   labSetupDone,
   manualLab,
+  dynamicVerifyEnabled,
   verifierEnabled,
   verifierPending,
   onSelect,
@@ -205,6 +213,7 @@ export default function PhaseFlow({
     reconSubphases,
     labSetupDone,
     manualLab,
+    dynamicVerifyEnabled,
     verifierEnabled,
     verifierPending,
   }
@@ -225,6 +234,7 @@ export default function PhaseFlow({
       }))
     }
     if (id === 'reviewer') {
+      if (!state.dynamicVerifyEnabled) return []
       return [
         {
           id: 'lab',
@@ -289,6 +299,7 @@ export default function PhaseFlow({
                     <Badge variant={badgeVariant(phaseTone(p.id, state))}>
                       {p.label}
                       {p.id === 'worker' && workerRounds != null ? ` ${workerRounds} 轮` : ''}
+                      {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
                       {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
                     </Badge>
                   </FlowTip>

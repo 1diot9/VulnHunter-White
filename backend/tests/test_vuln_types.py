@@ -19,12 +19,25 @@ def test_normalize_aliases():
     assert normalize_vuln_type("文件包含") == "path_traversal"
     assert normalize_vuln_type("目录遍历") == "path_traversal"
     assert normalize_vuln_type("反射XSS") == "xss"
+    assert normalize_vuln_type("存储型XSS") == "stored_xss"
+    assert normalize_vuln_type("stored xss") == "stored_xss"
+    assert normalize_vuln_type("硬编码密钥") == "hardcoded_secret"
+    assert normalize_vuln_type("hardcoded credentials") == "hardcoded_secret"
     assert normalize_vuln_type("") == "other"
 
 
 def test_infer_from_text():
     assert infer_vuln_type_from_text("任意文件读取漏洞") == "file_read"
     assert infer_vuln_type_from_text("Log4j JNDI lookup") == "jndi_injection"
+    assert infer_vuln_type_from_text("Stored XSS in profile") == "stored_xss"
+    assert infer_vuln_type_from_text("hardcoded JWT secret") == "hardcoded_secret"
+
+
+def test_refine_generic_xss_to_stored_when_title_says_so():
+    from app.vuln_types import refine_vuln_type
+
+    assert refine_vuln_type("xss", title="Reflected XSS") == "xss"
+    assert refine_vuln_type("xss", title="存储型XSS in comment") == "stored_xss"
 
 
 def test_resolve_prefers_explicit_type():

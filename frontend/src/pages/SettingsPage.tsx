@@ -3,6 +3,14 @@ import { api, type Settings } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -15,9 +23,10 @@ export default function SettingsPage() {
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
-  const [concurrency, setConcurrency] = useState(1)
-  const [fixConcurrency, setFixConcurrency] = useState(1)
+  const [llmThreadLimit, setLlmThreadLimit] = useState(6)
   const [contextWindow, setContextWindow] = useState(128000)
+  const [httpProxy, setHttpProxy] = useState('')
+  const [chatProxy, setChatProxy] = useState('')
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -28,16 +37,22 @@ export default function SettingsPage() {
   const [fofaTesting, setFofaTesting] = useState(false)
   const [fofaOk, setFofaOk] = useState<boolean | null>(null)
   const [fofaMsg, setFofaMsg] = useState('')
+  const [logDays, setLogDays] = useState(7)
+  const [logConfirmOpen, setLogConfirmOpen] = useState(false)
+  const [logPurging, setLogPurging] = useState(false)
+  const [logMsg, setLogMsg] = useState('')
+  const [logOk, setLogOk] = useState<boolean | null>(null)
 
   useEffect(() => {
     api.getSettings().then((x) => {
       setS(x)
       setDefaultModel(x.default_model || '')
       setDefaultBaseUrl(x.default_base_url || '')
-      setConcurrency(x.worker_concurrency || 1)
-      setFixConcurrency(x.fix_concurrency || 1)
+      setLlmThreadLimit(x.llm_thread_limit || 6)
       setContextWindow(x.context_window || 128000)
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
+      setHttpProxy(x.http_proxy || '')
+      setChatProxy(x.chat_proxy || '')
     })
   }, [])
 
@@ -142,9 +157,10 @@ export default function SettingsPage() {
       const body: Record<string, unknown> = {
         default_model: defaultModel,
         default_base_url: defaultBaseUrl,
-        worker_concurrency: concurrency,
-        fix_concurrency: fixConcurrency,
+        llm_thread_limit: llmThreadLimit,
         context_window: contextWindow,
+        http_proxy: httpProxy.trim(),
+        chat_proxy: chatProxy.trim(),
       }
       if (defaultApiKey.trim()) body.default_api_key = defaultApiKey.trim()
       if (githubPat.trim()) body.github_pat = githubPat.trim()
@@ -177,6 +193,33 @@ export default function SettingsPage() {
       setMsg('已保存')
     } catch (e) {
       setMsg(String(e))
+    }
+  }
+
+  const logDaysSafe = Number.isFinite(logDays) ? Math.max(0, Math.min(3650, Math.floor(logDays))) : 7
+
+  async function confirmPurgeLogs() {
+    setLogPurging(true)
+    setLogMsg('')
+    setLogOk(null)
+    try {
+      const out = await api.purgeLiveLogs(logDaysSafe)
+      setLogOk(true)
+      if (out.files === 0) {
+        setLogMsg(
+          logDaysSafe === 0 ? '没有可清理的实时日志。' : `没有 ${logDaysSafe} 天前的实时日志。`,
+        )
+      } else {
+        setLogMsg(
+          `已删除 ${out.files} 个文件，涉及 ${out.projects} 个项目，共 ${formatBytes(out.bytes)}。`,
+        )
+      }
+      setLogConfirmOpen(false)
+    } catch (e) {
+      setLogOk(false)
+      setLogMsg(String(e))
+    } finally {
+      setLogPurging(false)
     }
   }
 
@@ -263,22 +306,16 @@ export default function SettingsPage() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label>挖掘 Worker 并发数</Label>
+          <Label>总线程数</Label>
           <Input
             type="number"
             min={1}
-            value={concurrency}
-            onChange={(e) => setConcurrency(Number(e.target.value) || 1)}
+            value={llmThreadLimit}
+            onChange={(e) => setLlmThreadLimit(Math.max(1, Number(e.target.value) || 6))}
           />
-        </div>
-        <div className="space-y-1.5">
-          <Label>修复并发数（打回漏洞修改，与挖掘 Worker 隔离）</Label>
-          <Input
-            type="number"
-            min={1}
-            value={fixConcurrency}
-            onChange={(e) => setFixConcurrency(Number(e.target.value) || 1)}
-          />
+          <div className="text-xs text-slate-500">
+            所有运行中项目的侦察、挖掘、审核等 LLM 线程合计上限。超出的工作按到达顺序排队放行。默认 6。
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label>上下文窗口（token 估算上限）</Label>
@@ -333,12 +370,102 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+        <div className="space-y-1.5">
+          <Label>出站代理（WebSearch / GHSA / FOFA）</Label>
+          <Input
+            value={httpProxy}
+            onChange={(e) => setHttpProxy(e.target.value)}
+            placeholder="留空则直连，例如 http://127.0.0.1:10808"
+          />
+          <div className="text-xs text-slate-500">仅工具出站 HTTP 使用。保存空值表示直连。</div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Chat 代理</Label>
+          <Input
+            value={chatProxy}
+            onChange={(e) => setChatProxy(e.target.value)}
+            placeholder="留空则 Chat Completions 直连"
+          />
+        </div>
         <div className="flex items-center gap-3">
           <Button onClick={save}>保存</Button>
           {msg ? <span className="text-sm text-slate-300">{msg}</span> : null}
         </div>
         </CardContent>
       </Card>
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <div className="space-y-1.5">
+            <Label>实时日志清理</Label>
+            <div className="text-xs text-slate-500">
+              清理各审计项目的 SSE 实时日志（live-events）。按文件最后写入时间判断，近期仍在更新的日志不会被删。填 0 表示清除全部实时日志。阶段报告、漏洞与源码不受影响。
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="log-days">清除多少天前</Label>
+                <Input
+                  id="log-days"
+                  type="number"
+                  min={0}
+                  max={3650}
+                  className="w-28"
+                  value={logDays}
+                  onChange={(e) => setLogDays(Number(e.target.value))}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  setLogConfirmOpen(true)
+                }}
+              >
+                清理日志
+              </Button>
+            </div>
+            {logMsg ? (
+              <div className="flex items-start gap-2 text-sm">
+                {logOk != null ? (
+                  <Badge variant={logOk ? 'success' : 'destructive'}>{logOk ? '完成' : '失败'}</Badge>
+                ) : null}
+                <span className={logOk === false ? 'text-red-300' : 'text-slate-300'}>{logMsg}</span>
+              </div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+      <Dialog
+        open={logConfirmOpen}
+        onOpenChange={(next) => {
+          if (logPurging) return
+          setLogConfirmOpen(next)
+        }}
+      >
+        <DialogContent showCloseButton={!logPurging}>
+          <DialogHeader>
+            <DialogTitle>清理实时日志</DialogTitle>
+            <DialogDescription>
+              {logDaysSafe === 0
+                ? '将删除所有审计项目的全部实时日志（SSE）。此操作不可恢复。'
+                : `将删除所有审计项目中 ${logDaysSafe} 天前的实时日志（SSE），近期日志不受影响。此操作不可恢复。`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={logPurging} onClick={() => setLogConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button variant="destructive" disabled={logPurging} onClick={() => void confirmPurgeLogs()}>
+              {logPurging ? '清理中…' : '确认清理'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

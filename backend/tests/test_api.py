@@ -11,18 +11,66 @@ def test_health_and_settings(tmp_env):
         s = client.get("/api/settings")
         assert s.status_code == 200
         body = s.json()
-        assert "worker_concurrency" in body
-        assert "fix_concurrency" in body
         assert "llm_providers" in body
+        assert "worker_concurrency" not in body
+        assert "fix_concurrency" not in body
+        assert "llm_thread_limit" in body
+        assert body["llm_thread_limit"] == 6
+        assert body["http_proxy"] == ""
+        assert body["chat_proxy"] == ""
 
         upd = client.put(
             "/api/settings",
-            json={"worker_concurrency": 2, "fix_concurrency": 3, "default_model": "gpt-test"},
+            json={
+                "llm_thread_limit": 8,
+                "default_model": "gpt-test",
+                "http_proxy": "http://127.0.0.1:19999",
+                "chat_proxy": "http://127.0.0.1:19998",
+            },
         )
         assert upd.status_code == 200
-        assert upd.json()["worker_concurrency"] == 2
-        assert upd.json()["fix_concurrency"] == 3
+        assert upd.json()["llm_thread_limit"] == 8
         assert upd.json()["default_model"] == "gpt-test"
+        from app.services.llm_thread import llm_thread_limiter
+
+        assert llm_thread_limiter.current_limit() == 8
+        assert upd.json()["http_proxy"] == "http://127.0.0.1:19999"
+        assert upd.json()["chat_proxy"] == "http://127.0.0.1:19998"
+        cleared = client.put("/api/settings", json={"http_proxy": "", "chat_proxy": ""})
+        assert cleared.json()["http_proxy"] == ""
+        assert cleared.json()["chat_proxy"] == ""
+
+
+def test_purge_live_logs_api(tmp_env, project):
+    import os
+    import time
+
+    from app.main import app
+    from app.services.live_log import live_log
+    from app.services.paths import logs_dir
+
+    live_log.reset_runtime_state()
+    live_log.agent(project, "old", phase="worker", role="worker")
+    live_log.agent(project, "recent", phase="recon", role="recon")
+    old_path = logs_dir(project) / "live-events" / "worker" / "round-1.jsonl"
+    recent = logs_dir(project) / "live-events" / "recon" / "round-1.jsonl"
+    os.utime(old_path, (time.time() - 10 * 86400, time.time() - 10 * 86400))
+
+    with TestClient(app) as client:
+        bad = client.post("/api/settings/logs/purge", json={"older_than_days": -1})
+        assert bad.status_code == 422
+        r = client.post("/api/settings/logs/purge", json={"older_than_days": 7})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["files"] == 1
+        assert body["projects"] == 1
+        assert body["older_than_days"] == 7
+        assert body["bytes"] > 0
+        empty = client.post("/api/settings/logs/purge", json={"older_than_days": 7})
+        assert empty.json()["files"] == 0
+    assert not old_path.exists()
+    assert recent.exists()
 
 
 def test_project_events_tail_and_before(tmp_env, project, monkeypatch, tmp_path):
@@ -124,6 +172,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["manual_lab"] is False
         assert created.json()["manual_lab_prompt"] == ""
         assert created.json()["verifier_enabled"] is False
+        assert created.json()["dynamic_verify_enabled"] is False
         full = client.post(
             "/api/projects",
             json={
@@ -172,14 +221,14 @@ def test_create_zip_audit_mode_and_invalid(tmp_env, monkeypatch):
         assert bad.status_code == 400
 
 
-def test_patch_audit_mode_only_when_paused(tmp_env, project):
+def test_patch_audit_mode_only_when_paused_or_completed(tmp_env, project):
     from app.main import app
     from app.models import Project, SessionLocal
 
     with TestClient(app) as client:
         denied = client.patch(f"/api/projects/{project}", json={"audit_mode": "full"})
         assert denied.status_code == 400
-        assert "暂停" in denied.json()["detail"]
+        assert "暂停或完成" in denied.json()["detail"]
         with SessionLocal() as db:
             p = db.get(Project, project)
             p.status = "paused"
@@ -188,6 +237,15 @@ def test_patch_audit_mode_only_when_paused(tmp_env, project):
         assert ok.status_code == 200
         assert ok.json()["audit_mode"] == "full"
         assert ok.json()["status"] == "paused"
+        with SessionLocal() as db:
+            p = db.get(Project, project)
+            p.status = "completed"
+            p.audit_mode = "full"
+            db.commit()
+        done = client.patch(f"/api/projects/{project}", json={"audit_mode": "bounty"})
+        assert done.status_code == 200
+        assert done.json()["audit_mode"] == "bounty"
+        assert done.json()["status"] == "completed"
 
 
 def test_create_and_patch_manual_lab_prompt_while_running(tmp_env, monkeypatch):
@@ -251,6 +309,37 @@ def test_create_zip_manual_lab(tmp_env, monkeypatch):
         assert created.json()["manual_lab_prompt"] == "http://127.0.0.1:18080"
 
 
+def test_create_and_patch_dynamic_verify_enabled(tmp_env, monkeypatch):
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.projects.start_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={"source_type": "github", "source_url": "https://github.com/owner/demo"},
+        )
+        assert created.status_code == 200
+        assert created.json()["dynamic_verify_enabled"] is False
+        pid = created.json()["id"]
+        enabled = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_enabled": True})
+        assert enabled.status_code == 200
+        assert enabled.json()["dynamic_verify_enabled"] is True
+        disabled = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_enabled": False})
+        assert disabled.status_code == 200
+        assert disabled.json()["dynamic_verify_enabled"] is False
+        on = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/dyn",
+                "dynamic_verify_enabled": True,
+            },
+        )
+        assert on.status_code == 200
+        assert on.json()["dynamic_verify_enabled"] is True
+
+
 def test_project_file_progress_counts(tmp_env, project):
     from app.main import app
     from app.models import FileWeight, PhaseRun, SessionLocal
@@ -276,17 +365,48 @@ def test_project_file_progress_counts(tmp_env, project):
         assert body["manual_lab"] is False
         assert body["manual_lab_prompt"] == ""
         assert body["verifier_enabled"] is False
+        assert body["dynamic_verify_enabled"] is False
         assert body["files_total"] == 4
         assert body["files_weighted"] == 2
         assert body["files_skipped"] == 1
         assert body["files_audited"] == 1
         assert body["worker_rounds"] == 2
+        assert body["weight_exts"] == [{"ext": ".java", "agent_added": False, "files": 4}]
         subs = body["recon_subphases"]
         assert [s["id"] for s in subs] == ["map", "source_ext", "old_vulns", "mark"]
         assert all("label" in s and "done" in s for s in subs)
         subs = body["recon_subphases"]
         assert [s["id"] for s in subs] == ["map", "source_ext", "old_vulns", "mark"]
         assert all("label" in s and "done" in s for s in subs)
+
+
+def test_project_weight_exts_marks_agent_added(tmp_env, project):
+    from app.main import app
+    from app.models import FileWeight, SessionLocal
+
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                FileWeight(project_id=project, path="app/Main.java", weight=80, skipped=False),
+                FileWeight(project_id=project, path="app/util.py", weight=40, skipped=False),
+                FileWeight(project_id=project, path="app/job.ftl", weight=None, skipped=False),
+                FileWeight(project_id=project, path="app/mapper.xml", weight=None, skipped=False),
+                FileWeight(project_id=project, path="tests/job.ftl", weight=0, skipped=True),
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        body = client.get(f"/api/projects/{project}").json()
+        assert body["weight_exts"] == [
+            {"ext": ".java", "agent_added": False, "files": 1},
+            {"ext": ".py", "agent_added": False, "files": 1},
+            {"ext": ".ftl", "agent_added": True, "files": 2},
+            {"ext": ".xml", "agent_added": True, "files": 1},
+        ]
+        listed = client.get("/api/projects").json()
+        row = next(p for p in listed if p["id"] == project)
+        assert row["weight_exts"] == body["weight_exts"]
 
 
 def test_project_token_usage_counts(tmp_env, project):
@@ -653,6 +773,80 @@ def test_phase_control_endpoints(tmp_env, project, monkeypatch):
         restarted = client.post(f"/api/projects/{project}/phases/recon/restart")
         assert restarted.status_code == 200
         assert restarted.json()["ok"] is True
+
+
+def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.status = "completed"
+        p.phase = "done"
+        db.commit()
+    with TestClient(app) as client:
+        mode = client.patch(f"/api/projects/{project}", json={"audit_mode": "full"})
+        assert mode.status_code == 200
+        assert mode.json()["audit_mode"] == "full"
+        assert mode.json()["status"] == "completed"
+        paused = client.post(f"/api/projects/{project}/pause")
+        assert paused.status_code == 400
+        assert "不可暂停" in paused.json()["detail"]
+        phase_paused = client.post(f"/api/projects/{project}/phases/worker/pause")
+        assert phase_paused.status_code == 400
+        assert "不可暂停" in phase_paused.json()["detail"]
+        shown = client.get(f"/api/projects/{project}").json()
+        assert shown["status"] == "completed"
+        assert shown["project_paused"] is False
+
+
+def test_reset_progress_endpoint(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import FileWeight, Project, SessionLocal, Vuln
+    from app.services import pipeline
+    from app.services.paths import docs_dir, workspace_dir
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    docs_dir(project).mkdir(parents=True, exist_ok=True)
+    (docs_dir(project) / "code-map.md").write_text("# 地图\n", encoding="utf-8")
+    rounds = workspace_dir(project) / "rounds"
+    rounds.mkdir(parents=True, exist_ok=True)
+    (rounds / "round-2.md").write_text("旧轮次\n", encoding="utf-8")
+    with SessionLocal() as db:
+        db.add(FileWeight(project_id=project, path="app/Main.java", weight=80, skipped=False, audited=True))
+        db.add(Vuln(project_id=project, title="保留洞", vuln_type="xss", status="confirmed"))
+        p = db.get(Project, project)
+        p.status = "auditing"
+        p.recon_done = True
+        db.commit()
+
+    with TestClient(app) as client:
+        missing = client.post("/api/projects/99999/reset-progress")
+        assert missing.status_code == 404
+        denied = client.post(f"/api/projects/{project}/reset-progress")
+        assert denied.status_code == 400
+        assert "暂停" in denied.json()["detail"]
+        with SessionLocal() as db:
+            p = db.get(Project, project)
+            p.status = "paused"
+            db.commit()
+        ok = client.post(f"/api/projects/{project}/reset-progress")
+        assert ok.status_code == 200
+        body = ok.json()
+        assert body["status"] == "paused"
+        assert body["files_audited"] == 0
+        assert body["vuln_confirmed"] == 1
+        assert body["project_paused"] is True
+
+    assert (docs_dir(project) / "code-map.md").is_file()
+    assert not (rounds / "round-2.md").exists()
+    with SessionLocal() as db:
+        fw = db.query(FileWeight).filter(FileWeight.project_id == project, FileWeight.path == "app/Main.java").one()
+        assert fw.audited is False
+        assert fw.weight == 80
+        assert db.query(Vuln).filter(Vuln.project_id == project, Vuln.title == "保留洞").one().status == "confirmed"
 
 
 def test_project_phase_reports(tmp_env, project):

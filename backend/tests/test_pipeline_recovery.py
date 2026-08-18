@@ -29,6 +29,16 @@ def _ctx(project_id: int, role: str, **kwargs) -> ToolContext:
     return ToolContext(project_id=project_id, role=role, phase=role, **kwargs)
 
 
+def _enable_dynamic_verify(project_id: int, enabled: bool = True) -> None:
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        assert proj is not None
+        proj.dynamic_verify_enabled = enabled
+        db.commit()
+
+
 def _mark_all_weighted(project: int) -> None:
     docs = docs_dir(project)
     (docs / "code-map.md").write_text("# map\n", encoding="utf-8")
@@ -567,7 +577,29 @@ def test_maybe_mark_recon_done_logs_only_on_transition(tmp_env, project, monkeyp
     assert apply_recon_done(project) is True
 
 
+def test_ensure_reviewer_skips_lab_when_dynamic_off(tmp_env, project, monkeypatch):
+    started: list[int] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ARG002
+            self._alive = False
+            self.name = kwargs.get("name") or ""
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def start(self) -> None:
+            self._alive = True
+            started.append(project)
+
+    monkeypatch.setattr(pipeline.threading, "Thread", FakeThread)
+    pipeline.reset_runtime_state()
+    pipeline._ensure_reviewer(project, pipeline._cancel_event(project))
+    assert started == []
+
+
 def test_ensure_reviewer_starts_lab_round_without_pending_vulns(tmp_env, project, monkeypatch):
+    _enable_dynamic_verify(project)
     started: list[int] = []
 
     class FakeThread:
@@ -643,12 +675,15 @@ def test_reviewer_once_does_not_ask_to_build_lab(tmp_env, project, monkeypatch):
     prompt = str(captured["user_prompt"])
     assert "搭建可复用的 Web 靶场" not in prompt
     assert "不要再搭建 Docker 靶场" in prompt
+    assert "本项目仅静态验证" in prompt
+    assert '"preferred": "static_only"' in prompt
     assert captured["timeout_sec"] == settings.timeout_reviewer_static
 
 
 def test_reviewer_once_injects_manual_lab_prompt(tmp_env, project, monkeypatch):
     from app.agent.loop import LoopResult
 
+    _enable_dynamic_verify(project)
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     with Session() as db:
@@ -696,6 +731,7 @@ def test_reviewer_lab_note_prefers_manual_then_docker(tmp_env, project, monkeypa
     )
     monkeypatch.setattr(pipeline, "recreate_lab", lambda pid: {"ok": True, "via": "reuse", "target_url": "http://127.0.0.1:18080"})
     monkeypatch.setattr(pipeline, "debug_ports_for_runtime", lambda env: {"mcp": None})
+    _enable_dynamic_verify(project)
     with Session() as db:
         proj = db.get(models.Project, project)
         proj.manual_lab_prompt = "http://10.0.0.8:9000"
@@ -713,9 +749,18 @@ def test_reviewer_lab_note_prefers_manual_then_docker(tmp_env, project, monkeypa
     assert "http://127.0.0.1:18080" in fallback
 
 
+def test_next_reviewer_step_reviews_when_dynamic_off(tmp_env, project):
+    from app.services.lab import lab_setup_finished
+
+    assert lab_setup_finished(project) is False
+    assert pipeline._next_reviewer_step(project, pending=1) == "review"
+    assert pipeline._next_reviewer_step(project, pending=0) == "review"
+
+
 def test_next_reviewer_step_reviews_before_lab_when_manual_prompt(tmp_env, project):
     from app.services.lab import lab_setup_finished
 
+    _enable_dynamic_verify(project)
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     assert lab_setup_finished(project) is False
@@ -732,6 +777,7 @@ def test_run_reviewer_lab_does_not_skip_docker_when_manual_prompt(tmp_env, proje
     from app.agent.loop import LoopResult
     from app.services.lab import lab_setup_finished
 
+    _enable_dynamic_verify(project)
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     with Session() as db:
@@ -759,6 +805,7 @@ def test_run_reviewer_lab_does_not_skip_docker_when_manual_prompt(tmp_env, proje
 def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monkeypatch):
     from app.services.lab import lab_setup_finished, save_env
 
+    _enable_dynamic_verify(project)
     save_env(
         project,
         {

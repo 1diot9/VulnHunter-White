@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zip 后，按 Recon、启发式 Worker、Reviewer 流程进行漏洞挖掘与验证；可选开启 Verifier，在 Reviewer 确认前台漏洞后用 FOFA 搜索同款目标并复测。
+VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zip 后，按 Recon、启发式 Worker、Reviewer 流程进行漏洞挖掘与验证；Reviewer 默认仅静态复核，可勾选动态验证；可选开启 Verifier，在 Reviewer 确认前台漏洞后用 FOFA 搜索同款目标并复测。
 
 - 后端：`backend/app`，FastAPI + SQLAlchemy + SQLite，负责项目导入、阶段调度、Agent 循环、工具注册、报告与漏洞数据。
 - 前端：`frontend`，Vite + React + TypeScript + Tailwind，用于审计项目、实时日志、阶段报告、漏洞列表和设置页。
@@ -55,11 +55,16 @@ pytest
 - SQLite schema 变更要更新 `models.py` 中的模型，并在 `_ensure_columns()` 里补充已有库的兼容列迁移。
 - 项目路径相关逻辑优先使用 `backend/app/services/paths.py`，不要散落拼接 `data/projects/{id}`。
 - 阶段调度、暂停/恢复/取消逻辑集中在 `backend/app/services/pipeline.py`；Agent 循环相关逻辑在 `backend/app/agent`。
-- 项目挖掘模式（赏金模式 `bounty` / 全量模式 `full`）在创建时确定，默认赏金模式；创建后仅当项目暂停才可更改。规则与闸门在 `backend/app/audit_mode.py` 和 `backend/app/prompts/modes/`。
+- 可重置 Worker 挖掘进度：`POST /api/projects/{id}/reset-progress`，仅暂停或终态（completed/cancelled/error）可用。清文件 `audited`/认领/轮次摘要与 Worker 检查点，保留漏洞产出、侦察文档、定权/跳过和环境；重置后保持暂停，便于换模型或改挖掘模式后再续跑。
+- 项目挖掘模式（赏金模式 `bounty` / 全量模式 `full`）在创建时确定，默认赏金模式；创建后仅当项目暂停或完成才可更改。已完成项目保持 `completed`，不可点暂停改成 `paused`。规则与闸门在 `backend/app/audit_mode.py` 和 `backend/app/prompts/modes/`。
+- 可选动态验证在创建时由用户决定，默认关闭（Reviewer 只做静态复核）；创建后可在项目配置中开启。开启后 Reviewer 会走独立环境轮搭建/复用 Docker 靶场，并用 HTTP PoC 或 debug MCP 动态复现；未开启时 ConfirmVuln 使用 `evidence_level=static_only`。
 - 可选 Verifier（互联网验证）在创建时由用户决定，默认关闭；创建后可在项目设置中开启。开启后，Reviewer 确认前台漏洞会排队用 FOFA 搜索同款目标并按报告复测，默认 10 个、任一成功即结束。一个审计项目只搜一次 FOFA，结果给全部漏洞共享。报告与漏洞详情会列出全部 FOFA 目标并标注成功 / 失败 / 未测；互联网复现成功须附上搜索语法。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞自动跳过、不做互联网复测。FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
+- 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
+- 设置页可手动清理 X 天前的 SSE 实时日志（`live-events` / `live.events.jsonl`），实现集中在 `live_log.purge_older_than`。
 - 历史漏洞只收录本项目公开洞，以及本仓库确有调用点、版本仍可能受影响、默认部署可能打到的组件条目；已修复 / 未使用 / 仅传递依赖写进索引 `note`，不要一条一文。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
-- 出站 HTTP、LLM、MCP 路径等配置通过 `backend/app/config.py` 的 `Settings` 管理，环境变量前缀为 `VULNHUNTER_`。
+- 出站 HTTP、Chat 代理优先用设置页；未保存过时可用 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY`。不要硬编码代理地址。
+- Debug MCP 放在 `tools/mcp/`，用相对仓库根目录的路径；可用 `VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON` 覆盖。
 - 不要在代码、测试、文档中写入真实 API Key、GitHub PAT、FOFA Key、CEYE token 或代理凭据。
 
 ## 前端约定

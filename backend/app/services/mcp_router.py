@@ -5,21 +5,31 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..config import settings
+from ..config import resolve_repo_path, settings
 from .lab import debug_ports_for_runtime, load_env
+
+
+def mcp_root(kind: str) -> Path:
+    if kind == "java":
+        return resolve_repo_path(settings.mcp_java, fallback="tools/mcp/java-debug")
+    if kind == "node":
+        return resolve_repo_path(settings.mcp_node, fallback="tools/mcp/node-debug")
+    if kind == "python":
+        return resolve_repo_path(settings.mcp_python, fallback="tools/mcp/python-debug")
+    raise ValueError(f"unknown mcp kind: {kind}")
 
 
 def resolve_mcp_command(runtime_mcp: str | None) -> dict[str, Any] | None:
     if not runtime_mcp:
         return None
     if runtime_mcp == "java":
-        root = Path(settings.mcp_java)
+        root = mcp_root("java")
         jar = root / "target" / "java-debug-mcp-0.1.0-SNAPSHOT-all.jar"
         if jar.exists():
             return {"transport": "stdio", "command": "java", "args": ["-jar", str(jar)], "cwd": str(root)}
-        return {"transport": "stdio", "hint": "build java-debug-mcp jar first", "cwd": str(root)}
+        return {"transport": "stdio", "hint": "build java-debug-mcp jar first (mvn package)", "cwd": str(root)}
     if runtime_mcp == "node":
-        root = Path(settings.mcp_node)
+        root = mcp_root("node")
         return {
             "transport": "stdio",
             "command": "npx",
@@ -27,7 +37,7 @@ def resolve_mcp_command(runtime_mcp: str | None) -> dict[str, Any] | None:
             "cwd": str(root),
         }
     if runtime_mcp == "python":
-        root = Path(settings.mcp_python)
+        root = mcp_root("python")
         server = root / "server.py"
         return {
             "transport": "stdio",

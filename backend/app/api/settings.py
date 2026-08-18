@@ -5,7 +5,17 @@ import json
 from fastapi import APIRouter
 
 from ..models import AppSettings, SessionLocal
-from ..schemas import FofaProbeIn, FofaTestOut, LlmModelListOut, LlmProbeIn, LlmTestOut, SettingsOut, SettingsUpdate
+from ..schemas import (
+    FofaProbeIn,
+    FofaTestOut,
+    LiveLogPurgeIn,
+    LiveLogPurgeOut,
+    LlmModelListOut,
+    LlmProbeIn,
+    LlmTestOut,
+    SettingsOut,
+    SettingsUpdate,
+)
 from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.llm_settings import (
@@ -45,10 +55,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
                 {k: v.model_dump() for k, v in body.llm_roles.items()},
                 ensure_ascii=False,
             )
-        if body.worker_concurrency is not None:
-            row.worker_concurrency = max(1, int(body.worker_concurrency))
-        if body.fix_concurrency is not None:
-            row.fix_concurrency = max(1, int(body.fix_concurrency))
+        if body.llm_thread_limit is not None:
+            row.llm_thread_limit = max(1, int(body.llm_thread_limit))
         if body.github_pat is not None:
             row.github_pat = body.github_pat
         if body.fofa_key is not None:
@@ -63,9 +71,17 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.default_api_key = body.default_api_key
         if body.context_window is not None:
             row.context_window = int(body.context_window)
+        if body.http_proxy is not None:
+            row.http_proxy = (body.http_proxy or "").strip()
+        if body.chat_proxy is not None:
+            row.chat_proxy = (body.chat_proxy or "").strip()
         db.commit()
         db.refresh(row)
-        return settings_out_from_row(row)
+        out = settings_out_from_row(row)
+    from ..services.llm_thread import llm_thread_limiter
+
+    llm_thread_limiter.refresh_limit(out.llm_thread_limit)
+    return out
 
 
 @router.post("/llm/models", response_model=LlmModelListOut)
@@ -81,3 +97,11 @@ def probe_llm_test(body: LlmProbeIn) -> LlmTestOut:
 @router.post("/fofa/test", response_model=FofaTestOut)
 def probe_fofa_test(body: FofaProbeIn) -> FofaTestOut:
     return test_fofa_connectivity(body)
+
+
+@router.post("/logs/purge", response_model=LiveLogPurgeOut)
+def purge_live_logs(body: LiveLogPurgeIn) -> LiveLogPurgeOut:
+    from ..services.live_log import live_log
+
+    stats = live_log.purge_older_than(body.older_than_days)
+    return LiveLogPurgeOut(ok=True, **stats)

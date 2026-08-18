@@ -8,7 +8,7 @@ from app.agent.loop import (
     _reasoning_text,
 )
 from app.config import settings
-from app.services.http_client import chat_http_client, chat_http_timeout
+from app.services.http_client import chat_http_client, chat_http_timeout, http_client, proxy_url
 from app.services.llm_gate import LlmRequestGate
 
 
@@ -81,20 +81,35 @@ def _has_proxy_transport(client) -> bool:
     return any(transport is not None for transport in client._mounts.values())
 
 
-def test_chat_http_client_direct_ignores_env_and_tool_proxy(monkeypatch):
-    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:10808")
-    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:10808")
-    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:10808")
-    monkeypatch.setattr(settings, "http_proxy", "http://127.0.0.1:10808")
-    monkeypatch.setattr(settings, "https_proxy", "http://127.0.0.1:10808")
+def test_chat_http_client_direct_ignores_env_and_tool_proxy(tmp_env, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:19999")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:19999")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:19999")
+    monkeypatch.setattr(settings, "http_proxy", "http://127.0.0.1:19999")
+    monkeypatch.setattr(settings, "https_proxy", "http://127.0.0.1:19999")
     monkeypatch.setattr(settings, "chat_proxy", "")
     with chat_http_client() as client:
         assert client.trust_env is False
         assert not _has_proxy_transport(client)
 
 
-def test_chat_http_client_uses_explicit_chat_proxy(monkeypatch):
-    monkeypatch.setattr(settings, "chat_proxy", "http://127.0.0.1:9999")
+def test_http_client_uses_settings_page_proxy(tmp_env):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        assert proxy_url() is None
+        client.put("/api/settings", json={"http_proxy": "http://127.0.0.1:19999"})
+        assert proxy_url() == "http://127.0.0.1:19999"
+        with http_client() as hc:
+            assert _has_proxy_transport(hc)
+        client.put("/api/settings", json={"http_proxy": ""})
+        assert proxy_url() is None
+
+
+def test_chat_http_client_uses_explicit_chat_proxy(tmp_env, monkeypatch):
+    monkeypatch.setattr(settings, "chat_proxy", "http://127.0.0.1:19998")
     with chat_http_client() as client:
         assert client.trust_env is False
         assert _has_proxy_transport(client)

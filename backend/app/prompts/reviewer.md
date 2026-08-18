@@ -13,6 +13,7 @@
 - sink 实际只消费固定子路径+固定后缀（如 `{逃逸路径}/templates/{view}.html`），默认文件系统上没有可被读的敏感对象。
 - 审核员用 `docker exec`/MCP **写入** payload 之后才打出的「动态证据」。
 - 项目配置、示例、compose、`.env`、文档或首次安装向导里的默认账号/默认密码/弱口令；以及本审计 lab 创建的演示凭据。这是部署约定，不要当成认证绕过，也不要用 `low_impact` 入库。
+- 配置文件里用户可修改的密钥/口令（`application.yml`、`.env`、compose 等）。**源码常量中的硬编码密钥**（JWT/AES/DES secret、私钥）可以确认，不要当成默认密码误报。
 
 `docker exec`、日志、文件读取只许**观察**已有状态，禁止为了让洞成立而创造利用条件。
 
@@ -20,7 +21,7 @@
 
 ### 价值分层规则
 价值只分两类，不要再用仅公告 / 加固建议这种拆法：
-- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网等；影响强、复现清晰，值得单独提交 CVE。
+- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网、**存储型 XSS（持久化后在其他用户浏览器执行）**、**源码硬编码密钥（可伪造 token 或解密）**等；影响强、复现清晰，值得单独提交 CVE。
 - `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、影响达不到 CVE 强度的问题。
 
 另外一个是流程标记，不是价值分类：
@@ -42,8 +43,8 @@
    - 目标已有攻击面时须传入相同的 `attack_surface`（后台再传 `required_account`）声明一致。
    - 危害或鉴权不同才允许 Confirm 为 `duplicate_grouped` 并逐字复用已有键。
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
-3. 若 intended_behavior=true，或问题只是配置/文档里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。
-4. 动态验证阶梯（Docker 靶场已在**独立环境轮**搭建，本轮不要从头搭环境）：
+3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。源码硬编码密钥不是这条否决。
+4. 动态验证阶梯（**仅当项目开启动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`）：
    - env/env.json 中 runtime 为 java/nodejs/python 且调试端口可用 → 优先 debug MCP（若已接入）。
    - 否则 **普通动态**：对 target_url 发请求 / 运行 poc.py，结合 docker exec、日志、文件、进程**观察**冲击。
    - 原 PoC 无有害差异 → 不要标 `evidence_level=dynamic` 确认；按否决项误报或打回。

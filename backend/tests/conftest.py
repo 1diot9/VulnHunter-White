@@ -39,8 +39,10 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.asset_proof as asset_proof
     import app.services.ghsa_service as ghsa_service
     import app.services.fofa as fofa_service
+    import app.services.http_client as http_client_mod
     import app.services.ingest as ingest
     import app.services.llm_settings as llm_settings
+    import app.services.old_vuln_crawl as old_vuln_crawl
     import app.services.pipeline as pipeline
     import app.services.verifier as verifier_service
     import app.services.vuln_followup as vuln_followup
@@ -59,9 +61,11 @@ def tmp_env(tmp_path, monkeypatch):
         phase_verifier,
         ingest,
         llm_settings,
+        old_vuln_crawl,
         vuln_followup,
         ghsa_service,
         fofa_service,
+        http_client_mod,
         verifier_service,
         asset_proof,
         pipeline,

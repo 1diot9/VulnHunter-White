@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 
-from ..audit_mode import normalize_audit_mode, parse_audit_mode
+from ..audit_mode import AUDIT_MODE_EDITABLE_STATUSES, normalize_audit_mode, parse_audit_mode
 from ..models import AppSettings, FileWeight, PhaseRun, Project, SessionLocal, TokenUsage, ToolLog, Vuln
 from ..schemas import (
     EventsChunk,
@@ -21,6 +21,7 @@ from ..schemas import (
     ProjectUpdate,
     normalize_manual_lab_prompt,
 )
+from ..services.ingest import indexed_weight_exts
 from ..services.lab import lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
@@ -29,6 +30,7 @@ from ..services.pipeline import (
     control_phase,
     get_phase_states,
     note_audit_mode_changed,
+    note_dynamic_verify_changed,
     note_verifier_enabled,
     request_cancel,
     request_pause,
@@ -36,6 +38,7 @@ from ..services.pipeline import (
     request_phase_restart,
     request_phase_resume,
     request_resume,
+    request_worker_progress_reset,
     start_audit,
     start_ingest_and_audit,
 )
@@ -144,8 +147,15 @@ def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
     return summaries
 
 
-def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> ProjectOut:
+def _project_out(
+    db,
+    p: Project,
+    summary: dict[str, int] | None = None,
+    weight_exts: list | None = None,
+) -> ProjectOut:
     summary = summary or _project_summaries(db, [p.id]).get(p.id, _empty_project_summary())
+    if weight_exts is None:
+        weight_exts = indexed_weight_exts(db, [p.id]).get(p.id, [])
     return ProjectOut(
         id=p.id,
         name=p.name,
@@ -159,6 +169,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         manual_lab=bool(p.manual_lab),
         manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
         verifier_enabled=bool(p.verifier_enabled),
+        dynamic_verify_enabled=bool(p.dynamic_verify_enabled),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -170,6 +181,7 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
         files_weighted=summary["files_weighted"],
         files_skipped=summary["files_skipped"],
         files_audited=summary["files_audited"],
+        weight_exts=weight_exts,
         worker_rounds=summary["worker_rounds"],
         tokens_input=summary["tokens_input"],
         tokens_output=summary["tokens_output"],
@@ -186,8 +198,10 @@ def _project_out(db, p: Project, summary: dict[str, int] | None = None) -> Proje
 def list_projects() -> list[ProjectOut]:
     with SessionLocal() as db:
         rows = db.query(Project).order_by(Project.id.desc()).all()
-        summaries = _project_summaries(db, [p.id for p in rows])
-        return [_project_out(db, p, summaries.get(p.id)) for p in rows]
+        ids = [p.id for p in rows]
+        summaries = _project_summaries(db, ids)
+        exts = indexed_weight_exts(db, ids)
+        return [_project_out(db, p, summaries.get(p.id), exts.get(p.id, [])) for p in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -222,6 +236,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             manual_lab=bool(body.manual_lab),
             manual_lab_prompt=manual_lab_prompt or None,
             verifier_enabled=bool(body.verifier_enabled),
+            dynamic_verify_enabled=bool(body.dynamic_verify_enabled),
         )
         db.add(p)
         db.commit()
@@ -243,6 +258,7 @@ async def create_project_zip(
     manual_lab: bool = Form(False),
     manual_lab_prompt: str = Form(""),
     verifier_enabled: bool = Form(False),
+    dynamic_verify_enabled: bool = Form(False),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
@@ -260,6 +276,7 @@ async def create_project_zip(
             manual_lab=bool(manual_lab),
             manual_lab_prompt=prompt or None,
             verifier_enabled=bool(verifier_enabled),
+            dynamic_verify_enabled=bool(dynamic_verify_enabled),
         )
         db.add(p)
         db.commit()
@@ -282,6 +299,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.manual_lab is None
         and body.manual_lab_prompt is None
         and body.verifier_enabled is None
+        and body.dynamic_verify_enabled is None
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
@@ -299,9 +317,10 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             raise HTTPException(404, "项目不存在")
         old_mode = normalize_audit_mode(p.audit_mode)
         old_verifier = bool(p.verifier_enabled)
+        old_dynamic = bool(p.dynamic_verify_enabled)
         if mode is not None:
-            if p.status != "paused":
-                raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
+            if p.status not in AUDIT_MODE_EDITABLE_STATUSES:
+                raise HTTPException(400, "挖掘模式仅在项目暂停或完成后可更改")
             p.audit_mode = mode
         if prompt is not None:
             p.manual_lab_prompt = prompt or None
@@ -311,6 +330,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.manual_lab = bool(body.manual_lab)
         if body.verifier_enabled is not None:
             p.verifier_enabled = bool(body.verifier_enabled)
+        if body.dynamic_verify_enabled is not None:
+            p.dynamic_verify_enabled = bool(body.dynamic_verify_enabled)
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
@@ -332,6 +353,14 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 restarted = True
         elif body.verifier_enabled is False and old_verifier:
             live_log.system(project_id, "已关闭 Verifier，不再对新的前台漏洞做互联网复测")
+        if body.dynamic_verify_enabled is True and not old_dynamic:
+            live_log.system(project_id, "已开启动态验证，后续审核将搭建靶场并做动态复现")
+            note_dynamic_verify_changed(project_id, enabled=True)
+            if p.status not in ("completed", "cancelled", "error", "pending", "ingesting"):
+                restarted = True
+        elif body.dynamic_verify_enabled is False and old_dynamic:
+            live_log.system(project_id, "已关闭动态验证，后续审核仅静态复核")
+            note_dynamic_verify_changed(project_id, enabled=False)
     if mode is not None and old_mode != mode:
         note_audit_mode_changed(project_id, mode)
     if sync_notes:
@@ -349,8 +378,18 @@ def _phase_state_fields(project_id: int) -> dict:
     return {"phase_states": states.get("phases") or {}, "project_paused": bool(states.get("project_paused"))}
 
 
+def _ensure_can_pause(project_id: int) -> None:
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "项目不存在")
+        if p.status == "completed":
+            raise HTTPException(400, "已完成项目不可暂停")
+
+
 @router.post("/{project_id}/pause")
 def pause_project(project_id: int) -> dict:
+    _ensure_can_pause(project_id)
     request_pause(project_id)
     return {"ok": True, **get_phase_states(project_id)}
 
@@ -375,9 +414,7 @@ def pause_project_phase(project_id: int, phase: str) -> dict:
         control_phase(phase)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    with SessionLocal() as db:
-        if not db.get(Project, project_id):
-            raise HTTPException(404, "项目不存在")
+    _ensure_can_pause(project_id)
     return {"ok": True, **request_phase_pause(project_id, phase)}
 
 
@@ -403,6 +440,22 @@ def restart_project_phase(project_id: int, phase: str) -> dict:
         if not db.get(Project, project_id):
             raise HTTPException(404, "项目不存在")
     return {"ok": True, **request_phase_restart(project_id, phase)}
+
+
+@router.post("/{project_id}/reset-progress", response_model=ProjectOut)
+def reset_project_progress(project_id: int) -> ProjectOut:
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    try:
+        request_worker_progress_reset(project_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "项目不存在")
+        return _project_out(db, p)
 
 
 @router.post("/{project_id}/cancel")

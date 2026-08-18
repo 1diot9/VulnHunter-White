@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Project } from '../api'
+import { DynamicVerifyToggle } from './DynamicVerifyToggle'
 import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
 import { VerifierToggle } from './VerifierToggle'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ export function ProjectSettingsButton({
 }) {
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
+  const [dynamicVerify, setDynamicVerify] = useState(Boolean(project.dynamic_verify_enabled))
   const [verifier, setVerifier] = useState(Boolean(project.verifier_enabled))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -30,9 +32,10 @@ export function ProjectSettingsButton({
   useEffect(() => {
     if (!open) return
     setPrompt(project.manual_lab_prompt || '')
+    setDynamicVerify(Boolean(project.dynamic_verify_enabled))
     setVerifier(Boolean(project.verifier_enabled))
     setError('')
-  }, [open, project.manual_lab_prompt, project.verifier_enabled])
+  }, [open, project.manual_lab_prompt, project.dynamic_verify_enabled, project.verifier_enabled])
 
   const close = () => {
     if (saving) return
@@ -48,6 +51,7 @@ export function ProjectSettingsButton({
         manual_lab: Boolean(text),
         manual_lab_prompt: text,
         verifier_enabled: verifier,
+        dynamic_verify_enabled: dynamicVerify,
       })
       onSaved(next)
       setOpen(false)
@@ -74,23 +78,26 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改。人工靶场说明保存后对下一轮审核生效；互联网验证立即按新开关排队。
+              审计运行中也可修改。人工靶场说明保存后对下一轮审核生效；动态验证与互联网验证立即按新开关调度。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="manual-lab-prompt" className="font-medium">
-                人工靶场描述
-              </Label>
-              <p className="text-xs leading-relaxed text-muted-foreground">{MANUAL_LAB_HINT}</p>
-              <Textarea
-                id="manual-lab-prompt"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder={MANUAL_LAB_PLACEHOLDER}
-                rows={5}
-              />
-            </div>
+            <DynamicVerifyToggle enabled={dynamicVerify} onEnabledChange={setDynamicVerify} />
+            {dynamicVerify ? (
+              <div className="space-y-2">
+                <Label htmlFor="manual-lab-prompt" className="font-medium">
+                  人工靶场描述
+                </Label>
+                <p className="text-xs leading-relaxed text-muted-foreground">{MANUAL_LAB_HINT}</p>
+                <Textarea
+                  id="manual-lab-prompt"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder={MANUAL_LAB_PLACEHOLDER}
+                  rows={5}
+                />
+              </div>
+            ) : null}
             <VerifierToggle enabled={verifier} onEnabledChange={setVerifier} />
             {error ? <p className="text-sm text-red-300">{error}</p> : null}
           </div>

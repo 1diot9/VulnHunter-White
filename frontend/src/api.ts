@@ -1,3 +1,9 @@
+export type WeightExt = {
+  ext: string
+  agent_added: boolean
+  files: number
+}
+
 export type Project = {
   id: number
   name: string
@@ -11,6 +17,7 @@ export type Project = {
   manual_lab: boolean
   manual_lab_prompt: string
   verifier_enabled: boolean
+  dynamic_verify_enabled: boolean
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -22,6 +29,7 @@ export type Project = {
   files_weighted: number
   files_skipped: number
   files_audited: number
+  weight_exts?: WeightExt[]
   worker_rounds: number
   tokens_input: number
   tokens_output: number
@@ -205,8 +213,7 @@ export type Settings = {
     api_key_set: boolean
   }>
   llm_roles: Record<string, { provider_id: string; model: string; reasoning_effort: string }>
-  worker_concurrency: number
-  fix_concurrency: number
+  llm_thread_limit: number
   github_pat_set: boolean
   fofa_key_set: boolean
   fofa_base_url: string
@@ -214,6 +221,8 @@ export type Settings = {
   default_base_url: string
   default_api_key_set: boolean
   context_window: number
+  http_proxy: string
+  chat_proxy: string
 }
 
 export type LlmProbeBody = {
@@ -236,6 +245,14 @@ export type LlmTest = {
   latency_ms: number | null
   error: string | null
   reply: string | null
+}
+
+export type LiveLogPurge = {
+  ok: boolean
+  older_than_days: number
+  projects: number
+  files: number
+  bytes: number
 }
 
 export type FofaProbeBody = {
@@ -270,7 +287,12 @@ export const api = {
     source_url: string,
     name = '',
     audit_mode: 'bounty' | 'full' = 'bounty',
-    opts: { manual_lab?: boolean; manual_lab_prompt?: string; verifier_enabled?: boolean } = {},
+    opts: {
+      manual_lab?: boolean
+      manual_lab_prompt?: string
+      verifier_enabled?: boolean
+      dynamic_verify_enabled?: boolean
+    } = {},
   ) =>
     request<Project>('/api/projects', {
       method: 'POST',
@@ -283,13 +305,19 @@ export const api = {
         manual_lab: Boolean(opts.manual_lab),
         manual_lab_prompt: opts.manual_lab_prompt || '',
         verifier_enabled: Boolean(opts.verifier_enabled),
+        dynamic_verify_enabled: Boolean(opts.dynamic_verify_enabled),
       }),
     }),
   uploadZip: async (
     file: File,
     name = '',
     audit_mode: 'bounty' | 'full' = 'bounty',
-    opts: { manual_lab?: boolean; manual_lab_prompt?: string; verifier_enabled?: boolean } = {},
+    opts: {
+      manual_lab?: boolean
+      manual_lab_prompt?: string
+      verifier_enabled?: boolean
+      dynamic_verify_enabled?: boolean
+    } = {},
   ) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -298,6 +326,7 @@ export const api = {
     fd.append('manual_lab', opts.manual_lab ? 'true' : 'false')
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
+    fd.append('dynamic_verify_enabled', opts.dynamic_verify_enabled ? 'true' : 'false')
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
   updateProject: (
@@ -307,6 +336,7 @@ export const api = {
       manual_lab?: boolean
       manual_lab_prompt?: string | null
       verifier_enabled?: boolean
+      dynamic_verify_enabled?: boolean
     },
   ) =>
     request<Project>(`/api/projects/${id}`, {
@@ -322,6 +352,8 @@ export const api = {
     request(`/api/projects/${id}/phases/${phase}/resume`, { method: 'POST' }),
   restartPhase: (id: number, phase: string) =>
     request(`/api/projects/${id}/phases/${phase}/restart`, { method: 'POST' }),
+  resetProgress: (id: number) =>
+    request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST' }),
   cancel: (id: number) => request(`/api/projects/${id}/cancel`, { method: 'POST' }),
   deleteProject: (id: number) => request(`/api/projects/${id}`, { method: 'DELETE' }),
   events: (id: number, query: EventsQuery = {}) => {
@@ -409,5 +441,11 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+  purgeLiveLogs: (olderThanDays: number) =>
+    request<LiveLogPurge>('/api/settings/logs/purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ older_than_days: olderThanDays }),
     }),
 }

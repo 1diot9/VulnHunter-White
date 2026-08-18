@@ -44,6 +44,8 @@ class AppSettings(Base):
     default_base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     default_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_window: Mapped[int] = mapped_column(Integer, default=128000)
+    http_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    chat_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
@@ -62,13 +64,15 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | recon | worker | reviewer | verifier | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
-    # bounty | full — set at create time; change only while paused
+    # bounty | full — set at create time; change only while paused or completed
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
     # 人工靶场：跳过 Docker 环境轮，审核时注入用户提供的环境说明
     manual_lab: Mapped[bool] = mapped_column(Boolean, default=False)
     manual_lab_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Verifier：Reviewer 确认前台洞后用 FOFA 搜同款目标并复测；默认关闭
     verifier_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Reviewer 动态验证（Docker 靶场 / HTTP PoC / debug MCP）；默认关闭，仅静态复核
+    dynamic_verify_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -269,6 +273,8 @@ def _ensure_columns() -> None:
             "llm_thread_limit": "INTEGER DEFAULT 6",
             "fofa_key": "TEXT",
             "fofa_base_url": "VARCHAR(1024)",
+            "http_proxy": "VARCHAR(1024)",
+            "chat_proxy": "VARCHAR(1024)",
         },
         "file_weights": {
             "claimed_at": "DATETIME",
@@ -281,6 +287,7 @@ def _ensure_columns() -> None:
             "manual_lab": "BOOLEAN DEFAULT 0",
             "manual_lab_prompt": "TEXT",
             "verifier_enabled": "BOOLEAN DEFAULT 0",
+            "dynamic_verify_enabled": "BOOLEAN DEFAULT 0",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

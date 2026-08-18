@@ -11,6 +11,15 @@ DB_PATH = DATA_DIR / "app.db"
 TEMPLATES_DIR = ROOT_DIR / "templates"
 
 
+def resolve_repo_path(value: str, *, fallback: str = "") -> Path:
+    """Resolve a repo-relative path, or keep an absolute override."""
+    raw = (value or "").strip() or (fallback or "").strip()
+    path = Path(raw)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    return path
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VULNHUNTER_", env_file=".env", extra="ignore")
 
@@ -54,15 +63,16 @@ class Settings(BaseSettings):
     round_report_inject_max_chars: int = 8 * 1024
     temperature: float = 0.2
 
-    # Debug MCP paths (optional)
-    mcp_java: str = r"D:\AI\MCP_Tools\Java-debug-mcp"
-    mcp_node: str = r"D:\AI\MCP_Tools\Node-debug-mcp-main"
-    mcp_python: str = r"D:\AI\MCP_Tools\Python-debug-mcp-main"
+    # Debug MCP directories (relative to repo root; env can override)
+    mcp_java: str = "tools/mcp/java-debug"
+    mcp_node: str = "tools/mcp/node-debug"
+    mcp_python: str = "tools/mcp/python-debug"
 
-    # Outbound HTTP proxy for tools (WebSearch / GHSA). Chat ignores these.
-    http_proxy: str = "http://127.0.0.1:10808"
-    https_proxy: str = "http://127.0.0.1:10808"
-    # Chat Completions: empty = direct (no env HTTPS_PROXY / no http_proxy above)
+    # Outbound HTTP for tools (WebSearch / GHSA / FOFA). Empty = direct.
+    # Prefer Settings page; these env values are fallbacks when DB has never saved a proxy.
+    http_proxy: str = ""
+    https_proxy: str = ""
+    # Chat Completions: empty = direct (does not use the tool proxy).
     chat_proxy: str = ""
 
     # FOFA (Verifier). Key can also be saved in Settings; env is fallback.
