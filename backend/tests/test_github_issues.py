@@ -97,6 +97,7 @@ def test_issue_keys_from_text_and_queries():
     assert "HALO-DEV/HALO#7" in keys
     queries = issue_search_queries("halo-dev/halo", "2023-01-01")
     assert any("label:security" in q for q in queries)
+    assert any("Security" in q and "in:title" in q for q in queries)
     assert all("repo:halo-dev/halo" in q for q in queries)
     assert all("is:open" in q for q in queries)
 
@@ -142,6 +143,14 @@ def test_crawl_github_issues_filters_policy_and_dedupes(monkeypatch):
             "state": "closed",
             "labels": [{"name": "security"}],
         },
+        {
+            "number": 12,
+            "title": "Security: session fixation on login",
+            "body": "please look at login cookies",
+            "html_url": "https://github.com/halo-dev/halo/issues/12",
+            "state": "open",
+            "labels": [],
+        },
     ]
 
     monkeypatch.setattr("app.services.github_issues.http_client", lambda **kwargs: DummyCM())
@@ -151,6 +160,6 @@ def test_crawl_github_issues_filters_policy_and_dedupes(monkeypatch):
     )
     recs, meta = crawl_github_issues("halo-dev/halo")
     assert meta["repo"] == "halo-dev/halo"
-    assert [r["number"] for r in recs] == [10]
+    assert [r["number"] for r in recs] == [12, 10]
     assert recs[0]["source"] == "github_issue"
     assert recs[0]["fix_status"] == "unpatched"

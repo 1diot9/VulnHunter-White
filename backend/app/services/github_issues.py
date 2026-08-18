@@ -44,7 +44,7 @@ _POLICY_TITLE_RE = re.compile(
 _SIGNAL_RE = re.compile(
     r"(CVE-\d{4}-\d+|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}|"
     r"\bRCE\b|remote code|code execution|SQLi|sql injection|SSRF|XSS|"
-    r"path traversal|LFI|RFI|deserialization|unauth|bypass|"
+    r"path traversal|LFI|RFI|deserialization|unauth|bypass|\bsecurity\b|"
     r"漏洞|未授权|越权|命令执行|任意文件|反序列化)",
     re.I,
 )
@@ -131,7 +131,7 @@ def issue_search_queries(repo: str, since: str) -> list[str]:
         f"repo:{repo} is:issue is:open (CVE OR GHSA) {created}",
         (
             f"repo:{repo} is:issue is:open in:title "
-            f'(RCE OR SQLi OR SSRF OR XSS OR LFI OR unauth OR advisory OR 漏洞 OR 未授权 OR 越权 OR "code execution") '
+            f'(RCE OR SQLi OR SSRF OR XSS OR LFI OR unauth OR advisory OR Security OR 漏洞 OR 未授权 OR 越权 OR "code execution") '
             f"{created}"
         ),
         f"repo:{repo} is:issue is:open (label:security OR label:vulnerability OR label:cve) {created}",
