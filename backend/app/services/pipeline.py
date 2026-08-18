@@ -35,7 +35,6 @@ from ..prompts import load_prompt, render_prompt
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
     debug_ports_for_runtime,
-    finish_manual_lab,
     lab_ready,
     lab_round_complete,
     lab_setup_finished,
@@ -51,11 +50,13 @@ from ..services.vuln_followup import archive_reviewer_checkpoint
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
     apply_recon_done,
+    mark_old_vuln_search_complete,
     paths_fully_marked,
     pick_unmarked_batch,
     recon_gates_met,
     recon_gates_status,
     recon_map_ready,
+    recon_old_vuln_llm_ready,
     recon_old_vulns_ready,
     recon_source_ext_ready,
 )
@@ -88,7 +89,7 @@ REVIEWER_POOL = 1
 
 CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
-    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
+    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "worker": ("worker", "fix"),
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
@@ -151,6 +152,8 @@ def control_phase(phase: str) -> str:
         "recon_mark",
         "recon-old-vuln",
         "recon_old_vuln",
+        "recon-old-vuln-ghsa",
+        "recon_old_vuln_ghsa",
         "recon-map",
         "recon-source-ext",
         "recon_source_ext",
@@ -815,7 +818,8 @@ def _read_manual_lab(project_id: int) -> tuple[bool, str]:
         proj = db.get(Project, project_id)
         if not proj:
             return False, ""
-        return bool(proj.manual_lab), str(proj.manual_lab_prompt or "").strip()
+        prompt = str(proj.manual_lab_prompt or "").strip()
+        return bool(proj.manual_lab) or bool(prompt), prompt
 
 
 def _read_verifier_enabled(project_id: int) -> bool:
@@ -832,34 +836,54 @@ _ASSET_PROOF_LAB_HINT = (
 )
 
 
-def _reviewer_lab_note(project_id: int) -> str:
-    enabled, prompt = _read_manual_lab(project_id)
-    if enabled:
-        if prompt:
-            return (
-                "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
-                "请按以下用户提供的环境说明访问并做动态验证（地址、账号、路径以用户说明为准）：\n"
-                f"{prompt}\n"
-                f"{_ASSET_PROOF_LAB_HINT}"
-            )
-        return (
-            "本项目使用人工靶场，不要搭建或复用 Docker 靶场。\n"
-            "用户尚未填写漏洞环境地址/说明。无法动态验证时用 evidence_level=static_only 或误报，"
-            "不要自行 docker 搭建。"
-        )
+def _docker_lab_note(project_id: int) -> str | None:
     env = load_env(project_id)
-    if lab_ready(env) or env.get("accepted"):
-        rec = recreate_lab(project_id)
-        dbg = debug_ports_for_runtime(load_env(project_id) or env)
-        return (
-            f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}\n"
-            f"{_ASSET_PROOF_LAB_HINT}"
-        )
+    if not (lab_ready(env) or env.get("accepted")):
+        return None
+    rec = recreate_lab(project_id)
+    dbg = debug_ports_for_runtime(load_env(project_id) or env)
+    return f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}"
+
+
+def _reviewer_lab_note(project_id: int) -> str:
+    _enabled, prompt = _read_manual_lab(project_id)
+    docker_note = _docker_lab_note(project_id)
+    if prompt:
+        parts = [
+            "优先使用用户提供的人工靶场（地址、账号、路径以用户说明为准）：",
+            prompt,
+        ]
+        if docker_note:
+            parts.append("若人工环境不可达，回退到已有 Docker 靶场：")
+            parts.append(docker_note)
+        else:
+            parts.append(
+                "Docker 靶场尚未就绪。若人工环境不可达，无法动态验证时用 evidence_level=static_only 或误报。"
+            )
+        parts.append(_ASSET_PROOF_LAB_HINT)
+        return "\n".join(parts)
+    if docker_note:
+        return f"{docker_note}\n{_ASSET_PROOF_LAB_HINT}"
     return (
         "动态环境搭建轮已结束；靶场未就绪，见 docs/lab.md。"
         "本轮只审核漏洞，不要再搭建 Docker 靶场。"
         "环境起不来时用 evidence_level=static_only 或误报。"
     )
+
+
+def _next_reviewer_step(project_id: int, pending: int) -> str:
+    """Prefer reviewing with a manual lab note; otherwise finish Docker lab first."""
+    lab_pending = not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
+    review_work = (
+        pending > 0
+        or bool(list_resumable_runs(project_id, "reviewer"))
+        or _should_skip_checkpoint(project_id, "reviewer")
+    )
+    if review_work and (_read_manual_lab(project_id)[1] or not lab_pending):
+        return "review"
+    if lab_pending:
+        return "lab"
+    return "review"
 
 
 def _audit_mode_vars(project_id: int) -> dict[str, str]:
@@ -1224,7 +1248,7 @@ def _run_reviewer_loop(project_id: int) -> None:
             with _lock:
                 _reviewer_inflight[project_id] = True
             try:
-                if not lab_setup_finished(project_id) or list_resumable_runs(project_id, "reviewer-lab"):
+                if _next_reviewer_step(project_id, pending) == "lab":
                     _run_reviewer_lab(project_id)
                 else:
                     _run_reviewer_once(project_id)
@@ -1496,6 +1520,7 @@ def _run_recon(project_id: int) -> None:
             return
         if recon_old_vulns_ready(project_id):
             _finish_resumable_phase(project_id, "recon-old-vuln")
+            _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
         elif not _run_recon_old_vulns(project_id, cancel):
             return
         if cancel.is_set():
@@ -1535,21 +1560,70 @@ def _run_recon_map(project_id: int, cancel: threading.Event) -> bool:
 
 
 def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
-    return _run_recon_gated_session(
+    if recon_old_vuln_llm_ready(project_id):
+        _finish_resumable_phase(project_id, "recon-old-vuln")
+    elif not _run_recon_gated_session(
         project_id,
         cancel,
         phase="recon-old-vuln",
         role="recon_old_vuln",
         prompt_name="recon-old-vuln.md",
-        ready=lambda: recon_old_vulns_ready(project_id),
+        ready=lambda: recon_old_vuln_llm_ready(project_id),
         initial_doc="recon-old-vuln.md",
         retry_loop_doc="recon-old-vuln-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-retry-timeout.md",
         retry_other_doc="recon-old-vuln-retry-other.md",
-        done_log="历史漏洞检索已结束，进入盖章轮",
-        fail_error="recon 历史漏洞会话未在重试上限内完成",
-        fail_status="Recon 历史漏洞未完成，将自动再拉起",
-        fail_log="Recon 历史漏洞会话重试用尽，等待调度器再拉起",
+        done_log="历史漏洞 LLM 检索已结束，进入 GHSA 爬虫补漏",
+        fail_error="recon 历史漏洞 LLM 检索未在重试上限内完成",
+        fail_status="Recon 历史漏洞 LLM 检索未完成，将自动再拉起",
+        fail_log="Recon 历史漏洞 LLM 检索重试用尽，等待调度器再拉起",
+        extra_label="历史漏洞",
+    ):
+        return False
+    if cancel.is_set():
+        return False
+    if recon_old_vulns_ready(project_id):
+        _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
+        return True
+    return _run_recon_old_vuln_ghsa(project_id, cancel)
+
+
+def _run_recon_old_vuln_ghsa(project_id: int, cancel: threading.Event) -> bool:
+    from .old_vuln_crawl import run_old_vuln_ghsa_crawl
+
+    result = run_old_vuln_ghsa_crawl(project_id)
+    if cancel.is_set():
+        return False
+    if result.ok and result.new_count == 0:
+        mark_old_vuln_search_complete(
+            project_id,
+            note="GHSA 爬虫无新候选，沿用 LLM 检索结果",
+        )
+        live_log.system(
+            project_id,
+            "GHSA 无新候选，历史漏洞检索已结束，进入盖章轮",
+            phase="recon-old-vuln-ghsa",
+            role="recon_old_vuln_ghsa",
+        )
+        return True
+    ghsa_error = f"；爬虫警告：{result.error}" if result.error else ""
+    return _run_recon_gated_session(
+        project_id,
+        cancel,
+        phase="recon-old-vuln-ghsa",
+        role="recon_old_vuln_ghsa",
+        prompt_name="recon-old-vuln-ghsa.md",
+        ready=lambda: recon_old_vulns_ready(project_id),
+        initial_doc="recon-old-vuln-ghsa.md",
+        retry_loop_doc="recon-old-vuln-ghsa-retry-loop.md",
+        retry_timeout_doc="recon-old-vuln-ghsa-retry-timeout.md",
+        retry_other_doc="recon-old-vuln-ghsa-retry-other.md",
+        done_log="历史漏洞 GHSA 补漏已结束，进入盖章轮",
+        fail_error="recon 历史漏洞 GHSA 补漏未在重试上限内完成",
+        fail_status="Recon 历史漏洞 GHSA 补漏未完成，将自动再拉起",
+        fail_log="Recon 历史漏洞 GHSA 补漏重试用尽，等待调度器再拉起",
+        extra_label="历史漏洞/GHSA补漏",
+        prompt_vars={"ghsa_count": result.new_count, "ghsa_error": ghsa_error},
     )
 
 
@@ -1588,9 +1662,12 @@ def _run_recon_gated_session(
     fail_error: str,
     fail_status: str,
     fail_log: str,
+    extra_label: str | None = None,
+    prompt_vars: dict[str, Any] | None = None,
 ) -> bool:
     system = load_prompt(prompt_name)
-    user = _prompt_with_summary(phase, project_id, _initial_prompt(initial_doc, project_id=project_id))
+    vars_ = {"project_id": project_id, **(prompt_vars or {})}
+    user = _prompt_with_summary(phase, project_id, _initial_prompt(initial_doc, **vars_))
     cp = _adopt_resumable(project_id, phase)
     run_id = cp.phase_run_id if cp else _new_phase_run(project_id, phase, role)
     resumes = 0
@@ -1616,9 +1693,11 @@ def _run_recon_gated_session(
                 used_checkpoint = True
             else:
                 _consume_force_new(project_id, "recon")
-                extra = {
+                extra = extra_label or {
                     "recon-old-vuln": "历史漏洞",
                     "recon_old_vuln": "历史漏洞",
+                    "recon-old-vuln-ghsa": "历史漏洞/GHSA补漏",
+                    "recon_old_vuln_ghsa": "历史漏洞/GHSA补漏",
                     "recon-source-ext": "扩展名",
                     "recon_source_ext": "扩展名",
                 }.get(phase, "代码地图/鉴权")
@@ -1655,7 +1734,7 @@ def _run_recon_gated_session(
                 return True
             resumes += 1
             if result.loop_aborted:
-                user = _prompt_with_summary(phase, project_id, _initial_prompt(retry_loop_doc, project_id=project_id))
+                user = _prompt_with_summary(phase, project_id, _initial_prompt(retry_loop_doc, **vars_))
                 live_log.system(
                     project_id,
                     f"Recon {phase} 新开重试 {resumes}/{settings.recon_max_resumes}",
@@ -1664,7 +1743,7 @@ def _run_recon_gated_session(
                 )
             elif result.timed_out:
                 user = _prompt_with_summary(
-                    phase, project_id, _initial_prompt(retry_timeout_doc, project_id=project_id)
+                    phase, project_id, _initial_prompt(retry_timeout_doc, **vars_)
                 )
             else:
                 user = _prompt_with_summary(
@@ -1672,9 +1751,9 @@ def _run_recon_gated_session(
                     project_id,
                     _initial_prompt(
                         retry_other_doc,
-                        project_id=project_id,
                         stop_reason=result.stop_reason,
                         error=result.error,
+                        **vars_,
                     ),
                 )
             if resumes > settings.recon_max_resumes:
@@ -2033,17 +2112,6 @@ def _run_reviewer_lab(project_id: int) -> None:
     try:
         if lab_setup_finished(project_id):
             _finish_resumable_phase(project_id, "reviewer-lab")
-            return
-        enabled, prompt = _read_manual_lab(project_id)
-        if enabled:
-            finish_manual_lab(project_id, prompt)
-            _finish_resumable_phase(project_id, "reviewer-lab")
-            live_log.system(
-                project_id,
-                "人工靶场已启用，跳过 Docker 环境搭建",
-                phase="reviewer-lab",
-                role="reviewer_lab",
-            )
             return
         env = load_env(project_id)
         if env.get("accepted"):

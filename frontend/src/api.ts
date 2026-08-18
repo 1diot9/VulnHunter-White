@@ -205,7 +205,8 @@ export type Settings = {
     api_key_set: boolean
   }>
   llm_roles: Record<string, { provider_id: string; model: string; reasoning_effort: string }>
-  llm_thread_limit: number
+  worker_concurrency: number
+  fix_concurrency: number
   github_pat_set: boolean
   fofa_key_set: boolean
   fofa_base_url: string
@@ -235,14 +236,6 @@ export type LlmTest = {
   latency_ms: number | null
   error: string | null
   reply: string | null
-}
-
-export type LiveLogPurge = {
-  ok: boolean
-  older_than_days: number
-  projects: number
-  files: number
-  bytes: number
 }
 
 export type FofaProbeBody = {
@@ -416,11 +409,5 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
-  purgeLiveLogs: (olderThanDays: number) =>
-    request<LiveLogPurge>('/api/settings/logs/purge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ older_than_days: olderThanDays }),
     }),
 }

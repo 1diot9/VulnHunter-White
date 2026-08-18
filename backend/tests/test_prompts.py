@@ -18,6 +18,10 @@ INITIAL_DOCS = (
     "recon-old-vuln-retry-loop.md",
     "recon-old-vuln-retry-timeout.md",
     "recon-old-vuln-retry-other.md",
+    "recon-old-vuln-ghsa.md",
+    "recon-old-vuln-ghsa-retry-loop.md",
+    "recon-old-vuln-ghsa-retry-timeout.md",
+    "recon-old-vuln-ghsa-retry-other.md",
     "recon-source-ext.md",
     "recon-source-ext-retry-loop.md",
     "recon-source-ext-retry-timeout.md",
@@ -315,7 +319,15 @@ def test_old_vuln_prompt_persist_is_not_completion():
     text = load_prompt("recon-old-vuln.md")
     assert "只落盘，不会结束本会话" in text
     assert "WriteOldVuln(done=true)" in text
+    assert "SearchGHSA" in text
+    assert "不要" in text
     assert "索引齐全后系统会结束" not in text
     initial = load_prompt("initial/recon-old-vuln.md")
     assert "落盘不会结束本会话" in initial
     assert "WriteOldVuln(done=true" in initial
+    assert "SearchGHSA" in initial
+    ghsa = load_prompt("recon-old-vuln-ghsa.md")
+    assert "ghsa_new.json" in ghsa
+    assert "WriteOldVuln(done=true" in ghsa
+    ghsa_initial = load_prompt("initial/recon-old-vuln-ghsa.md")
+    assert "ghsa_new.json" in ghsa_initial

@@ -10,7 +10,7 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln|-source-ext|-mark)?|worker|fix|reviewer(?:-lab)?|verifier)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fix|reviewer(?:-lab)?|verifier)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
@@ -21,6 +21,7 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "recon": ("recon", "侦察", "map"),
     "recon-source-ext": ("recon", "侦察", "source_ext"),
     "recon-old-vuln": ("recon", "侦察", "old_vulns"),
+    "recon-old-vuln-ghsa": ("recon", "侦察", "old_vulns"),
     "recon-mark": ("recon", "侦察", "mark"),
     "worker": ("worker", "挖掘", "mine"),
     "fix": ("worker", "挖掘", "fix"),

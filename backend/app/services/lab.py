@@ -80,15 +80,14 @@ def finish_manual_lab(project_id: int, prompt: str = "") -> dict[str, Any]:
 
 
 def sync_manual_lab_notes(project_id: int, prompt: str) -> dict[str, Any] | None:
-    """Refresh env/lab.md notes after the user edits the manual lab prompt."""
+    """Record the user-supplied lab note without replacing a Docker env."""
     env = dict(load_env(project_id) or {})
-    if not env:
+    env["manual_notes"] = prompt.strip()
+    if not env.get("status") and not env.get("setup_finished") and not prompt.strip():
         return None
-    env["lab_kind"] = "manual"
-    env["notes"] = prompt.strip() or "人工靶场：用户自行提供运行环境"
     save_env(project_id, env)
     if lab_setup_finished(project_id):
-        write_lab_doc(project_id, env, via="manual")
+        write_lab_doc(project_id, env, via=str(env.get("lab_kind") or "manual"))
     return env
 
 
@@ -150,6 +149,7 @@ def render_lab_doc(env: dict[str, Any], *, via: str | None = None) -> str:
     compose_hint = "docker compose -f env/docker-compose.yml up -d"
     via_line = f"- 启动来源：{via}" if via else "- 启动来源：未记录"
     notes = str(env.get("notes") or "").strip() or "未记录"
+    manual = str(env.get("manual_notes") or "").strip() or "未记录"
     port_lines = "\n".join(_port_lines(env))
     return f"""# 动态环境搭建
 
@@ -176,6 +176,9 @@ def render_lab_doc(env: dict[str, Any], *, via: str | None = None) -> str:
 
 ## 凭据
 {_json_block(env.get("credentials"))}
+
+## 人工靶场
+{manual}
 
 ## 备注
 {notes}

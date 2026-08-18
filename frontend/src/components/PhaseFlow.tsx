@@ -34,7 +34,7 @@ const PHASES = [
 const BRANCH_HINTS: Record<string, string> = {
   map: '梳理模块、HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。',
   source_ext: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。',
-  old_vulns: '收录本项目公开洞，以及仓库里确有调用点、默认部署仍可能打到的组件漏洞。',
+  old_vulns: '先 LLM 检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 爬虫补漏并核验。',
   mark: '按批次给源码定权或跳过，决定后续挖掘优先级。',
   lab: '用 Docker 搭建默认可复用靶场，供动态复现；不是制造利用条件。',
   manualLab: '使用用户提供的漏洞环境地址做动态验证，跳过 Docker 搭建。',
@@ -229,18 +229,29 @@ export default function PhaseFlow({
         {
           id: 'lab',
           node: (
-            <FlowTip hint={state.manualLab ? BRANCH_HINTS.manualLab : BRANCH_HINTS.lab} side="right">
+            <FlowTip hint={BRANCH_HINTS.lab} side="right">
               <Badge
                 variant={badgeVariant(
                   state.labSetupDone ? 'success' : phaseTone('reviewer', state) === 'info' ? 'info' : 'neutral',
                 )}
               >
-                {state.manualLab ? '人工靶场' : '环境搭建'}
-                {state.labSetupDone ? ' ✓' : ''}
+                环境搭建{state.labSetupDone ? ' ✓' : ''}
               </Badge>
             </FlowTip>
           ),
         },
+        ...(state.manualLab
+          ? [
+              {
+                id: 'manual-lab',
+                node: (
+                  <FlowTip hint={BRANCH_HINTS.manualLab} side="right">
+                    <Badge variant="info">人工靶场</Badge>
+                  </FlowTip>
+                ),
+              },
+            ]
+          : []),
       ]
     }
     return []

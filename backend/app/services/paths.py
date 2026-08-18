@@ -94,6 +94,16 @@ def old_vulns_dir(project_id: int) -> Path:
     return docs_dir(project_id) / "old-vulns"
 
 
+def old_vuln_crawl_spec_path(project_id: int) -> Path:
+    """LLM pass product slug / extra packages for the GHSA crawler."""
+    return workspace_dir(project_id) / "old-vuln-crawl.json"
+
+
+def ghsa_new_path(project_id: int) -> Path:
+    """Crawler output for the historical-vuln GHSA supplement pass."""
+    return workspace_dir(project_id) / "ghsa_new.json"
+
+
 def summaries_dir(project_id: int) -> Path:
     return docs_dir(project_id) / "summaries"
 

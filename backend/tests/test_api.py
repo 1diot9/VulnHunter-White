@@ -11,54 +11,18 @@ def test_health_and_settings(tmp_env):
         s = client.get("/api/settings")
         assert s.status_code == 200
         body = s.json()
+        assert "worker_concurrency" in body
+        assert "fix_concurrency" in body
         assert "llm_providers" in body
-        assert "worker_concurrency" not in body
-        assert "fix_concurrency" not in body
-        assert "llm_thread_limit" in body
-        assert body["llm_thread_limit"] == 6
 
         upd = client.put(
             "/api/settings",
-            json={"llm_thread_limit": 8, "default_model": "gpt-test"},
+            json={"worker_concurrency": 2, "fix_concurrency": 3, "default_model": "gpt-test"},
         )
         assert upd.status_code == 200
-        assert upd.json()["llm_thread_limit"] == 8
+        assert upd.json()["worker_concurrency"] == 2
+        assert upd.json()["fix_concurrency"] == 3
         assert upd.json()["default_model"] == "gpt-test"
-        from app.services.llm_thread import llm_thread_limiter
-
-        assert llm_thread_limiter.current_limit() == 8
-
-
-def test_purge_live_logs_api(tmp_env, project):
-    import os
-    import time
-
-    from app.main import app
-    from app.services.live_log import live_log
-    from app.services.paths import logs_dir
-
-    live_log.reset_runtime_state()
-    live_log.agent(project, "old", phase="worker", role="worker")
-    live_log.agent(project, "recent", phase="recon", role="recon")
-    old_path = logs_dir(project) / "live-events" / "worker" / "round-1.jsonl"
-    recent = logs_dir(project) / "live-events" / "recon" / "round-1.jsonl"
-    os.utime(old_path, (time.time() - 10 * 86400, time.time() - 10 * 86400))
-
-    with TestClient(app) as client:
-        bad = client.post("/api/settings/logs/purge", json={"older_than_days": -1})
-        assert bad.status_code == 422
-        r = client.post("/api/settings/logs/purge", json={"older_than_days": 7})
-        assert r.status_code == 200
-        body = r.json()
-        assert body["ok"] is True
-        assert body["files"] == 1
-        assert body["projects"] == 1
-        assert body["older_than_days"] == 7
-        assert body["bytes"] > 0
-        empty = client.post("/api/settings/logs/purge", json={"older_than_days": 7})
-        assert empty.json()["files"] == 0
-    assert not old_path.exists()
-    assert recent.exists()
 
 
 def test_project_events_tail_and_before(tmp_env, project, monkeypatch, tmp_path):

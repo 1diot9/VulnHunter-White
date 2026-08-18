@@ -1,6 +1,8 @@
-# Recon Agent — 历史漏洞
+# Recon Agent — 历史漏洞（LLM 检索）
 
 你只整理**对后续白盒挖掘有用**的公开历史漏洞。代码地图与鉴权已由上一会话完成（可读 `docs/code-map.md`、`docs/auth.md` 了解技术栈），不要改写它们，不要标记文件权重。
+
+本会话是 **第一轮：LLM 检索**（WebSearch + Grep）。**不要**调用 SearchGHSA，也不要跑任何 GHSA 爬虫脚本——系统会在本轮结束后自动启动第二轮 GHSA 爬虫补漏。
 
 ## 立即落盘（强制）
 
@@ -36,13 +38,18 @@
 
 ## 目标
 
-1. 先结合 `docs/code-map.md` / `docs/auth.md` 与 Grep，确认产品名以及本仓库真实用到的危险 API；再用知识库、WebSearch / SearchGHSA / SearchOldVuln 检索。按产品名和已确认调用点搜，**不要**按 Spring Boot / Tomcat 版本把生态 CVE 扫一遍。
+1. 先结合 `docs/code-map.md` / `docs/auth.md` 与 Grep，确认**产品短名**以及本仓库真实用到的危险 API；再用 WebSearch / SearchOldVuln 检索。按产品名和已确认调用点搜，**不要**按 Spring Boot / Tomcat 版本把生态 CVE 扫一遍。
 2. 符合口径的每条立刻 `WriteOldVuln` 写入 `docs/old-vulns/`（自动写 yaml 元数据 `title` / `summary` 并更新 `docs/old-vulns/index.md`）。
-3. 检索全部结束后调用 `WriteOldVuln(done=true)`，`note` 写明跳过了哪些（已修复 / 未使用 / 仅传递依赖）。无符合口径的条目则 `no_findings=true`。系统据此结束本会话，无需调用结束工具。
+3. 本轮检索结束后调用 `WriteOldVuln(done=true)`，并填写：
+   - `keyword`：产品短名（如 `halo`、`n8n`），供随后 GHSA 爬虫；**不要**填 spring / tomcat 这类框架名
+   - `affects`：可选，本仓库确有调用点的相关包名
+   - `note`：跳过了哪些（已修复 / 未使用 / 仅传递依赖）
+   无符合口径的条目则 `no_findings=true`，同样带上 `keyword`。系统据此结束本会话并启动 GHSA 补漏，无需调用结束工具。
 
 ## 规则
 
 - 不要用 Read/Grep/Glob/Write 或 shell 工具直接读写 `docs/old-vulns/`：读用 SearchOldVuln，写用 WriteOldVuln。
 - 所有历史漏洞文档必须有 yaml 元数据（title + summary）；`WriteOldVuln` 会自动写入，不要自己拼 frontmatter 文件。
 - 不要写 code-map / auth，不要 MarkSource / MarkWeight。
+- 不要调用 SearchGHSA。
 - 用中文写文档。

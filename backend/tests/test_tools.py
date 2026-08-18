@@ -86,7 +86,7 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     assert recon_docs_ready(project) is False
     assert recon_old_vulns_ready(project) is False
     status = recon_gates_status(project)
-    assert any("检索尚未结束" in e for e in status["errors"])
+    assert any("LLM 检索尚未结束" in e for e in status["errors"])
     by_id = {s["id"]: s["done"] for s in status["subphases"]}
     assert by_id["old_vulns"] is False
     assert by_id["source_ext"] is False
@@ -759,7 +759,7 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
     assert todo_relpath(recon) != todo_relpath(worker_a)
 
 
-def test_openai_tools_for_role_contains_expected():
+def test_openai_tools_for_role_contains_expected(tmp_env, project):
     recon_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon")}
     assert "FinishRecon" not in recon_names
     assert "WriteOldVuln" not in recon_names
@@ -771,11 +771,18 @@ def test_openai_tools_for_role_contains_expected():
     assert "MarkWeight" not in recon_names
     old_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln")}
     assert "WriteOldVuln" in old_names
-    assert "SearchGHSA" in old_names
+    assert "SearchGHSA" not in old_names
+    denied_ghsa = registry.dispatch(_ctx(project, "recon_old_vuln"), "SearchGHSA", {"query": "halo"})
+    assert denied_ghsa["ok"] is False
+    assert "无权" in denied_ghsa["error"]
     assert "WebSearch" in old_names
     assert "MarkSource" not in old_names
     assert "AddSourceExt" not in old_names
     assert "Write" not in old_names
+    ghsa_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_old_vuln_ghsa")}
+    assert "WriteOldVuln" in ghsa_names
+    assert "SearchGHSA" in ghsa_names
+    assert "WebSearch" in ghsa_names
     ext_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon_source_ext")}
     assert "AddSourceExt" in ext_names
     assert "Read" in ext_names

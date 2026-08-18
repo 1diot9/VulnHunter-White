@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Project } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
+import { DeleteProjectButton } from '../components/DeleteProjectButton'
+import { GithubLink } from '../components/GithubLink'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import PhaseFlow from '../components/PhaseFlow'
@@ -10,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { githubRepoHref } from '../lib/github'
 import { formatAuditMode, formatDateTime, formatFileProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
@@ -119,24 +122,41 @@ export default function HomePage() {
                     {p.name}
                   </Link>
                 </CardTitle>
-                <CardDescription className="mt-1 truncate text-xs">
-                  {formatAuditMode(p.audit_mode)} · {p.identity || p.source_url || p.source_type} · {formatDateTime(p.created_at)}
+                <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
+                  <span>{formatAuditMode(p.audit_mode)}</span>
+                  <span>·</span>
+                  {githubRepoHref(p) ? (
+                    <GithubLink project={p} className="min-w-0" />
+                  ) : (
+                    <span className="truncate">{p.identity || p.source_url || p.source_type}</span>
+                  )}
+                  <span>·</span>
+                  <span>{formatDateTime(p.created_at)}</span>
                 </CardDescription>
               </div>
               <CardAction>
-                <Badge
-                  variant={
-                    runStatus === '已完成'
-                      ? 'success'
-                      : runStatus === '已停止'
-                        ? 'destructive'
-                        : runStatus === '已暂停'
-                          ? 'warning'
-                          : 'info'
-                  }
-                >
-                  {runStatus}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <GithubLink project={p} variant="button" />
+                  <Badge
+                    variant={
+                      runStatus === '已完成'
+                        ? 'success'
+                        : runStatus === '已停止'
+                          ? 'destructive'
+                          : runStatus === '已暂停'
+                            ? 'warning'
+                            : 'info'
+                    }
+                  >
+                    {runStatus}
+                  </Badge>
+                  <DeleteProjectButton
+                    projectId={p.id}
+                    projectName={p.name}
+                    size="sm"
+                    onDeleted={refresh}
+                  />
+                </div>
               </CardAction>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -151,7 +171,7 @@ export default function HomePage() {
                 vulnPending={p.vuln_pending}
                 reconSubphases={p.recon_subphases}
                 labSetupDone={p.lab_setup_done}
-                manualLab={p.manual_lab}
+                manualLab={Boolean(p.manual_lab_prompt)}
                 verifierEnabled={p.verifier_enabled}
                 verifierPending={p.verifier_pending}
               />

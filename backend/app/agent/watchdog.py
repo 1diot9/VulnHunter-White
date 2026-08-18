@@ -49,14 +49,24 @@ IDENTICAL_TOOL_NUDGE = (
 )
 
 RECON_PERSIST_INTERVAL = 50
-RECON_PERSIST_PHASES = frozenset({"recon-old-vuln", "recon-source-ext"})
+RECON_PERSIST_PHASES = frozenset({"recon-old-vuln", "recon-old-vuln-ghsa", "recon-source-ext"})
 
 RECON_OLD_VULN_PERSIST_NUDGE = (
     "看门狗提醒：侦察（历史漏洞）已连续 {n} 轮未调用 WriteOldVuln。"
     "请立刻把已确认的条目落盘，不要等全部检索完再写——"
     "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
     "若无公开历史漏洞立刻 WriteOldVuln(no_findings=true)；"
-    "检索已全部完成再 WriteOldVuln(done=true)。"
+    "本轮完成后 WriteOldVuln(done=true, keyword=产品短名)。"
+    "不要调用 SearchGHSA（随后由系统爬虫补漏）。不要改写 code-map/auth，不要标权重。"
+    "上下文会被压缩，延迟写入会丢失。"
+)
+
+RECON_OLD_VULN_GHSA_PERSIST_NUDGE = (
+    "看门狗提醒：侦察（历史漏洞/GHSA补漏）已连续 {n} 轮未调用 WriteOldVuln。"
+    "请立刻核验 workspace/ghsa_new.json 候选并落盘符合口径的条目——"
+    "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
+    "无关/已修复/未使用的不要建档；"
+    "全部核验完再 WriteOldVuln(done=true)；无符合口径则 no_findings=true。"
     "不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
 )
 
@@ -82,6 +92,7 @@ WORKER_FINISH_NUDGE = (
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon-old-vuln": frozenset({"WriteOldVuln"}),
+    "recon-old-vuln-ghsa": frozenset({"WriteOldVuln"}),
     "recon-source-ext": frozenset({"AddSourceExt"}),
     "worker": frozenset({"FinishFile"}),
 }
@@ -123,6 +134,8 @@ class AgentWatchdog:
                 return WORKER_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
+            if self.phase == "recon-old-vuln-ghsa":
+                return RECON_OLD_VULN_GHSA_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-source-ext":
                 return RECON_SOURCE_EXT_PERSIST_NUDGE.format(n=self.idle_turns)
         return None
@@ -133,6 +146,8 @@ class AgentWatchdog:
             return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记非入口文件"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
+        if self.phase == "recon-old-vuln-ghsa":
+            return f"看门狗：侦察（历史漏洞/GHSA补漏）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-source-ext":
             return f"看门狗：侦察（扩展名）连续 {n} 轮未 AddSourceExt，已提醒立即落盘"
         return f"看门狗：连续 {n} 轮未落盘，已提醒"

@@ -240,6 +240,19 @@ def _short_error(text: str, limit: int = 300) -> str:
     return t
 
 
+def _f_points(data: dict[str, Any]) -> int | None:
+    """FOFA 控制台的「F点」是 fofa_point；fcoin 是旧币，会员账号经常为 0。"""
+    for key in ("fofa_point", "fofa_points", "fcoin"):
+        raw = data.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def test_connectivity(body: FofaProbeIn) -> FofaTestOut:
     """Ping FOFA /api/v1/info/my using the form key, else the saved/env key."""
     form_key = (body.key or "").strip()
@@ -282,13 +295,7 @@ def test_connectivity(body: FofaProbeIn) -> FofaTestOut:
             account_error=account,
         )
     username = str(data.get("username") or "").strip()
-    fcoin_raw = data.get("fcoin")
-    if fcoin_raw is None:
-        fcoin_raw = data.get("fofa_point")
-    try:
-        fcoin = int(fcoin_raw) if fcoin_raw is not None else None
-    except (TypeError, ValueError):
-        fcoin = None
+    fcoin = _f_points(data)
     isvip = data.get("isvip")
     if isvip is not None:
         isvip = bool(isvip)

@@ -167,16 +167,17 @@ def _extract_urls(text: str) -> list[str]:
 
 def lab_target_urls(project_id: int) -> list[str]:
     urls: list[str] = []
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if proj:
+            urls.extend(_extract_urls(str(proj.manual_lab_prompt or "")))
     env = load_env(project_id)
     target = str(env.get("target_url") or "").strip()
     if target:
         urls.append(target)
     notes = str(env.get("notes") or "")
     urls.extend(_extract_urls(notes))
-    with SessionLocal() as db:
-        proj = db.get(Project, project_id)
-        if proj and proj.manual_lab and (proj.manual_lab_prompt or "").strip():
-            urls.extend(_extract_urls(str(proj.manual_lab_prompt)))
+    urls.extend(_extract_urls(str(env.get("manual_notes") or "")))
     unique: list[str] = []
     for item in urls:
         if item not in unique:

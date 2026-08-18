@@ -473,9 +473,11 @@ def test_recon_control_includes_old_vuln_phase():
         "recon",
         "recon-source-ext",
         "recon-old-vuln",
+        "recon-old-vuln-ghsa",
         "recon-mark",
     )
     assert pipeline.control_phase("recon-old-vuln") == "recon"
+    assert pipeline.control_phase("recon-old-vuln-ghsa") == "recon"
     assert pipeline.control_phase("recon-source-ext") == "recon"
     assert pipeline.control_phase("recon-map") == "recon"
 
@@ -646,14 +648,11 @@ def test_reviewer_once_does_not_ask_to_build_lab(tmp_env, project, monkeypatch):
 
 def test_reviewer_once_injects_manual_lab_prompt(tmp_env, project, monkeypatch):
     from app.agent.loop import LoopResult
-    from app.services.lab import finish_manual_lab
 
     models = tmp_env["models"]
     Session = tmp_env["Session"]
-    finish_manual_lab(project, "placeholder")
     with Session() as db:
         proj = db.get(models.Project, project)
-        proj.manual_lab = True
         proj.manual_lab_prompt = "http://127.0.0.1:18080 账号 admin/admin"
         db.add(
             models.Vuln(
@@ -677,13 +676,61 @@ def test_reviewer_once_injects_manual_lab_prompt(tmp_env, project, monkeypatch):
     monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
     pipeline._run_reviewer_once(project)
     prompt = str(captured["user_prompt"])
-    assert "人工靶场" in prompt
+    assert "优先使用用户提供的人工靶场" in prompt
     assert "http://127.0.0.1:18080 账号 admin/admin" in prompt
-    assert "不要搭建或复用 Docker 靶场" in prompt
+    assert "不要搭建或复用 Docker 靶场" not in prompt
 
 
-def test_run_reviewer_lab_skips_docker_when_manual_lab(tmp_env, project, monkeypatch):
-    from app.services.lab import lab_setup_finished, load_env
+def test_reviewer_lab_note_prefers_manual_then_docker(tmp_env, project, monkeypatch):
+    from app.services.lab import save_env
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid: {"ok": True, "via": "reuse", "target_url": "http://127.0.0.1:18080"})
+    monkeypatch.setattr(pipeline, "debug_ports_for_runtime", lambda env: {"mcp": None})
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab_prompt = "http://10.0.0.8:9000"
+        db.commit()
+    note = pipeline._reviewer_lab_note(project)
+    assert note.index("http://10.0.0.8:9000") < note.index("回退到已有 Docker 靶场")
+    assert "http://127.0.0.1:18080" in note
+
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab_prompt = ""
+        db.commit()
+    fallback = pipeline._reviewer_lab_note(project)
+    assert "优先使用用户提供的人工靶场" not in fallback
+    assert "http://127.0.0.1:18080" in fallback
+
+
+def test_next_reviewer_step_reviews_before_lab_when_manual_prompt(tmp_env, project):
+    from app.services.lab import lab_setup_finished
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    assert lab_setup_finished(project) is False
+    assert pipeline._next_reviewer_step(project, pending=1) == "lab"
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab_prompt = "http://127.0.0.1:8080"
+        db.commit()
+    assert pipeline._next_reviewer_step(project, pending=1) == "review"
+    assert pipeline._next_reviewer_step(project, pending=0) == "lab"
+
+
+def test_run_reviewer_lab_does_not_skip_docker_when_manual_prompt(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+    from app.services.lab import lab_setup_finished
 
     models = tmp_env["models"]
     Session = tmp_env["Session"]
@@ -695,20 +742,18 @@ def test_run_reviewer_lab_skips_docker_when_manual_lab(tmp_env, project, monkeyp
 
     called = {"loop": 0}
 
-    class BoomLoop:
+    class FakeLoop:
         def __init__(self, **kwargs):  # noqa: ANN003, ARG002
             called["loop"] += 1
 
-        def run(self):  # noqa: ANN204
-            raise AssertionError("manual lab should skip AgentLoop")
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, cancelled=True, stop_reason="cancelled")
 
-    monkeypatch.setattr(pipeline, "AgentLoop", BoomLoop)
+    monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(pipeline, "resolve_llm", lambda role: object())
     pipeline._run_reviewer_lab(project)
-    assert called["loop"] == 0
-    assert lab_setup_finished(project) is True
-    env = load_env(project)
-    assert env.get("lab_kind") == "manual"
-    assert "http://192.168.1.8:8080" in str(env.get("notes") or "")
+    assert called["loop"] == 1
+    assert lab_setup_finished(project) is False
 
 
 def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monkeypatch):

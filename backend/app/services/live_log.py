@@ -21,13 +21,17 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
             "recon_mark",
             "recon-old-vuln",
             "recon_old_vuln",
+            "recon-old-vuln-ghsa",
+            "recon_old_vuln_ghsa",
             "recon-source-ext",
             "recon_source_ext",
         }
     ),
     "recon-map": frozenset({"recon"}),
     "recon-source-ext": frozenset({"recon-source-ext", "recon_source_ext"}),
-    "recon-old-vuln": frozenset({"recon-old-vuln", "recon_old_vuln"}),
+    "recon-old-vuln": frozenset(
+        {"recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"}
+    ),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
     "worker": frozenset({"worker", "fix"}),
     "mine": frozenset({"worker"}),
@@ -43,6 +47,7 @@ LOG_PHASES = (
     "recon",
     "recon-source-ext",
     "recon-old-vuln",
+    "recon-old-vuln-ghsa",
     "recon-mark",
     "worker",
     "fix",
@@ -51,7 +56,7 @@ LOG_PHASES = (
     "verifier",
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
-    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-mark"),
+    "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "worker": ("worker", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
@@ -531,6 +536,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "recon-source-ext"
     if p in ("recon-old-vuln", "recon_old_vuln"):
         return "recon-old-vuln"
+    if p in ("recon-old-vuln-ghsa", "recon_old_vuln_ghsa"):
+        return "recon-old-vuln-ghsa"
     if p in ("recon-mark", "recon_mark"):
         return "recon-mark"
     if p in ("worker", "mine"):
@@ -558,6 +565,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return CONTROL_LOG_PHASES["reviewer"]
     if phase == "verifier":
         return CONTROL_LOG_PHASES["verifier"]
+    if phase in ("recon-old-vuln", "recon_old_vuln"):
+        return ("recon-old-vuln", "recon-old-vuln-ghsa")
     lp = log_phase_of(phase)
     if lp:
         return (lp,)
@@ -580,7 +589,7 @@ def control_phase_of(phase: str | None) -> str | None:
 def control_phase_of_filter(phase: str | None) -> str | None:
     if not phase:
         return None
-    if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-mark"):
+    if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"):
         return "recon"
     if phase in ("worker", "mine", "fix"):
         return "worker"

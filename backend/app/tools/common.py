@@ -140,7 +140,7 @@ def read_text_window(
         want = default_limit
     want = min(want, _READ_MAX_LIMIT)
 
-    # Cap each Read page so a full window + paging hint fits in one tool result.
+    # Cap each Read page so a full window + hint stays in the newest intact results.
     budget = min(max_bytes, _READ_PAGE_MAX_BYTES)
     window = _fit_lines(remaining[:want], start + 1, budget)
     read_n = len(window)
@@ -577,6 +577,8 @@ def todo_relpath(ctx) -> str:
         return "workspace/todos-recon.json"
     if role in ("recon_old_vuln", "recon-old-vuln"):
         return "workspace/todos-recon-old-vuln.json"
+    if role in ("recon_old_vuln_ghsa", "recon-old-vuln-ghsa"):
+        return "workspace/todos-recon-old-vuln-ghsa.json"
     if role in ("recon_source_ext", "recon-source-ext"):
         return "workspace/todos-recon-source-ext.json"
     if role == "worker":
@@ -1004,7 +1006,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索（本项目历史漏洞；组件 CVE 仅当本仓库有对应危险 API 调用且版本仍可能受影响）。符合口径的立刻 WriteOldVuln；落盘不会结束历史漏洞会话",
+            description="网络搜索（本项目历史漏洞；组件 CVE 仅当本仓库有对应危险 API 调用且版本仍可能受影响）。符合口径的立刻 WriteOldVuln；落盘不会结束本会话。LLM 检索轮不要代替随后的 GHSA 爬虫。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1019,7 +1021,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="SearchGHSA",
-            description="查询 GitHub Advisories（可按 ecosystem/package/query）",
+            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞 LLM 检索轮不要用；GHSA 补漏轮在爬虫结果不足时作兜底。",
             parameters={
                 "type": "object",
                 "properties": {

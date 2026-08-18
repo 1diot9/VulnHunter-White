@@ -33,7 +33,8 @@ class LlmRoleAssignment(BaseModel):
 class SettingsOut(BaseModel):
     llm_providers: list[LlmProviderOut] = Field(default_factory=list)
     llm_roles: dict[str, LlmRoleAssignment] = Field(default_factory=dict)
-    llm_thread_limit: int = 6
+    worker_concurrency: int = 1
+    fix_concurrency: int = 1
     github_pat_set: bool = False
     fofa_key_set: bool = False
     fofa_base_url: str = "https://fofa.info"
@@ -46,7 +47,8 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     llm_providers: list[LlmProviderIn] | None = None
     llm_roles: dict[str, LlmRoleAssignment] | None = None
-    llm_thread_limit: int | None = None
+    worker_concurrency: int | None = None
+    fix_concurrency: int | None = None
     github_pat: str | None = None
     fofa_key: str | None = None
     fofa_base_url: str | None = None
@@ -95,18 +97,6 @@ class FofaTestOut(BaseModel):
     isvip: bool | None = None
     error: str | None = None
     account_error: bool = False
-
-
-class LiveLogPurgeIn(BaseModel):
-    older_than_days: int = Field(ge=0, le=3650)
-
-
-class LiveLogPurgeOut(BaseModel):
-    ok: bool = True
-    older_than_days: int
-    projects: int = 0
-    files: int = 0
-    bytes: int = 0
 
 
 MANUAL_LAB_PROMPT_MAX = 20000

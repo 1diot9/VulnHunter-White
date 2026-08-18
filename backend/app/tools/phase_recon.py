@@ -10,6 +10,7 @@ import yaml
 
 from ..models import FileWeight, Project, SessionLocal, Source
 from ..services.ingest import EXTRA_SOURCE_EXTS, expand_file_index
+from ..services.old_vuln_crawl import save_crawl_spec
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
 from .common import _parse_frontmatter
@@ -40,16 +41,30 @@ def _source_exts_path(project_id: int) -> Path:
     return docs_dir(project_id) / "source-exts.md"
 
 
-def _old_vuln_search_complete(index_path: Path) -> bool:
+def _old_vuln_index_meta(index_path: Path) -> dict[str, Any]:
     if not _doc_nonempty(index_path):
-        return False
+        return {}
     text = index_path.read_text(encoding="utf-8", errors="ignore")
     meta, _ = _parse_frontmatter(text)
-    return _truthy_meta(meta.get("complete"))
+    return meta if isinstance(meta, dict) else {}
+
+
+def _old_vuln_search_complete(index_path: Path) -> bool:
+    return _truthy_meta(_old_vuln_index_meta(index_path).get("complete"))
+
+
+def _old_vuln_llm_complete(index_path: Path) -> bool:
+    meta = _old_vuln_index_meta(index_path)
+    return _truthy_meta(meta.get("llm_complete")) or _truthy_meta(meta.get("complete"))
+
+
+def recon_old_vuln_llm_ready(project_id: int) -> bool:
+    """True after the LLM research pass concludes (GHSA crawler may still run)."""
+    return _old_vuln_llm_complete(_old_vuln_index_path(project_id))
 
 
 def recon_old_vulns_ready(project_id: int) -> bool:
-    """True only after the agent declares search complete — not after the first WriteOldVuln."""
+    """True only after LLM + GHSA supplement both declare complete — not after the first WriteOldVuln."""
     return _old_vuln_search_complete(_old_vuln_index_path(project_id))
 
 
@@ -115,10 +130,16 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     if old_missing:
         errors.append("缺少历史漏洞索引 old-vulns/index.md；请用 WriteOldVuln 逐条落盘，不要用 Write 攒到最后")
     elif not old_done:
-        errors.append(
-            "历史漏洞检索尚未结束；逐条 WriteOldVuln 只落盘、不会结束本会话，"
-            "检索全部结束后再 WriteOldVuln(done=true)"
-        )
+        if recon_old_vuln_llm_ready(project_id):
+            errors.append(
+                "历史漏洞 GHSA 补漏尚未结束；核验爬虫候选后逐条 WriteOldVuln，"
+                "全部核验完再 WriteOldVuln(done=true)"
+            )
+        else:
+            errors.append(
+                "历史漏洞 LLM 检索尚未结束；逐条 WriteOldVuln 只落盘、不会结束本会话，"
+                "本轮结束后再 WriteOldVuln(done=true)，随后系统会跑 GHSA 爬虫补漏"
+            )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
     subphases = _recon_subphase_rows(
@@ -552,9 +573,11 @@ _WRITE_NOW_HINT = (
     "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
     "只收录本项目自身洞，或本仓库有调用点且仍可能打到的组件洞；"
     "已修复/未使用/仅传递依赖不要建档。"
-    "落盘不会结束本会话；检索全部结束后再 WriteOldVuln(done=true, note=跳过说明)。"
+    "落盘不会结束本会话；本轮检索结束后再 WriteOldVuln(done=true, note=跳过说明)。"
 )
+_LLM_PASS_DONE_HINT = "LLM 检索已声明结束，系统将结束本会话并启动 GHSA 爬虫补漏。"
 _SEARCH_DONE_HINT = "检索已声明结束，系统将结束本会话。"
+_INDEX_NOTE_MARKERS = ("\n\n检索说明", "\n\n经 WebSearch", "\n\n经 LLM", "\n\n经 GHSA")
 
 
 def _slug_filename(title: str, cve: str = "") -> str:
@@ -594,7 +617,38 @@ def _find_existing_old_vuln(old_dir: Path, *, title: str, cve: str, filename: st
     return None
 
 
-def _rebuild_old_vuln_index(old_dir: Path, *, complete: bool = False) -> int:
+def _index_trailing_notes(text: str) -> str:
+    positions = [text.find(marker) for marker in _INDEX_NOTE_MARKERS]
+    hits = [p for p in positions if p >= 0]
+    if not hits:
+        return ""
+    return text[min(hits):]
+
+
+def _read_index_state(old_dir: Path) -> tuple[dict[str, Any], str]:
+    index = old_dir / "index.md"
+    if not index.exists():
+        return {}, ""
+    text = index.read_text(encoding="utf-8", errors="ignore")
+    meta, _ = _parse_frontmatter(text)
+    if not isinstance(meta, dict):
+        meta = {}
+    return meta, _index_trailing_notes(text)
+
+
+def _rebuild_old_vuln_index(
+    old_dir: Path,
+    *,
+    complete: bool | None = None,
+    llm_complete: bool | None = None,
+) -> int:
+    prev_meta, notes = _read_index_state(old_dir)
+    prev_complete = _truthy_meta(prev_meta.get("complete"))
+    prev_llm = _truthy_meta(prev_meta.get("llm_complete")) or prev_complete
+    if complete is None:
+        complete = prev_complete
+    if llm_complete is None:
+        llm_complete = prev_llm or bool(complete)
     rows: list[str] = []
     for fp in _iter_old_vuln_files(old_dir):
         text = fp.read_text(encoding="utf-8", errors="ignore")
@@ -610,6 +664,7 @@ def _rebuild_old_vuln_index(old_dir: Path, *, complete: bool = False) -> int:
         "title: 历史漏洞索引\n"
         "summary: 本项目已知历史漏洞列表\n"
         f"complete: {'true' if complete else 'false'}\n"
+        f"llm_complete: {'true' if llm_complete else 'false'}\n"
         "---\n\n"
         "# 历史漏洞索引\n\n"
         "| 标题 | 摘要 | 文件 |\n"
@@ -617,6 +672,10 @@ def _rebuild_old_vuln_index(old_dir: Path, *, complete: bool = False) -> int:
         + "\n".join(rows)
         + "\n"
     )
+    if notes:
+        body = body.rstrip() + notes
+        if not body.endswith("\n"):
+            body += "\n"
     (old_dir / "index.md").write_text(body, encoding="utf-8")
     return count
 
@@ -626,24 +685,83 @@ def _append_search_note(old_dir: Path, *, note: str, no_findings: bool, count: i
     if note:
         extra = f"\n\n检索说明：{note}\n"
     elif no_findings and count == 0:
-        extra = "\n\n经 WebSearch / SearchGHSA 检索，未发现需单独建档的公开历史漏洞。\n"
+        extra = "\n\n经 LLM / WebSearch / GHSA 检索，未发现需单独建档的公开历史漏洞。\n"
     if not extra:
         return
     index = old_dir / "index.md"
-    index.write_text(index.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    current = index.read_text(encoding="utf-8") if index.exists() else ""
+    snippet = extra.strip()
+    if snippet and snippet in current:
+        return
+    index.write_text(current + extra, encoding="utf-8")
 
 
-def _conclude_old_vuln_search(old_dir: Path, *, no_findings: bool, note: str) -> dict[str, Any]:
-    count = _rebuild_old_vuln_index(old_dir, complete=True)
+def _is_old_vuln_ghsa_pass(ctx) -> bool:
+    phase = str(getattr(ctx, "phase", "") or "").replace("_", "-").strip().lower()
+    role = str(getattr(ctx, "role", "") or "").replace("_", "-").strip().lower()
+    return phase.endswith("old-vuln-ghsa") or role.endswith("old-vuln-ghsa")
+
+
+def _list_str_args(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
+        return parts
+    if isinstance(raw, list):
+        return [str(p).strip() for p in raw if str(p).strip()]
+    return []
+
+
+def _persist_pass1_crawl_spec(ctx, args: dict[str, Any]) -> None:
+    keyword = str(args.get("keyword") or args.get("crawl_keyword") or "").strip()
+    affects = _list_str_args(args.get("affects") or args.get("packages"))
+    ecosystems = _list_str_args(args.get("ecosystems") or args.get("ecosystem"))
+    if not keyword and not affects and not ecosystems:
+        return
+    save_crawl_spec(
+        ctx.project_id,
+        keyword=keyword or None,
+        affects=affects or None,
+        ecosystems=ecosystems or None,
+    )
+
+
+def _conclude_old_vuln_search(
+    old_dir: Path,
+    *,
+    no_findings: bool,
+    note: str,
+    complete: bool,
+    llm_complete: bool,
+    hint: str,
+) -> dict[str, Any]:
+    count = _rebuild_old_vuln_index(old_dir, complete=complete, llm_complete=llm_complete)
     _append_search_note(old_dir, note=note, no_findings=no_findings, count=count)
     return {
         "ok": True,
         "no_findings": no_findings,
         "done": True,
         "indexed": count,
+        "llm_complete": llm_complete,
+        "complete": complete,
         "path": "docs/old-vulns/index.md",
-        "hint": _SEARCH_DONE_HINT,
+        "hint": hint,
     }
+
+
+def mark_old_vuln_search_complete(project_id: int, *, note: str = "") -> dict[str, Any]:
+    """Pipeline helper: GHSA crawler found nothing new, close the historical-vuln phase."""
+    old_dir = old_vulns_dir(project_id)
+    old_dir.mkdir(parents=True, exist_ok=True)
+    return _conclude_old_vuln_search(
+        old_dir,
+        no_findings=False,
+        note=note,
+        complete=True,
+        llm_complete=True,
+        hint=_SEARCH_DONE_HINT,
+    )
 
 
 def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
@@ -653,12 +771,22 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     title = str(args.get("title") or "").strip()
     old_dir = old_vulns_dir(ctx.project_id)
     old_dir.mkdir(parents=True, exist_ok=True)
+    ghsa_pass = _is_old_vuln_ghsa_pass(ctx)
+    llm_complete = True if conclude else None
+    complete = True if (conclude and ghsa_pass) else (False if conclude else None)
+    hint = _SEARCH_DONE_HINT if ghsa_pass else _LLM_PASS_DONE_HINT
+
+    if conclude and not ghsa_pass:
+        _persist_pass1_crawl_spec(ctx, args)
 
     if conclude and (no_findings or not title):
         return _conclude_old_vuln_search(
             old_dir,
             no_findings=no_findings,
             note=str(args.get("note") or "").strip(),
+            complete=bool(complete),
+            llm_complete=True,
+            hint=hint,
         )
 
     summary = str(args.get("summary") or "").strip()
@@ -669,7 +797,7 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not title:
         return {
             "ok": False,
-            "error": "缺少 title。每确认一条符合口径的历史漏洞立刻调用，不要攒着。检索全部结束后再 WriteOldVuln(done=true)。",
+            "error": "缺少 title。每确认一条符合口径的历史漏洞立刻调用，不要攒着。本轮结束后再 WriteOldVuln(done=true)。",
         }
     if not summary:
         return {"ok": False, "error": "缺少 summary"}
@@ -715,7 +843,7 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     front = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     text = f"---\n{front}\n---\n\n{body.strip()}\n"
     target.write_text(text, encoding="utf-8")
-    indexed = _rebuild_old_vuln_index(old_dir, complete=conclude)
+    indexed = _rebuild_old_vuln_index(old_dir, complete=complete, llm_complete=llm_complete)
     if conclude:
         _append_search_note(
             old_dir,
@@ -731,7 +859,9 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "created": created,
         "indexed": indexed,
         "done": conclude,
-        "hint": _SEARCH_DONE_HINT if conclude else _WRITE_NOW_HINT,
+        "llm_complete": True if conclude else recon_old_vuln_llm_ready(ctx.project_id),
+        "complete": bool(complete) if conclude else recon_old_vulns_ready(ctx.project_id),
+        "hint": hint if conclude else _WRITE_NOW_HINT,
     }
 
 
@@ -832,7 +962,8 @@ def register_recon_tools() -> None:
                 "只收录本项目自身公开洞，或本仓库源码确有危险 API 调用点、版本仍可能受影响、默认部署可能打到的组件洞。"
                 "已修复、未使用、仅传递依赖的 CVE 不要建档，结束时用 done+note 写进索引。"
                 "每确认一条就调用；禁止调查完再一次性写入，否则上下文压缩会丢失内容。"
-                "逐条落盘不会结束本会话。检索全部结束后设 done=true；无符合口径的条目时设 no_findings=true。"
+                "逐条落盘不会结束本会话。本轮结束后设 done=true；无符合口径的条目时设 no_findings=true。"
+                "LLM 检索轮结束时可带 keyword（产品短名）和 affects（相关包），供随后 GHSA 爬虫补漏。"
             ),
             parameters={
                 "type": "object",
@@ -850,13 +981,27 @@ def register_recon_tools() -> None:
                     "component": {"type": "string"},
                     "affected_version": {"type": "string"},
                     "filename": {"type": "string", "description": "可选文件名，默认由 CVE/标题生成"},
+                    "keyword": {
+                        "type": "string",
+                        "description": "LLM 轮结束时填写产品短名（如 halo），供 GHSA 爬虫；不要填框架名",
+                    },
+                    "affects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选额外包名，供 GHSA 爬虫 affects= 查询",
+                    },
+                    "ecosystems": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选生态，如 maven/npm/pip/composer；省略则按仓库推断",
+                    },
                     "done": {
                         "type": "boolean",
-                        "description": "检索已全部完成时为 true，声明本会话结束；逐条落盘时不要设",
+                        "description": "本轮检索已完成时为 true，声明本会话结束；逐条落盘时不要设",
                     },
                     "no_findings": {
                         "type": "boolean",
-                        "description": "已检索且无符合口径的历史漏洞时为 true，写空索引并结束本会话",
+                        "description": "本轮已检索且无符合口径的历史漏洞时为 true，写空索引并结束本会话",
                     },
                     "note": {
                         "type": "string",

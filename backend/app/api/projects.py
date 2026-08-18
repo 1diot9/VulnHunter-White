@@ -23,7 +23,7 @@ from ..schemas import (
 )
 from ..services.lab import lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
-from ..services.paths import ensure_project_dirs, force_rmtree, project_root
+from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.pipeline import (
     control_phase,
@@ -303,16 +303,18 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             if p.status != "paused":
                 raise HTTPException(400, "挖掘模式仅在项目暂停后可更改")
             p.audit_mode = mode
-        if body.manual_lab is not None:
-            p.manual_lab = bool(body.manual_lab)
         if prompt is not None:
             p.manual_lab_prompt = prompt or None
+            if body.manual_lab is None:
+                p.manual_lab = bool(prompt)
+        if body.manual_lab is not None:
+            p.manual_lab = bool(body.manual_lab)
         if body.verifier_enabled is not None:
             p.verifier_enabled = bool(body.verifier_enabled)
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
-        sync_notes = bool(out.manual_lab and prompt is not None)
+        sync_notes = prompt is not None
         notes_text = out.manual_lab_prompt
         restarted = False
         if body.verifier_enabled is True and not old_verifier:
@@ -541,14 +543,17 @@ def get_project_report(project_id: int, path: str) -> PhaseReportDetail:
 
 @router.delete("/{project_id}")
 def delete_project(project_id: int) -> dict:
-    request_cancel(project_id)
     with SessionLocal() as db:
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "项目不存在")
-        db.query(TokenUsage).filter(TokenUsage.project_id == project_id).delete()
-        db.query(ToolLog).filter(ToolLog.project_id == project_id).delete()
-        db.delete(p)
-        db.commit()
-    force_rmtree(project_root(project_id))
+    request_cancel(project_id)
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if p:
+            db.query(TokenUsage).filter(TokenUsage.project_id == project_id).delete()
+            db.query(ToolLog).filter(ToolLog.project_id == project_id).delete()
+            db.delete(p)
+            db.commit()
+    force_rmtree(project_dir(project_id))
     return {"ok": True}

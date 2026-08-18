@@ -26,6 +26,8 @@ const PHASE_LABEL: Record<string, string> = {
   recon_source_ext: '侦察/扩展名',
   'recon-old-vuln': '侦察/历史漏洞',
   recon_old_vuln: '侦察/历史漏洞',
+  'recon-old-vuln-ghsa': '侦察/历史漏洞补漏',
+  recon_old_vuln_ghsa: '侦察/历史漏洞补漏',
   'recon-mark': '侦察/盖章',
   recon_mark: '侦察/盖章',
   worker: '挖掘',
@@ -52,12 +54,21 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
       p === 'recon-source-ext' ||
       p === 'recon_source_ext' ||
       p === 'recon-old-vuln' ||
-      p === 'recon_old_vuln'
+      p === 'recon_old_vuln' ||
+      p === 'recon-old-vuln-ghsa' ||
+      p === 'recon_old_vuln_ghsa'
     )
   }
   if (phaseFilter === 'recon-map') return p === 'recon'
   if (phaseFilter === 'recon-source-ext') return p === 'recon-source-ext' || p === 'recon_source_ext'
-  if (phaseFilter === 'recon-old-vuln') return p === 'recon-old-vuln' || p === 'recon_old_vuln'
+  if (phaseFilter === 'recon-old-vuln') {
+    return (
+      p === 'recon-old-vuln' ||
+      p === 'recon_old_vuln' ||
+      p === 'recon-old-vuln-ghsa' ||
+      p === 'recon_old_vuln_ghsa'
+    )
+  }
   if (phaseFilter === 'recon-mark') return p === 'recon-mark' || p === 'recon_mark'
   if (phaseFilter === 'reviewer') {
     return p === 'reviewer' || p === 'reviewer-lab' || p === 'reviewer_lab'

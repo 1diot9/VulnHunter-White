@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
+import { DeleteProjectButton } from '../components/DeleteProjectButton'
+import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
-import { ManualLabPromptEditor } from '../components/ManualLabFields'
-import { VerifierToggle } from '../components/VerifierToggle'
+import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
 import PhaseFlow from '../components/PhaseFlow'
 import VulnGroupList from '../components/VulnGroupList'
 import { Badge } from '@/components/ui/badge'
@@ -56,9 +57,11 @@ function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 've
     logPhase === 'recon-source-ext' ||
     logPhase === 'recon_source_ext' ||
     logPhase === 'recon-old-vuln' ||
+    logPhase === 'recon-old-vuln-ghsa' ||
     logPhase === 'recon-mark' ||
     logPhase === 'recon_mark' ||
-    logPhase === 'recon_old_vuln'
+    logPhase === 'recon_old_vuln' ||
+    logPhase === 'recon_old_vuln_ghsa'
   ) {
     return 'recon'
   }
@@ -115,6 +118,7 @@ function PhaseRunControls({
 
 export default function ProjectDetailPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const projectId = Number(id)
   const [project, setProject] = useState<Project | null>(null)
   const [events, setEvents] = useState<LogEvent[]>([])
@@ -388,7 +392,10 @@ export default function ProjectDetailPage() {
           <Link to="/" className="text-sm text-slate-400 hover:underline">
             ← 返回
           </Link>
-          <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold">{project.name}</h1>
+            <GithubLink project={project} variant="button" />
+          </div>
           <div className="mt-2">
             <PhaseFlow
               phase={project.phase}
@@ -401,7 +408,7 @@ export default function ProjectDetailPage() {
               vulnPending={project.vuln_pending}
               reconSubphases={project.recon_subphases}
               labSetupDone={project.lab_setup_done}
-              manualLab={project.manual_lab}
+              manualLab={Boolean(project.manual_lab_prompt)}
               verifierEnabled={project.verifier_enabled}
               verifierPending={project.verifier_pending}
               onSelect={(pid) => {
@@ -412,6 +419,7 @@ export default function ProjectDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <ProjectSettingsButton project={project} onSaved={setProject} />
           <Button variant="outline" onClick={() => api.pause(projectId)}>
             全部暂停
           </Button>
@@ -421,6 +429,11 @@ export default function ProjectDetailPage() {
           <Button variant="destructive" onClick={() => api.cancel(projectId)}>
             停止
           </Button>
+          <DeleteProjectButton
+            projectId={projectId}
+            projectName={project.name}
+            onDeleted={() => navigate('/', { replace: true })}
+          />
         </div>
       </div>
 
@@ -456,27 +469,6 @@ export default function ProjectDetailPage() {
           {formatAuditModeHint(project.audit_mode)}
           {project.status === 'paused' ? ' 暂停时可更改，续跑后按新规则生效。' : ''}
         </p>
-        {project.manual_lab ? (
-          <ManualLabPromptEditor
-            prompt={project.manual_lab_prompt || ''}
-            onSave={async (text) => {
-              const next = await api.updateProject(projectId, { manual_lab_prompt: text })
-              setProject(next)
-            }}
-          />
-        ) : null}
-        <VerifierToggle
-          enabled={Boolean(project.verifier_enabled)}
-          onEnabledChange={async (enabled) => {
-            if (enabled === Boolean(project.verifier_enabled)) return
-            try {
-              const next = await api.updateProject(projectId, { verifier_enabled: enabled })
-              setProject(next)
-            } catch {
-              /* ignore */
-            }
-          }}
-        />
       </div>
 
       <div className="flex gap-2">
@@ -551,7 +543,7 @@ export default function ProjectDetailPage() {
                           variant={phaseFilter === sk ? 'default' : 'outline'}
                           onClick={() => selectPhase(sk)}
                         >
-                          {sk === 'reviewer-lab' && project.manual_lab ? '人工靶场' : slabel}
+                          {slabel}
                           {sk === 'reviewer-lab' ? (project.lab_setup_done ? ' ✓' : ' ○') : ''}
                         </Button>
                       ))}

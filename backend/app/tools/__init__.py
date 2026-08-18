@@ -84,6 +84,17 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "WebSearch",
             "SearchOldVuln",
             "WriteOldVuln",
+        }
+    ),
+    "recon_old_vuln_ghsa": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "TodoWrite",
+            "WebSearch",
+            "SearchOldVuln",
+            "WriteOldVuln",
             "SearchGHSA",
         }
     ),
