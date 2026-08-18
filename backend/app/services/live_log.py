@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .paths import live_events_path
+from .paths import iter_project_ids, live_events_path, project_dir
 
 # worker=挖掘页全部；mine=仅挖掘 Worker；fix=仅修复 Worker
 PHASE_GROUPS: dict[str, frozenset[str]] = {
@@ -456,6 +457,61 @@ class LiveLog:
             session_count=session_count,
         )
 
+    def purge_older_than(self, days: int) -> dict[str, int]:
+        """Delete SSE live-event files whose mtime is older than ``days`` days.
+
+        days=0 deletes every live-event file. Recent/current rounds are kept when
+        days>=1 because they are still being appended and have a fresh mtime.
+        """
+        n_days = int(days)
+        if n_days < 0:
+            raise ValueError("天数须 >= 0")
+        cutoff = None if n_days == 0 else time.time() - n_days * 86400
+        files_removed = 0
+        bytes_removed = 0
+        projects_touched = 0
+        for pid in iter_project_ids():
+            removed, nbytes = self._purge_project_files(pid, cutoff)
+            if removed:
+                projects_touched += 1
+                files_removed += removed
+                bytes_removed += nbytes
+        return {
+            "older_than_days": n_days,
+            "projects": projects_touched,
+            "files": files_removed,
+            "bytes": bytes_removed,
+        }
+
+    def _purge_project_files(self, project_id: int, cutoff: float | None) -> tuple[int, int]:
+        to_delete: list[tuple[Path, int]] = []
+        for path in _on_disk_event_files(project_id):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            if cutoff is None or st.st_mtime < cutoff:
+                to_delete.append((path, int(st.st_size)))
+        if not to_delete:
+            return 0, 0
+
+        removed = 0
+        nbytes = 0
+        with _lock:
+            for path, size in to_delete:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+                removed += 1
+                nbytes += size
+                with _cache_lock:
+                    _event_cache.pop(str(path), None)
+            if removed:
+                _invalidate_project_runtime(project_id)
+                _prune_empty_event_dirs(project_id)
+        return removed, nbytes
+
 
 def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
     """phase 为空不过滤。recon=侦察子阶段；recon-map / recon-source-ext / recon-old-vuln / recon-mark 为子阶段。worker=挖掘+修复。"""
@@ -545,6 +601,47 @@ def is_session_start(ev: dict[str, Any]) -> bool:
 
 def _live_events_dir(project_id: int) -> Path:
     return live_events_path(project_id).parent / "live-events"
+
+
+def _on_disk_event_files(project_id: int) -> list[Path]:
+    """SSE files already on disk. Does not create project/log directories."""
+    root = project_dir(project_id)
+    files: list[Path] = []
+    legacy = root / "logs" / "live.events.jsonl"
+    if legacy.is_file():
+        files.append(legacy)
+    base = root / "logs" / "live-events"
+    if base.is_dir():
+        files.extend(path for path in base.glob("*/round-*.jsonl") if path.is_file())
+    return files
+
+
+def _invalidate_project_runtime(project_id: int) -> None:
+    path_key = str(_live_events_dir(project_id))
+    with _session_lock:
+        _hydrated_paths.discard(path_key)
+        for key in [k for k in _sessions if k[0] == project_id]:
+            del _sessions[key]
+        for key in [k for k in _session_used if k[0] == project_id]:
+            del _session_used[key]
+
+
+def _prune_empty_event_dirs(project_id: int) -> None:
+    base = project_dir(project_id) / "logs" / "live-events"
+    if not base.is_dir():
+        return
+    for child in list(base.iterdir()):
+        if not child.is_dir():
+            continue
+        try:
+            empty = not any(child.iterdir())
+        except OSError:
+            continue
+        if empty:
+            try:
+                child.rmdir()
+            except OSError:
+                pass
 
 
 def _event_seq_path(project_id: int) -> Path:

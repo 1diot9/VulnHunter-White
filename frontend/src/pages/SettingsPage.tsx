@@ -3,6 +3,14 @@ import { api, type Settings } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -27,6 +35,11 @@ export default function SettingsPage() {
   const [fofaTesting, setFofaTesting] = useState(false)
   const [fofaOk, setFofaOk] = useState<boolean | null>(null)
   const [fofaMsg, setFofaMsg] = useState('')
+  const [logDays, setLogDays] = useState(7)
+  const [logConfirmOpen, setLogConfirmOpen] = useState(false)
+  const [logPurging, setLogPurging] = useState(false)
+  const [logMsg, setLogMsg] = useState('')
+  const [logOk, setLogOk] = useState<boolean | null>(null)
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -174,6 +187,33 @@ export default function SettingsPage() {
       setMsg('已保存')
     } catch (e) {
       setMsg(String(e))
+    }
+  }
+
+  const logDaysSafe = Number.isFinite(logDays) ? Math.max(0, Math.min(3650, Math.floor(logDays))) : 7
+
+  async function confirmPurgeLogs() {
+    setLogPurging(true)
+    setLogMsg('')
+    setLogOk(null)
+    try {
+      const out = await api.purgeLiveLogs(logDaysSafe)
+      setLogOk(true)
+      if (out.files === 0) {
+        setLogMsg(
+          logDaysSafe === 0 ? '没有可清理的实时日志。' : `没有 ${logDaysSafe} 天前的实时日志。`,
+        )
+      } else {
+        setLogMsg(
+          `已删除 ${out.files} 个文件，涉及 ${out.projects} 个项目，共 ${formatBytes(out.bytes)}。`,
+        )
+      }
+      setLogConfirmOpen(false)
+    } catch (e) {
+      setLogOk(false)
+      setLogMsg(String(e))
+    } finally {
+      setLogPurging(false)
     }
   }
 
@@ -330,6 +370,79 @@ export default function SettingsPage() {
         </div>
         </CardContent>
       </Card>
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <div className="space-y-1.5">
+            <Label>实时日志清理</Label>
+            <div className="text-xs text-slate-500">
+              清理各审计项目的 SSE 实时日志（live-events）。按文件最后写入时间判断，近期仍在更新的日志不会被删。填 0 表示清除全部实时日志。阶段报告、漏洞与源码不受影响。
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="log-days">清除多少天前</Label>
+                <Input
+                  id="log-days"
+                  type="number"
+                  min={0}
+                  max={3650}
+                  className="w-28"
+                  value={logDays}
+                  onChange={(e) => setLogDays(Number(e.target.value))}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  setLogConfirmOpen(true)
+                }}
+              >
+                清理日志
+              </Button>
+            </div>
+            {logMsg ? (
+              <div className="flex items-start gap-2 text-sm">
+                {logOk != null ? (
+                  <Badge variant={logOk ? 'success' : 'destructive'}>{logOk ? '完成' : '失败'}</Badge>
+                ) : null}
+                <span className={logOk === false ? 'text-red-300' : 'text-slate-300'}>{logMsg}</span>
+              </div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+      <Dialog
+        open={logConfirmOpen}
+        onOpenChange={(next) => {
+          if (logPurging) return
+          setLogConfirmOpen(next)
+        }}
+      >
+        <DialogContent showCloseButton={!logPurging}>
+          <DialogHeader>
+            <DialogTitle>清理实时日志</DialogTitle>
+            <DialogDescription>
+              {logDaysSafe === 0
+                ? '将删除所有审计项目的全部实时日志（SSE）。此操作不可恢复。'
+                : `将删除所有审计项目中 ${logDaysSafe} 天前的实时日志（SSE），近期日志不受影响。此操作不可恢复。`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={logPurging} onClick={() => setLogConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button variant="destructive" disabled={logPurging} onClick={() => void confirmPurgeLogs()}>
+              {logPurging ? '清理中…' : '确认清理'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

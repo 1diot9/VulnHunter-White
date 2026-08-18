@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 from app.services.live_log import format_tool_command, format_tool_output, live_log
 
@@ -294,3 +296,57 @@ def test_subphase_sessions_are_independent(tmp_env, project, monkeypatch, tmp_pa
     assert live_log.current_session(project, "fix") == 2
     assert live_log.current_session(project, "recon") == 1
     assert live_log.current_session(project, "recon-mark") == 2
+
+
+def test_purge_older_than_keeps_recent_events(tmp_env, project):
+    from app.services.paths import logs_dir, tool_exec_errors_path
+
+    live_log.reset_runtime_state()
+    live_log.agent(project, "old", phase="worker", role="worker")
+    live_log.begin_session(project, "worker")
+    live_log.agent(project, "new", phase="worker", role="worker")
+
+    old_path = logs_dir(project) / "live-events" / "worker" / "round-1.jsonl"
+    new_path = logs_dir(project) / "live-events" / "worker" / "round-2.jsonl"
+    legacy = logs_dir(project) / "live.events.jsonl"
+    legacy.write_text('{"kind":"agent","text":"legacy-old"}\n', encoding="utf-8")
+    errors = tool_exec_errors_path(project)
+    errors.write_text('{"error":"keep-me"}\n', encoding="utf-8")
+
+    old_mtime = time.time() - 10 * 86400
+    os.utime(old_path, (old_mtime, old_mtime))
+    os.utime(legacy, (old_mtime, old_mtime))
+
+    result = live_log.purge_older_than(7)
+    assert result["older_than_days"] == 7
+    assert result["files"] == 2
+    assert result["projects"] == 1
+    assert result["bytes"] > 0
+    assert not old_path.exists()
+    assert not legacy.exists()
+    assert new_path.exists()
+    assert errors.exists()
+    assert errors.read_text(encoding="utf-8") == '{"error":"keep-me"}\n'
+
+    page = live_log.read_events(project, limit=10, tail=True, phase="worker")
+    assert [e["text"] for e in page.events] == ["new"]
+
+
+def test_purge_older_than_zero_deletes_all_events(tmp_env, project):
+    from app.services.paths import logs_dir
+
+    live_log.reset_runtime_state()
+    live_log.agent(project, "keep-or-not", phase="worker", role="worker")
+    path = logs_dir(project) / "live-events" / "worker" / "round-1.jsonl"
+    seq = logs_dir(project) / "live-events" / ".seq"
+    assert path.exists()
+    assert seq.exists()
+
+    result = live_log.purge_older_than(0)
+    assert result["files"] == 1
+    assert result["projects"] == 1
+    assert not path.exists()
+    assert seq.exists()
+    assert not (logs_dir(project) / "live-events" / "worker").exists()
+    page = live_log.read_events(project, limit=10, tail=True, phase="worker")
+    assert page.events == []

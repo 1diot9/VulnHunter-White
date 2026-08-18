@@ -237,6 +237,14 @@ export type LlmTest = {
   reply: string | null
 }
 
+export type LiveLogPurge = {
+  ok: boolean
+  older_than_days: number
+  projects: number
+  files: number
+  bytes: number
+}
+
 export type FofaProbeBody = {
   key?: string | null
   base_url?: string | null
@@ -408,5 +416,11 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+  purgeLiveLogs: (olderThanDays: number) =>
+    request<LiveLogPurge>('/api/settings/logs/purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ older_than_days: olderThanDays }),
     }),
 }

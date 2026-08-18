@@ -5,7 +5,17 @@ import json
 from fastapi import APIRouter
 
 from ..models import AppSettings, SessionLocal
-from ..schemas import FofaProbeIn, FofaTestOut, LlmModelListOut, LlmProbeIn, LlmTestOut, SettingsOut, SettingsUpdate
+from ..schemas import (
+    FofaProbeIn,
+    FofaTestOut,
+    LiveLogPurgeIn,
+    LiveLogPurgeOut,
+    LlmModelListOut,
+    LlmProbeIn,
+    LlmTestOut,
+    SettingsOut,
+    SettingsUpdate,
+)
 from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.llm_settings import (
@@ -83,3 +93,11 @@ def probe_llm_test(body: LlmProbeIn) -> LlmTestOut:
 @router.post("/fofa/test", response_model=FofaTestOut)
 def probe_fofa_test(body: FofaProbeIn) -> FofaTestOut:
     return test_fofa_connectivity(body)
+
+
+@router.post("/logs/purge", response_model=LiveLogPurgeOut)
+def purge_live_logs(body: LiveLogPurgeIn) -> LiveLogPurgeOut:
+    from ..services.live_log import live_log
+
+    stats = live_log.purge_older_than(body.older_than_days)
+    return LiveLogPurgeOut(ok=True, **stats)

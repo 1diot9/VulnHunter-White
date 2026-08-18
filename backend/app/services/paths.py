@@ -37,8 +37,13 @@ def force_rmtree(path: Path, attempts: int = 8) -> None:
         raise RuntimeError(f"无法删除目录: {target}")
 
 
+def project_dir(project_id: int) -> Path:
+    """Project workspace path without creating it."""
+    return PROJECTS_DIR / str(project_id)
+
+
 def project_root(project_id: int) -> Path:
-    path = PROJECTS_DIR / str(project_id)
+    path = project_dir(project_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -109,6 +114,14 @@ def env_dir(project_id: int) -> Path:
 
 def logs_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "logs"
+
+
+def iter_project_ids() -> list[int]:
+    """Numeric workspace folders under PROJECTS_DIR. Does not create anything."""
+    root = PROJECTS_DIR
+    if not root.exists():
+        return []
+    return sorted(int(p.name) for p in root.iterdir() if p.is_dir() and p.name.isdigit())
 
 
 def tool_exec_errors_path(project_id: int) -> Path:

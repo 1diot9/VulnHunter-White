@@ -97,6 +97,18 @@ class FofaTestOut(BaseModel):
     account_error: bool = False
 
 
+class LiveLogPurgeIn(BaseModel):
+    older_than_days: int = Field(ge=0, le=3650)
+
+
+class LiveLogPurgeOut(BaseModel):
+    ok: bool = True
+    older_than_days: int
+    projects: int = 0
+    files: int = 0
+    bytes: int = 0
+
+
 MANUAL_LAB_PROMPT_MAX = 20000
 
 
