@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..models import AppSettings, SessionLocal
+from ..models import AppSettings, Project, SessionLocal
 from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, SettingsOut
 
 LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
@@ -158,6 +158,11 @@ def merge_providers_update(
     return merged
 
 
+def normalize_project_llm_model(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
 def llm_role_for_agent(role: str) -> LlmRole:
     """Map agent/session roles onto configured LLM slots (recon / worker / reviewer)."""
     r = (role or "").strip().replace("-", "_")
@@ -170,14 +175,20 @@ def llm_role_for_agent(role: str) -> LlmRole:
     return "worker"
 
 
-def resolve_llm(role: LlmRole = "worker") -> ResolvedLlm:
+def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> ResolvedLlm:
     with SessionLocal() as db:
         row = db.query(AppSettings).first()
+        project_model = None
+        if project_id:
+            proj = db.get(Project, project_id)
+            project_model = normalize_project_llm_model(
+                getattr(proj, "llm_model", None) if proj else None
+            )
     providers = load_providers_raw(row)
     roles = load_roles_raw(row)
     assignment = roles.get(role) if isinstance(roles.get(role), dict) else {}
     provider_id = str((assignment or {}).get("provider_id") or "").strip()
-    model = str((assignment or {}).get("model") or "").strip()
+    model = project_model or str((assignment or {}).get("model") or "").strip()
 
     provider: dict[str, Any] | None = None
     if provider_id:
@@ -200,7 +211,7 @@ def resolve_llm(role: LlmRole = "worker") -> ResolvedLlm:
             wire_api=wire if wire in _WIRE else "chat",
             model=model,
             api_key=api_key,
-            source=f"provider:{provider_id}",
+            source=f"provider:{provider_id}" + ("+project" if project_model else ""),
         )
 
     # Fallback defaults
@@ -212,7 +223,7 @@ def resolve_llm(role: LlmRole = "worker") -> ResolvedLlm:
         wire_api="chat",
         model=model,
         api_key=api_key,
-        source="default",
+        source="default" + ("+project" if project_model else ""),
     )
 
 

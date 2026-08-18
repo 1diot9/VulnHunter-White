@@ -24,6 +24,7 @@ export type Project = {
   fast_queue_frozen: boolean
   bypass_enabled: boolean
   bypass_queue_frozen: boolean
+  llm_model: string
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -340,6 +341,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      llm_model?: string
     } = {},
   ) =>
     request<Project>('/api/projects', {
@@ -358,6 +360,7 @@ export const api = {
         heuristic_lite: Boolean(opts.heuristic_lite),
         fast_enabled: Boolean(opts.fast_enabled),
         bypass_enabled: Boolean(opts.bypass_enabled),
+        llm_model: (opts.llm_model || '').trim(),
       }),
     }),
   uploadZip: async (
@@ -373,6 +376,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      llm_model?: string
     } = {},
   ) => {
     const fd = new FormData()
@@ -387,6 +391,7 @@ export const api = {
     fd.append('heuristic_lite', opts.heuristic_lite ? 'true' : 'false')
     fd.append('fast_enabled', opts.fast_enabled ? 'true' : 'false')
     fd.append('bypass_enabled', opts.bypass_enabled ? 'true' : 'false')
+    fd.append('llm_model', (opts.llm_model || '').trim())
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
   updateProject: (
@@ -401,6 +406,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      llm_model?: string
     },
   ) =>
     request<Project>(`/api/projects/${id}`, {

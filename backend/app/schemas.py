@@ -153,6 +153,7 @@ class ProjectCreate(BaseModel):
     heuristic_lite: bool = False
     fast_enabled: bool = False
     bypass_enabled: bool = False
+    llm_model: str = Field(default="", max_length=256)
 
 
 class ProjectUpdate(BaseModel):
@@ -165,6 +166,7 @@ class ProjectUpdate(BaseModel):
     heuristic_lite: bool | None = None
     fast_enabled: bool | None = None
     bypass_enabled: bool | None = None
+    llm_model: str | None = Field(default=None, max_length=256)
 
 
 class WeightExtOut(BaseModel):
@@ -193,6 +195,7 @@ class ProjectOut(BaseModel):
     fast_queue_frozen: bool = False
     bypass_enabled: bool = False
     bypass_queue_frozen: bool = False
+    llm_model: str = ""
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime

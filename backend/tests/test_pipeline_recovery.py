@@ -941,7 +941,7 @@ def test_run_reviewer_lab_does_not_skip_docker_when_manual_prompt(tmp_env, proje
             return LoopResult(ok=False, cancelled=True, stop_reason="cancelled")
 
     monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
-    monkeypatch.setattr(pipeline, "resolve_llm", lambda role: object())
+    monkeypatch.setattr(pipeline, "resolve_llm", lambda role, **kwargs: object())
     pipeline._run_reviewer_lab(project)
     assert called["loop"] == 1
     assert lab_setup_finished(project) is False

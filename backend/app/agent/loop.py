@@ -190,7 +190,7 @@ class AgentLoop:
         self.timeout_sec = timeout_sec or settings.timeout_worker_round
         self.context_window = context_window or settings.default_context_window
         self.stop_when = stop_when
-        self.llm = llm or resolve_llm(llm_role_for_agent(role))
+        self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id)
         self.state: dict[str, Any] = {}
         self.watchdog = AgentWatchdog(phase=phase)
         self._last_prompt_tokens = 0

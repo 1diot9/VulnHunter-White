@@ -2279,7 +2279,7 @@ def _run_recon_gated_session(
     run_id = cp.phase_run_id if cp else _new_phase_run(project_id, phase, role)
     resumes = 0
     used_checkpoint = False
-    llm = resolve_llm("recon")
+    llm = resolve_llm("recon", project_id=project_id)
     try:
         while resumes <= settings.recon_max_resumes and not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "recon"), "recon"):
@@ -2380,7 +2380,7 @@ def _run_recon_gated_session(
 
 def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
     system = load_prompt("recon-mark.md")
-    llm = resolve_llm("recon")
+    llm = resolve_llm("recon", project_id=project_id)
     batch_size = max(1, int(settings.recon_mark_batch_size))
     while not cancel.is_set():
         if not _wait_if_paused(project_id, _loop_cancel(project_id, "recon"), "recon"):
@@ -3210,7 +3210,7 @@ def _run_reviewer_lab(project_id: int) -> None:
         run_id = cp.phase_run_id if cp else _new_phase_run(project_id, "reviewer-lab", "reviewer_lab")
         resumes = 0
         used_checkpoint = False
-        llm = resolve_llm("reviewer")
+        llm = resolve_llm("reviewer", project_id=project_id)
         timeout_sec = settings.timeout_docker + settings.timeout_reviewer_static
         max_resumes = max(0, int(settings.phase_max_resumes))
         try:

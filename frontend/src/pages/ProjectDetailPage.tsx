@@ -501,6 +501,9 @@ export default function ProjectDetailPage() {
             </span>
           )}
           <Badge variant="outline">{formatMiningPaths(project)}</Badge>
+          <Badge variant="outline" title={project.llm_model ? '项目模型' : '使用设置页全局模型'}>
+            {project.llm_model || '全局模型'}
+          </Badge>
           <span>tokens {formatTokens(project.tokens_total)}</span>
           <span>{formatMiningProgress(project)}</span>
           <span>

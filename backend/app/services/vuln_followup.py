@@ -320,7 +320,7 @@ def _build_chat_messages(
 
 
 def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
-    llm = resolve_llm("reviewer")
+    llm = resolve_llm("reviewer", project_id=project_id)
     url = llm.base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {llm.api_key}",

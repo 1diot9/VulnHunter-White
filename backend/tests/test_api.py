@@ -176,6 +176,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["manual_lab_prompt"] == ""
         assert created.json()["verifier_enabled"] is False
         assert created.json()["dynamic_verify_enabled"] is False
+        assert created.json()["llm_model"] == ""
         full = client.post(
             "/api/projects",
             json={
@@ -341,6 +342,52 @@ def test_create_and_patch_dynamic_verify_enabled(tmp_env, monkeypatch):
         )
         assert on.status_code == 200
         assert on.json()["dynamic_verify_enabled"] is True
+
+
+def test_project_llm_model_create_patch_and_clear(tmp_env, monkeypatch):
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.projects.start_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/model",
+                "llm_model": "  project-model  ",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["llm_model"] == "project-model"
+        pid = created.json()["id"]
+        cleared = client.patch(f"/api/projects/{pid}", json={"llm_model": "  "})
+        assert cleared.status_code == 200
+        assert cleared.json()["llm_model"] == ""
+        updated = client.patch(f"/api/projects/{pid}", json={"llm_model": "other-model"})
+        assert updated.status_code == 200
+        assert updated.json()["llm_model"] == "other-model"
+
+
+def test_create_zip_llm_model(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"llm_model": " zip-model "},
+        )
+        assert created.status_code == 200
+        assert created.json()["llm_model"] == "zip-model"
 
 
 def test_project_file_progress_counts(tmp_env, project):

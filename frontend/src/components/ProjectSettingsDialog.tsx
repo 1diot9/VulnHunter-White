@@ -3,6 +3,7 @@ import { api, type Project } from '../api'
 import { DynamicVerifyToggle } from './DynamicVerifyToggle'
 import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
+import { ProjectModelSelect } from './ProjectModelSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,6 +32,7 @@ export function ProjectSettingsButton({
   const [heuristicLite, setHeuristicLite] = useState(project.heuristic_lite === true)
   const [fastEnabled, setFastEnabled] = useState(project.fast_enabled === true)
   const [bypassEnabled, setBypassEnabled] = useState(project.bypass_enabled === true)
+  const [llmModel, setLlmModel] = useState(project.llm_model || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -43,6 +45,7 @@ export function ProjectSettingsButton({
     setHeuristicLite(project.heuristic_lite === true)
     setFastEnabled(project.fast_enabled === true)
     setBypassEnabled(project.bypass_enabled === true)
+    setLlmModel(project.llm_model || '')
     setError('')
   }, [
     open,
@@ -53,6 +56,7 @@ export function ProjectSettingsButton({
     project.heuristic_lite,
     project.fast_enabled,
     project.bypass_enabled,
+    project.llm_model,
   ])
 
   const close = () => {
@@ -71,6 +75,7 @@ export function ProjectSettingsButton({
         manual_lab_prompt: text,
         verifier_enabled: verifier,
         dynamic_verify_enabled: dynamicVerify,
+        llm_model: llmModel.trim(),
         ...(canEditPaths
           ? { heuristic_enabled: heuristicEnabled, heuristic_lite: heuristicLite, fast_enabled: fastEnabled, bypass_enabled: bypassEnabled }
           : {}),
@@ -96,14 +101,15 @@ export function ProjectSettingsButton({
           else setOpen(true)
         }}
       >
-        <DialogContent className="sm:max-w-lg" showCloseButton={!saving}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg" showCloseButton={!saving}>
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改动态验证与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明保存后对下一轮审核生效。
+              审计运行中也可修改模型、动态验证与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明保存后对下一轮审核生效。模型对下一轮 Agent 生效。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
             <MiningPathSelect
               heuristicEnabled={heuristicEnabled}
               heuristicLite={heuristicLite}

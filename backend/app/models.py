@@ -82,6 +82,8 @@ class Project(Base):
     # 历史漏洞绕过：收集完毕后按文档逐条尝试绕过
     bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     bypass_queue_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 项目级模型；空则使用设置页全局 default_model
+    llm_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -366,6 +368,7 @@ def _ensure_columns() -> None:
             "fast_queue_frozen": "BOOLEAN DEFAULT 0",
             "bypass_enabled": "BOOLEAN DEFAULT 0",
             "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
+            "llm_model": "VARCHAR(256)",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

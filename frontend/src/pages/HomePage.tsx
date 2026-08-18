@@ -9,6 +9,7 @@ import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import { AuditFlowPreview } from '../components/AuditFlowPreview'
 import { MiningPathSelect } from '../components/MiningPathSelect'
+import { ProjectModelSelect } from '../components/ProjectModelSelect'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +33,7 @@ export default function HomePage() {
   const [heuristicLite, setHeuristicLite] = useState(false)
   const [fastEnabled, setFastEnabled] = useState(false)
   const [bypassEnabled, setBypassEnabled] = useState(false)
+  const [llmModel, setLlmModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -53,6 +55,7 @@ export default function HomePage() {
         heuristic_lite: heuristicLite,
         fast_enabled: fastEnabled,
         bypass_enabled: bypassEnabled,
+        llm_model: llmModel,
       })
       setUrl('')
       await refresh()
@@ -77,6 +80,7 @@ export default function HomePage() {
         heuristic_lite: heuristicLite,
         fast_enabled: fastEnabled,
         bypass_enabled: bypassEnabled,
+        llm_model: llmModel,
       })
       await refresh()
     } catch (e) {
@@ -90,7 +94,7 @@ export default function HomePage() {
     <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量，并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。动态验证与互联网验证默认关闭。</p>
+        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量，并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。每个项目可单独选择模型，不选则使用设置里的全局模型。动态验证与互联网验证默认关闭。</p>
       </div>
 
       <Card className="w-full">
@@ -99,6 +103,7 @@ export default function HomePage() {
           <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
             <div className="space-y-3">
               <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
+              <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
                 heuristicLite={heuristicLite}
@@ -173,6 +178,8 @@ export default function HomePage() {
                 </CardTitle>
                 <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
                   <span>{formatAuditMode(p.audit_mode)}</span>
+                  <span>·</span>
+                  <span>{p.llm_model || '全局模型'}</span>
                   <span>·</span>
                   <span>{formatMiningPaths(p)}</span>
                   <span>·</span>

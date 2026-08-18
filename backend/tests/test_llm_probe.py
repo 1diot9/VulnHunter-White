@@ -155,3 +155,34 @@ def test_llm_role_for_recon_sub_sessions():
     assert llm_role_for_agent("fast_worker") == "worker"
     assert llm_role_for_agent("sink_triage") == "worker"
     assert llm_role_for_agent("bypass_worker") == "worker"
+
+
+def test_resolve_llm_uses_project_model(tmp_env, project):
+    from app.models import AppSettings, Project, SessionLocal
+    from app.services.llm_settings import resolve_llm
+
+    with SessionLocal() as db:
+        row = db.query(AppSettings).first()
+        row.default_model = "global-model"
+        row.default_base_url = "https://api.example.com/v1"
+        row.default_api_key = "sk-test"
+        row.llm_roles = (
+            '{"worker": {"provider_id": "", "model": "role-model", "reasoning_effort": ""}}'
+        )
+        proj = db.get(Project, project)
+        proj.llm_model = "project-model"
+        db.commit()
+
+    global_llm = resolve_llm("worker")
+    assert global_llm.model == "role-model"
+    project_llm = resolve_llm("worker", project_id=project)
+    assert project_llm.model == "project-model"
+    assert project_llm.source.endswith("+project")
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.llm_model = None
+        db.commit()
+    fallback = resolve_llm("worker", project_id=project)
+    assert fallback.model == "role-model"
+    assert "+project" not in fallback.source

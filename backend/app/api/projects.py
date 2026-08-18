@@ -42,6 +42,7 @@ from ..schemas import (
 from ..services.ingest import indexed_weight_exts
 from ..services.lab import lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
+from ..services.llm_settings import normalize_project_llm_model
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.pipeline import (
@@ -247,6 +248,7 @@ def _project_out(
         fast_queue_frozen=bool(getattr(p, "fast_queue_frozen", False)),
         bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
         bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
+        llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -330,6 +332,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             heuristic_lite=heuristic_lite,
             fast_enabled=fast_enabled,
             bypass_enabled=bypass_enabled,
+            llm_model=normalize_project_llm_model(body.llm_model),
         )
         db.add(p)
         db.commit()
@@ -356,6 +359,7 @@ async def create_project_zip(
     heuristic_lite: str = Form("false"),
     fast_enabled: str = Form("false"),
     bypass_enabled: str = Form("false"),
+    llm_model: str = Form(""),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
@@ -384,6 +388,7 @@ async def create_project_zip(
             heuristic_lite=lite_on,
             fast_enabled=fast_on,
             bypass_enabled=bypass_on,
+            llm_model=normalize_project_llm_model(llm_model),
         )
         db.add(p)
         db.commit()
@@ -411,6 +416,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.heuristic_lite is None
         and body.fast_enabled is None
         and body.bypass_enabled is None
+        and body.llm_model is None
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
@@ -434,6 +440,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_lite = bool(getattr(p, "heuristic_lite", False))
         old_fast = bool(getattr(p, "fast_enabled", False))
         old_bypass = bool(getattr(p, "bypass_enabled", False))
+        old_llm_model = normalize_project_llm_model(getattr(p, "llm_model", None))
         if (
             body.heuristic_enabled is not None
             or body.fast_enabled is not None
@@ -481,6 +488,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.verifier_enabled = bool(body.verifier_enabled)
         if body.dynamic_verify_enabled is not None:
             p.dynamic_verify_enabled = bool(body.dynamic_verify_enabled)
+        if body.llm_model is not None:
+            p.llm_model = normalize_project_llm_model(body.llm_model)
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
@@ -510,6 +519,16 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         elif body.dynamic_verify_enabled is False and old_dynamic:
             live_log.system(project_id, "已关闭动态验证，后续审核仅静态复核")
             note_dynamic_verify_changed(project_id, enabled=False)
+        if body.llm_model is not None:
+            new_llm_model = normalize_project_llm_model(out.llm_model)
+            if new_llm_model != old_llm_model:
+                if new_llm_model:
+                    live_log.system(
+                        project_id,
+                        f"项目模型已改为 {new_llm_model}，下一轮 Agent 生效",
+                    )
+                else:
+                    live_log.system(project_id, "项目模型已改回全局默认，下一轮 Agent 生效")
     if mode is not None and old_mode != mode:
         note_audit_mode_changed(project_id, mode)
     if paths_changed:
