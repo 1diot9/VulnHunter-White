@@ -883,7 +883,7 @@ def test_project_phase_reports(tmp_env, project):
         assert "docs/summaries/recon-mark-rescue-1.md" in ids
         round_item = next(i for i in by_phase["worker"]["reports"] if i["id"] == "workspace/rounds/round-1.md")
         assert round_item["kind"] == "round"
-        assert round_item["title"] == "round-1"
+        assert round_item["title"] == "单轮挖掘方向"
         assert round_item["round"] == 1
         mark = next(i for i in by_phase["recon"]["reports"] if i["kind"] == "rescue")
         assert mark["subphase"] == "mark"

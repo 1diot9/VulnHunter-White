@@ -210,6 +210,7 @@ def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, proje
     assert load_checkpoint(project, run_id) is None
     assert not (rounds / "round-1.md").exists()
     assert not (summaries / "worker-round-1.md").exists()
+    assert pipeline._next_worker_round_id(project) == 1
     assert not (workspace_dir(project) / "todos-worker-w1.json").exists()
     assert (docs / "code-map.md").is_file()
     assert (docs / "auth.md").is_file()

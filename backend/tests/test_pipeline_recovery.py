@@ -324,17 +324,24 @@ def test_strip_followup_section_keeps_later_h2():
 
 
 def test_next_worker_round_id_does_not_reuse_existing_files(tmp_env, project):
-    assert pipeline._next_worker_round_id(project, session=1) == 1
+    assert pipeline._next_worker_round_id(project) == 1
     for n in range(1, 9):
         _write_round_report(project, n, f"old-{n}")
     assert max_round_report_no(project) == 8
-    # Restart looks like session=1 again; must not overwrite round-1.md.
-    assert pipeline._next_worker_round_id(project, session=1) == 9
-    # Live-log session already at 27 should keep that number (gap files stay missing).
-    assert pipeline._next_worker_round_id(project, session=27) == 27
+    # Restart / 新跑 must not overwrite round-1.md just because the live-log session is 1.
+    assert pipeline._next_worker_round_id(project) == 9
 
 
-def test_bind_worker_round_id_resume_uses_live_session(tmp_env, project):
+def test_next_worker_round_id_restarts_after_reports_cleared(tmp_env, project):
+    for n in range(1, 9):
+        _write_round_report(project, n, f"old-{n}")
+    for path in (workspace_dir(project) / "rounds").glob("round-*.md"):
+        path.unlink()
+    # reset-progress deletes reports; live-log session may still be 27.
+    assert pipeline._next_worker_round_id(project) == 1
+
+
+def test_bind_worker_round_id_resume_keeps_unwritten_round(tmp_env, project):
     loop = pipeline.AgentLoop(
         project_id=project,
         role="worker",
@@ -343,9 +350,25 @@ def test_bind_worker_round_id_resume_uses_live_session(tmp_env, project):
         user_prompt="u",
     )
     loop.state["round_id"] = 3
-    n = pipeline._bind_worker_round_id(loop, project, new_round=False, session=27)
-    assert n == 27
-    assert loop.state["round_id"] == 27
+    n = pipeline._bind_worker_round_id(loop, project, new_round=False)
+    assert n == 3
+    assert loop.state["round_id"] == 3
+
+
+def test_bind_worker_round_id_resume_avoids_overwrite(tmp_env, project):
+    for n in range(1, 4):
+        _write_round_report(project, n, f"old-{n}")
+    loop = pipeline.AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    loop.state["round_id"] = 3
+    n = pipeline._bind_worker_round_id(loop, project, new_round=False)
+    assert n == 4
+    assert loop.state["round_id"] == 4
 
 
 def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):

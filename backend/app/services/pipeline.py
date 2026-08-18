@@ -2034,22 +2034,30 @@ def _finish_worker_round(
     return "next"
 
 
-def _next_worker_round_id(project_id: int, session: int) -> int:
-    """Durable FinishRound index: live-log session, never reuse an existing round-N.md.
+def _round_report_exists(project_id: int, n: int) -> bool:
+    path = workspace_dir(project_id) / "rounds" / f"round-{n}.md"
+    return path.is_file() and path.stat().st_size > 0
 
-    The worker loop used to keep a process-local counter from 0. After restart /
-    新跑 it reset and FinishRound overwrote workspace/rounds/round-1.md.
+
+def _next_worker_round_id(project_id: int) -> int:
+    """Next FinishRound file index. Never reuse an existing round-N.md.
+
+    Number from files on disk, not live-log session. After reset-progress the
+    reports are deleted but worker/round-N.jsonl pages keep counting; tying the
+    two wrote round-28.md as the first post-reset mining report.
     """
-    return max(max(1, int(session or 1)), max_round_report_no(project_id) + 1)
+    return max_round_report_no(project_id) + 1
 
 
-def _bind_worker_round_id(loop: AgentLoop, project_id: int, *, new_round: bool, session: int | None = None) -> int:
-    if session is None:
-        session = live_log.current_session(project_id, "worker")
+def _bind_worker_round_id(loop: AgentLoop, project_id: int, *, new_round: bool) -> int:
     if new_round:
-        n = _next_worker_round_id(project_id, session)
+        n = _next_worker_round_id(project_id)
     else:
-        n = max(1, int(session or 1))
+        existing = int((loop.state or {}).get("round_id") or 0)
+        if existing > 0 and not _round_report_exists(project_id, existing):
+            n = existing
+        else:
+            n = _next_worker_round_id(project_id)
     loop.state["round_id"] = n
     return n
 
@@ -2111,8 +2119,8 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
             )
             current_run_id = run_id
             _consume_force_new(project_id, "worker")
-            session = _start_log_session(project_id, "worker", extra=fw.path)
-            round_id = _next_worker_round_id(project_id, session)
+            _start_log_session(project_id, "worker", extra=fw.path)
+            round_id = _next_worker_round_id(project_id)
             body = _initial_prompt(
                 "worker.md",
                 worker_id=worker_id,

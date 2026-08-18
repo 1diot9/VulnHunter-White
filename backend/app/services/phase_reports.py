@@ -43,6 +43,7 @@ _SUB_LABEL = {
     "verify": "互联网验证",
 }
 _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue": "抢救"}
+_ROUND_TITLE = "单轮挖掘方向"
 
 _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/code-map.md", "recon", "map", "代码地图"),
@@ -177,7 +178,7 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
             subphase="mine",
             kind="round",
             round_no=n,
-            title=path.stem,
+            title=_ROUND_TITLE,
             content=content,
         )
     if rel.startswith("docs/verifier/"):
@@ -259,7 +260,7 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                     subphase="mine",
                     kind="round",
                     round_no=n,
-                    title=path.stem,
+                    title=_ROUND_TITLE,
                 )
             )
 
