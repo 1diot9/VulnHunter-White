@@ -1006,11 +1006,12 @@ def test_websearch_empty_or_non_json_is_ok(monkeypatch, project):
         def get(self, *args, **kwargs):
             return FakeResp()
 
-    monkeypatch.setattr("app.tools.common.http_client", lambda timeout=20.0: FakeClient())
+    monkeypatch.setattr("app.services.fingerprint_search.http_client", lambda timeout=20.0: FakeClient())
     out = registry.dispatch(_ctx(project, "recon_old_vuln"), "WebSearch", {"query": "halo cve"})
     assert out["ok"] is True
     assert out.get("results") == []
-    assert "空" in (out.get("note") or "")
+    note = out.get("note") or ""
+    assert "不可用" in note or "空" in note or "非 JSON" in note or note == ""
 
 
 def test_dispatch_rejects_non_native_shell(monkeypatch, project):

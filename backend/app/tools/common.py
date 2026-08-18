@@ -17,6 +17,7 @@ import yaml
 
 from ..config import settings
 from ..services.ghsa_service import search_advisories
+from ..services.fingerprint_search import web_search_results
 from ..services.github_issues import search_github_issues
 from ..services.http_client import http_client
 from ..services.ingest import IGNORE_DIR_NAMES
@@ -636,35 +637,7 @@ def _websearch_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     query = (args.get("query") or args.get("search_term") or "").strip()
     if not query:
         return {"ok": False, "error": "缺少 query"}
-    try:
-        with http_client(timeout=20.0) as client:
-            r = client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-            )
-            r.raise_for_status()
-            raw = (r.text or "").strip()
-            if not raw:
-                return {"ok": True, "query": query, "results": [], "note": "搜索接口返回空"}
-            try:
-                data = r.json()
-            except Exception:  # noqa: BLE001
-                return {"ok": True, "query": query, "results": [], "note": "搜索接口非 JSON"}
-        if not isinstance(data, dict):
-            return {"ok": True, "query": query, "results": [], "note": "搜索接口格式异常"}
-        results = []
-        if data.get("AbstractText"):
-            results.append({"title": data.get("Heading") or query, "snippet": data["AbstractText"], "url": data.get("AbstractURL")})
-        for topic in (data.get("RelatedTopics") or [])[:8]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append({"title": topic.get("Text", "")[:80], "snippet": topic.get("Text"), "url": topic.get("FirstURL")})
-            elif isinstance(topic, dict) and "Topics" in topic:
-                for t in topic["Topics"][:3]:
-                    if t.get("Text"):
-                        results.append({"title": t.get("Text", "")[:80], "snippet": t.get("Text"), "url": t.get("FirstURL")})
-        return {"ok": True, "query": query, "results": results[:10]}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": True, "query": query, "results": [], "note": f"搜索不可用: {e}"}
+    return web_search_results(query)
 
 
 def _search_ghsa_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
