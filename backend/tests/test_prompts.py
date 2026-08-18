@@ -35,6 +35,9 @@ INITIAL_DOCS = (
     "reviewer-lab-retry-timeout.md",
     "reviewer-lab-retry-other.md",
     "verifier.md",
+    "fast_worker.md",
+    "bypass_worker.md",
+    "sink_triage.md",
 )
 
 
@@ -141,6 +144,11 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "默认密码" in text
     assert "弱口令" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
+    followup = load_prompt("initial/reviewer-dynamic-followup.md")
+    assert "追加动态验证" in followup
+    assert "evidence_level=dynamic" in followup
+    assert "不要从零重做静态分析" in followup
+    assert "CollectLabFingerprints" in followup
     assert "fofa_fingerprint" in load_prompt("initial/reviewer.md")
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
@@ -165,6 +173,28 @@ def test_worker_prompt_requires_default_exploitability():
     assert "root_cause_key" in worker
     assert "默认密码" in worker
     assert "弱口令" in worker
+    assert "-u/--url" in worker
+    assert "-c/--cmd" in worker
+    assert "回显" in worker
+
+
+def test_poc_prompt_requires_cli_parameters():
+    poc = load_prompt("poc.md")
+    assert "-u/--url" in poc
+    assert "-c/--cmd" in poc
+    assert "argparse" in poc
+    assert "命令输出" in poc
+    assert "不要写死" in poc
+    reviewer = load_prompt("reviewer.md")
+    assert "poc_code" in reviewer
+    assert "-c/--cmd" in reviewer
+    fast = load_prompt("fast_worker.md")
+    assert "-c/--cmd" in fast
+    bypass = load_prompt("bypass_worker.md")
+    assert "-c/--cmd" in bypass
+    assert "-c/--cmd" in load_prompt("initial/worker.md")
+    assert "-c/--cmd" in load_prompt("initial/fix.md")
+    assert "poc.py -u" in load_prompt("verifier.md")
 
 
 def test_audit_mode_overlay_prompts(tmp_env, project):
@@ -186,6 +216,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     overlay = pipeline._phase_system_prompt(project, "worker.md")
     assert "赏金模式" in overlay
     assert "什么算漏洞" in overlay
+    assert "-u/--url" in overlay
+    assert "-c/--cmd" in overlay
     with SessionLocal() as db:
         p = db.get(Project, project)
         p.audit_mode = "full"
@@ -194,6 +226,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "全量模式" in full_overlay
     assert "双层审核" in full_overlay
     assert "仅静态" in full_overlay
+    assert "-c/--cmd" in full_overlay
+    assert full_overlay.rindex("仅静态") > full_overlay.rindex("-c/--cmd")
 
     with SessionLocal() as db:
         p = db.get(Project, project)
@@ -283,6 +317,33 @@ def test_recon_mark_weights_non_http_entries():
     assert "不要只标 HTTP" in recon_initial
 
 
+def test_fast_worker_and_sink_triage_prompts():
+    worker = load_prompt("fast_worker.md")
+    initial = load_prompt("initial/fast_worker.md")
+    triage = load_prompt("sink_triage.md")
+    triage_initial = load_prompt("initial/sink_triage.md")
+    assert "FinishSink" in worker
+    assert "FinishFile" in worker
+    assert "不要 FinishFile / FinishRound" in worker
+    assert "FinishSink" in initial
+    assert "FinishSinkTriage" in triage
+    assert "禁止读源码" in triage
+    assert "FinishSinkTriage" in triage_initial
+    assert "不要读文件" in triage_initial
+
+
+def test_bypass_worker_prompts():
+    worker = load_prompt("bypass_worker.md")
+    initial = load_prompt("initial/bypass_worker.md")
+    assert "FinishBypass" in worker
+    assert "不要 FinishFile / FinishRound / FinishSink" in worker
+    assert "patched" in worker
+    assert "unpatched" in worker
+    assert "FinishBypass" in initial
+    assert "${old_vuln_doc}" in initial
+    assert "bypass_submitted" in initial
+
+
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():
     recon = load_prompt("recon.md")
     initial = load_prompt("initial/recon.md")
@@ -322,31 +383,44 @@ def test_pipeline_source_has_no_inline_initial_prompts():
         assert needle not in src, needle
 
 
-def test_reviewer_lab_prompt_is_setup_only():
+def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     text = load_prompt("reviewer-lab.md")
     assert "独立一轮" in text
     assert "FinishLab" in text
     assert "ConfirmVuln" in text
     assert "不要搭 Docker" in text or "不是" in text
+    assert "${lab_image}" in text
+    assert "${lab_container}" in text
     initial = load_prompt("initial/reviewer-lab.md")
     assert "FinishLab" in initial
     assert "不要审核漏洞" in initial
+    assert "${lab_image}" in initial
     docker = load_prompt("docker.md")
     assert "do not review vulnerabilities" in docker
+    assert "${lab_image}" in docker
+    assert "${lab_container}" in docker
+    assert "${lab_compose_project}" in docker
+    rendered = pipeline._lab_system_prompt(project)
+    assert f"demo-{project}:lab" in rendered
+    assert f"demo-{project}" in rendered
+    assert "${lab_image}" not in rendered
 
 
-def test_verifier_prompt_requires_fofa_and_one_success():
+def test_verifier_prompt_requires_fofa_and_three_successes():
     text = load_prompt("verifier.md")
     assert "FofaSearch" in text
     assert "FinishVerifier" in text
     assert "10" in text
-    assert "任一" in text or "任一目标" in text
+    assert "3 个" in text
+    assert "expand" in text
     assert "poc" in text
     assert "response" in text
     assert "未测" in text
     assert "targets" in text
     assert "共享" in text
     assert "fofa_query" in text
+    assert "5 轮" in text
+    assert "50" in text
     initial = load_prompt("initial/verifier.md")
     assert "FofaSearch" in initial
     assert "FinishVerifier" in initial
@@ -358,7 +432,12 @@ def test_verifier_prompt_requires_fofa_and_one_success():
     assert "fofa_query=" in initial
     assert "未测" in initial
     assert "共享" in initial
+    assert "3 个" in initial
+    assert "expand=true" in initial
+    assert "5 轮" in initial
+    assert "50" in initial
     assert "增删改" in text or "禁止" in text
+    assert "app-fingerprints" in text or "项目级" in text or "项目应用指纹" in text
 
 
 def test_old_vuln_prompt_persist_is_not_completion():

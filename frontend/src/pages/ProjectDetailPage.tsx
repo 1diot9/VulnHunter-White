@@ -17,8 +17,11 @@ import { Card, CardContent } from '@/components/ui/card'
 import {
   formatAuditMode,
   formatAuditModeHint,
-  formatFileProgress,
+  formatMiningPaths,
+  formatMiningProgress,
+  formatProjectStatus,
   formatTokens,
+  projectStatusBadgeVariant,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
@@ -31,11 +34,6 @@ const PHASE_TABS = [
   ['reviewer', '审核'],
   ['verifier', '验证'],
 ] as const
-const WORKER_LOG_TABS = [
-  ['mine', '启发式'],
-  ['fast', '快速扫描'],
-  ['fix', '修复'],
-] as const
 const REVIEWER_LOG_TABS = [
   ['reviewer-lab', '环境搭建'],
   ['reviewer-review', '审核'],
@@ -46,6 +44,15 @@ const RECON_LOG_TABS = [
   ['recon-old-vuln', '历史漏洞', 'old_vulns'],
   ['recon-mark', '盖章', 'mark'],
 ] as const
+
+function workerLogTabs(project: { heuristic_enabled?: boolean; fast_enabled?: boolean; bypass_enabled?: boolean }) {
+  const tabs: [string, string][] = []
+  if (project.heuristic_enabled !== false) tabs.push(['mine', '启发式'])
+  if (project.fast_enabled === true) tabs.push(['fast', '快速扫描'])
+  if (project.bypass_enabled === true) tabs.push(['bypass', '历史漏洞绕过'])
+  tabs.push(['fix', '修复'])
+  return tabs
+}
 
 function isSessionStart(ev: LogEvent): boolean {
   if (ev.session_start) return true
@@ -414,6 +421,8 @@ export default function ProjectDetailPage() {
               filesAudited={project.files_audited}
               filesSkipped={project.files_skipped}
               filesTotal={project.files_total}
+              filesWeight100={project.files_weight100}
+              filesWeight100Audited={project.files_weight100_audited}
               workerRounds={project.worker_rounds}
               vulnPending={project.vuln_pending}
               reconSubphases={project.recon_subphases}
@@ -422,6 +431,16 @@ export default function ProjectDetailPage() {
               dynamicVerifyEnabled={project.dynamic_verify_enabled}
               verifierEnabled={project.verifier_enabled}
               verifierPending={project.verifier_pending}
+              heuristicEnabled={project.heuristic_enabled}
+              heuristicLite={project.heuristic_lite}
+              fastEnabled={project.fast_enabled}
+              fastQueueFrozen={project.fast_queue_frozen}
+              sinksQueued={project.sinks_queued}
+              sinksDone={project.sinks_done}
+              bypassEnabled={project.bypass_enabled}
+              bypassQueueFrozen={project.bypass_queue_frozen}
+              bypassQueued={project.bypass_queued}
+              bypassDone={project.bypass_done}
               onSelect={(pid) => {
                 setTab('logs')
                 if (pid !== 'done') selectPhase(pid)
@@ -456,7 +475,9 @@ export default function ProjectDetailPage() {
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-          <Badge variant="info">{project.status}</Badge>
+          <Badge variant={projectStatusBadgeVariant(project.status)}>
+            {formatProjectStatus(project.status)}
+          </Badge>
           {project.status === 'paused' || project.status === 'completed' ? (
             <AuditModeSelect
               value={project.audit_mode}
@@ -479,8 +500,9 @@ export default function ProjectDetailPage() {
               <BountyScopeButton />
             </span>
           )}
+          <Badge variant="outline">{formatMiningPaths(project)}</Badge>
           <span>tokens {formatTokens(project.tokens_total)}</span>
-          <span>{formatFileProgress(project)}</span>
+          <span>{formatMiningProgress(project)}</span>
           <span>
             洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}
           </span>
@@ -488,8 +510,14 @@ export default function ProjectDetailPage() {
         <WeightExtBadges exts={project.weight_exts} />
         <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
           {formatAuditModeHint(project.audit_mode)}
+          {project.fast_enabled
+            ? ' 快速扫描覆盖 SAST Sink（命令执行、注入、反序列化等）；缺鉴权、IDOR、业务逻辑仍靠启发式。'
+            : ''}
+          {project.bypass_enabled
+            ? ' 历史漏洞绕过以收集到的历史漏洞文档为输入，每轮尝试绕过一条。'
+            : ''}
           {project.status === 'paused' || project.status === 'completed'
-            ? ' 暂停或完成后可更改，续跑后按新规则生效。'
+            ? ' 暂停或完成后可更改挖掘模式；挖掘路径请到项目配置中修改。续跑后按新规则生效。'
             : ''}
         </p>
       </div>
@@ -545,7 +573,7 @@ export default function ProjectDetailPage() {
                   ) : null}
                   {k === 'worker' ? (
                     <div className="vh-phase-subs">
-                      {WORKER_LOG_TABS.map(([sk, slabel]) => (
+                      {workerLogTabs(project).map(([sk, slabel]) => (
                         <Button
                           key={sk}
                           className="h-6 px-2 text-[11px]"

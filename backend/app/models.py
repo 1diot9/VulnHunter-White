@@ -73,6 +73,15 @@ class Project(Base):
     verifier_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Reviewer 动态验证（Docker 靶场 / HTTP PoC / debug MCP）；默认关闭，仅静态复核
     dynamic_verify_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 挖掘路径：启发式按文件 / 快速按 Sink / 历史漏洞绕过；至少开一条
+    heuristic_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 启发式轻量：仅权重 100 的文件作为 Worker 入口
+    heuristic_lite: Mapped[bool] = mapped_column(Boolean, default=False)
+    fast_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    fast_queue_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 历史漏洞绕过：收集完毕后按文档逐条尝试绕过
+    bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    bypass_queue_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -82,6 +91,8 @@ class Project(Base):
 
     files: Mapped[list[FileWeight]] = relationship(back_populates="project", cascade="all, delete-orphan")
     sources: Mapped[list[Source]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    sinks: Mapped[list["Sink"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    bypass_targets: Mapped[list["BypassTarget"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     vulns: Mapped[list[Vuln]] = relationship(back_populates="project", cascade="all, delete-orphan")
     phase_runs: Mapped[list[PhaseRun]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
@@ -118,6 +129,65 @@ class Source(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="sources")
+
+
+class Sink(Base):
+    __tablename__ = "sinks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    line_start: Mapped[int] = mapped_column(Integer, default=0)
+    line_end: Mapped[int] = mapped_column(Integer, default=0)
+    check_ids: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    severity: Mapped[str] = mapped_column(String(32), default="WARNING")
+    confidence: Mapped[str] = mapped_column(String(32), default="MEDIUM")
+    mapped_vuln_type: Mapped[str] = mapped_column(String(64), default="other")
+    code_score: Mapped[int] = mapped_column(Integer, default=0)
+    # candidate | queued | claimed | done | dropped_agent
+    status: Mapped[str] = mapped_column(String(32), default="candidate", index=True)
+    # pending | vuln_submitted | unreachable | sanitized | intended | noise
+    verdict: Mapped[str] = mapped_column(String(32), default="pending")
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_decision: Mapped[str | None] = mapped_column(String(16), nullable=True)  # keep|drop|defer
+    agent_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vuln_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Project] = relationship(back_populates="sinks")
+
+
+class BypassTarget(Base):
+    __tablename__ = "bypass_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cve: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fix_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # queued | claimed | done
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    # pending | bypass_submitted | still_patched | unreachable | incomplete | intended
+    verdict: Mapped[str] = mapped_column(String(32), default="pending")
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vuln_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Project] = relationship(back_populates="bypass_targets")
 
 
 class Vuln(Base):
@@ -234,6 +304,8 @@ REQUIRED_TABLES = (
     "projects",
     "file_weights",
     "sources",
+    "sinks",
+    "bypass_targets",
     "vulns",
     "phase_runs",
     "tool_logs",
@@ -288,6 +360,12 @@ def _ensure_columns() -> None:
             "manual_lab_prompt": "TEXT",
             "verifier_enabled": "BOOLEAN DEFAULT 0",
             "dynamic_verify_enabled": "BOOLEAN DEFAULT 0",
+            "heuristic_enabled": "BOOLEAN DEFAULT 1",
+            "heuristic_lite": "BOOLEAN DEFAULT 0",
+            "fast_enabled": "BOOLEAN DEFAULT 0",
+            "fast_queue_frozen": "BOOLEAN DEFAULT 0",
+            "bypass_enabled": "BOOLEAN DEFAULT 0",
+            "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

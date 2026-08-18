@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn, formatAuditMode, formatMiningPaths } from '@/lib/utils'
 
 const RECON_STEPS = [
-  { id: 'map', label: '代码地图/鉴权', hint: '梳理模块、HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。' },
+  { id: 'map', label: '代码地图/鉴权', hint: '梳理模块、HTTP 与非 HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。' },
   { id: 'source_ext', label: '扩展名', hint: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。' },
   { id: 'old_vulns', label: '历史漏洞', hint: '先检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 与 GitHub Issues 爬虫补漏并核验。' },
   { id: 'mark', label: '文件定权', hint: '按批次给源码定权或跳过，决定后续挖掘优先级。' },
@@ -16,7 +16,9 @@ type PreviewProps = {
   manualLab: boolean
   verifierEnabled: boolean
   heuristicEnabled?: boolean
+  heuristicLite?: boolean
   fastEnabled?: boolean
+  bypassEnabled?: boolean
   className?: string
 }
 
@@ -36,12 +38,16 @@ function buildNodes({
   manualLab,
   verifierEnabled,
   heuristicEnabled = true,
+  heuristicLite = false,
   fastEnabled = false,
+  bypassEnabled = false,
 }: PreviewProps): FlowNode[] {
   const bounty = auditMode !== 'full'
   const useManual = dynamicVerifyEnabled && manualLab
   const heuristicOn = heuristicEnabled !== false
+  const liteOn = heuristicOn && heuristicLite === true
   const fastOn = fastEnabled === true
+  const bypassOn = bypassEnabled === true
   const scopeChip = bounty
     ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、源码硬编码密钥等。' }
     : { id: 'scope', label: '含低危害难利用', hint: 'CORS、反射 XSS、缺速率限制、安全头等由 Reviewer 分层。' }
@@ -50,12 +56,18 @@ function buildNodes({
   if (heuristicOn) {
     mines.push({
       id: 'heuristic',
-      title: '启发式',
+      title: liteOn ? '启发式轻量' : '启发式',
       tag: bounty ? '赏金' : '全量',
-      body: bounty
-        ? '按文件定权沿 source→sink 挖洞。缺鉴权、IDOR、业务逻辑靠这条。只报默认可利用的高危害。'
-        : '按文件定权沿 source→sink 挖洞。缺鉴权、IDOR、业务逻辑靠这条。同时收录 CORS、反射 XSS 等低危害难利用项。',
-      hint: '启发式 Worker 从高权未审计文件挖洞；与快速扫描并行，两条都结束后才算挖掘完成。',
+      body: liteOn
+        ? bounty
+          ? '只把权重 100 的入口当焦点（含 HTTP / WebSocket / RPC / MQ），正向 source→sink。缺鉴权、IDOR、业务逻辑靠这条。只报默认可利用的高危害。'
+          : '只把权重 100 的入口当焦点（含 HTTP / WebSocket / RPC / MQ），正向 source→sink。缺鉴权、IDOR、业务逻辑靠这条。同时收录 CORS、反射 XSS 等低危害难利用项。'
+        : bounty
+          ? '按文件定权：入口正向挖，Service / 过滤器回推或控面，低权薄扫。缺鉴权、IDOR、业务逻辑靠这条。只报默认可利用的高危害。'
+          : '按文件定权：入口正向挖，Service / 过滤器回推或控面，低权薄扫。缺鉴权、IDOR、业务逻辑靠这条。同时收录 CORS、反射 XSS 等低危害难利用项。',
+      hint: liteOn
+        ? '历史漏洞收集完毕后，启发式 Worker 只注入权重 100 的未审计文件；更低权重不作为入口、不阻塞完成。可与文件定权并行。'
+        : '历史漏洞收集完毕后，启发式 Worker 从高权未审计文件挖洞；可与文件定权并行。开启的挖掘路径并行，都结束后才算挖掘完成。',
       chips: [scopeChip],
     })
   }
@@ -71,13 +83,25 @@ function buildNodes({
       chips: [scopeChip],
     })
   }
+  if (bypassOn) {
+    mines.push({
+      id: 'bypass',
+      title: '历史漏洞绕过',
+      tag: bounty ? '赏金' : '全量',
+      body: bounty
+        ? '以历史漏洞文档为输入，每轮尝试绕过一条补丁或确认未修复洞仍可打。只报默认可利用的高危害。'
+        : '以历史漏洞文档为输入，每轮尝试绕过一条补丁或确认未修复洞仍可打。同时收录低危害难利用项。',
+      hint: '历史漏洞收集完毕后按文档逐条注入；与启发式 / 快速扫描并行。',
+      chips: [scopeChip],
+    })
+  }
 
   return [
     {
       id: 'recon',
       title: '侦察',
-      body: '摸清结构与鉴权，补齐扩展名、收录历史漏洞并给文件定权。四步全部完成后才进入挖掘。',
-      hint: '导入后先跑侦察：代码地图、源码扩展名、历史漏洞、文件定权。',
+      body: '摸清结构与鉴权，补齐扩展名、收录历史漏洞并给文件定权。启发式和历史漏洞绕过在历史漏洞收集完毕后开始；快速扫描等四步（含定权）全部完成。',
+      hint: '导入后先跑侦察：代码地图、源码扩展名、历史漏洞、文件定权。启发式不等待定权全部结束。',
       chips: [...RECON_STEPS],
     },
     ...mines,
@@ -116,14 +140,15 @@ function buildNodes({
       tag: verifierEnabled ? 'FOFA' : '未开',
       skipped: !verifierEnabled,
       body: verifierEnabled
-        ? 'Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认 10 个，任一成功即结束。'
+        ? 'Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认 10 个，成功 3 个即结束。'
         : '未开启。确认后不搜互联网目标，审核结束即进入完成。',
       hint: verifierEnabled
-        ? '一个项目只搜一次 FOFA，结果共享。任意文件删除、DoS、SQL 增删改等破坏性漏洞会跳过。需配置 FOFA Key。'
+        ? '当前这批 10 个凑不满 3 个成功时，保留已成功的并再搜下一轮，最多 5 轮（合计最多 50 个目标）。语法有命中后项目内共享。任意文件删除、DoS、SQL 增删改等破坏性漏洞会跳过。需配置 FOFA Key。'
         : '互联网验证默认关闭。勾选后才会在确认前台漏洞后做 FOFA 复测。',
       chips: verifierEnabled
         ? [
             { id: 'frontend', label: '仅前台洞', hint: '后台漏洞不走互联网复测。' },
+            { id: 'three', label: '成功 3 个', hint: '每轮 10 个凑满 3 个成功即结束；不足则保留已成功的并再搜下一轮，最多 5 轮 / 50 个目标。' },
             { id: 'skip', label: '破坏性跳过', hint: '任意文件删除、DoS、SQL 增删改等会中断业务的漏洞自动跳过。' },
           ]
         : [],
@@ -218,8 +243,19 @@ function FlowFork({ nodes }: { nodes: FlowNode[] }) {
   return (
     <div>
       <div className="mx-auto h-3 w-px bg-slate-600" aria-hidden />
-      <div className="relative grid grid-cols-2 gap-2">
-        <div className="pointer-events-none absolute top-0 left-1/4 right-1/4 h-px bg-slate-600" aria-hidden />
+      <div
+        className={cn(
+          'relative grid gap-2',
+          nodes.length >= 3 ? 'grid-cols-3' : 'grid-cols-2',
+        )}
+      >
+        <div
+          className={cn(
+            'pointer-events-none absolute top-0 h-px bg-slate-600',
+            nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
+          )}
+          aria-hidden
+        />
         {nodes.map((node) => (
           <div key={node.id} className="flex min-w-0 flex-col items-center">
             <div className="h-3 w-px shrink-0 bg-slate-600" aria-hidden />
@@ -229,14 +265,20 @@ function FlowFork({ nodes }: { nodes: FlowNode[] }) {
             <div className="min-h-3 w-px flex-1 bg-slate-600" aria-hidden />
           </div>
         ))}
-        <div className="pointer-events-none absolute bottom-0 left-1/4 right-1/4 h-px bg-slate-600" aria-hidden />
+        <div
+          className={cn(
+            'pointer-events-none absolute bottom-0 h-px bg-slate-600',
+            nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
+          )}
+          aria-hidden
+        />
       </div>
     </div>
   )
 }
 
 function isMineNode(id: string) {
-  return id === 'heuristic' || id === 'fast'
+  return id === 'heuristic' || id === 'fast' || id === 'bypass'
 }
 
 function summaryText({
@@ -245,17 +287,20 @@ function summaryText({
   manualLab,
   verifierEnabled,
   heuristicEnabled = true,
+  heuristicLite = false,
   fastEnabled = false,
+  bypassEnabled = false,
 }: PreviewProps): string {
   const mode = formatAuditMode(auditMode)
   const paths = formatMiningPaths({
     heuristic_enabled: heuristicEnabled,
+    heuristic_lite: heuristicLite,
     fast_enabled: fastEnabled,
+    bypass_enabled: bypassEnabled,
   })
-  const mine =
-    heuristicEnabled !== false && fastEnabled === true
-      ? `${mode} · 启发式 ∥ 快速扫描`
-      : `${mode} · ${paths}`
+  const onCount =
+    (heuristicEnabled !== false ? 1 : 0) + (fastEnabled === true ? 1 : 0) + (bypassEnabled === true ? 1 : 0)
+  const mine = onCount > 1 ? `${mode} · ${paths.replaceAll(' + ', ' ∥ ')}` : `${mode} · ${paths}`
   const review = dynamicVerifyEnabled
     ? manualLab
       ? '动态验证（人工靶场优先）'
@@ -297,7 +342,7 @@ export function AuditFlowPreview(props: PreviewProps) {
           ))}
         </div>
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          侦察完成后开启的挖掘路径并行推进，并与审核并行：一边挖一边审。证据不足或需改报告时，打回 Worker / Fix 再审。开启的挖掘路径都结束后项目才完成。
+          历史漏洞收集完毕后启发式与历史漏洞绕过可与定权并行；快速扫描等侦察四步完成。开启的挖掘路径并行推进，并与审核并行：一边挖一边审。证据不足或需改报告时，打回 Worker / Fix 再审。开启的挖掘路径都结束后项目才完成。
         </p>
       </section>
     </TooltipProvider>

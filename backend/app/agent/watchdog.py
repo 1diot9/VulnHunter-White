@@ -24,23 +24,42 @@ from typing import Any
 
 LAB_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。本轮是独立的 Docker 靶场搭建，请立刻 Read/Glob 找 Dockerfile/compose，"
-    "用 shell 构建并启动，Write env/env.json；完成后 FinishLab。"
+    "用 shell 构建并启动（自建镜像与 Web 容器必须使用提示词中的 lab_image / lab_container，命名含项目名与项目ID），"
+    "Write env/env.json；完成后 FinishLab。"
     "无法搭建则 FinishLab(skipped=true, reason=...)。不要审核漏洞。"
 )
 
 VERIFIER_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。请立刻 Read 漏洞报告。"
-    "若本项目已有共享 FOFA 结果，直接按这些目标复测，不要再 FofaSearch；"
-    "否则 FofaSearch 一次（一个项目只搜一次，结果给全部漏洞共享）。"
-    "任一成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., fofa_query=...)。不要空转。"
+    "若本项目已有共享 FOFA 命中，直接按这些目标复测，不要为换语法再 FofaSearch；"
+    "否则用项目应用指纹 FofaSearch（有命中后冻结语法；0 条可改写最多 3 次）。"
+    "凑满 3 个成功即 FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., fofa_query=...)；"
+    "当前这批测完仍不足 3 个则保留成功的，FofaSearch(expand=true) 再搜下一轮（最多 5 轮 / 50 个目标）。不要空转。"
 )
 
 NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。纯文字回复无法读取代码、执行命令或落盘结果，对任务没有进展。"
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
-    "挖掘轮次：非入口文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的入口已完整分析后才 FinishRound；"
+    "挖掘轮次：无独立审计价值的文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的焦点已按角色分析完后才 FinishRound；"
     "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员） / ReturnToWorker；"
-    "互联网验证请复用项目共享 FOFA 结果或 FofaSearch 一次 / FinishVerifier；修复请 FinishFix。"
+    "互联网验证请复用项目共享 FOFA 命中或用项目指纹 FofaSearch（0 条可改写最多 3 次；当前批次不足 3 个成功可 expand 再搜，最多 5 轮 / 50 个目标） / FinishVerifier；修复请 FinishFix。"
+)
+
+FAST_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本轮只验证注入的这一条 Sink。"
+    "请立刻 Grep 生产调用并从 Sink 回推用户可控入口；无生产调用则 FinishSink(verdict=unreachable)。"
+    "分析结束后必须 FinishSink。不要 FinishFile / FinishRound。"
+)
+
+BYPASS_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本轮只分析注入的这一条历史漏洞。"
+    "请立刻 Grep/Read 当前源码找对应实现并尝试绕过；找不到代码则 FinishBypass(verdict=unreachable)。"
+    "分析结束后必须 FinishBypass。不要 FinishFile / FinishRound / FinishSink。"
+)
+
+TRIAGE_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本批只做 keep / drop / defer，禁止读代码。"
+    "请立刻对每条 Sink 给出 decision，然后 FinishSinkTriage(decisions=[...])。"
 )
 
 IDENTICAL_TOOL_NUDGE = (
@@ -82,11 +101,29 @@ RECON_SOURCE_EXT_PERSIST_NUDGE = (
 WORKER_FINISH_INTERVAL = 50
 
 WORKER_FINISH_NUDGE = (
-    "看门狗提醒：挖掘已连续 {n} 轮未调用 FinishFile。沿调用链已确认不能作为入口点的文件请立刻 "
-    "FinishFile(paths=[...])，不要只标一开始注入的入口文件，也不要等收工再攒着——"
-    "未标记的非入口文件会被再次注入。FinishFile 之后继续分析本轮注入入口，禁止立刻 FinishRound。"
-    "仅当一开始注入的入口文件 source→sink 已完整分析后，才 FinishFile 它并 FinishRound；report 对齐 templates/round-report.md。"
-    "仍有未查清的入口链路可继续，但不要重复已读代码或无限扩读。上下文会被压缩，拖延标记会丢失进展。"
+    "看门狗提醒：挖掘已连续 {n} 轮未调用 FinishFile。沿调用链已确认没有独立审计价值的文件请立刻 "
+    "FinishFile(paths=[...])，不要只标一开始注入的焦点文件，也不要等收工再攒着——"
+    "未标记的非入口文件会被再次注入。FinishFile 其它文件之后继续分析本轮焦点，禁止立刻 FinishRound。"
+    "仅当一开始注入的焦点文件已按角色分析完后，才 FinishFile 它并 FinishRound；report 对齐 templates/round-report.md。"
+    "仍有未查清的焦点链路可继续，但不要重复已读代码或无限扩读。上下文会被压缩，拖延标记会丢失进展。"
+)
+
+FAST_FINISH_NUDGE = (
+    "看门狗提醒：快速扫描已连续 {n} 轮未调用 FinishSink。"
+    "请立刻结束本轮注入的这一条 Sink：无生产调用则 unreachable，否则回推到用户入口后 "
+    "FinishSink(verdict=...)。不要 FinishFile / FinishRound。"
+)
+
+BYPASS_FINISH_NUDGE = (
+    "看门狗提醒：历史漏洞绕过已连续 {n} 轮未调用 FinishBypass。"
+    "请立刻结束本轮注入的这一条历史漏洞：找不到代码则 unreachable，补丁完整则 still_patched，"
+    "否则绕过并 SubmitVuln 后 FinishBypass(verdict=bypass_submitted, vuln_id=...)。"
+    "不要 FinishFile / FinishRound / FinishSink。"
+)
+
+TRIAGE_FINISH_NUDGE = (
+    "看门狗提醒：Sink 筛选已连续 {n} 轮未调用 FinishSinkTriage。"
+    "请立刻对本批每条给出 keep / drop / defer，然后 FinishSinkTriage。不要读代码。"
 )
 
 # Consecutive idle turns reset when any of these tools is called this turn.
@@ -95,6 +132,9 @@ PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon-old-vuln-ghsa": frozenset({"WriteOldVuln"}),
     "recon-source-ext": frozenset({"AddSourceExt"}),
     "worker": frozenset({"FinishFile"}),
+    "fast-worker": frozenset({"FinishSink"}),
+    "bypass-worker": frozenset({"FinishBypass"}),
+    "sink-triage": frozenset({"FinishSinkTriage"}),
 }
 
 
@@ -111,7 +151,7 @@ class AgentWatchdog:
     reason: str | None = None
 
     def _persist_interval(self) -> int:
-        if self.phase == "worker":
+        if self.phase in ("worker", "fast-worker", "bypass-worker", "sink-triage"):
             return self.worker_finish_interval
         if self.phase in RECON_PERSIST_PHASES:
             return self.persist_nudge_interval
@@ -132,6 +172,12 @@ class AgentWatchdog:
         if self.idle_turns % interval == 0:
             if self.phase == "worker":
                 return WORKER_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase == "fast-worker":
+                return FAST_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase == "bypass-worker":
+                return BYPASS_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase == "sink-triage":
+                return TRIAGE_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln-ghsa":
@@ -144,6 +190,12 @@ class AgentWatchdog:
         n = self.idle_turns
         if self.phase == "worker":
             return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记非入口文件"
+        if self.phase == "fast-worker":
+            return f"看门狗：快速扫描连续 {n} 轮未 FinishSink，已提醒立刻结束本条 Sink"
+        if self.phase == "bypass-worker":
+            return f"看门狗：历史漏洞绕过连续 {n} 轮未 FinishBypass，已提醒立刻结束本条"
+        if self.phase == "sink-triage":
+            return f"看门狗：Sink 筛选连续 {n} 轮未 FinishSinkTriage，已提醒立刻提交决策"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-old-vuln-ghsa":
@@ -159,6 +211,12 @@ class AgentWatchdog:
             return LAB_NO_TOOL_NUDGE
         if self.phase == "verifier":
             return VERIFIER_NO_TOOL_NUDGE
+        if self.phase in ("fast-worker", "fast_worker"):
+            return FAST_NO_TOOL_NUDGE
+        if self.phase in ("bypass-worker", "bypass_worker"):
+            return BYPASS_NO_TOOL_NUDGE
+        if self.phase in ("sink-triage", "sink_triage"):
+            return TRIAGE_NO_TOOL_NUDGE
         return NO_TOOL_NUDGE
 
     def snapshot(self) -> dict[str, Any]:

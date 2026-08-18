@@ -30,6 +30,7 @@ class LoopCheckpoint:
     last_prompt_tokens: int = 0
     timeout_sec: int = 0
     rate_limit_retries: int = 0
+    transient_retries: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class LoopCheckpoint:
             "last_prompt_tokens": self.last_prompt_tokens,
             "timeout_sec": self.timeout_sec,
             "rate_limit_retries": self.rate_limit_retries,
+            "transient_retries": self.transient_retries,
         }
 
     @classmethod
@@ -68,6 +70,7 @@ class LoopCheckpoint:
             last_prompt_tokens=int(data.get("last_prompt_tokens") or 0),
             timeout_sec=int(data.get("timeout_sec") or 0),
             rate_limit_retries=int(data.get("rate_limit_retries") or 0),
+            transient_retries=int(data.get("transient_retries") or 0),
         )
 
 
@@ -129,11 +132,12 @@ def list_resumable_runs(project_id: int, phase: str | None = None) -> list[Phase
 
 def resumable_file_paths(project_id: int) -> set[str]:
     paths: set[str] = set()
-    for pr in list_resumable_runs(project_id, "worker"):
-        cp = load_checkpoint(project_id, pr.id)
-        path = (cp.file_path if cp else None) or pr.file_path
-        if path:
-            paths.add(path)
+    for phase in ("worker", "fast-worker", "bypass-worker"):
+        for pr in list_resumable_runs(project_id, phase):
+            cp = load_checkpoint(project_id, pr.id)
+            path = (cp.file_path if cp else None) or pr.file_path
+            if path:
+                paths.add(path)
     return paths
 
 

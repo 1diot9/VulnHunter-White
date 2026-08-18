@@ -119,6 +119,29 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishFix",
         }
     ),
+    "fast_worker": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "SearchOldVuln",
+            "SubmitVuln",
+            "AppendAffectedLocations",
+            "FinishSink",
+        }
+    ),
+    "bypass_worker": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "SearchOldVuln",
+            "SubmitVuln",
+            "AppendAffectedLocations",
+            "FinishBypass",
+        }
+    ),
+    "sink_triage": frozenset({"FinishSinkTriage"}),
     "reviewer": frozenset(
         {
             "Read",
@@ -433,5 +456,7 @@ def register_all_tools() -> None:
     from . import common  # noqa: F401
     from . import phase_recon  # noqa: F401
     from . import phase_worker  # noqa: F401
+    from . import phase_fast  # noqa: F401
+    from . import phase_bypass  # noqa: F401
     from . import phase_reviewer  # noqa: F401
     from . import phase_verifier  # noqa: F401

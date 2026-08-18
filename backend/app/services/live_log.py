@@ -33,11 +33,13 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
         {"recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"}
     ),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
-    "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
+    "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass-worker", "bypass_worker"}),
     "mine": frozenset({"worker"}),
     "fast": frozenset({"fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
     "fast-worker": frozenset({"fast-worker", "fast_worker"}),
     "sink-triage": frozenset({"sink-triage", "sink_triage"}),
+    "bypass": frozenset({"bypass-worker", "bypass_worker"}),
+    "bypass-worker": frozenset({"bypass-worker", "bypass_worker"}),
     "fix": frozenset({"fix"}),
     "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab"}),
     "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
@@ -55,6 +57,7 @@ LOG_PHASES = (
     "worker",
     "fast-worker",
     "sink-triage",
+    "bypass-worker",
     "fix",
     "reviewer-lab",
     "reviewer",
@@ -62,7 +65,7 @@ LOG_PHASES = (
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
-    "worker": ("worker", "fast-worker", "sink-triage", "fix"),
+    "worker": ("worker", "fast-worker", "sink-triage", "bypass-worker", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
 }
@@ -524,7 +527,7 @@ class LiveLog:
 
 
 def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
-    """phase 为空不过滤。recon=侦察子阶段；worker=挖掘+修复；mine=启发式；fast=快速扫描。"""
+    """phase 为空不过滤。recon=侦察子阶段；worker=挖掘+修复；mine=启发式；fast=快速扫描；bypass=历史漏洞绕过。"""
     if not phase:
         return True
     wanted = PHASE_GROUPS.get(phase, frozenset({phase}))
@@ -551,6 +554,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "fast-worker"
     if p in ("sink-triage", "sink_triage"):
         return "sink-triage"
+    if p in ("bypass-worker", "bypass_worker", "bypass"):
+        return "bypass-worker"
     if p == "fix":
         return "fix"
     if p in ("reviewer-lab", "reviewer_lab"):
@@ -578,6 +583,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return ("recon-old-vuln", "recon-old-vuln-ghsa")
     if phase == "fast":
         return ("fast-worker", "sink-triage")
+    if phase in ("bypass", "bypass-worker", "bypass_worker"):
+        return ("bypass-worker",)
     lp = log_phase_of(phase)
     if lp:
         return (lp,)
@@ -602,7 +609,7 @@ def control_phase_of_filter(phase: str | None) -> str | None:
         return None
     if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"):
         return "recon"
-    if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage"):
+    if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass", "bypass-worker", "bypass_worker"):
         return "worker"
     if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-review"):
         return "reviewer"
@@ -766,7 +773,7 @@ def _session_count_log_phase(project_id: int, log_phase: str) -> int:
     control = control_phase_of(log_phase)
     if control and control != log_phase:
         n = max(n, _matching_session_max_in_dir(base / _safe_phase_dir(control), log_phase))
-    if log_phase in ("fast-worker", "sink-triage"):
+    if log_phase in ("fast-worker", "sink-triage", "bypass-worker"):
         n = max(n, _matching_session_max_in_dir(base / "system", log_phase))
     return max(n, _legacy_session_max(project_id, log_phase))
 

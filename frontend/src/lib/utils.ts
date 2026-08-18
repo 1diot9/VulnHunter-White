@@ -139,6 +139,40 @@ export function formatProjectRunStatus(
   return '运行中'
 }
 
+export function formatProjectStatus(status: string | null | undefined): string {
+  switch (status) {
+    case 'pending':
+      return '待开始'
+    case 'ingesting':
+      return '导入中'
+    case 'recon':
+      return '侦察中'
+    case 'auditing':
+      return '挖掘中'
+    case 'reviewing':
+      return '审核中'
+    case 'paused':
+      return '已暂停'
+    case 'completed':
+      return '已完成'
+    case 'cancelled':
+      return '已停止'
+    case 'error':
+      return '出错'
+    default:
+      return status?.trim() || '—'
+  }
+}
+
+export function projectStatusBadgeVariant(
+  status: string | null | undefined,
+): 'info' | 'success' | 'warning' | 'destructive' {
+  if (status === 'completed') return 'success'
+  if (status === 'paused') return 'warning'
+  if (status === 'cancelled' || status === 'error') return 'destructive'
+  return 'info'
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   let s = value.trim()
@@ -189,6 +223,68 @@ export function formatFileProgress(p: {
   return `已审计 ${p.files_audited ?? 0} / 已定权 ${p.files_weighted ?? 0} / 已跳过 ${p.files_skipped ?? 0} / 共 ${p.files_total ?? 0}`
 }
 
+export function formatSinkProgress(p: {
+  sinks_done?: number | null
+  sinks_queued?: number | null
+}): string {
+  return `快速扫描 ${p.sinks_done ?? 0}/${p.sinks_queued ?? 0}`
+}
+
+export function formatBypassProgress(p: {
+  bypass_done?: number | null
+  bypass_queued?: number | null
+}): string {
+  return `历史漏洞绕过 ${p.bypass_done ?? 0}/${p.bypass_queued ?? 0}`
+}
+
+export function formatMiningPaths(p: {
+  heuristic_enabled?: boolean | null
+  heuristic_lite?: boolean | null
+  fast_enabled?: boolean | null
+  bypass_enabled?: boolean | null
+}): string {
+  const heuristicOn = p.heuristic_enabled !== false
+  const liteOn = heuristicOn && p.heuristic_lite === true
+  const fastOn = p.fast_enabled === true
+  const bypassOn = p.bypass_enabled === true
+  const parts: string[] = []
+  if (heuristicOn) parts.push(liteOn ? '启发式轻量' : '启发式挖掘')
+  if (fastOn) parts.push('快速扫描')
+  if (bypassOn) parts.push('历史漏洞绕过')
+  return parts.join(' + ') || '启发式挖掘'
+}
+
+export function formatMiningProgress(p: {
+  heuristic_enabled?: boolean | null
+  heuristic_lite?: boolean | null
+  fast_enabled?: boolean | null
+  bypass_enabled?: boolean | null
+  files_audited?: number | null
+  files_weighted?: number | null
+  files_skipped?: number | null
+  files_total?: number | null
+  files_weight100?: number | null
+  files_weight100_audited?: number | null
+  sinks_done?: number | null
+  sinks_queued?: number | null
+  bypass_done?: number | null
+  bypass_queued?: number | null
+}): string {
+  const heuristicOn = p.heuristic_enabled !== false
+  const liteOn = heuristicOn && p.heuristic_lite === true
+  const fastOn = p.fast_enabled === true
+  const bypassOn = p.bypass_enabled === true
+  const parts: string[] = []
+  if (heuristicOn && liteOn) {
+    parts.push(`轻量入口 ${p.files_weight100_audited ?? 0}/${p.files_weight100 ?? 0}`)
+  } else if (heuristicOn) {
+    parts.push(formatFileProgress(p))
+  }
+  if (fastOn) parts.push(formatSinkProgress(p))
+  if (bypassOn) parts.push(formatBypassProgress(p))
+  return parts.join(' · ')
+}
+
 export function formatTokens(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '—'
   const v = Math.round(n)
@@ -221,4 +317,13 @@ export function formatTokenUsage(p: {
   const output = p.tokens_output ?? 0
   const cached = p.tokens_cached ?? 0
   return `输入 ${formatTokens(input)} / 输出 ${formatTokens(output)} / 缓存率 ${formatCacheRate(cached, input)}`
+}
+
+export function saveBlob(blob: Blob, filename: string) {
+  const a = document.createElement('a')
+  const url = URL.createObjectURL(blob)
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }

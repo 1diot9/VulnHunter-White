@@ -18,6 +18,12 @@ export type Project = {
   manual_lab_prompt: string
   verifier_enabled: boolean
   dynamic_verify_enabled: boolean
+  heuristic_enabled: boolean
+  heuristic_lite: boolean
+  fast_enabled: boolean
+  fast_queue_frozen: boolean
+  bypass_enabled: boolean
+  bypass_queue_frozen: boolean
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -29,6 +35,12 @@ export type Project = {
   files_weighted: number
   files_skipped: number
   files_audited: number
+  files_weight100: number
+  files_weight100_audited: number
+  sinks_queued: number
+  sinks_done: number
+  bypass_queued: number
+  bypass_done: number
   weight_exts?: WeightExt[]
   worker_rounds: number
   tokens_input: number
@@ -99,6 +111,8 @@ export type VulnDetail = Vuln & {
   verifier_response?: string | null
   verifier_targets?: VerifierTarget[]
   verifier_fofa_query?: string | null
+  can_dynamic_verify?: boolean
+  dynamic_verify_queued?: boolean
 }
 
 export type VerifierTarget = {
@@ -270,6 +284,21 @@ export type FofaTest = {
   account_error: boolean
 }
 
+export type GithubProbeBody = {
+  github_pat?: string | null
+  http_proxy?: string | null
+}
+
+export type GithubTest = {
+  ok: boolean
+  latency_ms: number | null
+  authenticated: boolean
+  login: string
+  rate_limit: number | null
+  rate_remaining: number | null
+  error: string | null
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
@@ -278,6 +307,21 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T
   return res.json()
+}
+
+function filenameFromDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header)
+  if (star?.[1]) {
+    const raw = star[1].trim().replace(/^"(.*)"$/, '$1')
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return raw
+    }
+  }
+  const plain = /filename="([^"]+)"|filename=([^;]+)/i.exec(header)
+  return (plain?.[1] || plain?.[2] || fallback).trim()
 }
 
 export const api = {
@@ -292,6 +336,10 @@ export const api = {
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      heuristic_enabled?: boolean
+      heuristic_lite?: boolean
+      fast_enabled?: boolean
+      bypass_enabled?: boolean
     } = {},
   ) =>
     request<Project>('/api/projects', {
@@ -306,6 +354,10 @@ export const api = {
         manual_lab_prompt: opts.manual_lab_prompt || '',
         verifier_enabled: Boolean(opts.verifier_enabled),
         dynamic_verify_enabled: Boolean(opts.dynamic_verify_enabled),
+        heuristic_enabled: opts.heuristic_enabled !== false,
+        heuristic_lite: Boolean(opts.heuristic_lite),
+        fast_enabled: Boolean(opts.fast_enabled),
+        bypass_enabled: Boolean(opts.bypass_enabled),
       }),
     }),
   uploadZip: async (
@@ -317,6 +369,10 @@ export const api = {
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      heuristic_enabled?: boolean
+      heuristic_lite?: boolean
+      fast_enabled?: boolean
+      bypass_enabled?: boolean
     } = {},
   ) => {
     const fd = new FormData()
@@ -327,6 +383,10 @@ export const api = {
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
     fd.append('dynamic_verify_enabled', opts.dynamic_verify_enabled ? 'true' : 'false')
+    fd.append('heuristic_enabled', opts.heuristic_enabled === false ? 'false' : 'true')
+    fd.append('heuristic_lite', opts.heuristic_lite ? 'true' : 'false')
+    fd.append('fast_enabled', opts.fast_enabled ? 'true' : 'false')
+    fd.append('bypass_enabled', opts.bypass_enabled ? 'true' : 'false')
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
   updateProject: (
@@ -337,6 +397,10 @@ export const api = {
       manual_lab_prompt?: string | null
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      heuristic_enabled?: boolean
+      heuristic_lite?: boolean
+      fast_enabled?: boolean
+      bypass_enabled?: boolean
     },
   ) =>
     request<Project>(`/api/projects/${id}`, {
@@ -408,6 +472,11 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
     }),
+  requestDynamicVerify: (id: number) =>
+    request<{ ok: boolean; vuln_id: number; project_id: number; phase_run_id: number }>(
+      `/api/vulns/${id}/dynamic-verify`,
+      { method: 'POST' },
+    ),
   downloadVulns: async (ids: number[]) => {
     const res = await fetch('/api/vulns/download', {
       method: 'POST',
@@ -416,6 +485,13 @@ export const api = {
     })
     if (!res.ok) throw new Error(await res.text())
     return res.blob()
+  },
+  downloadVulnReport: async (id: number) => {
+    const res = await fetch(`/api/vulns/${id}/download`)
+    if (!res.ok) throw new Error(await res.text())
+    const blob = await res.blob()
+    const filename = filenameFromDisposition(res.headers.get('Content-Disposition'), `vuln-${id}.md`)
+    return { blob, filename }
   },
   getSettings: () => request<Settings>('/api/settings'),
   putSettings: (body: Record<string, unknown>) =>
@@ -438,6 +514,12 @@ export const api = {
     }),
   testFofa: (body: FofaProbeBody) =>
     request<FofaTest>('/api/settings/fofa/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  testGithub: (body: GithubProbeBody) =>
+    request<GithubTest>('/api/settings/github/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

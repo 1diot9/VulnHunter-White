@@ -251,6 +251,57 @@ def test_maybe_complete_project(tmp_env, project):
         assert proj.phase == "done"
 
 
+def test_refresh_project_after_reviewer_reverts_when_queue_empty(tmp_env, project):
+    build_file_index(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.status = "reviewing"
+        proj.phase = "reviewer"
+        rows = db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all()
+        assert rows
+        for i, fw in enumerate(rows):
+            fw.weight = 10
+            fw.skipped = False
+            fw.audited = i > 0
+        db.commit()
+
+    pipeline._refresh_project_after_reviewer(project)
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        assert proj.status == "auditing"
+        assert proj.phase == "worker"
+
+
+def test_refresh_project_after_reviewer_completes_when_idle(tmp_env, project):
+    build_file_index(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.status = "reviewing"
+        proj.phase = "reviewer"
+        for fw in db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all():
+            fw.weight = 10
+            fw.audited = True
+        db.commit()
+
+    pipeline._refresh_project_after_reviewer(project)
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        assert proj.status == "completed"
+        assert proj.phase == "done"
+
+
+def test_reviewer_force_new_is_not_open_work(tmp_env, project):
+    pipeline._force_new_run.add((project, "reviewer"))
+    assert pipeline._should_skip_checkpoint(project, "reviewer") is True
+    assert pipeline._reviewer_has_review_work(project, pending=0) is False
+
+
 def test_reviewer_loop_retries_sqlite_locked_project_check(tmp_env, project, monkeypatch):
     errors: list[str] = []
 
@@ -513,6 +564,76 @@ def test_recon_control_includes_old_vuln_phase():
     assert pipeline.control_phase("recon-old-vuln-ghsa") == "recon"
     assert pipeline.control_phase("recon-source-ext") == "recon"
     assert pipeline.control_phase("recon-map") == "recon"
+    assert pipeline.control_phase("fast-worker") == "worker"
+    assert pipeline.control_phase("sink-triage") == "worker"
+    assert pipeline.control_phase("fast") == "worker"
+    assert pipeline.control_phase("bypass-worker") == "worker"
+    assert pipeline.control_phase("bypass") == "worker"
+
+
+def test_ensure_workers_waits_for_old_vulns(tmp_env, project, monkeypatch):
+    build_file_index(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        for fw in db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all():
+            if fw.skipped:
+                continue
+            fw.weight = 80
+            fw.skipped = False
+            fw.audited = False
+        db.commit()
+
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ARG002
+            self._alive = False
+            self.name = kwargs.get("name") or ""
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def start(self) -> None:
+            self._alive = True
+            started.append(self.name)
+
+    monkeypatch.setattr(pipeline.threading, "Thread", FakeThread)
+    pipeline.reset_runtime_state()
+    assert pipeline.recon_old_vulns_ready(project) is False
+    out = pipeline._ensure_workers(project, [])
+    assert out == []
+    assert started == []
+
+    _mark_all_weighted(project)
+    assert pipeline.recon_old_vulns_ready(project) is True
+    out = pipeline._ensure_workers(project, [])
+    assert started
+    assert all(name.startswith("vh-worker-") for name in started)
+    assert len(out) == len(started)
+
+
+def test_ensure_bypass_prepare_waits_for_old_vulns(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = True
+        db.commit()
+    assert pipeline.recon_old_vulns_ready(project) is False
+    pipeline._ensure_bypass_prepare(project)
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        assert bool(proj.bypass_queue_frozen) is False
+
+    _mark_all_weighted(project)
+    pipeline._ensure_bypass_prepare(project)
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        assert bool(proj.bypass_queue_frozen) is True
+        assert pipeline.recon_old_vulns_ready(project) is True
 
 
 def test_local_shell_error_writes_jsonl(tmp_env, project):
@@ -593,6 +714,7 @@ def test_maybe_mark_recon_done_logs_only_on_transition(tmp_env, project, monkeyp
         "system",
         lambda pid, text, **kwargs: logs.append(text),
     )
+    monkeypatch.setattr(pipeline, "_ensure_project_fingerprints_once", lambda _pid: None)
     assert pipeline._maybe_mark_recon_done(project) is True
     assert logs == ["侦察门闩已满足，系统标记 recon_done"]
     assert pipeline._maybe_mark_recon_done(project) is True
@@ -852,3 +974,69 @@ def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monke
     pipeline._run_reviewer_lab(project)
     assert called["loop"] == 0
     assert lab_setup_finished(project) is True
+
+
+def test_reviewer_once_appends_dynamic_followup_without_interrupt(tmp_env, project, monkeypatch):
+    from app.agent.checkpoint import LoopCheckpoint, save_checkpoint
+    from app.agent.loop import INTERRUPT_RESUME, LoopResult
+    from app.services.lab import mark_lab_setup_finished
+
+    _enable_dynamic_verify(project)
+    mark_lab_setup_finished(project, skipped=True, notes="skip", via="test")
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        vuln = models.Vuln(
+            project_id=project,
+            title="static sqli",
+            vuln_type="sqli",
+            status="static_only",
+            evidence_level="static_only",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        vid = vuln.id
+
+    run_id = pipeline._new_phase_run(project, "reviewer", "reviewer", vuln_id=vid)
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt="旧静态 system",
+            user_prompt="请审核漏洞",
+            messages=[
+                {"role": "system", "content": "旧静态 system"},
+                {"role": "user", "content": "请审核漏洞"},
+                {"role": "assistant", "content": "静态结论：可利用。"},
+            ],
+            state={"dynamic_followup": True, "dynamic_followup_prompted": False, "review_done": True},
+            vuln_id=vid,
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class FakeLoop:
+        def __init__(self, cp, **kwargs):  # noqa: ANN003
+            captured["resumed"] = kwargs.get("resumed")
+            captured["messages"] = list(cp.messages)
+            captured["system"] = cp.system_prompt
+            self.state = dict(cp.state)
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=True, stop_reason="stop_when", state={"review_done": True})
+
+    monkeypatch.setattr(pipeline, "_loop_from_checkpoint", lambda cp, **kwargs: FakeLoop(cp, **kwargs))
+    pipeline._run_reviewer_once(project)
+    assert captured["resumed"] is False
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    last = messages[-1]
+    assert last["role"] == "user"
+    assert "追加动态验证" in last["content"]
+    assert "静态结论：可利用" in "\n".join(str(m.get("content") or "") for m in messages)
+    assert INTERRUPT_RESUME not in last["content"]
+    assert "仅静态" not in str(captured["system"] or "")
+    assert "动态验证阶梯" in str(captured["system"] or "")

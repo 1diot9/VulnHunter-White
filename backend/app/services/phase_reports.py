@@ -10,14 +10,16 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|sink-triage|fix|reviewer(?:-lab)?|verifier)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|sink-triage|fix|reviewer(?:-lab)?|verifier)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
 _ROUND_NAME = re.compile(r"^round-(?P<n>\d+)\.md$")
 _FAST_ROUND_NAME = re.compile(r"^fast-round-(?P<n>\d+)\.md$")
+_BYPASS_ROUND_NAME = re.compile(r"^bypass-round-(?P<n>\d+)\.md$")
 _ROUND_TITLE = "单轮挖掘方向"
 _FAST_ROUND_TITLE = "快速 Sink 回推"
+_BYPASS_ROUND_TITLE = "历史漏洞绕过"
 
 # filename phase -> (control phase, control label, subphase id)
 _PHASE_META: dict[str, tuple[str, str, str]] = {
@@ -27,6 +29,7 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "recon-old-vuln-ghsa": ("recon", "侦察", "old_vulns"),
     "recon-mark": ("recon", "侦察", "mark"),
     "fast-worker": ("worker", "挖掘", "fast"),
+    "bypass-worker": ("worker", "挖掘", "bypass"),
     "sink-triage": ("worker", "挖掘", "fast"),
     "worker": ("worker", "挖掘", "mine"),
     "fix": ("worker", "挖掘", "fix"),
@@ -43,6 +46,7 @@ _SUB_LABEL = {
     "mark": "盖章",
     "mine": "启发式",
     "fast": "快速扫描",
+    "bypass": "历史漏洞绕过",
     "fix": "修复",
     "lab": "环境搭建",
     "reviewer": "审核",
@@ -186,19 +190,32 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
                 content=content,
             )
         fm = _FAST_ROUND_NAME.match(path.name)
-        if not fm:
-            raise FileNotFoundError(rel)
-        n = int(fm.group("n"))
-        return _item(
-            rel=rel,
-            path=path,
-            control="worker",
-            subphase="fast",
-            kind="round",
-            round_no=n,
-            title=_FAST_ROUND_TITLE,
-            content=content,
-        )
+        bm = _BYPASS_ROUND_NAME.match(path.name)
+        if fm:
+            n = int(fm.group("n"))
+            return _item(
+                rel=rel,
+                path=path,
+                control="worker",
+                subphase="fast",
+                kind="round",
+                round_no=n,
+                title=_FAST_ROUND_TITLE,
+                content=content,
+            )
+        if bm:
+            n = int(bm.group("n"))
+            return _item(
+                rel=rel,
+                path=path,
+                control="worker",
+                subphase="bypass",
+                kind="round",
+                round_no=n,
+                title=_BYPASS_ROUND_TITLE,
+                content=content,
+            )
+        raise FileNotFoundError(rel)
     if rel.startswith("docs/verifier/"):
         stem = path.stem
         if not stem.isdigit():
@@ -295,6 +312,22 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                     kind="round",
                     round_no=n,
                     title=_FAST_ROUND_TITLE,
+                )
+            )
+        for path in rounds.glob("bypass-round-*.md"):
+            m = _BYPASS_ROUND_NAME.match(path.name)
+            if not m or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            n = int(m.group("n"))
+            items.append(
+                _item(
+                    rel=f"workspace/rounds/{path.name}",
+                    path=path,
+                    control="worker",
+                    subphase="bypass",
+                    kind="round",
+                    round_no=n,
+                    title=_BYPASS_ROUND_TITLE,
                 )
             )
 

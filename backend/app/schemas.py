@@ -101,6 +101,23 @@ class FofaTestOut(BaseModel):
     account_error: bool = False
 
 
+class GithubProbeIn(BaseModel):
+    """Unsaved form values for GitHub connectivity test."""
+
+    github_pat: str | None = None
+    http_proxy: str | None = None  # None = saved/env proxy; "" = direct
+
+
+class GithubTestOut(BaseModel):
+    ok: bool
+    latency_ms: int | None = None
+    authenticated: bool = False
+    login: str = ""
+    rate_limit: int | None = None
+    rate_remaining: int | None = None
+    error: str | None = None
+
+
 class LiveLogPurgeIn(BaseModel):
     older_than_days: int = Field(ge=0, le=3650)
 
@@ -132,6 +149,10 @@ class ProjectCreate(BaseModel):
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool = False
     dynamic_verify_enabled: bool = False
+    heuristic_enabled: bool = True
+    heuristic_lite: bool = False
+    fast_enabled: bool = False
+    bypass_enabled: bool = False
 
 
 class ProjectUpdate(BaseModel):
@@ -140,6 +161,10 @@ class ProjectUpdate(BaseModel):
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool | None = None
     dynamic_verify_enabled: bool | None = None
+    heuristic_enabled: bool | None = None
+    heuristic_lite: bool | None = None
+    fast_enabled: bool | None = None
+    bypass_enabled: bool | None = None
 
 
 class WeightExtOut(BaseModel):
@@ -162,6 +187,12 @@ class ProjectOut(BaseModel):
     manual_lab_prompt: str = ""
     verifier_enabled: bool = False
     dynamic_verify_enabled: bool = False
+    heuristic_enabled: bool = True
+    heuristic_lite: bool = False
+    fast_enabled: bool = False
+    fast_queue_frozen: bool = False
+    bypass_enabled: bool = False
+    bypass_queue_frozen: bool = False
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -173,6 +204,12 @@ class ProjectOut(BaseModel):
     files_weighted: int = 0
     files_skipped: int = 0
     files_audited: int = 0
+    files_weight100: int = 0
+    files_weight100_audited: int = 0
+    sinks_queued: int = 0
+    sinks_done: int = 0
+    bypass_queued: int = 0
+    bypass_done: int = 0
     weight_exts: list[WeightExtOut] = Field(default_factory=list)
     worker_rounds: int = 0
     tokens_input: int = 0
@@ -232,6 +269,8 @@ class VulnDetail(VulnOut):
     verifier_response: str | None = None
     verifier_targets: list[dict[str, Any]] = Field(default_factory=list)
     verifier_fofa_query: str | None = None
+    can_dynamic_verify: bool = False
+    dynamic_verify_queued: bool = False
 
 
 class VulnTrackingIn(BaseModel):

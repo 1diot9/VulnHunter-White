@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     timeout_reviewer_static: int = 1800
     timeout_verifier: int = 1800
     timeout_docker: int = 1800
+    timeout_semgrep: int = 1800
+    timeout_sink_triage: int = 1800
     timeout_conclude: int = 300
     timeout_conclude_rescue: int = 1800
 
@@ -68,7 +70,7 @@ class Settings(BaseSettings):
     mcp_node: str = "tools/mcp/node-debug"
     mcp_python: str = "tools/mcp/python-debug"
 
-    # Outbound HTTP for tools (WebSearch / GHSA / FOFA). Empty = direct.
+    # Outbound HTTP for tools (WebSearch / GHSA / GitHub Issues / FOFA). Empty = direct.
     # Prefer Settings page; these env values are fallbacks when DB has never saved a proxy.
     http_proxy: str = ""
     https_proxy: str = ""

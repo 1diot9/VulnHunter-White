@@ -33,6 +33,8 @@ const PHASE_LABEL: Record<string, string> = {
   worker: '挖掘',
   'fast-worker': '快速扫描',
   fast_worker: '快速扫描',
+  'bypass-worker': '历史漏洞绕过',
+  bypass_worker: '历史漏洞绕过',
   'sink-triage': 'Sink 筛选',
   sink_triage: 'Sink 筛选',
   reviewer: '审核',
@@ -54,7 +56,9 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
       p === 'fast-worker' ||
       p === 'fast_worker' ||
       p === 'sink-triage' ||
-      p === 'sink_triage'
+      p === 'sink_triage' ||
+      p === 'bypass-worker' ||
+      p === 'bypass_worker'
     )
   }
   if (phaseFilter === 'mine') {
@@ -62,6 +66,9 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   }
   if (phaseFilter === 'fast' || phaseFilter === 'fast-worker' || phaseFilter === 'fast_worker') {
     return p === 'fast-worker' || p === 'fast_worker' || p === 'sink-triage' || p === 'sink_triage'
+  }
+  if (phaseFilter === 'bypass' || phaseFilter === 'bypass-worker' || phaseFilter === 'bypass_worker') {
+    return p === 'bypass-worker' || p === 'bypass_worker'
   }
   if (phaseFilter === 'sink-triage' || phaseFilter === 'sink_triage') {
     return p === 'sink-triage' || p === 'sink_triage'

@@ -63,6 +63,8 @@ def needs_compress(
 
 _SUMMARY_REST = re.compile(r"^(rescue-|round-)?\d+\.md$")
 _ROUND_FILE = re.compile(r"^round-(\d+)\.md$")
+_FAST_ROUND_FILE = re.compile(r"^fast-round-(\d+)\.md$")
+_BYPASS_ROUND_FILE = re.compile(r"^bypass-round-(\d+)\.md$")
 _WORKER_ROUND_SUMMARY = re.compile(r"^(\d+)\.md$")
 _FOLLOWUP_HEADING = re.compile(r"^##[ \t]*建议后续方向[ \t]*\r?$", re.MULTILINE)
 _NEXT_H2 = re.compile(r"^##[ \t]+\S", re.MULTILINE)
@@ -178,6 +180,98 @@ def max_round_report_no(project_id: int) -> int:
     return found[-1][0] if found else 0
 
 
+def list_recent_fast_round_reports(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    cap = settings.worker_round_history if limit is None else limit
+    rounds = workspace_dir(project_id) / "rounds"
+    if not rounds.is_dir():
+        return []
+    found = _numbered_markdown(list(rounds.glob("fast-round-*.md")), _FAST_ROUND_FILE)
+    return found[-cap:] if cap >= 0 else found
+
+
+def max_fast_round_report_no(project_id: int) -> int:
+    found = list_recent_fast_round_reports(project_id, limit=-1)
+    return found[-1][0] if found else 0
+
+
+def inject_fast_prior_block(project_id: int) -> str:
+    """Recon docs plus recent FinishSink round reports."""
+    parts: list[str] = []
+    docs = docs_dir(project_id)
+    doc_cap = settings.recon_doc_inject_max_chars
+    map_text = _read_capped(docs / "code-map.md", doc_cap)
+    auth_text = _read_capped(docs / "auth.md", doc_cap)
+    if map_text or auth_text:
+        parts.append(
+            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
+            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用。\n"
+        )
+        if map_text:
+            parts.append(f"### docs/code-map.md\n{map_text}\n")
+        if auth_text:
+            parts.append(f"### docs/auth.md\n{auth_text}\n")
+    reports = list_recent_fast_round_reports(project_id)
+    if reports:
+        n = len(reports)
+        parts.append(
+            f"## 最近 {n} 条已完成 Sink（不要重复）\n"
+            "以下为 FinishSink 落盘的回推结论。已否决或已提交的 Sink 不要再分析。\n"
+        )
+        round_cap = settings.round_report_inject_max_chars
+        for num, path in reports:
+            text = _read_round_for_inject(path, round_cap)
+            parts.append(f"### 快速轮 {num} · workspace/rounds/{path.name}\n{text}\n")
+    if not parts:
+        return ""
+    return "\n".join(parts).strip() + "\n\n"
+
+
+def list_recent_bypass_round_reports(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    cap = settings.worker_round_history if limit is None else limit
+    rounds = workspace_dir(project_id) / "rounds"
+    if not rounds.is_dir():
+        return []
+    found = _numbered_markdown(list(rounds.glob("bypass-round-*.md")), _BYPASS_ROUND_FILE)
+    return found[-cap:] if cap >= 0 else found
+
+
+def max_bypass_round_report_no(project_id: int) -> int:
+    found = list_recent_bypass_round_reports(project_id, limit=-1)
+    return found[-1][0] if found else 0
+
+
+def inject_bypass_prior_block(project_id: int) -> str:
+    """Recon docs plus recent FinishBypass round reports."""
+    parts: list[str] = []
+    docs = docs_dir(project_id)
+    doc_cap = settings.recon_doc_inject_max_chars
+    map_text = _read_capped(docs / "code-map.md", doc_cap)
+    auth_text = _read_capped(docs / "auth.md", doc_cap)
+    if map_text or auth_text:
+        parts.append(
+            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
+            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用。\n"
+        )
+        if map_text:
+            parts.append(f"### docs/code-map.md\n{map_text}\n")
+        if auth_text:
+            parts.append(f"### docs/auth.md\n{auth_text}\n")
+    reports = list_recent_bypass_round_reports(project_id)
+    if reports:
+        n = len(reports)
+        parts.append(
+            f"## 最近 {n} 条已完成历史漏洞绕过（不要重复）\n"
+            "以下为 FinishBypass 落盘的结论。已否决或已提交的条目不要再分析。\n"
+        )
+        round_cap = settings.round_report_inject_max_chars
+        for num, path in reports:
+            text = _read_round_for_inject(path, round_cap)
+            parts.append(f"### 绕过轮 {num} · workspace/rounds/{path.name}\n{text}\n")
+    if not parts:
+        return ""
+    return "\n".join(parts).strip() + "\n\n"
+
+
 def list_recent_worker_round_summaries(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
     """worker-round-N.md compression summaries, used when FinishRound reports are absent."""
     cap = settings.worker_round_history if limit is None else limit
@@ -204,7 +298,7 @@ def inject_worker_prior_block(project_id: int) -> str:
     if map_text or auth_text:
         parts.append(
             "## 侦察产物（已完成，禁止再梳理项目结构）\n"
-            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用，不要再 Glob/Read 去重建模块划分、HTTP 入口或鉴权模型。\n"
+            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用，不要再 Glob/Read 去重建模块划分、HTTP / 非 HTTP 入口或鉴权模型。\n"
         )
         if map_text:
             parts.append(f"### docs/code-map.md\n{map_text}\n")
@@ -217,7 +311,7 @@ def inject_worker_prior_block(project_id: int) -> str:
         parts.append(
             f"## 最近 {n} 轮挖掘摘要（不要重复已尝试路径）\n"
             "以下为 FinishRound 落盘的单轮报告。已审计文件、已走调用链、已否决方向不要再分析一遍；"
-            "从本轮注入入口的新调用链继续，不要按历史摘要里的建议改方向。\n"
+            "从本轮焦点按角色继续，不要按历史摘要里的建议改方向。\n"
         )
         round_cap = settings.round_report_inject_max_chars
         for num, path in reports:
@@ -246,7 +340,7 @@ def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:
     if not summary or not summary.strip():
         return ""
     hint = (
-        "只接续与当前注入文件相关的部分；与当前任务无关则忽略。\n"
+        "只接续与当前焦点文件相关的部分；与当前任务无关则忽略。\n"
         if for_file
         else "若摘要与当前任务无关则忽略。\n"
     )

@@ -62,7 +62,7 @@ export function ResetProgressButton({ project, onReset }: ResetProgressButtonPro
         type="button"
         variant="warning"
         disabled={!allowed}
-        title={allowed ? '重置 Worker 挖掘进度，保留漏洞与侦察文档' : '请先全部暂停，再重置挖掘进度'}
+        title={allowed ? '重置启发式挖掘进度，保留快速扫描、历史漏洞绕过、漏洞与侦察文档' : '请先全部暂停，再重置挖掘进度'}
         onClick={openDialog}
       >
         重置进度
@@ -76,9 +76,9 @@ export function ResetProgressButton({ project, onReset }: ResetProgressButtonPro
       >
         <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
           <DialogHeader>
-            <DialogTitle>确认重置挖掘进度</DialogTitle>
+            <DialogTitle>确认重置启发式挖掘进度</DialogTitle>
             <DialogDescription>
-              将清空「{project.name}」的 Worker 已审计标记、轮次报告和挖掘检查点，文件会重新进入待挖队列。漏洞产出、侦察文档、定权/跳过标记和环境搭建会保留。重置后项目保持暂停。请再次确认。
+              将清空「{project.name}」的启发式已审计文件标记、启发式轮次报告和 Worker 检查点。快速扫描 Sink 队列、历史漏洞绕过进度、Semgrep 产物与冻结名单保留。漏洞产出、侦察文档、定权/跳过标记和环境搭建会保留。重置后项目保持暂停。请再次确认。
             </DialogDescription>
           </DialogHeader>
           <Label className="items-start font-normal">
@@ -89,7 +89,7 @@ export function ResetProgressButton({ project, onReset }: ResetProgressButtonPro
               onCheckedChange={(checked) => setAcked(checked === true)}
             />
             <span className="min-w-0 text-sm leading-relaxed">
-              我已了解，确认清空挖掘进度（漏洞与侦察文档不受影响）
+              我已了解，确认清空启发式挖掘进度（快速扫描、历史漏洞绕过、漏洞与侦察文档不受影响）
             </span>
           </Label>
           {error ? <p className="text-sm text-red-300">{error}</p> : null}

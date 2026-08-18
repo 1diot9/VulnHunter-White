@@ -43,25 +43,33 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.ingest as ingest
     import app.services.llm_settings as llm_settings
     import app.services.old_vuln_crawl as old_vuln_crawl
+    import app.services.github_issues as github_issues
     import app.services.pipeline as pipeline
     import app.services.verifier as verifier_service
     import app.services.vuln_followup as vuln_followup
     import app.tools as tools
+    import app.tools.phase_fast as phase_fast
+    import app.tools.phase_bypass as phase_bypass
     import app.tools.phase_recon as phase_recon
     import app.tools.phase_reviewer as phase_reviewer
     import app.tools.phase_verifier as phase_verifier
     import app.tools.phase_worker as phase_worker
+    import app.services.sink_queue as sink_queue
+    import app.services.bypass_queue as bypass_queue
 
     for mod in (
         models,
         tools,
         phase_recon,
         phase_worker,
+        phase_fast,
+        phase_bypass,
         phase_reviewer,
         phase_verifier,
         ingest,
         llm_settings,
         old_vuln_crawl,
+        github_issues,
         vuln_followup,
         ghsa_service,
         fofa_service,
@@ -69,6 +77,8 @@ def tmp_env(tmp_path, monkeypatch):
         verifier_service,
         asset_proof,
         pipeline,
+        sink_queue,
+        bypass_queue,
         agent_loop,
         agent_checkpoint,
         api_projects,
@@ -79,6 +89,8 @@ def tmp_env(tmp_path, monkeypatch):
 
     assert inspect(engine).has_table("projects")
     assert inspect(engine).has_table("vulns")
+    assert inspect(engine).has_table("sinks")
+    assert inspect(engine).has_table("bypass_targets")
 
     with Session() as db:
         if db.query(models.AppSettings).first() is None:

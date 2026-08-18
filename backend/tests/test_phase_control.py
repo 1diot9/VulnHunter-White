@@ -141,10 +141,13 @@ def test_event_matches_mine_excludes_fix():
     assert event_matches_phase({"phase": "fix"}, "worker")
     assert event_matches_phase({"phase": "worker"}, "worker")
     assert event_matches_phase({"phase": "fast-worker"}, "worker")
+    assert event_matches_phase({"phase": "bypass-worker"}, "bypass")
+    assert not event_matches_phase({"phase": "bypass-worker"}, "fast")
+    assert event_matches_phase({"phase": "bypass-worker"}, "worker")
 
 
 def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, project, monkeypatch):
-    from app.models import FileWeight, Project, SessionLocal, Source, Vuln
+    from app.models import BypassTarget, FileWeight, Project, SessionLocal, Sink, Source, Vuln
     from app.services.ingest import build_file_index
     from app.services.paths import docs_dir, summaries_dir, workspace_dir
 
@@ -156,8 +159,13 @@ def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, proje
     rounds = workspace_dir(project) / "rounds"
     rounds.mkdir(parents=True, exist_ok=True)
     (rounds / "round-1.md").write_text("## 本轮入口\nMain.java\n", encoding="utf-8")
+    (rounds / "fast-round-1.md").write_text("## Sink\nexec\n", encoding="utf-8")
+    (rounds / "bypass-round-1.md").write_text("## 绕过\nCVE\n", encoding="utf-8")
     summaries = summaries_dir(project)
     (summaries / "worker-round-1.md").write_text("压缩：已审完。\n", encoding="utf-8")
+    (summaries / "fast-worker-round-1.md").write_text("快速扫描摘要应保留。\n", encoding="utf-8")
+    (summaries / "bypass-worker-round-1.md").write_text("绕过摘要应保留。\n", encoding="utf-8")
+    (summaries / "sink-triage-1.md").write_text("Sink 筛选摘要应保留。\n", encoding="utf-8")
     (summaries / "recon-1.md").write_text("侦察摘要应保留。\n", encoding="utf-8")
     (workspace_dir(project) / "todos-worker-w1.json").write_text("[]", encoding="utf-8")
 
@@ -187,6 +195,24 @@ def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, proje
                 file_path="app/Main.java",
             )
         )
+        db.add(
+            Sink(
+                project_id=project,
+                file_path="app/Main.java",
+                line_start=4,
+                status="done",
+                verdict="noise",
+            )
+        )
+        db.add(
+            BypassTarget(
+                project_id=project,
+                file_path="docs/old-vulns/cve.md",
+                title="旧洞",
+                status="done",
+                verdict="still_patched",
+            )
+        )
         p = db.get(Project, project)
         p.status = "completed"
         p.phase = "done"
@@ -208,13 +234,49 @@ def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, proje
         ),
         status="paused",
     )
+    fast_run = pipeline._new_phase_run(project, "fast-worker", "fast_worker", file_path="sink:1")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=fast_run,
+            role="fast_worker",
+            phase="fast-worker",
+            system_prompt="s",
+            user_prompt="u",
+            messages=_sample_messages(),
+            file_path="sink:1",
+        ),
+        status="paused",
+    )
+    bypass_run = pipeline._new_phase_run(project, "bypass-worker", "bypass_worker", file_path="bypass:1")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=bypass_run,
+            role="bypass_worker",
+            phase="bypass-worker",
+            system_prompt="s",
+            user_prompt="u",
+            messages=_sample_messages(),
+            file_path="bypass:1",
+        ),
+        status="paused",
+    )
 
     states = pipeline.request_worker_progress_reset(project)
     assert states["project_paused"] is True
     assert states["phases"]["worker"]["paused"] is True
     assert load_checkpoint(project, run_id) is None
+    assert load_checkpoint(project, fast_run) is not None
+    assert load_checkpoint(project, bypass_run) is not None
+    assert not pipeline._should_skip_checkpoint(project, "worker")
     assert not (rounds / "round-1.md").exists()
+    assert (rounds / "fast-round-1.md").is_file()
+    assert (rounds / "bypass-round-1.md").is_file()
     assert not (summaries / "worker-round-1.md").exists()
+    assert (summaries / "fast-worker-round-1.md").is_file()
+    assert (summaries / "bypass-worker-round-1.md").is_file()
+    assert (summaries / "sink-triage-1.md").is_file()
     assert pipeline._next_worker_round_id(project) == 1
     assert not (workspace_dir(project) / "todos-worker-w1.json").exists()
     assert (docs / "code-map.md").is_file()
@@ -236,6 +298,12 @@ def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, proje
         vulns = {v.title: v.status for v in db.query(Vuln).filter(Vuln.project_id == project)}
         assert vulns["已确认洞"] == "confirmed"
         assert vulns["修复中"] == "returned"
+        sink = db.query(Sink).filter(Sink.project_id == project).one()
+        assert sink.status == "done"
+        assert sink.verdict == "noise"
+        bypass = db.query(BypassTarget).filter(BypassTarget.project_id == project).one()
+        assert bypass.status == "done"
+        assert bypass.verdict == "still_patched"
 
 
 def test_worker_progress_reset_requires_pause(tmp_env, project):

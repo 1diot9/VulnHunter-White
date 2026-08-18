@@ -112,7 +112,7 @@ def test_worker_finish_nudge_every_50_turns():
     assert "FinishFile" in msg
     assert "FinishRound" in msg
     assert "非入口" in msg
-    assert "不要只标一开始注入的入口文件" in msg
+    assert "不要只标一开始注入的焦点文件" in msg
     assert "禁止立刻 FinishRound" in msg
     assert msg == WORKER_FINISH_NUDGE.format(n=50)
     assert "看门狗：挖掘连续 50 轮未 FinishFile，已提醒立刻标记非入口文件" == w.persist_nudge_log()
@@ -196,3 +196,16 @@ def test_idle_turns_restored_from_snapshot():
     assert restored.idle_turns == 2
     assert restored.note_turn(["Grep"]) is not None
     assert AgentWatchdog.restore({}).idle_turns == 0
+
+
+def test_bypass_finish_nudge_and_no_tool():
+    from app.agent.watchdog import BYPASS_FINISH_NUDGE, BYPASS_NO_TOOL_NUDGE
+
+    w = AgentWatchdog(phase="bypass-worker", worker_finish_interval=2)
+    assert w.note_no_tools() == BYPASS_NO_TOOL_NUDGE
+    assert w.note_turn(["Read"]) is None
+    msg = w.note_turn(["Grep"])
+    assert msg == BYPASS_FINISH_NUDGE.format(n=2)
+    assert "FinishBypass" in w.persist_nudge_log()
+    assert w.note_turn(["FinishBypass"]) is None
+    assert w.idle_turns == 0

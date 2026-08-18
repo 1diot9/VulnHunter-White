@@ -12,7 +12,7 @@ const PHASES = [
   {
     id: 'worker',
     label: '挖掘',
-    hint: '启发式按文件挖洞，快速扫描按 Semgrep Sink 回推；两条路径并行。开启的路径都结束后才算挖掘完成。',
+    hint: '启发式在历史漏洞收集完毕后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。开启的路径都结束后才算挖掘完成。',
   },
   {
     id: 'reviewer',
@@ -22,7 +22,7 @@ const PHASES = [
   {
     id: 'verifier',
     label: '验证',
-    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认搜 10 个，任一成功即结束。',
+    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认每轮 10 个，成功 3 个即结束；不足则再搜下一轮，最多 5 轮 / 50 个目标。',
   },
   {
     id: 'done',
@@ -32,7 +32,7 @@ const PHASES = [
 ] as const
 
 const BRANCH_HINTS: Record<string, string> = {
-  map: '梳理模块、HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。',
+  map: '梳理模块、HTTP 与非 HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。',
   source_ext: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。',
   old_vulns: '先 LLM 检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 与 GitHub Issues 爬虫补漏并核验。',
   mark: '按批次给源码定权或跳过，决定后续挖掘优先级。',
@@ -61,6 +61,8 @@ type FlowState = {
   filesAudited?: number
   filesSkipped?: number
   filesTotal?: number
+  filesWeight100?: number
+  filesWeight100Audited?: number
   workerRounds?: number
   vulnPending?: number
   reconSubphases?: ReconSubphaseView[]
@@ -70,10 +72,15 @@ type FlowState = {
   verifierEnabled?: boolean
   verifierPending?: number
   heuristicEnabled?: boolean
+  heuristicLite?: boolean
   fastEnabled?: boolean
   fastQueueFrozen?: boolean
   sinksQueued?: number
   sinksDone?: number
+  bypassEnabled?: boolean
+  bypassQueueFrozen?: boolean
+  bypassQueued?: number
+  bypassDone?: number
 }
 
 type BranchItem = {
@@ -83,8 +90,12 @@ type BranchItem = {
 
 function heuristicFinished(s: FlowState): boolean {
   if (s.heuristicEnabled === false) return true
+  if (!s.reconDone) return false
+  if (s.heuristicLite === true) {
+    return (s.filesWeight100Audited ?? 0) >= (s.filesWeight100 ?? 0)
+  }
   const total = s.filesTotal ?? 0
-  if (!s.reconDone || total <= 0) return false
+  if (total <= 0) return false
   return (s.filesAudited ?? 0) + (s.filesSkipped ?? 0) >= total
 }
 
@@ -94,8 +105,14 @@ function fastFinished(s: FlowState): boolean {
   return (s.sinksDone ?? 0) >= (s.sinksQueued ?? 0)
 }
 
+function bypassFinished(s: FlowState): boolean {
+  if (s.bypassEnabled !== true) return true
+  if (!s.bypassQueueFrozen) return false
+  return (s.bypassDone ?? 0) >= (s.bypassQueued ?? 0)
+}
+
 function workerFinished(s: FlowState): boolean {
-  return heuristicFinished(s) && fastFinished(s)
+  return heuristicFinished(s) && fastFinished(s) && bypassFinished(s)
 }
 
 function heuristicTone(s: FlowState): Tone {
@@ -111,6 +128,13 @@ function fastTone(s: FlowState): Tone {
   if (s.fastEnabled !== true) return 'neutral'
   if (fastFinished(s)) return 'success'
   if (s.reconDone && (s.phase === 'worker' || s.status === 'auditing' || !fastFinished(s))) return 'info'
+  return 'neutral'
+}
+
+function bypassTone(s: FlowState): Tone {
+  if (s.bypassEnabled !== true) return 'neutral'
+  if (bypassFinished(s)) return 'success'
+  if (s.phase === 'worker' || s.status === 'auditing' || s.bypassQueueFrozen || s.reconDone) return 'info'
   return 'neutral'
 }
 
@@ -219,6 +243,8 @@ export default function PhaseFlow({
   filesAudited,
   filesSkipped,
   filesTotal,
+  filesWeight100,
+  filesWeight100Audited,
   workerRounds,
   vulnPending,
   reconSubphases,
@@ -228,10 +254,15 @@ export default function PhaseFlow({
   verifierEnabled,
   verifierPending,
   heuristicEnabled,
+  heuristicLite,
   fastEnabled,
   fastQueueFrozen,
   sinksQueued,
   sinksDone,
+  bypassEnabled,
+  bypassQueueFrozen,
+  bypassQueued,
+  bypassDone,
   onSelect,
 }: FlowState & { onSelect?: (id: string) => void }) {
   const state: FlowState = {
@@ -241,6 +272,8 @@ export default function PhaseFlow({
     filesAudited,
     filesSkipped,
     filesTotal,
+    filesWeight100,
+    filesWeight100Audited,
     workerRounds,
     vulnPending,
     reconSubphases,
@@ -250,10 +283,15 @@ export default function PhaseFlow({
     verifierEnabled,
     verifierPending,
     heuristicEnabled,
+    heuristicLite,
     fastEnabled,
     fastQueueFrozen,
     sinksQueued,
     sinksDone,
+    bypassEnabled,
+    bypassQueueFrozen,
+    bypassQueued,
+    bypassDone,
   }
   const subs = reconSubphases ?? []
 
@@ -275,13 +313,16 @@ export default function PhaseFlow({
       const items: BranchItem[] = []
       if (state.heuristicEnabled !== false) {
         const done = heuristicFinished(state)
-        const total = state.filesTotal ?? 0
-        const progressed = (state.filesAudited ?? 0) + (state.filesSkipped ?? 0)
+        const lite = state.heuristicLite === true
+        const total = lite ? (state.filesWeight100 ?? 0) : (state.filesTotal ?? 0)
+        const progressed = lite
+          ? (state.filesWeight100Audited ?? 0)
+          : (state.filesAudited ?? 0) + (state.filesSkipped ?? 0)
         items.push({
           id: 'mine',
           node: (
             <Badge variant={badgeVariant(heuristicTone(state))}>
-              启发式
+              {lite ? '启发式轻量' : '启发式'}
               {total > 0 ? ` ${progressed}/${total}` : workerRounds != null ? ` ${workerRounds} 轮` : ''}
               {done ? ' ✓' : ''}
             </Badge>
@@ -298,6 +339,21 @@ export default function PhaseFlow({
             <Badge variant={badgeVariant(fastTone(state))}>
               快速扫描
               {state.fastQueueFrozen ? ` ${progressed}/${queued}` : ' 准备中'}
+              {done ? ' ✓' : ''}
+            </Badge>
+          ),
+        })
+      }
+      if (state.bypassEnabled === true) {
+        const done = bypassFinished(state)
+        const queued = state.bypassQueued ?? 0
+        const progressed = state.bypassDone ?? 0
+        items.push({
+          id: 'bypass',
+          node: (
+            <Badge variant={badgeVariant(bypassTone(state))}>
+              历史漏洞绕过
+              {state.bypassQueueFrozen ? ` ${progressed}/${queued}` : ' 等待历史漏洞'}
               {done ? ' ✓' : ''}
             </Badge>
           ),
@@ -352,8 +408,9 @@ export default function PhaseFlow({
     0,
   )
   const workerHints: Record<string, string> = {
-    mine: '按文件定权沿 source→sink 挖洞。缺鉴权、IDOR、业务逻辑靠这条。',
+    mine: '历史漏洞收集完毕后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
+    bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
   }
 
   return (

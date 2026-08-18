@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_submit_block_reason, normalize_audit_mode
-from ..models import FileWeight, Project, SessionLocal, Vuln
+from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active
+from ..models import FileWeight, Project, SessionLocal, Sink, Vuln
 from ..services.affected_locations import (
     AFFECTED_LOCATIONS_HEADING,
     append_affected_locations,
@@ -13,6 +14,7 @@ from ..services.affected_locations import (
     parse_locations,
 )
 from ..services.paths import vuln_dir
+from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import ensure_search_fingerprint_section, write_report_md
 from ..vuln_types import PENDING_SEVERITY, normalize_root_cause_key, normalize_vuln_type, refine_vuln_type
 from . import ToolSpec, registry
@@ -32,22 +34,22 @@ REQUIRED_SUBMIT_FIELDS = (
 )
 
 FINISH_FILE_CONTINUE_MSG = (
-    "FinishFile 不等于结束本轮。请继续分析一开始注入的入口文件；"
-    "仅当该入口的 source→sink 已完整分析后再调用 FinishRound。"
+    "FinishFile 不等于结束本轮。请继续按角色分析一开始注入的焦点文件；"
+    "仅当该焦点已按本轮角色分析完后再调用 FinishRound。"
 )
 FINISH_FILE_NON_ENTRY_MSG = (
-    "已标记非入口文件，本轮未结束。禁止立刻 FinishRound。"
-    "请继续分析一开始注入的入口文件及其调用链。"
+    "已标记其它文件，本轮未结束。禁止立刻 FinishRound。"
+    "请继续分析一开始注入的焦点文件。"
 )
 FINISH_FILE_ENTRY_MSG = (
-    "已标记本轮注入入口。若其 source→sink 已完整分析，现在可以 FinishRound；"
+    "已标记本轮注入焦点。若已按角色分析完毕，现在可以 FinishRound；"
     "否则继续分析，不要仅因 FinishFile 而结束本轮。"
 )
 FINISH_ROUND_NEED_FILE = "FinishRound 前本轮必须先调用过 FinishFile"
 FINISH_ROUND_NEED_ENTRY = (
-    "本轮注入入口 {injected} 尚未 FinishFile，不能结束本轮。"
-    "中途 FinishFile 的是非入口文件，请继续分析注入入口；"
-    "仅当该入口 source→sink 已完整分析并 FinishFile 后再 FinishRound。"
+    "本轮注入焦点 {injected} 尚未 FinishFile，不能结束本轮。"
+    "中途 FinishFile 的是其它文件，请继续分析注入焦点；"
+    "仅当该焦点已按角色分析完并 FinishFile 后再 FinishRound。"
 )
 
 
@@ -65,23 +67,73 @@ def _injected_path(ctx) -> str | None:
     return _norm_audit_path(str(raw))
 
 
+def _heuristic_lite(proj: Project | None) -> bool:
+    if not proj:
+        return False
+    return heuristic_lite_active(
+        heuristic_enabled=bool(getattr(proj, "heuristic_enabled", True)),
+        heuristic_lite=bool(getattr(proj, "heuristic_lite", False)),
+    )
+
+
+def _pending_heuristic_entries(db, project_id: int, *, lite: bool) -> int:
+    q = db.query(FileWeight).filter(
+        FileWeight.project_id == project_id,
+        FileWeight.skipped.is_(False),
+        FileWeight.audited.is_(False),
+    )
+    if lite:
+        q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
+    return q.count()
+
+
+def heuristic_complete(project_id: int) -> bool:
+    """Heuristic path done, or the path is off.
+
+    Lite mode only waits on weight-100 entry files; unmarked / lower-weight
+    files can still be FinishFile'd along a call chain but do not block.
+    """
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return False
+        if not bool(getattr(proj, "heuristic_enabled", True)):
+            return True
+        return _pending_heuristic_entries(db, project_id, lite=_heuristic_lite(proj)) <= 0
+
+
 def mining_complete(project_id: int) -> bool:
-    """recon_done + all non-skipped files audited + no returned/fixing."""
+    """recon_done + enabled mining paths finished + no returned/fixing."""
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not proj.recon_done:
             return False
-        left = (
-            db.query(FileWeight)
-            .filter(
-                FileWeight.project_id == project_id,
-                FileWeight.skipped.is_(False),
-                FileWeight.audited.is_(False),
+        if bool(getattr(proj, "heuristic_enabled", True)):
+            left = _pending_heuristic_entries(db, project_id, lite=_heuristic_lite(proj))
+            if left > 0:
+                return False
+        if bool(getattr(proj, "fast_enabled", False)):
+            if not bool(getattr(proj, "fast_queue_frozen", False)):
+                return False
+            open_n = (
+                db.query(Sink)
+                .filter(Sink.project_id == project_id, Sink.status.in_(("queued", "claimed")))
+                .count()
             )
-            .count()
-        )
-        if left > 0:
-            return False
+            if open_n > 0:
+                return False
+        if bool(getattr(proj, "bypass_enabled", False)):
+            if not bool(getattr(proj, "bypass_queue_frozen", False)):
+                return False
+            from ..models import BypassTarget
+
+            open_n = (
+                db.query(BypassTarget)
+                .filter(BypassTarget.project_id == project_id, BypassTarget.status.in_(("queued", "claimed")))
+                .count()
+            )
+            if open_n > 0:
+                return False
         bounced = (
             db.query(Vuln)
             .filter(
@@ -147,11 +199,14 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if ctx.role == "worker" and mining_complete(ctx.project_id):
         return {
             "ok": False,
-            "error": "挖掘阶段已完成（文件均已审计且无打回），禁止再 SubmitVuln；修复请走 Fix 流程",
+            "error": "挖掘阶段已完成（入口均已审计且无打回），禁止再 SubmitVuln；修复请走 Fix 流程",
         }
     missing = [f for f in REQUIRED_SUBMIT_FIELDS if args.get(f) in (None, "")]
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
+    poc_blocked = poc_cli_block_reason(str(args.get("poc_code") or ""))
+    if poc_blocked:
+        return {"ok": False, "error": poc_blocked}
     vtype = refine_vuln_type(
         normalize_vuln_type(str(args.get("vuln_type"))),
         title=str(args.get("title") or ""),
@@ -196,15 +251,32 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vdir = vuln_dir(ctx.project_id, vuln_id)
         report = args.get("report_md") or _default_report(args, vtype)
         report = _ensure_affected_section(str(report), args)
+        from ..services.asset_proof import (
+            ensure_project_fingerprints,
+            overlay_project_fingerprints,
+            upgrade_project_fingerprints,
+        )
+        from ..services.report import is_placeholder_query
+
+        ensure_project_fingerprints(ctx.project_id)
+        worker_fofa = args.get("fofa_fingerprint")
+        worker_x = args.get("x_fingerprint")
+        if worker_fofa and not is_placeholder_query(worker_fofa):
+            upgrade_project_fingerprints(
+                ctx.project_id,
+                {"fofa": worker_fofa, "x": worker_x or "", "ok": True},
+                origin="manual",
+            )
         report = ensure_search_fingerprint_section(
             str(report),
-            fofa=args.get("fofa_fingerprint"),
-            x=args.get("x_fingerprint"),
+            fofa=worker_fofa,
+            x=worker_x,
             basis=args.get("fingerprint_basis"),
         )
+        report = overlay_project_fingerprints(report, ctx.project_id)
         write_report_md(vdir / "report.md", report, vuln.created_at)
         (vdir / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
-        (vdir / "poc.py").write_text(str(args["poc_code"]), encoding="utf-8")
+        write_poc_code(ctx.project_id, vuln_id, str(args["poc_code"]))
         vuln.report_path = f"vulns/{vuln_id}/report.md"
         db.commit()
 
@@ -300,7 +372,7 @@ summary: {args.get('source_sink', '')[:200]}
 {args.get('source_sink')}
 
 ### 完整 PoC 描述
-可运行脚本见同目录 `poc.py`。
+可运行脚本见同目录 `poc.py`（`python poc.py -u <目标>`；RCE 加 `-c/--cmd`）。
 
 ```http
 {args.get('http_request')}
@@ -409,6 +481,10 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": "漏洞不存在"}
         if vuln.status not in ("returned", "fixing"):
             return {"ok": False, "error": f"仅 status=returned/fixing 可 FinishFix，当前为 {vuln.status}"}
+        if args.get("poc_code"):
+            poc_blocked = poc_cli_block_reason(str(args["poc_code"]))
+            if poc_blocked:
+                return {"ok": False, "error": poc_blocked}
         # optional field updates
         for key in (
             "title",
@@ -433,11 +509,18 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 x=args.get("x_fingerprint"),
                 basis=args.get("fingerprint_basis"),
             )
+            from ..services.asset_proof import ensure_project_fingerprints, overlay_project_fingerprints
+
+            ensure_project_fingerprints(ctx.project_id)
+            report = overlay_project_fingerprints(report, ctx.project_id)
             write_report_md(vdir / "report.md", report, vuln.created_at)
         if args.get("http_request"):
             (vuln_dir(ctx.project_id, vuln.id) / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         if args.get("poc_code"):
-            (vuln_dir(ctx.project_id, vuln.id) / "poc.py").write_text(str(args["poc_code"]), encoding="utf-8")
+            poc_blocked = poc_cli_block_reason(str(args["poc_code"]))
+            if poc_blocked:
+                return {"ok": False, "error": poc_blocked}
+            write_poc_code(ctx.project_id, vuln.id, str(args["poc_code"]))
         vuln.status = "pending_review"
         vuln.return_reason = None
         db.commit()
@@ -452,7 +535,8 @@ def register_worker_tools() -> None:
             name="SubmitVuln",
             description=(
                 "提交待审核漏洞（必填字段齐全才入库）。"
-                "仅当默认/官方部署下，攻击者只凭自身权限与 HTTP 输入就能打出可观察有害冲击时才提交；"
+                "仅当默认/官方部署下，攻击者只凭自身权限与用户可控输入"
+                "（HTTP / WebSocket / RPC / MQ / 回调等）就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
                 "或只是配置/文档/compose/.env 里用户可改的默认密码弱口令的不要提交。"
                 "源码常量中的硬编码密钥（JWT/AES/DES secret 等）可以提交。"
@@ -472,7 +556,13 @@ def register_worker_tools() -> None:
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},
                     "http_request": {"type": "string"},
-                    "poc_code": {"type": "string"},
+                    "poc_code": {
+                        "type": "string",
+                        "description": (
+                            "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
+                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                        ),
+                    },
                     "expected_evidence": {"type": "string"},
                     "intended_behavior": {"type": "boolean"},
                     "root_cause_key": {
@@ -528,9 +618,9 @@ def register_worker_tools() -> None:
         ToolSpec(
             name="FinishFile",
             description=(
-                "中途标记文件不必再作为后续轮次注入点。沿调用链确认的非入口文件立刻 "
-                "FinishFile(paths=[...])，然后继续分析本轮注入入口，禁止立刻 FinishRound。"
-                "本轮注入入口仅在 source→sink 查清后再标。不要只标一开始注入的文件。"
+                "中途标记文件不必再作为后续轮次注入焦点。沿调用链确认没有独立审计价值的文件立刻 "
+                "FinishFile(paths=[...])，然后继续分析本轮注入焦点，禁止立刻 FinishRound。"
+                "本轮注入焦点仅在按角色分析完后再标。不要只标一开始注入的文件。"
             ),
             parameters={
                 "type": "object",
@@ -546,9 +636,9 @@ def register_worker_tools() -> None:
         ToolSpec(
             name="FinishRound",
             description=(
-                "仅当一开始注入的入口文件已完整分析后结束本轮。"
+                "仅当一开始注入的焦点文件已按角色分析完后结束本轮。"
                 "须附 report，结构对齐 templates/round-report.md（本轮入口、挖掘方向、已尝试、已排除）。不要写建议后续方向。"
-                "中途 FinishFile 非入口文件后禁止立刻调用；须先 FinishFile 该注入入口。"
+                "中途 FinishFile 其它文件后禁止立刻调用；须先 FinishFile 该注入焦点。"
             ),
             parameters={
                 "type": "object",
@@ -583,7 +673,13 @@ def register_worker_tools() -> None:
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},
                     "http_request": {"type": "string"},
-                    "poc_code": {"type": "string"},
+                    "poc_code": {
+                        "type": "string",
+                        "description": (
+                            "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
+                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                        ),
+                    },
                     "expected_evidence": {"type": "string"},
                     "fofa_fingerprint": {"type": "string"},
                     "x_fingerprint": {"type": "string"},

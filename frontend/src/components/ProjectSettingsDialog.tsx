@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, type Project } from '../api'
 import { DynamicVerifyToggle } from './DynamicVerifyToggle'
 import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
+import { MiningPathSelect } from './MiningPathSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { Button } from '@/components/ui/button'
 import {
@@ -26,6 +27,10 @@ export function ProjectSettingsButton({
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
   const [dynamicVerify, setDynamicVerify] = useState(Boolean(project.dynamic_verify_enabled))
   const [verifier, setVerifier] = useState(Boolean(project.verifier_enabled))
+  const [heuristicEnabled, setHeuristicEnabled] = useState(project.heuristic_enabled !== false)
+  const [heuristicLite, setHeuristicLite] = useState(project.heuristic_lite === true)
+  const [fastEnabled, setFastEnabled] = useState(project.fast_enabled === true)
+  const [bypassEnabled, setBypassEnabled] = useState(project.bypass_enabled === true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -34,8 +39,21 @@ export function ProjectSettingsButton({
     setPrompt(project.manual_lab_prompt || '')
     setDynamicVerify(Boolean(project.dynamic_verify_enabled))
     setVerifier(Boolean(project.verifier_enabled))
+    setHeuristicEnabled(project.heuristic_enabled !== false)
+    setHeuristicLite(project.heuristic_lite === true)
+    setFastEnabled(project.fast_enabled === true)
+    setBypassEnabled(project.bypass_enabled === true)
     setError('')
-  }, [open, project.manual_lab_prompt, project.dynamic_verify_enabled, project.verifier_enabled])
+  }, [
+    open,
+    project.manual_lab_prompt,
+    project.dynamic_verify_enabled,
+    project.verifier_enabled,
+    project.heuristic_enabled,
+    project.heuristic_lite,
+    project.fast_enabled,
+    project.bypass_enabled,
+  ])
 
   const close = () => {
     if (saving) return
@@ -47,11 +65,15 @@ export function ProjectSettingsButton({
     setError('')
     try {
       const text = prompt.trim()
+      const canEditPaths = project.status === 'paused' || project.status === 'completed'
       const next = await api.updateProject(project.id, {
         manual_lab: Boolean(text),
         manual_lab_prompt: text,
         verifier_enabled: verifier,
         dynamic_verify_enabled: dynamicVerify,
+        ...(canEditPaths
+          ? { heuristic_enabled: heuristicEnabled, heuristic_lite: heuristicLite, fast_enabled: fastEnabled, bypass_enabled: bypassEnabled }
+          : {}),
       })
       onSaved(next)
       setOpen(false)
@@ -78,10 +100,23 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改。人工靶场说明保存后对下一轮审核生效；动态验证与互联网验证立即按新开关调度。
+              审计运行中也可修改动态验证与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明保存后对下一轮审核生效。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <MiningPathSelect
+              heuristicEnabled={heuristicEnabled}
+              heuristicLite={heuristicLite}
+              fastEnabled={fastEnabled}
+              bypassEnabled={bypassEnabled}
+              disabled={project.status !== 'paused' && project.status !== 'completed'}
+              onChange={({ heuristicEnabled: nextH, heuristicLite: nextL, fastEnabled: nextF, bypassEnabled: nextB }) => {
+                setHeuristicEnabled(nextH)
+                setHeuristicLite(nextL)
+                setFastEnabled(nextF)
+                setBypassEnabled(nextB)
+              }}
+            />
             <DynamicVerifyToggle enabled={dynamicVerify} onEnabledChange={setDynamicVerify} />
             {dynamicVerify ? (
               <div className="space-y-2">

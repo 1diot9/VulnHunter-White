@@ -152,3 +152,6 @@ def test_llm_role_for_recon_sub_sessions():
     assert llm_role_for_agent("reviewer_lab") == "reviewer"
     assert llm_role_for_agent("reviewer-lab") == "reviewer"
     assert llm_role_for_agent("verifier") == "verifier"
+    assert llm_role_for_agent("fast_worker") == "worker"
+    assert llm_role_for_agent("sink_triage") == "worker"
+    assert llm_role_for_agent("bypass_worker") == "worker"

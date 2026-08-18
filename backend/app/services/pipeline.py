@@ -1,4 +1,4 @@
-"""Project audit orchestrator: recon || worker, review queue, isolated fix pool."""
+"""Project audit orchestrator: recon, then heuristic after old vulns; review queue; isolated fix pool."""
 
 from __future__ import annotations
 
@@ -19,23 +19,30 @@ from ..agent.checkpoint import (
     load_checkpoint,
     resumable_file_paths,
     resumable_vuln_ids,
+    save_checkpoint,
     set_phase_run_status,
     set_phase_run_worker,
 )
 from ..agent.compression import (
     inject_summary_block,
+    inject_fast_prior_block,
+    inject_bypass_prior_block,
     inject_worker_prior_block,
     latest_summary,
+    max_fast_round_report_no,
+    max_bypass_round_report_no,
     max_round_report_no,
 )
 from ..agent.loop import AgentLoop
-from ..audit_mode import audit_mode_label, initial_hint, normalize_audit_mode
+from ..audit_mode import audit_mode_label, initial_hint, is_bounty_mode, normalize_audit_mode
 from ..config import settings
-from ..models import FileWeight, PhaseRun, Project, SessionLocal, Source, Vuln, utcnow
+from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active, mining_path_label
+from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
     debug_ports_for_runtime,
+    lab_naming,
     lab_ready,
     lab_round_complete,
     lab_setup_finished,
@@ -47,7 +54,8 @@ from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
 from ..services.paths import ensure_project_dirs, src_dir, summaries_dir, workspace_dir
-from ..services.vuln_followup import archive_reviewer_checkpoint
+from ..services.poc_script import read_poc_code
+from ..services.vuln_followup import archive_reviewer_checkpoint, latest_reviewer_context
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
     apply_recon_done,
@@ -61,7 +69,7 @@ from ..tools.phase_recon import (
     recon_old_vulns_ready,
     recon_source_ext_ready,
 )
-from ..tools.phase_worker import mining_complete, project_complete_gates
+from ..tools.phase_worker import heuristic_complete, mining_complete, project_complete_gates
 
 register_all_tools()
 
@@ -80,6 +88,8 @@ _reviewer_inflight: dict[int, bool] = {}
 _verifier_inflight: dict[int, bool] = {}
 _fix_inflight: dict[int, set[int]] = {}
 _adopted_phase_runs: set[tuple[int, int]] = set()
+_fast_prepare_threads: dict[int, threading.Thread] = {}
+_fast_last_dir: dict[int, str] = {}
 _DB_LOCK_RETRY_SECONDS = 1.0
 
 # Role pools: Recon 1 / Worker 2 (mine 1 + fix 1) / Reviewer 1
@@ -91,7 +101,7 @@ REVIEWER_POOL = 1
 CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
-    "worker": ("worker", "fix"),
+    "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker"),
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
 }
@@ -161,7 +171,19 @@ def control_phase(phase: str) -> str:
         "recon_source_ext",
     ):
         return "recon"
-    if p in ("worker", "fix", "mine"):
+    if p in (
+        "worker",
+        "fix",
+        "mine",
+        "fast",
+        "fast-worker",
+        "fast_worker",
+        "sink-triage",
+        "sink_triage",
+        "bypass-worker",
+        "bypass_worker",
+        "bypass",
+    ):
         return "worker"
     if p in ("reviewer", "reviewer-lab", "reviewer_lab"):
         return "reviewer"
@@ -219,6 +241,8 @@ def reset_runtime_state() -> None:
         _verifier_inflight.clear()
         _fix_inflight.clear()
         _adopted_phase_runs.clear()
+        _fast_prepare_threads.clear()
+        _fast_last_dir.clear()
     from .llm_thread import llm_thread_limiter
 
     llm_thread_limiter.reset()
@@ -264,6 +288,25 @@ def request_pause(project_id: int) -> None:
     live_log.system(project_id, "用户暂停全部阶段")
 
 
+def note_mining_paths_changed(
+    project_id: int,
+    *,
+    heuristic_enabled: bool,
+    fast_enabled: bool,
+    bypass_enabled: bool = False,
+    heuristic_lite: bool = False,
+) -> None:
+    """Keep paused; next resume uses the new mining paths."""
+    _force_new_run.add((project_id, "worker"))
+    _abandon_phase_checkpoints(project_id, "worker")
+    _bump_phase_generation(project_id, "worker")
+    live_log.system(
+        project_id,
+        f"挖掘路径已改为{mining_path_label(heuristic_enabled=heuristic_enabled, fast_enabled=fast_enabled, bypass_enabled=bypass_enabled, heuristic_lite=heuristic_lite)}，续跑后按新路径调度",
+        phase="worker",
+    )
+
+
 def note_audit_mode_changed(project_id: int, mode: str) -> None:
     """Keep the project paused; next resume must use the new Worker/Reviewer rules."""
     for control in ("worker", "reviewer"):
@@ -289,6 +332,136 @@ def note_dynamic_verify_changed(project_id: int, *, enabled: bool) -> None:
     _bump_phase_generation(project_id, "reviewer")
     if enabled and not _pause_event(project_id).is_set():
         _phase_pause_event(project_id, "reviewer").clear()
+
+
+class DynamicVerifyRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def is_static_only_vuln(vuln: Vuln) -> bool:
+    if vuln.status == "static_only":
+        return True
+    return vuln.status == "confirmed" and (vuln.evidence_level or "") == "static_only"
+
+
+def reviewer_run_active_for_vuln(project_id: int, vuln_id: int) -> bool:
+    with SessionLocal() as db:
+        row = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.phase == "reviewer",
+                PhaseRun.vuln_id == vuln_id,
+                PhaseRun.status.in_(("running", "paused")),
+            )
+            .first()
+        )
+        return row is not None
+
+
+def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple[bool, bool]:
+    queued = reviewer_run_active_for_vuln(vuln.project_id, vuln.id)
+    proj = project
+    if proj is None:
+        with SessionLocal() as db:
+            proj = db.get(Project, vuln.project_id)
+    can = bool(
+        is_static_only_vuln(vuln)
+        and proj is not None
+        and proj.dynamic_verify_enabled
+        and proj.status not in ("cancelled", "error", "pending", "ingesting")
+        and vuln.status != "merged"
+    )
+    return can, queued
+
+
+def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
+    """Queue a Reviewer follow-up that continues the static round with dynamic verification."""
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        if not vuln:
+            raise DynamicVerifyRequestError("漏洞不存在", status_code=404)
+        proj = db.get(Project, vuln.project_id)
+        if not proj:
+            raise DynamicVerifyRequestError("项目不存在", status_code=404)
+        db.expunge(vuln)
+        db.expunge(proj)
+    if proj.status in ("cancelled", "error", "pending", "ingesting"):
+        raise DynamicVerifyRequestError("当前项目状态不可追加动态验证")
+    if not proj.dynamic_verify_enabled:
+        raise DynamicVerifyRequestError("请先在项目设置中开启动态验证")
+    if vuln.status == "merged":
+        raise DynamicVerifyRequestError("该漏洞已并入其他报告")
+    if not is_static_only_vuln(vuln):
+        raise DynamicVerifyRequestError("仅 static_only 的漏洞可追加动态验证")
+    if reviewer_run_active_for_vuln(proj.id, vuln.id):
+        raise DynamicVerifyRequestError("该漏洞已在动态验证中", status_code=409)
+
+    ctx = latest_reviewer_context(proj.id, vuln.id)
+    system = _phase_system_prompt(proj.id, "reviewer.md")
+    if ctx and ctx.get("messages"):
+        messages = list(ctx.get("messages") or [])
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {**messages[0], "content": system}
+        else:
+            messages.insert(0, {"role": "system", "content": system})
+        user_prompt = str(ctx.get("user_prompt") or "")
+        last_prompt_tokens = int(ctx.get("last_prompt_tokens") or 0)
+        source_run = ctx.get("phase_run_id")
+    else:
+        messages = [{"role": "system", "content": system}]
+        user_prompt = ""
+        last_prompt_tokens = 0
+        source_run = None
+
+    run_id = _new_phase_run(proj.id, "reviewer", "reviewer", vuln_id=vuln.id)
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=proj.id,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt=system,
+            user_prompt=user_prompt,
+            messages=messages,
+            state={
+                "dynamic_followup": True,
+                "dynamic_followup_prompted": False,
+                "review_done": False,
+                "source_phase_run_id": source_run,
+            },
+            vuln_id=vuln.id,
+            last_prompt_tokens=last_prompt_tokens,
+            timeout_sec=settings.timeout_reviewer_static,
+        )
+    )
+    _force_new_run.discard((proj.id, "reviewer"))
+    if _pause_event(proj.id).is_set():
+        for phase in CONTROL_PHASES:
+            if phase != "reviewer":
+                _phase_pause_event(proj.id, phase).set()
+        _pause_event(proj.id).clear()
+    _phase_pause_event(proj.id, "reviewer").clear()
+    cancel = _cancel_event(proj.id)
+    if cancel.is_set():
+        cancel.clear()
+    with SessionLocal() as db:
+        row = db.get(Project, proj.id)
+        if row and row.status in ("completed", "paused"):
+            row.status = "reviewing"
+            row.phase = "reviewer"
+            row.error = None
+            db.commit()
+    live_log.system(
+        proj.id,
+        f"漏洞 #{vuln.id} 接续原审核轮次追加动态验证",
+        phase="reviewer",
+    )
+    start_audit(proj.id)
+    _ensure_reviewer(proj.id, _cancel_event(proj.id))
+    return {"ok": True, "vuln_id": vuln.id, "project_id": proj.id, "phase_run_id": run_id}
 
 
 def request_resume(project_id: int) -> None:
@@ -394,11 +567,12 @@ def request_phase_restart(project_id: int, phase: str) -> dict[str, Any]:
 
 
 def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
-    """Reset Worker file progress so a new model / audit mode can re-mine.
+    """Reset heuristic Worker file progress so a new model can re-mine that path.
 
-    Keeps vulns, recon docs, file weights/skips, lab, and reviewer/verifier state.
-    Clears audited/claim flags, Worker checkpoints, round reports, and summaries
-    that would tell the next Worker to skip already-tried paths.
+    Keeps vulns, recon docs, file weights/skips, lab, reviewer/verifier state,
+    fast-scan Sink queue, and historical-vuln bypass queue.
+    Clears audited/claim flags, heuristic Worker checkpoints, round reports, and
+    summaries that would tell the next heuristic Worker to skip already-tried paths.
     Project stays paused so the user can switch mode or model, then resume.
     """
     with SessionLocal() as db:
@@ -428,18 +602,16 @@ def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
         db.commit()
 
     n_fix = _reset_fixing_to_returned(project_id, except_ids=set())
-    n_rounds = _clear_worker_progress_files(project_id)
-    _abandon_phase_checkpoints(project_id, "worker", reason="用户重置挖掘进度")
+    n_rounds = _clear_heuristic_progress_files(project_id)
+    _abandon_db_phase_runs(project_id, ("worker", "fix"), reason="用户重置启发式挖掘进度")
     with _lock:
         _pending_inject.pop((project_id, "worker"), None)
-        _force_new_run.add((project_id, "worker"))
-    _bump_phase_generation(project_id, "worker")
     _pause_event(project_id).set()
     for phase in CONTROL_PHASES:
         _phase_pause_event(project_id, phase).set()
     live_log.system(
         project_id,
-        "已重置挖掘进度：文件恢复未审计，轮次摘要已清；漏洞产出与侦察文档保留。"
+        "已重置启发式挖掘进度：文件恢复未审计，启发式轮次摘要已清；快速扫描与历史漏洞绕过进度保留。漏洞产出与侦察文档保留。"
         + (f" fixing→returned {n_fix}。" if n_fix else "")
         + f" 已审计文件 {audited}，轮次文件 {n_rounds}。"
         " 项目保持暂停，可更换模型或切换挖掘模式后全部续跑。",
@@ -448,8 +620,8 @@ def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
     return get_phase_states(project_id)
 
 
-def _clear_worker_progress_files(project_id: int) -> int:
-    """Delete Worker round reports, compression summaries, and worker/fix todos."""
+def _clear_heuristic_progress_files(project_id: int) -> int:
+    """Delete heuristic Worker round reports, compression summaries, and worker/fix todos."""
     n = 0
     rounds = workspace_dir(project_id) / "rounds"
     if rounds.is_dir():
@@ -556,10 +728,15 @@ def _collect_inject_targets(project_id: int, phase: str) -> list[dict[str, Any]]
     return out
 
 
+def _abandon_db_phase_runs(project_id: int, db_phases: tuple[str, ...], *, reason: str) -> None:
+    for db_phase in db_phases:
+        for pr in list_resumable_runs(project_id, db_phase):
+            _release_adopted(project_id, pr.id)
+            _finish_phase_run(pr.id, "cancelled", reason)
+
+
 def _abandon_phase_checkpoints(project_id: int, phase: str, *, reason: str = "用户新跑") -> None:
-    for pr in _resumable_for_control(project_id, phase):
-        _release_adopted(project_id, pr.id)
-        _finish_phase_run(pr.id, "cancelled", reason)
+    _abandon_db_phase_runs(project_id, CONTROL_DB_PHASES[control_phase(phase)], reason=reason)
 
 
 def _prepare_phase_resume(project_id: int, phase: str) -> None:
@@ -569,10 +746,45 @@ def _prepare_phase_resume(project_id: int, phase: str) -> None:
         keep_vulns = resumable_vuln_ids(project_id, "fix")
         n_claims = _release_claims(project_id, except_paths=keep_paths)
         n_fix = _reset_fixing_to_returned(project_id, except_ids=keep_vulns)
-        if n_claims or n_fix:
+        from .sink_queue import parse_sink_ref
+        from .bypass_queue import parse_bypass_ref
+        from ..models import BypassTarget, Sink
+
+        keep_sinks = {parse_sink_ref(p) for p in keep_paths if parse_sink_ref(p)}
+        keep_bypass = {parse_bypass_ref(p) for p in keep_paths if parse_bypass_ref(p)}
+        n_sinks = 0
+        n_bypass = 0
+        with SessionLocal() as db:
+            rows = (
+                db.query(Sink)
+                .filter(Sink.project_id == project_id, Sink.status == "claimed")
+                .all()
+            )
+            for row in rows:
+                if row.id in keep_sinks:
+                    continue
+                row.status = "queued"
+                row.claimed_by = None
+                row.claimed_at = None
+                n_sinks += 1
+            bypass_rows = (
+                db.query(BypassTarget)
+                .filter(BypassTarget.project_id == project_id, BypassTarget.status == "claimed")
+                .all()
+            )
+            for row in bypass_rows:
+                if row.id in keep_bypass:
+                    continue
+                row.status = "queued"
+                row.claimed_by = None
+                row.claimed_at = None
+                n_bypass += 1
+            if n_sinks or n_bypass:
+                db.commit()
+        if n_claims or n_fix or n_sinks or n_bypass:
             live_log.system(
                 project_id,
-                f"挖掘续跑准备：清认领 {n_claims}，fixing→returned {n_fix}",
+                f"挖掘续跑准备：清认领 {n_claims}，Sink {n_sinks}，绕过 {n_bypass}，fixing→returned {n_fix}",
                 phase="worker",
             )
     n_cp = len(_resumable_for_control(project_id, control))
@@ -671,7 +883,8 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
         t = _verifier_threads.get(project_id)
         return t is not None and t.is_alive()
     for t in _threads.get(project_id, []):
-        if t.is_alive() and "worker" in (t.name or ""):
+        name = t.name or ""
+        if t.is_alive() and ("worker" in name or "fast" in name):
             return True
     if _fix_inflight.get(project_id):
         return True
@@ -782,6 +995,23 @@ def _release_claims(
         return n
 
 
+def _release_claim_if_unfinished(project_id: int, path: str, worker_id: str, *, failed: bool) -> None:
+    with SessionLocal() as db:
+        row = (
+            db.query(FileWeight)
+            .filter(FileWeight.project_id == project_id, FileWeight.path == path)
+            .first()
+        )
+        if not row:
+            return
+        if row.claimed_by == worker_id and not row.audited:
+            row.claimed_by = None
+            row.claimed_at = None
+            if failed:
+                row.audit_attempts = int(row.audit_attempts or 0) + 1
+            db.commit()
+
+
 def _release_stale_claims(project_id: int) -> int:
     cutoff = utcnow() - timedelta(seconds=max(60, int(settings.claim_stale_sec)))
     with SessionLocal() as db:
@@ -811,24 +1041,37 @@ def _release_stale_claims(project_id: int) -> int:
             n += 1
         if n:
             db.commit()
-        return n
+    n += _release_stale_sink_claims(project_id, cutoff)
+    n += _release_stale_bypass_claims(project_id, cutoff)
+    return n
 
 
-def _release_claim_if_unfinished(project_id: int, path: str, worker_id: str, *, failed: bool) -> None:
-    with SessionLocal() as db:
-        row = (
-            db.query(FileWeight)
-            .filter(FileWeight.project_id == project_id, FileWeight.path == path)
-            .first()
-        )
-        if not row:
-            return
-        if row.claimed_by == worker_id and not row.audited:
-            row.claimed_by = None
-            row.claimed_at = None
-            if failed:
-                row.audit_attempts = int(row.audit_attempts or 0) + 1
-            db.commit()
+def _release_stale_sink_claims(project_id: int, cutoff) -> int:
+    from .sink_queue import parse_sink_ref, release_stale_sink_claims
+
+    keep = {
+        sid
+        for sid in (parse_sink_ref(p) for p in resumable_file_paths(project_id))
+        if sid
+    }
+    n = release_stale_sink_claims(project_id, stale_before=cutoff, except_ids=keep)
+    if n:
+        live_log.system(project_id, f"回收陈旧 Sink 认领 {n}", phase="fast-worker")
+    return n
+
+
+def _release_stale_bypass_claims(project_id: int, cutoff) -> int:
+    from .bypass_queue import parse_bypass_ref, release_stale_bypass_claims
+
+    keep = {
+        bid
+        for bid in (parse_bypass_ref(p) for p in resumable_file_paths(project_id))
+        if bid
+    }
+    n = release_stale_bypass_claims(project_id, stale_before=cutoff, except_ids=keep)
+    if n:
+        live_log.system(project_id, f"回收陈旧绕过认领 {n}", phase="bypass-worker")
+    return n
 
 
 def _reset_fixing_to_returned(project_id: int, except_ids: set[int] | None = None) -> int:
@@ -868,21 +1111,25 @@ def _prepare_project_resume(project_id: int) -> None:
 def _pick_next_file(project_id: int, worker_id: str) -> FileWeight | None:
     protected = resumable_file_paths(project_id)
     with SessionLocal() as db:
-        q = (
-            db.query(FileWeight)
-            .filter(
-                FileWeight.project_id == project_id,
-                FileWeight.skipped.is_(False),
-                FileWeight.audited.is_(False),
-                FileWeight.weight.isnot(None),
-                FileWeight.claimed_by.is_(None),
-            )
-            .order_by(
-                FileWeight.audit_attempts.asc(),
-                FileWeight.has_source.desc(),
-                FileWeight.weight.desc(),
-                FileWeight.path.asc(),
-            )
+        proj = db.get(Project, project_id)
+        lite = heuristic_lite_active(
+            heuristic_enabled=bool(getattr(proj, "heuristic_enabled", True)) if proj else True,
+            heuristic_lite=bool(getattr(proj, "heuristic_lite", False)) if proj else False,
+        )
+        q = db.query(FileWeight).filter(
+            FileWeight.project_id == project_id,
+            FileWeight.skipped.is_(False),
+            FileWeight.audited.is_(False),
+            FileWeight.weight.isnot(None),
+            FileWeight.claimed_by.is_(None),
+        )
+        if lite:
+            q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
+        q = q.order_by(
+            FileWeight.audit_attempts.asc(),
+            FileWeight.has_source.desc(),
+            FileWeight.weight.desc(),
+            FileWeight.path.asc(),
         )
         row = None
         for cand in q.all():
@@ -943,10 +1190,21 @@ def _reviewer_has_lab_work(project_id: int) -> bool:
     return not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
 
 
+def _reviewer_has_review_work(project_id: int, pending: int | None = None) -> bool:
+    if pending is None:
+        with SessionLocal() as db:
+            pending = (
+                db.query(Vuln)
+                .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
+                .count()
+            )
+    return pending > 0 or bool(list_resumable_runs(project_id, "reviewer"))
+
+
 _ASSET_PROOF_LAB_HINT = (
-    "有可访问的漏洞环境时，审核中顺带完善报告「互联网资产证明」："
-    "先 CollectLabFingerprints 采集标题/body/header/favicon，"
-    "将 FOFA 与 X 情报社区语句写入本条报告（apply=true 或 ConfirmVuln 传 fofa_fingerprint/x_fingerprint）。"
+    "应用指纹是项目级的（docs/app-fingerprints.json），全项目只识别一次。"
+    "有可访问的漏洞环境时，用 CollectLabFingerprints 升级项目指纹（标题/body/header/favicon），"
+    "再写入本条报告（apply=true 或 ConfirmVuln 传 fofa_fingerprint/x_fingerprint）。"
     "不要把「待运行环境确认」留到确认后，也不要为此 ReturnToWorker。"
 )
 
@@ -955,7 +1213,8 @@ _STATIC_REVIEW_NOTE = (
     "本项目仅静态验证：不要搭建 Docker、不要对靶场发请求或运行 poc.py、"
     "不要 docker exec / debug MCP。"
     "ConfirmVuln 必须 evidence_level=static_only。"
-    "无运行环境，互联网资产证明允许保留「待运行环境确认」，不要编造 hash。"
+    "应用指纹是项目级的（docs/app-fingerprints.json），系统已在侦察结束后采集一次；"
+    "不要每条漏洞重新识别，Confirm 会写入报告。不要编造 hash。"
 )
 
 
@@ -999,11 +1258,7 @@ def _reviewer_lab_note(project_id: int) -> str:
 def _next_reviewer_step(project_id: int, pending: int) -> str:
     """Prefer reviewing with a manual lab note; otherwise finish Docker lab first."""
     lab_pending = _reviewer_has_lab_work(project_id)
-    review_work = (
-        pending > 0
-        or bool(list_resumable_runs(project_id, "reviewer"))
-        or _should_skip_checkpoint(project_id, "reviewer")
-    )
+    review_work = _reviewer_has_review_work(project_id, pending)
     if not lab_pending:
         return "review"
     if review_work and (_read_manual_lab(project_id)[1] or not lab_pending):
@@ -1022,10 +1277,17 @@ def _audit_mode_vars(project_id: int) -> dict[str, str]:
     }
 
 
+_POC_PROMPT_PHASES = frozenset(
+    {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
+)
+
+
 def _phase_system_prompt(project_id: int, name: str) -> str:
     base = load_prompt(name).rstrip()
     overlay = load_prompt(f"modes/{_read_audit_mode(project_id)}.md").strip()
     parts = [base, overlay]
+    if name in _POC_PROMPT_PHASES:
+        parts.append(load_prompt("poc.md").strip())
     if name == "reviewer.md" and not _read_dynamic_verify_enabled(project_id):
         parts.append(load_prompt("verify/static.md").strip())
     return "\n\n".join(parts) + "\n"
@@ -1113,6 +1375,7 @@ def _loop_from_checkpoint(
     stop_when,
     timeout_sec: int | None = None,
     llm=None,
+    resumed: bool = True,
 ) -> AgentLoop:
     return AgentLoop.from_checkpoint(
         cp,
@@ -1122,6 +1385,7 @@ def _loop_from_checkpoint(
         context_window=_context_window(),
         timeout_sec=timeout_sec,
         llm=llm,
+        resumed=resumed,
     )
 
 
@@ -1267,12 +1531,30 @@ def _maybe_mark_recon_done(project_id: int) -> bool:
             return True
     if apply_recon_done(project_id):
         live_log.system(project_id, "侦察门闩已满足，系统标记 recon_done")
+        _ensure_project_fingerprints_once(project_id)
         return True
     return False
 
 
+def _ensure_project_fingerprints_once(project_id: int) -> None:
+    """Identify application FOFA/X fingerprints once after recon; later phases reuse them."""
+    try:
+        from .asset_proof import ensure_project_fingerprints, fingerprints_usable
+
+        cache = ensure_project_fingerprints(project_id)
+        if fingerprints_usable(cache):
+            origin = cache.get("origin") or "source"
+            live_log.system(project_id, f"已写入项目应用指纹（{origin}），后续漏洞复用")
+        else:
+            live_log.system(project_id, "项目应用指纹暂缺稳定语句，后续确认/验证时再补")
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"采集项目应用指纹失败: {e}")
+
+
 def _maybe_complete_project(project_id: int, *, reviewer_busy: bool, fix_busy: bool, verifier_busy: bool = False) -> bool:
     if reviewer_busy or fix_busy or verifier_busy:
+        return False
+    if list_resumable_runs(project_id, "reviewer") or list_resumable_runs(project_id, "reviewer-lab"):
         return False
     if not project_complete_gates(project_id):
         return False
@@ -1286,6 +1568,46 @@ def _maybe_complete_project(project_id: int, *, reviewer_busy: bool, fix_busy: b
         db.commit()
     live_log.system(project_id, "项目审计完成（状态门闩满足）")
     return True
+
+
+def _refresh_project_after_reviewer(project_id: int) -> None:
+    """Clear leftover reviewing when the review queue is empty."""
+    if _reviewer_has_lab_work(project_id) or _reviewer_has_review_work(project_id):
+        return
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error", "paused"):
+            return
+    with _lock:
+        fix_busy = bool(_fix_inflight.get(project_id))
+        verifier_busy = bool(_verifier_inflight.get(project_id))
+    if _maybe_complete_project(
+        project_id,
+        reviewer_busy=False,
+        fix_busy=fix_busy,
+        verifier_busy=verifier_busy,
+    ):
+        return
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status != "reviewing":
+            return
+        verifier_work = False
+        if bool(proj.verifier_enabled):
+            verifier_work = (
+                db.query(Vuln)
+                .filter(
+                    Vuln.project_id == project_id,
+                    Vuln.verifier_status == "pending",
+                    Vuln.status.in_(("confirmed", "static_only")),
+                    Vuln.attack_surface == "frontend",
+                )
+                .count()
+                > 0
+            )
+        proj.status = "auditing"
+        proj.phase = "verifier" if verifier_work or verifier_busy else "worker"
+        db.commit()
 
 
 def _ensure_recon(project_id: int, cancel: threading.Event) -> None:
@@ -1324,11 +1646,7 @@ def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
     if _phase_is_paused(project_id, "reviewer"):
         return
     has_lab_work = _reviewer_has_lab_work(project_id)
-    has_review_work = (
-        pending > 0
-        or bool(list_resumable_runs(project_id, "reviewer"))
-        or _should_skip_checkpoint(project_id, "reviewer")
-    )
+    has_review_work = _reviewer_has_review_work(project_id, pending)
     if not has_lab_work and not has_review_work:
         return
     with _lock:
@@ -1368,11 +1686,8 @@ def _run_reviewer_loop(project_id: int) -> None:
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
-            if pending <= 0 and not _reviewer_has_lab_work(project_id) and not list_resumable_runs(
-                project_id, "reviewer"
-            ) and not _should_skip_checkpoint(
-                project_id, "reviewer"
-            ):
+            if not _reviewer_has_lab_work(project_id) and not _reviewer_has_review_work(project_id, pending):
+                _refresh_project_after_reviewer(project_id)
                 cancel.wait(timeout=5.0)
                 continue
             with _lock:
@@ -1385,6 +1700,7 @@ def _run_reviewer_loop(project_id: int) -> None:
             finally:
                 with _lock:
                     _reviewer_inflight[project_id] = False
+            _refresh_project_after_reviewer(project_id)
     except Exception as e:  # noqa: BLE001
         live_log.error(project_id, f"Reviewer 线程异常: {e}", phase="reviewer")
         with _lock:
@@ -1475,20 +1791,29 @@ def _ensure_workers(
         if not proj or proj.status in ("completed", "cancelled", "error"):
             return [t for t in active_workers if t.is_alive()]
         status = proj.status
-        unaudited_weighted = (
-            db.query(FileWeight)
-            .filter(
-                FileWeight.project_id == project_id,
-                FileWeight.weight.isnot(None),
-                FileWeight.skipped.is_(False),
-                FileWeight.audited.is_(False),
-            )
-            .count()
+        heuristic_on = bool(getattr(proj, "heuristic_enabled", True))
+        lite = heuristic_lite_active(
+            heuristic_enabled=heuristic_on,
+            heuristic_lite=bool(getattr(proj, "heuristic_lite", False)),
         )
+        q = db.query(FileWeight).filter(
+            FileWeight.project_id == project_id,
+            FileWeight.weight.isnot(None),
+            FileWeight.skipped.is_(False),
+            FileWeight.audited.is_(False),
+        )
+        if lite:
+            q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
+        unaudited_weighted = q.count()
     if _phase_is_paused(project_id, "worker"):
         return [t for t in active_workers if t.is_alive()]
 
     alive = [t for t in active_workers if t.is_alive()]
+    if not heuristic_on:
+        return alive
+    # 历史漏洞是启发式线索；LLM + GHSA/Issues 收齐前不拉 Worker。
+    if not recon_old_vulns_ready(project_id):
+        return alive
     if project_complete_gates(project_id):
         return alive
     if (
@@ -1523,6 +1848,146 @@ def _ensure_workers(
     return alive
 
 
+def _ensure_fast_prepare(project_id: int) -> None:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not proj.recon_done or not bool(getattr(proj, "fast_enabled", False)):
+            return
+        if bool(getattr(proj, "fast_queue_frozen", False)):
+            return
+        if proj.status in ("completed", "cancelled", "error"):
+            return
+    if _phase_is_paused(project_id, "worker"):
+        return
+    with _lock:
+        t = _fast_prepare_threads.get(project_id)
+        if t is not None and t.is_alive():
+            return
+        rt = threading.Thread(
+            target=_run_fast_prepare,
+            args=(project_id,),
+            daemon=True,
+            name=f"vh-fast-prepare-{project_id}",
+        )
+        _fast_prepare_threads[project_id] = rt
+        _threads.setdefault(project_id, []).append(rt)
+    live_log.system(project_id, "拉起快速扫描准备（Semgrep + Sink 筛选）", phase="fast-worker")
+    rt.start()
+
+
+def _ensure_fast_workers(
+    project_id: int,
+    active_workers: list[threading.Thread],
+) -> list[threading.Thread]:
+    from .sink_queue import fast_path_complete, queue_frozen
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return [t for t in active_workers if t.is_alive()]
+        fast_on = bool(getattr(proj, "fast_enabled", False))
+        heuristic_on = bool(getattr(proj, "heuristic_enabled", True))
+        bypass_on = bool(getattr(proj, "bypass_enabled", False))
+        status = proj.status
+    if _phase_is_paused(project_id, "worker"):
+        return [t for t in active_workers if t.is_alive()]
+    alive = [t for t in active_workers if t.is_alive()]
+    if not fast_on or not queue_frozen(project_id) or fast_path_complete(project_id):
+        return alive
+    if project_complete_gates(project_id):
+        return alive
+    conc = 1 if heuristic_on or bypass_on else _worker_concurrency(project_id)
+    conc = max(1, conc)
+    while len(alive) < conc:
+        wid = f"fast-{len(alive)+1}-{uuid.uuid4().hex[:6]}"
+        wt = threading.Thread(
+            target=_run_fast_worker_loop,
+            args=(project_id, wid),
+            daemon=True,
+            name=f"vh-{wid}",
+        )
+        alive.append(wt)
+        with _lock:
+            _threads.setdefault(project_id, []).append(wt)
+        live_log.system(project_id, f"启动 Fast Worker {wid}", phase="fast-worker")
+        wt.start()
+    if status == "recon":
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "recon":
+                proj.status = "auditing"
+                db.commit()
+    return alive
+
+
+def _ensure_bypass_prepare(project_id: int) -> None:
+    from .bypass_queue import freeze_bypass_queue
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not bool(getattr(proj, "bypass_enabled", False)):
+            return
+        if bool(getattr(proj, "bypass_queue_frozen", False)):
+            return
+        if proj.status in ("completed", "cancelled", "error"):
+            return
+    if _phase_is_paused(project_id, "worker"):
+        return
+    if not recon_old_vulns_ready(project_id):
+        return
+    queued = freeze_bypass_queue(project_id)
+    live_log.system(
+        project_id,
+        f"历史漏洞绕过队列已冻结，待尝试 {queued} 条",
+        phase="bypass-worker",
+    )
+
+
+def _ensure_bypass_workers(
+    project_id: int,
+    active_workers: list[threading.Thread],
+) -> list[threading.Thread]:
+    from .bypass_queue import bypass_path_complete, queue_frozen
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return [t for t in active_workers if t.is_alive()]
+        bypass_on = bool(getattr(proj, "bypass_enabled", False))
+        heuristic_on = bool(getattr(proj, "heuristic_enabled", True))
+        fast_on = bool(getattr(proj, "fast_enabled", False))
+        status = proj.status
+    if _phase_is_paused(project_id, "worker"):
+        return [t for t in active_workers if t.is_alive()]
+    alive = [t for t in active_workers if t.is_alive()]
+    if not bypass_on or not queue_frozen(project_id) or bypass_path_complete(project_id):
+        return alive
+    if project_complete_gates(project_id):
+        return alive
+    conc = 1 if heuristic_on or fast_on else _worker_concurrency(project_id)
+    conc = max(1, conc)
+    while len(alive) < conc:
+        wid = f"bypass-{len(alive)+1}-{uuid.uuid4().hex[:6]}"
+        wt = threading.Thread(
+            target=_run_bypass_worker_loop,
+            args=(project_id, wid),
+            daemon=True,
+            name=f"vh-{wid}",
+        )
+        alive.append(wt)
+        with _lock:
+            _threads.setdefault(project_id, []).append(wt)
+        live_log.system(project_id, f"启动 Bypass Worker {wid}", phase="bypass-worker")
+        wt.start()
+    if status == "recon":
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "recon":
+                proj.status = "auditing"
+                db.commit()
+    return alive
+
+
 def _orchestrate(project_id: int) -> None:
     from ..models import ensure_schema
 
@@ -1534,6 +1999,8 @@ def _orchestrate(project_id: int) -> None:
         return
     live_log.system(project_id, "调度器启动")
     active_workers: list[threading.Thread] = []
+    active_fast_workers: list[threading.Thread] = []
+    active_bypass_workers: list[threading.Thread] = []
     fix_pool = ThreadPoolExecutor(
         max_workers=_fix_concurrency(),
         thread_name_prefix=f"vh-fix-{project_id}-",
@@ -1584,6 +2051,10 @@ def _orchestrate(project_id: int) -> None:
                         returned_ids.append(vid)
 
                 active_workers = _ensure_workers(project_id, active_workers)
+                _ensure_fast_prepare(project_id)
+                active_fast_workers = _ensure_fast_workers(project_id, active_fast_workers)
+                _ensure_bypass_prepare(project_id)
+                active_bypass_workers = _ensure_bypass_workers(project_id, active_bypass_workers)
 
                 for vid in returned_ids:
                     if _phase_is_paused(project_id, "worker"):
@@ -1604,6 +2075,7 @@ def _orchestrate(project_id: int) -> None:
 
                 _ensure_reviewer(project_id, cancel)
                 _ensure_verifier(project_id, cancel)
+                _refresh_project_after_reviewer(project_id)
 
                 with _lock:
                     fix_busy = bool(_fix_inflight.get(project_id))
@@ -1703,7 +2175,7 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-old-vuln-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-retry-timeout.md",
         retry_other_doc="recon-old-vuln-retry-other.md",
-        done_log="历史漏洞 LLM 检索已结束，进入 GHSA 爬虫补漏",
+        done_log="历史漏洞 LLM 检索已结束，进入 GHSA / GitHub Issues 爬虫补漏",
         fail_error="recon 历史漏洞 LLM 检索未在重试上限内完成",
         fail_status="Recon 历史漏洞 LLM 检索未完成，将自动再拉起",
         fail_log="Recon 历史漏洞 LLM 检索重试用尽，等待调度器再拉起",
@@ -1831,8 +2303,8 @@ def _run_recon_gated_session(
                 extra = extra_label or {
                     "recon-old-vuln": "历史漏洞",
                     "recon_old_vuln": "历史漏洞",
-                    "recon-old-vuln-ghsa": "历史漏洞/GHSA补漏",
-                    "recon_old_vuln_ghsa": "历史漏洞/GHSA补漏",
+                    "recon-old-vuln-ghsa": "历史漏洞/GHSA与Issues补漏",
+                    "recon_old_vuln_ghsa": "历史漏洞/GHSA与Issues补漏",
                     "recon-source-ext": "扩展名",
                     "recon_source_ext": "扩展名",
                 }.get(phase, "代码地图/鉴权")
@@ -2078,8 +2550,10 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 proj = db.get(Project, project_id)
                 if not proj or proj.status in ("completed", "cancelled", "error"):
                     return
-            if mining_complete(project_id) and not _pending_inject.get((project_id, "worker")):
-                # No more files / bounced work — idle until project completes via reviewer
+            if not recon_old_vulns_ready(project_id):
+                cancel.wait(timeout=5.0)
+                continue
+            if heuristic_complete(project_id) and not _pending_inject.get((project_id, "worker")):
                 cancel.wait(timeout=5.0)
                 continue
 
@@ -2171,6 +2645,459 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
             pass
 
 
+def _indexed_extensions(project_id: int) -> list[str]:
+    with SessionLocal() as db:
+        rows = db.query(FileWeight.path).filter(FileWeight.project_id == project_id).all()
+    exts: set[str] = set()
+    for (path,) in rows:
+        suffix = Path(str(path or "")).suffix.lower()
+        if suffix:
+            exts.add(suffix)
+    return sorted(exts)
+
+
+def _nearby_sources(project_id: int, file_path: str) -> str:
+    parent = str(Path(file_path).parent).replace("\\", "/")
+    with SessionLocal() as db:
+        rows = db.query(Source).filter(Source.project_id == project_id).all()
+        same = [r for r in rows if r.file_path.replace("\\", "/") == file_path]
+        nearby = [
+            r
+            for r in rows
+            if r not in same and str(Path(r.file_path).parent).replace("\\", "/") == parent
+        ]
+    lines = [f"- {r.file_path} :: {r.method_name}" for r in (same + nearby)[:20]]
+    return "\n".join(lines) if lines else "（附近无 Recon Source）"
+
+
+def _format_sink_cards(rows) -> str:
+    from .sink_queue import sink_card
+
+    parts = []
+    for row in rows:
+        card = sink_card(row)
+        parts.append(
+            f"id={card['id']} {card['file_path']}:{card['line_start']} "
+            f"sev={card['severity']} conf={card['confidence']} type={card['mapped_vuln_type']} "
+            f"score={card['code_score']} rules={','.join(card['check_ids'])}\n"
+            f"{(card['snippet'] or '')[:400]}"
+        )
+    return "\n\n".join(parts)
+
+
+def _run_fast_prepare(project_id: int) -> None:
+    from .semgrep_scan import SemgrepUnavailable, language_configs, run_semgrep_scan
+    from .sink_queue import (
+        freeze_audit_queue,
+        freeze_empty_queue,
+        ingest_semgrep_results,
+        load_undecided_candidates,
+        queue_frozen,
+    )
+
+    cancel = _cancel_event(project_id)
+    try:
+        if queue_frozen(project_id) or cancel.is_set():
+            return
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if not proj or not proj.fast_enabled:
+                return
+            heuristic_on = bool(proj.heuristic_enabled)
+            bypass_on = bool(getattr(proj, "bypass_enabled", False))
+            bounty = is_bounty_mode(proj.audit_mode)
+        try:
+            configs = language_configs(_indexed_extensions(project_id))
+            live_log.system(
+                project_id,
+                f"开始 Semgrep 扫描（{' '.join('--config ' + c for c in configs)}）",
+                phase="fast-worker",
+            )
+            payload = run_semgrep_scan(project_id, configs=configs)
+        except SemgrepUnavailable as exc:
+            live_log.error(project_id, str(exc), phase="fast-worker")
+            if heuristic_on or bypass_on:
+                freeze_empty_queue(project_id)
+                live_log.system(project_id, "快速扫描跳过：无 Semgrep，其他挖掘路径继续", phase="fast-worker")
+                return
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if proj:
+                    proj.status = "error"
+                    proj.error = str(exc)
+                    db.commit()
+            return
+        except Exception as exc:  # noqa: BLE001
+            live_log.error(project_id, f"Semgrep 失败: {exc}", phase="fast-worker")
+            if heuristic_on or bypass_on:
+                freeze_empty_queue(project_id)
+                return
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if proj:
+                    proj.status = "error"
+                    proj.error = f"Semgrep 失败: {exc}"
+                    db.commit()
+            return
+
+        n = ingest_semgrep_results(project_id, payload, bounty=bounty)
+        live_log.system(project_id, f"代码筛后候选 Sink {n} 条", phase="fast-worker")
+        if n <= 0:
+            freeze_empty_queue(project_id)
+            return
+
+        while not cancel.is_set() and not _phase_is_paused(project_id, "worker"):
+            batch = load_undecided_candidates(project_id, limit=30)
+            if not batch:
+                break
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                return
+            cards = _format_sink_cards(batch)
+            system = _phase_system_prompt(project_id, "sink_triage.md")
+            run_id = _new_phase_run(project_id, "sink-triage", "sink_triage")
+            _start_log_session(project_id, "sink-triage", extra=f"{len(batch)} sinks")
+            body = _initial_prompt(
+                "sink_triage.md",
+                batch_count=len(batch),
+                cards=cards,
+                **_audit_mode_vars(project_id),
+            )
+            user = _prompt_with_summary("sink-triage", project_id, body)
+            loop = AgentLoop(
+                project_id=project_id,
+                role="sink_triage",
+                phase="sink-triage",
+                system_prompt=system,
+                user_prompt=user,
+                phase_run_id=run_id,
+                cancel_event=_loop_cancel(project_id, "worker"),
+                pause_event=_combined_pause(project_id, "worker"),
+                timeout_sec=settings.timeout_sink_triage,
+                context_window=_context_window(),
+                stop_when=lambda st: bool(st.get("triage_batch_finished")),
+            )
+            loop.state["triage_batch_ids"] = [row.id for row in batch]
+            result = loop.run()
+            _finish_phase_run(
+                run_id,
+                "completed" if result.state.get("triage_batch_finished") else ("cancelled" if result.cancelled else "failed"),
+                result.error,
+            )
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            if not result.state.get("triage_batch_finished"):
+                live_log.system(project_id, "Sink 筛选本批未完成，按代码分冻结队列", phase="sink-triage")
+                break
+
+        queued = freeze_audit_queue(project_id)
+        live_log.system(project_id, f"快速扫描队列已冻结，待审计 Sink {queued} 条", phase="fast-worker")
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"快速扫描准备异常: {e}", phase="fast-worker")
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.fast_enabled and not proj.heuristic_enabled and not getattr(proj, "bypass_enabled", False):
+                proj.status = "error"
+                proj.error = f"快速扫描准备失败: {e}"
+                db.commit()
+            elif proj and proj.fast_enabled:
+                freeze_empty_queue(project_id)
+
+
+def _next_fast_round_id(project_id: int) -> int:
+    return max_fast_round_report_no(project_id) + 1
+
+
+def _finish_fast_round(project_id: int, worker_id: str, sink_id: int | None, run_id: int, result) -> str:
+    from .sink_queue import release_sink_claim
+
+    if result.stop_reason == "auth_error":
+        _pause_for_auth(project_id, result.error or "auth_error")
+        return "interrupt"
+    phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    finished = bool(result.state.get("sink_finished"))
+    if sink_id and not finished and not phase_restart:
+        release_sink_claim(project_id, sink_id, worker_id)
+    if finished and sink_id:
+        with SessionLocal() as db:
+            row = db.get(Sink, sink_id)
+            if row:
+                _fast_last_dir[project_id] = str(Path(row.file_path).parent).replace("\\", "/")
+    _finish_phase_run(
+        run_id,
+        "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
+        "用户新跑" if phase_restart else result.error,
+    )
+    if result.cancelled and _cancel_event(project_id).is_set():
+        return "cancel"
+    if phase_restart:
+        return "restart"
+    return "next"
+
+
+def _run_fast_worker_loop(project_id: int, worker_id: str) -> None:
+    from .sink_queue import (
+        fast_path_complete,
+        parse_sink_ref,
+        pick_next_sink,
+        reclaim_sink,
+        sink_card,
+        sink_ref,
+    )
+
+    cancel = _cancel_event(project_id)
+    current_run_id: int | None = None
+    try:
+        while not cancel.is_set():
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if not proj or proj.status in ("completed", "cancelled", "error"):
+                    return
+            if fast_path_complete(project_id):
+                cancel.wait(timeout=5.0)
+                continue
+
+            cp = _adopt_resumable(project_id, "fast-worker", worker_id=worker_id)
+            if cp:
+                sink_id = parse_sink_ref(cp.file_path)
+                if sink_id:
+                    reclaim_sink(project_id, sink_id, worker_id)
+                current_run_id = cp.phase_run_id
+                try:
+                    loop = _loop_from_checkpoint(
+                        cp,
+                        cancel=cancel,
+                        stop_when=lambda st: bool(st.get("sink_finished")),
+                        timeout_sec=settings.timeout_worker_round,
+                    )
+                    loop.worker_id = worker_id
+                    if not int((loop.state or {}).get("round_id") or 0):
+                        loop.state["round_id"] = _next_fast_round_id(project_id)
+                    result = loop.run()
+                    action = _finish_fast_round(project_id, worker_id, sink_id, cp.phase_run_id, result)
+                    if action in ("interrupt", "cancel"):
+                        return
+                    if action == "restart":
+                        continue
+                finally:
+                    _release_adopted(project_id, cp.phase_run_id)
+                    current_run_id = None
+                continue
+
+            row = pick_next_sink(project_id, worker_id, prefer_dir=_fast_last_dir.get(project_id))
+            if row is None:
+                cancel.wait(timeout=5.0)
+                continue
+            card = sink_card(row)
+            system = _phase_system_prompt(project_id, "fast_worker.md")
+            run_id = _new_phase_run(
+                project_id, "fast-worker", "fast_worker", worker_id=worker_id, file_path=sink_ref(row.id)
+            )
+            current_run_id = run_id
+            _consume_force_new(project_id, "worker")
+            _start_log_session(project_id, "fast-worker", extra=f"{row.file_path}:{row.line_start}")
+            round_id = _next_fast_round_id(project_id)
+            body = _initial_prompt(
+                "fast_worker.md",
+                worker_id=worker_id,
+                round_id=round_id,
+                sink_id=row.id,
+                file_path=row.file_path,
+                line_start=row.line_start,
+                line_end=row.line_end,
+                severity=row.severity,
+                confidence=row.confidence,
+                mapped_vuln_type=row.mapped_vuln_type,
+                code_score=row.code_score,
+                check_ids=", ".join(card.get("check_ids") or []),
+                snippet=row.snippet or "",
+                nearby_sources=_nearby_sources(project_id, row.file_path),
+                **_audit_mode_vars(project_id),
+            )
+            user = _prompt_with_summary("fast-worker", project_id, body, for_file=True)
+            prior = inject_fast_prior_block(project_id)
+            if prior:
+                user = f"{prior}{user}"
+            loop = AgentLoop(
+                project_id=project_id,
+                role="fast_worker",
+                phase="fast-worker",
+                system_prompt=system,
+                user_prompt=user,
+                phase_run_id=run_id,
+                worker_id=worker_id,
+                cancel_event=_loop_cancel(project_id, "worker"),
+                pause_event=_combined_pause(project_id, "worker"),
+                timeout_sec=settings.timeout_worker_round,
+                context_window=_context_window(),
+                stop_when=lambda st: bool(st.get("sink_finished")),
+                file_path=sink_ref(row.id),
+            )
+            loop.state["round_id"] = round_id
+            loop.state["sink_id"] = row.id
+            loop.state["injected_sink"] = sink_ref(row.id)
+            result = loop.run()
+            action = _finish_fast_round(project_id, worker_id, row.id, run_id, result)
+            current_run_id = None
+            if action in ("interrupt", "cancel"):
+                return
+            if action == "restart":
+                continue
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"Fast Worker={worker_id} 异常: {e}", phase="fast-worker")
+        try:
+            if current_run_id:
+                _finish_phase_run(current_run_id, "failed", str(e))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _next_bypass_round_id(project_id: int) -> int:
+    return max_bypass_round_report_no(project_id) + 1
+
+
+def _finish_bypass_round(project_id: int, worker_id: str, bypass_id: int | None, run_id: int, result) -> str:
+    from .bypass_queue import release_bypass_claim
+
+    if result.stop_reason == "auth_error":
+        _pause_for_auth(project_id, result.error or "auth_error")
+        return "interrupt"
+    phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    finished = bool(result.state.get("bypass_finished"))
+    if bypass_id and not finished and not phase_restart:
+        release_bypass_claim(project_id, bypass_id, worker_id)
+    _finish_phase_run(
+        run_id,
+        "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
+        "用户新跑" if phase_restart else result.error,
+    )
+    if result.cancelled and _cancel_event(project_id).is_set():
+        return "cancel"
+    if phase_restart:
+        return "restart"
+    return "next"
+
+
+def _run_bypass_worker_loop(project_id: int, worker_id: str) -> None:
+    from .bypass_queue import (
+        bypass_path_complete,
+        bypass_ref,
+        load_bypass_doc,
+        parse_bypass_ref,
+        pick_next_bypass,
+        reclaim_bypass,
+    )
+
+    cancel = _cancel_event(project_id)
+    current_run_id: int | None = None
+    try:
+        while not cancel.is_set():
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if not proj or proj.status in ("completed", "cancelled", "error"):
+                    return
+            if bypass_path_complete(project_id):
+                cancel.wait(timeout=5.0)
+                continue
+
+            cp = _adopt_resumable(project_id, "bypass-worker", worker_id=worker_id)
+            if cp:
+                bypass_id = parse_bypass_ref(cp.file_path)
+                if bypass_id:
+                    reclaim_bypass(project_id, bypass_id, worker_id)
+                current_run_id = cp.phase_run_id
+                try:
+                    loop = _loop_from_checkpoint(
+                        cp,
+                        cancel=cancel,
+                        stop_when=lambda st: bool(st.get("bypass_finished")),
+                        timeout_sec=settings.timeout_worker_round,
+                    )
+                    loop.worker_id = worker_id
+                    if not int((loop.state or {}).get("round_id") or 0):
+                        loop.state["round_id"] = _next_bypass_round_id(project_id)
+                    result = loop.run()
+                    action = _finish_bypass_round(project_id, worker_id, bypass_id, cp.phase_run_id, result)
+                    if action in ("interrupt", "cancel"):
+                        return
+                    if action == "restart":
+                        continue
+                finally:
+                    _release_adopted(project_id, cp.phase_run_id)
+                    current_run_id = None
+                continue
+
+            row = pick_next_bypass(project_id, worker_id)
+            if row is None:
+                cancel.wait(timeout=5.0)
+                continue
+            doc = load_bypass_doc(project_id, row.file_path, max_chars=settings.recon_doc_inject_max_chars)
+            if not doc.strip():
+                doc = "（文档缺失或为空，可 FinishBypass(verdict=incomplete)）"
+            system = _phase_system_prompt(project_id, "bypass_worker.md")
+            run_id = _new_phase_run(
+                project_id, "bypass-worker", "bypass_worker", worker_id=worker_id, file_path=bypass_ref(row.id)
+            )
+            current_run_id = run_id
+            _consume_force_new(project_id, "worker")
+            _start_log_session(project_id, "bypass-worker", extra=row.file_path)
+            round_id = _next_bypass_round_id(project_id)
+            body = _initial_prompt(
+                "bypass_worker.md",
+                worker_id=worker_id,
+                round_id=round_id,
+                bypass_id=row.id,
+                file_path=row.file_path,
+                title=row.title,
+                cve=row.cve or "",
+                cwe=row.cwe or "",
+                fix_status=row.fix_status or "",
+                source=row.source or "",
+                old_vuln_doc=doc,
+                **_audit_mode_vars(project_id),
+            )
+            user = _prompt_with_summary("bypass-worker", project_id, body, for_file=True)
+            prior = inject_bypass_prior_block(project_id)
+            if prior:
+                user = f"{prior}{user}"
+            loop = AgentLoop(
+                project_id=project_id,
+                role="bypass_worker",
+                phase="bypass-worker",
+                system_prompt=system,
+                user_prompt=user,
+                phase_run_id=run_id,
+                worker_id=worker_id,
+                cancel_event=_loop_cancel(project_id, "worker"),
+                pause_event=_combined_pause(project_id, "worker"),
+                timeout_sec=settings.timeout_worker_round,
+                context_window=_context_window(),
+                stop_when=lambda st: bool(st.get("bypass_finished")),
+                file_path=bypass_ref(row.id),
+            )
+            loop.state["round_id"] = round_id
+            loop.state["bypass_id"] = row.id
+            loop.state["injected_bypass"] = bypass_ref(row.id)
+            result = loop.run()
+            action = _finish_bypass_round(project_id, worker_id, row.id, run_id, result)
+            current_run_id = None
+            if action in ("interrupt", "cancel"):
+                return
+            if action == "restart":
+                continue
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"Bypass Worker={worker_id} 异常: {e}", phase="bypass-worker")
+        try:
+            if current_run_id:
+                _finish_phase_run(current_run_id, "failed", str(e))
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _run_fix(project_id: int, vuln_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
@@ -2246,8 +3173,9 @@ def _run_fix(project_id: int, vuln_id: int) -> None:
             pass
 
 
-def _lab_system_prompt() -> str:
-    return f"{load_prompt('reviewer-lab.md').rstrip()}\n\n{load_prompt('docker.md').rstrip()}\n"
+def _lab_system_prompt(project_id: int) -> str:
+    names = lab_naming(project_id)
+    return f"{render_prompt('reviewer-lab.md', **names)}\n\n{render_prompt('docker.md', **names)}\n"
 
 
 def _run_reviewer_lab(project_id: int) -> None:
@@ -2268,11 +3196,15 @@ def _run_reviewer_lab(project_id: int) -> None:
                 live_log.system(project_id, "已复用现有 Docker 靶场，环境搭建轮结束", phase="reviewer-lab", role="reviewer_lab")
                 return
 
-        system = _lab_system_prompt()
+        system = _lab_system_prompt(project_id)
         user = _prompt_with_summary(
             "reviewer-lab",
             project_id,
-            _initial_prompt("reviewer-lab.md", project_id=project_id, **_audit_mode_vars(project_id)),
+            _initial_prompt(
+                "reviewer-lab.md",
+                **_audit_mode_vars(project_id),
+                **lab_naming(project_id),
+            ),
         )
         cp = _adopt_resumable(project_id, "reviewer-lab")
         run_id = cp.phase_run_id if cp else _new_phase_run(project_id, "reviewer-lab", "reviewer_lab")
@@ -2389,11 +3321,43 @@ def _run_reviewer_lab(project_id: int) -> None:
             mark_lab_setup_finished(project_id, skipped=True, notes=f"环境搭建轮异常: {e}", via="lab-round")
 
 
+def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
+    system = _phase_system_prompt(cp.project_id, "reviewer.md")
+    cp.system_prompt = system
+    messages = list(cp.messages or [])
+    if messages and messages[0].get("role") == "system":
+        messages[0] = {**messages[0], "content": system}
+    else:
+        messages.insert(0, {"role": "system", "content": system})
+    lab_note = _reviewer_lab_note(cp.project_id)
+    debug_plan = {**reviewer_debug_plan(cp.project_id), "enabled": True}
+    body = _initial_prompt(
+        "reviewer-dynamic-followup.md",
+        vuln_id=cp.vuln_id,
+        lab_note=lab_note,
+        debug_plan=json_dumps(debug_plan),
+        **_audit_mode_vars(cp.project_id),
+    )
+    messages.append({"role": "user", "content": body})
+    cp.messages = messages
+    cp.state["review_done"] = False
+    cp.state.pop("review_verdict", None)
+    cp.state["dynamic_followup"] = True
+    cp.state["dynamic_followup_prompted"] = True
+
+
 def _run_reviewer_once(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
         cp = _adopt_resumable(project_id, "reviewer")
         if cp and cp.vuln_id is not None:
+            first_followup = bool(cp.state.get("dynamic_followup")) and not bool(
+                cp.state.get("dynamic_followup_prompted")
+            )
+            if first_followup:
+                _append_dynamic_followup_turn(cp)
+                save_checkpoint(cp)
+                _start_log_session(project_id, "reviewer", extra=f"漏洞 #{cp.vuln_id} 追加动态验证")
             with SessionLocal() as db:
                 proj = db.get(Project, project_id)
                 if proj and proj.status not in ("completed", "cancelled", "paused"):
@@ -2406,6 +3370,7 @@ def _run_reviewer_once(project_id: int) -> None:
                     cancel=cancel,
                     stop_when=lambda st: bool(st.get("review_done")),
                     timeout_sec=settings.timeout_reviewer_static,
+                    resumed=not first_followup,
                 )
                 result = loop.run()
             finally:
@@ -2565,12 +3530,22 @@ def _run_verifier_once(project_id: int) -> None:
                 phase="verifier",
             )
             return
+        from .asset_proof import ensure_project_fingerprints, load_project_fingerprints
+        from .report import is_placeholder_query
+
+        ensure_project_fingerprints(project_id)
+        app_fp = load_project_fingerprints(project_id) or {}
         fofa_cache = load_project_fofa_cache(project_id)
-        fofa_query = (
-            (fofa_cache or {}).get("query")
-            or extract_fofa_query(report_md)
-            or "（报告内未解析到 FOFA 语句，请 Read 后自行提炼）"
-        )
+        report_query = extract_fofa_query(report_md)
+        cached_query = str((fofa_cache or {}).get("query") or "").strip()
+        if fofa_cache and fofa_cache.get("sample") and cached_query:
+            fofa_query = cached_query
+        elif not is_placeholder_query(app_fp.get("fofa")):
+            fofa_query = str(app_fp.get("fofa") or "").strip()
+        elif not is_placeholder_query(report_query):
+            fofa_query = report_query
+        else:
+            fofa_query = "（项目指纹与报告均无可用 FOFA 语句：Read docs/app-fingerprints.json 与报告后改写再搜）"
         payload = {
             "title": vuln.title,
             "type": vuln.vuln_type,
@@ -2580,7 +3555,7 @@ def _run_verifier_once(project_id: int) -> None:
             "line": vuln.line_no,
             "report_path": vuln.report_path or f"vulns/{vuln_id}/report.md",
             "http_request": vuln.http_request,
-            "poc_code": vuln.poc_code,
+            "poc_code": read_poc_code(project_id, vuln_id, fallback=vuln.poc_code),
             "expected_evidence": vuln.expected_evidence,
         }
         with SessionLocal() as db:

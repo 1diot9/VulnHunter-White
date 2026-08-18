@@ -8,6 +8,7 @@ import { DynamicVerifyToggle } from '../components/DynamicVerifyToggle'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import { AuditFlowPreview } from '../components/AuditFlowPreview'
+import { MiningPathSelect } from '../components/MiningPathSelect'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
@@ -16,7 +17,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { githubRepoHref } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatFileProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 export default function HomePage() {
@@ -27,6 +28,10 @@ export default function HomePage() {
   const [manualLabPrompt, setManualLabPrompt] = useState('')
   const [dynamicVerifyEnabled, setDynamicVerifyEnabled] = useState(false)
   const [verifierEnabled, setVerifierEnabled] = useState(false)
+  const [heuristicEnabled, setHeuristicEnabled] = useState(true)
+  const [heuristicLite, setHeuristicLite] = useState(false)
+  const [fastEnabled, setFastEnabled] = useState(false)
+  const [bypassEnabled, setBypassEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -44,6 +49,10 @@ export default function HomePage() {
         manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
+        heuristic_enabled: heuristicEnabled,
+        heuristic_lite: heuristicLite,
+        fast_enabled: fastEnabled,
+        bypass_enabled: bypassEnabled,
       })
       setUrl('')
       await refresh()
@@ -64,6 +73,10 @@ export default function HomePage() {
         manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
+        heuristic_enabled: heuristicEnabled,
+        heuristic_lite: heuristicLite,
+        fast_enabled: fastEnabled,
+        bypass_enabled: bypassEnabled,
       })
       await refresh()
     } catch (e) {
@@ -77,7 +90,7 @@ export default function HomePage() {
     <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒启发式审计。创建时选择挖掘模式，默认赏金模式；动态验证与互联网验证默认关闭。</p>
+        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量，并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。动态验证与互联网验证默认关闭。</p>
       </div>
 
       <Card className="w-full">
@@ -85,17 +98,29 @@ export default function HomePage() {
         <div className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
             <div className="space-y-3">
-          <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
-          <DynamicVerifyToggle enabled={dynamicVerifyEnabled} onEnabledChange={setDynamicVerifyEnabled} />
-          {dynamicVerifyEnabled ? (
-            <ManualLabToggle
-              enabled={manualLab}
-              prompt={manualLabPrompt}
-              onEnabledChange={setManualLab}
-              onPromptChange={setManualLabPrompt}
-            />
-          ) : null}
-          <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
+              <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
+              <MiningPathSelect
+                heuristicEnabled={heuristicEnabled}
+                heuristicLite={heuristicLite}
+                fastEnabled={fastEnabled}
+                bypassEnabled={bypassEnabled}
+                onChange={({ heuristicEnabled: nextH, heuristicLite: nextL, fastEnabled: nextF, bypassEnabled: nextB }) => {
+                  setHeuristicEnabled(nextH)
+                  setHeuristicLite(nextL)
+                  setFastEnabled(nextF)
+                  setBypassEnabled(nextB)
+                }}
+              />
+              <DynamicVerifyToggle enabled={dynamicVerifyEnabled} onEnabledChange={setDynamicVerifyEnabled} />
+              {dynamicVerifyEnabled ? (
+                <ManualLabToggle
+                  enabled={manualLab}
+                  prompt={manualLabPrompt}
+                  onEnabledChange={setManualLab}
+                  onPromptChange={setManualLabPrompt}
+                />
+              ) : null}
+              <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
             </div>
             <AuditFlowPreview
               className="xl:sticky xl:top-[4.25rem]"
@@ -103,6 +128,10 @@ export default function HomePage() {
               dynamicVerifyEnabled={dynamicVerifyEnabled}
               manualLab={manualLab}
               verifierEnabled={verifierEnabled}
+              heuristicEnabled={heuristicEnabled}
+              heuristicLite={heuristicLite}
+              fastEnabled={fastEnabled}
+              bypassEnabled={bypassEnabled}
             />
           </div>
           <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
@@ -144,6 +173,8 @@ export default function HomePage() {
                 </CardTitle>
                 <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
                   <span>{formatAuditMode(p.audit_mode)}</span>
+                  <span>·</span>
+                  <span>{formatMiningPaths(p)}</span>
                   <span>·</span>
                   {githubRepoHref(p) ? (
                     <GithubLink project={p} className="min-w-0" />
@@ -187,6 +218,8 @@ export default function HomePage() {
                 filesAudited={p.files_audited}
                 filesSkipped={p.files_skipped}
                 filesTotal={p.files_total}
+                filesWeight100={p.files_weight100}
+                filesWeight100Audited={p.files_weight100_audited}
                 workerRounds={p.worker_rounds}
                 vulnPending={p.vuln_pending}
                 reconSubphases={p.recon_subphases}
@@ -195,12 +228,22 @@ export default function HomePage() {
                 dynamicVerifyEnabled={p.dynamic_verify_enabled}
                 verifierEnabled={p.verifier_enabled}
                 verifierPending={p.verifier_pending}
+                heuristicEnabled={p.heuristic_enabled}
+                heuristicLite={p.heuristic_lite}
+                fastEnabled={p.fast_enabled}
+                fastQueueFrozen={p.fast_queue_frozen}
+                sinksQueued={p.sinks_queued}
+                sinksDone={p.sinks_done}
+                bypassEnabled={p.bypass_enabled}
+                bypassQueueFrozen={p.bypass_queue_frozen}
+                bypassQueued={p.bypass_queued}
+                bypassDone={p.bypass_done}
               />
               <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                 <span>确认 {p.vuln_confirmed}</span>
                 <span>待审 {p.vuln_pending}</span>
                 <span>误报 {p.vuln_false_positive}</span>
-                <span>{formatFileProgress(p)}</span>
+                <span>{formatMiningProgress(p)}</span>
                 <span>{formatTokenUsage(p)}</span>
               </div>
               <WeightExtBadges exts={p.weight_exts} />

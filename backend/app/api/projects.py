@@ -9,7 +9,25 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 
 from ..audit_mode import AUDIT_MODE_EDITABLE_STATUSES, normalize_audit_mode, parse_audit_mode
-from ..models import AppSettings, FileWeight, PhaseRun, Project, SessionLocal, TokenUsage, ToolLog, Vuln
+from ..mining_paths import (
+    HEURISTIC_LITE_WEIGHT,
+    MINING_PATH_EDITABLE_STATUSES,
+    MiningPathError,
+    parse_heuristic_lite,
+    parse_mining_paths,
+)
+from ..models import (
+    AppSettings,
+    BypassTarget,
+    FileWeight,
+    PhaseRun,
+    Project,
+    SessionLocal,
+    Sink,
+    TokenUsage,
+    ToolLog,
+    Vuln,
+)
 from ..schemas import (
     EventsChunk,
     FileWeightOut,
@@ -31,6 +49,7 @@ from ..services.pipeline import (
     get_phase_states,
     note_audit_mode_changed,
     note_dynamic_verify_changed,
+    note_mining_paths_changed,
     note_verifier_enabled,
     request_cancel,
     request_pause,
@@ -45,6 +64,7 @@ from ..services.pipeline import (
 from ..services.verifier import enqueue_confirmed_frontend
 from ..services.shutdown import is_shutting_down, wait_or_shutdown
 from ..tools.phase_recon import recon_subphases
+from ..tools.phase_worker import project_complete_gates
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -58,6 +78,12 @@ def _empty_project_summary() -> dict[str, int]:
         "files_weighted": 0,
         "files_skipped": 0,
         "files_audited": 0,
+        "files_weight100": 0,
+        "files_weight100_audited": 0,
+        "sinks_queued": 0,
+        "sinks_done": 0,
+        "bypass_queued": 0,
+        "bypass_done": 0,
         "files_unmarked": 0,
         "worker_rounds": 0,
         "tokens_input": 0,
@@ -107,8 +133,25 @@ def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
             func.count(FileWeight.id),
             func.sum(case((FileWeight.weight.isnot(None) & FileWeight.skipped.is_(False), 1), else_=0)),
             func.sum(case((FileWeight.skipped.is_(True), 1), else_=0)),
-            func.sum(case((FileWeight.audited.is_(True), 1), else_=0)),
+            func.sum(case((FileWeight.audited.is_(True) & FileWeight.skipped.is_(False), 1), else_=0)),
             func.sum(case((FileWeight.skipped.is_(False) & FileWeight.weight.is_(None), 1), else_=0)),
+            func.sum(
+                case(
+                    ((FileWeight.weight == HEURISTIC_LITE_WEIGHT) & FileWeight.skipped.is_(False), 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (
+                        (FileWeight.weight == HEURISTIC_LITE_WEIGHT)
+                        & FileWeight.skipped.is_(False)
+                        & FileWeight.audited.is_(True),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
         )
         .filter(FileWeight.project_id.in_(ids))
         .group_by(FileWeight.project_id)
@@ -119,6 +162,34 @@ def _project_summaries(db, project_ids: list[int]) -> dict[int, dict[str, int]]:
         s["files_skipped"] = int(row[3] or 0)
         s["files_audited"] = int(row[4] or 0)
         s["files_unmarked"] = int(row[5] or 0)
+        s["files_weight100"] = int(row[6] or 0)
+        s["files_weight100_audited"] = int(row[7] or 0)
+
+    for row in (
+        db.query(
+            Sink.project_id,
+            func.sum(case((Sink.status.in_(("queued", "claimed", "done")), 1), else_=0)),
+            func.sum(case((Sink.status == "done", 1), else_=0)),
+        )
+        .filter(Sink.project_id.in_(ids))
+        .group_by(Sink.project_id)
+    ):
+        s = summaries[int(row[0])]
+        s["sinks_queued"] = int(row[1] or 0)
+        s["sinks_done"] = int(row[2] or 0)
+
+    for row in (
+        db.query(
+            BypassTarget.project_id,
+            func.sum(case((BypassTarget.status.in_(("queued", "claimed", "done")), 1), else_=0)),
+            func.sum(case((BypassTarget.status == "done", 1), else_=0)),
+        )
+        .filter(BypassTarget.project_id.in_(ids))
+        .group_by(BypassTarget.project_id)
+    ):
+        s = summaries[int(row[0])]
+        s["bypass_queued"] = int(row[1] or 0)
+        s["bypass_done"] = int(row[2] or 0)
 
     for row in (
         db.query(PhaseRun.project_id, func.count(PhaseRun.id))
@@ -170,6 +241,12 @@ def _project_out(
         manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
         verifier_enabled=bool(p.verifier_enabled),
         dynamic_verify_enabled=bool(p.dynamic_verify_enabled),
+        heuristic_enabled=bool(getattr(p, "heuristic_enabled", True)),
+        heuristic_lite=bool(getattr(p, "heuristic_lite", False)),
+        fast_enabled=bool(getattr(p, "fast_enabled", False)),
+        fast_queue_frozen=bool(getattr(p, "fast_queue_frozen", False)),
+        bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
+        bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -181,6 +258,12 @@ def _project_out(
         files_weighted=summary["files_weighted"],
         files_skipped=summary["files_skipped"],
         files_audited=summary["files_audited"],
+        files_weight100=int(summary.get("files_weight100") or 0),
+        files_weight100_audited=int(summary.get("files_weight100_audited") or 0),
+        sinks_queued=int(summary.get("sinks_queued") or 0),
+        sinks_done=int(summary.get("sinks_done") or 0),
+        bypass_queued=int(summary.get("bypass_queued") or 0),
+        bypass_done=int(summary.get("bypass_done") or 0),
         weight_exts=weight_exts,
         worker_rounds=summary["worker_rounds"],
         tokens_input=summary["tokens_input"],
@@ -223,6 +306,12 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
     try:
         audit_mode = parse_audit_mode(body.audit_mode)
         manual_lab_prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
+        heuristic_enabled, fast_enabled, bypass_enabled = parse_mining_paths(
+            heuristic_enabled=body.heuristic_enabled,
+            fast_enabled=body.fast_enabled,
+            bypass_enabled=body.bypass_enabled,
+        )
+        heuristic_lite = parse_heuristic_lite(body.heuristic_lite)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
@@ -237,6 +326,10 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             manual_lab_prompt=manual_lab_prompt or None,
             verifier_enabled=bool(body.verifier_enabled),
             dynamic_verify_enabled=bool(body.dynamic_verify_enabled),
+            heuristic_enabled=heuristic_enabled,
+            heuristic_lite=heuristic_lite,
+            fast_enabled=fast_enabled,
+            bypass_enabled=bypass_enabled,
         )
         db.add(p)
         db.commit()
@@ -259,11 +352,21 @@ async def create_project_zip(
     manual_lab_prompt: str = Form(""),
     verifier_enabled: bool = Form(False),
     dynamic_verify_enabled: bool = Form(False),
+    heuristic_enabled: str = Form("true"),
+    heuristic_lite: str = Form("false"),
+    fast_enabled: str = Form("false"),
+    bypass_enabled: str = Form("false"),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
         mode = parse_audit_mode(audit_mode)
         prompt = normalize_manual_lab_prompt(manual_lab_prompt)
+        heuristic_on, fast_on, bypass_on = parse_mining_paths(
+            heuristic_enabled=heuristic_enabled,
+            fast_enabled=fast_enabled,
+            bypass_enabled=bypass_enabled,
+        )
+        lite_on = parse_heuristic_lite(heuristic_lite)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
@@ -277,6 +380,10 @@ async def create_project_zip(
             manual_lab_prompt=prompt or None,
             verifier_enabled=bool(verifier_enabled),
             dynamic_verify_enabled=bool(dynamic_verify_enabled),
+            heuristic_enabled=heuristic_on,
+            heuristic_lite=lite_on,
+            fast_enabled=fast_on,
+            bypass_enabled=bypass_on,
         )
         db.add(p)
         db.commit()
@@ -300,6 +407,10 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.manual_lab_prompt is None
         and body.verifier_enabled is None
         and body.dynamic_verify_enabled is None
+        and body.heuristic_enabled is None
+        and body.heuristic_lite is None
+        and body.fast_enabled is None
+        and body.bypass_enabled is None
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
@@ -311,6 +422,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    paths_changed = False
     with SessionLocal() as db:
         p = db.get(Project, project_id)
         if not p:
@@ -318,6 +430,43 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_mode = normalize_audit_mode(p.audit_mode)
         old_verifier = bool(p.verifier_enabled)
         old_dynamic = bool(p.dynamic_verify_enabled)
+        old_heuristic = bool(getattr(p, "heuristic_enabled", True))
+        old_lite = bool(getattr(p, "heuristic_lite", False))
+        old_fast = bool(getattr(p, "fast_enabled", False))
+        old_bypass = bool(getattr(p, "bypass_enabled", False))
+        if (
+            body.heuristic_enabled is not None
+            or body.fast_enabled is not None
+            or body.bypass_enabled is not None
+            or body.heuristic_lite is not None
+        ):
+            if p.status not in MINING_PATH_EDITABLE_STATUSES:
+                raise HTTPException(400, "挖掘路径仅在项目暂停或完成后可更改")
+            try:
+                heuristic_on, fast_on, bypass_on = parse_mining_paths(
+                    heuristic_enabled=old_heuristic if body.heuristic_enabled is None else body.heuristic_enabled,
+                    fast_enabled=old_fast if body.fast_enabled is None else body.fast_enabled,
+                    bypass_enabled=old_bypass if body.bypass_enabled is None else body.bypass_enabled,
+                    default_heuristic=old_heuristic,
+                    default_fast=old_fast,
+                    default_bypass=old_bypass,
+                )
+            except MiningPathError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            lite_on = parse_heuristic_lite(
+                old_lite if body.heuristic_lite is None else body.heuristic_lite,
+                default=old_lite,
+            )
+            p.heuristic_enabled = heuristic_on
+            p.heuristic_lite = lite_on
+            p.fast_enabled = fast_on
+            p.bypass_enabled = bypass_on
+            paths_changed = (
+                heuristic_on != old_heuristic
+                or fast_on != old_fast
+                or bypass_on != old_bypass
+                or lite_on != old_lite
+            )
         if mode is not None:
             if p.status not in AUDIT_MODE_EDITABLE_STATUSES:
                 raise HTTPException(400, "挖掘模式仅在项目暂停或完成后可更改")
@@ -363,6 +512,28 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             note_dynamic_verify_changed(project_id, enabled=False)
     if mode is not None and old_mode != mode:
         note_audit_mode_changed(project_id, mode)
+    if paths_changed:
+        note_mining_paths_changed(
+            project_id,
+            heuristic_enabled=bool(out.heuristic_enabled),
+            fast_enabled=bool(out.fast_enabled),
+            bypass_enabled=bool(out.bypass_enabled),
+            heuristic_lite=bool(out.heuristic_lite),
+        )
+        if out.status == "completed" and not project_complete_gates(project_id):
+            with SessionLocal() as db:
+                p = db.get(Project, project_id)
+                if p and p.status == "completed":
+                    p.status = "paused"
+                    p.phase = "worker"
+                    db.commit()
+                    db.refresh(p)
+                    out = _project_out(db, p)
+            live_log.system(
+                project_id,
+                "挖掘范围已扩大，项目改回暂停，续跑后按新范围继续",
+                phase="worker",
+            )
     if sync_notes:
         sync_manual_lab_notes(project_id, notes_text)
     if restarted:
