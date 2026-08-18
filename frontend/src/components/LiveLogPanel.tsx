@@ -31,6 +31,10 @@ const PHASE_LABEL: Record<string, string> = {
   'recon-mark': '侦察/盖章',
   recon_mark: '侦察/盖章',
   worker: '挖掘',
+  'fast-worker': '快速扫描',
+  fast_worker: '快速扫描',
+  'sink-triage': 'Sink 筛选',
+  sink_triage: 'Sink 筛选',
   reviewer: '审核',
   'reviewer-lab': '审核/环境搭建',
   reviewer_lab: '审核/环境搭建',
@@ -43,8 +47,25 @@ const PHASE_LABEL: Record<string, string> = {
 export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   if (!phaseFilter) return true
   const p = ev.phase || ev.role || ''
-  if (phaseFilter === 'worker') return p === 'worker' || p === 'fix'
-  if (phaseFilter === 'mine') return p === 'worker'
+  if (phaseFilter === 'worker') {
+    return (
+      p === 'worker' ||
+      p === 'fix' ||
+      p === 'fast-worker' ||
+      p === 'fast_worker' ||
+      p === 'sink-triage' ||
+      p === 'sink_triage'
+    )
+  }
+  if (phaseFilter === 'mine') {
+    return p === 'worker'
+  }
+  if (phaseFilter === 'fast' || phaseFilter === 'fast-worker' || phaseFilter === 'fast_worker') {
+    return p === 'fast-worker' || p === 'fast_worker' || p === 'sink-triage' || p === 'sink_triage'
+  }
+  if (phaseFilter === 'sink-triage' || phaseFilter === 'sink_triage') {
+    return p === 'sink-triage' || p === 'sink_triage'
+  }
   if (phaseFilter === 'fix') return p === 'fix'
   if (phaseFilter === 'recon') {
     return (

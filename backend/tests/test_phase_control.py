@@ -132,10 +132,15 @@ def test_generation_cancel_only_old_loop(tmp_env, project):
 def test_event_matches_mine_excludes_fix():
     assert event_matches_phase({"phase": "worker"}, "mine")
     assert not event_matches_phase({"phase": "fix"}, "mine")
+    assert not event_matches_phase({"phase": "fast-worker"}, "mine")
+    assert event_matches_phase({"phase": "fast-worker"}, "fast")
+    assert event_matches_phase({"phase": "sink-triage"}, "fast")
+    assert not event_matches_phase({"phase": "worker"}, "fast")
     assert event_matches_phase({"phase": "fix"}, "fix")
     assert not event_matches_phase({"phase": "worker"}, "fix")
     assert event_matches_phase({"phase": "fix"}, "worker")
     assert event_matches_phase({"phase": "worker"}, "worker")
+    assert event_matches_phase({"phase": "fast-worker"}, "worker")
 
 
 def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, project, monkeypatch):

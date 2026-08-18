@@ -12,7 +12,7 @@ const PHASES = [
   {
     id: 'worker',
     label: '挖掘',
-    hint: '启发式 Worker 从高权重未审计文件沿 source→sink 挖漏洞并提交。',
+    hint: '启发式按文件挖洞，快速扫描按 Semgrep Sink 回推；两条路径并行。开启的路径都结束后才算挖掘完成。',
   },
   {
     id: 'reviewer',
@@ -34,7 +34,7 @@ const PHASES = [
 const BRANCH_HINTS: Record<string, string> = {
   map: '梳理模块、HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。',
   source_ext: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。',
-  old_vulns: '先 LLM 检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 爬虫补漏并核验。',
+  old_vulns: '先 LLM 检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 与 GitHub Issues 爬虫补漏并核验。',
   mark: '按批次给源码定权或跳过，决定后续挖掘优先级。',
   lab: '用 Docker 搭建默认可复用靶场，供动态复现；不是制造利用条件。',
   manualLab: '使用用户提供的漏洞环境地址做动态验证，跳过 Docker 搭建。',
@@ -69,6 +69,11 @@ type FlowState = {
   dynamicVerifyEnabled?: boolean
   verifierEnabled?: boolean
   verifierPending?: number
+  heuristicEnabled?: boolean
+  fastEnabled?: boolean
+  fastQueueFrozen?: boolean
+  sinksQueued?: number
+  sinksDone?: number
 }
 
 type BranchItem = {
@@ -76,10 +81,37 @@ type BranchItem = {
   node: ReactNode
 }
 
-function workerFinished(s: FlowState): boolean {
+function heuristicFinished(s: FlowState): boolean {
+  if (s.heuristicEnabled === false) return true
   const total = s.filesTotal ?? 0
   if (!s.reconDone || total <= 0) return false
   return (s.filesAudited ?? 0) + (s.filesSkipped ?? 0) >= total
+}
+
+function fastFinished(s: FlowState): boolean {
+  if (s.fastEnabled !== true) return true
+  if (!s.reconDone || !s.fastQueueFrozen) return false
+  return (s.sinksDone ?? 0) >= (s.sinksQueued ?? 0)
+}
+
+function workerFinished(s: FlowState): boolean {
+  return heuristicFinished(s) && fastFinished(s)
+}
+
+function heuristicTone(s: FlowState): Tone {
+  if (s.heuristicEnabled === false) return 'neutral'
+  if (heuristicFinished(s)) return 'success'
+  if (s.phase === 'worker' || s.phase === 'fix' || s.status === 'auditing' || (s.reconDone && !heuristicFinished(s))) {
+    return 'info'
+  }
+  return 'neutral'
+}
+
+function fastTone(s: FlowState): Tone {
+  if (s.fastEnabled !== true) return 'neutral'
+  if (fastFinished(s)) return 'success'
+  if (s.reconDone && (s.phase === 'worker' || s.status === 'auditing' || !fastFinished(s))) return 'info'
+  return 'neutral'
 }
 
 function phaseTone(id: string, s: FlowState): Tone {
@@ -100,16 +132,12 @@ function phaseTone(id: string, s: FlowState): Tone {
     return 'neutral'
   }
   if (id === 'reviewer') {
+    const pending = s.vulnPending ?? 0
     const dynamicOn = Boolean(s.dynamicVerifyEnabled)
-    if (!dynamicOn) {
-      if ((s.vulnPending ?? 0) === 0 && (completed || workerFinished(s))) return 'success'
-      if (s.phase === 'reviewer' || s.status === 'reviewing' || (s.vulnPending ?? 0) > 0) return 'info'
-      return 'neutral'
-    }
-    if (s.labSetupDone && (s.vulnPending ?? 0) === 0 && (s.status === 'completed' || s.phase === 'done')) {
-      return 'success'
-    }
+    const labOk = !dynamicOn || Boolean(s.labSetupDone)
+    if (labOk && pending === 0 && (completed || workerDone)) return 'success'
     if (
+      dynamicOn &&
       !s.labSetupDone &&
       s.status !== 'pending' &&
       s.status !== 'error' &&
@@ -117,7 +145,7 @@ function phaseTone(id: string, s: FlowState): Tone {
     ) {
       return 'info'
     }
-    if (s.phase === 'reviewer' || s.status === 'reviewing' || (s.vulnPending ?? 0) > 0) return 'info'
+    if (pending > 0) return 'info'
     return 'neutral'
   }
   if (id === 'verifier') {
@@ -199,6 +227,11 @@ export default function PhaseFlow({
   dynamicVerifyEnabled,
   verifierEnabled,
   verifierPending,
+  heuristicEnabled,
+  fastEnabled,
+  fastQueueFrozen,
+  sinksQueued,
+  sinksDone,
   onSelect,
 }: FlowState & { onSelect?: (id: string) => void }) {
   const state: FlowState = {
@@ -216,6 +249,11 @@ export default function PhaseFlow({
     dynamicVerifyEnabled,
     verifierEnabled,
     verifierPending,
+    heuristicEnabled,
+    fastEnabled,
+    fastQueueFrozen,
+    sinksQueued,
+    sinksDone,
   }
   const subs = reconSubphases ?? []
 
@@ -232,6 +270,40 @@ export default function PhaseFlow({
           </FlowTip>
         ),
       }))
+    }
+    if (id === 'worker') {
+      const items: BranchItem[] = []
+      if (state.heuristicEnabled !== false) {
+        const done = heuristicFinished(state)
+        const total = state.filesTotal ?? 0
+        const progressed = (state.filesAudited ?? 0) + (state.filesSkipped ?? 0)
+        items.push({
+          id: 'mine',
+          node: (
+            <Badge variant={badgeVariant(heuristicTone(state))}>
+              启发式
+              {total > 0 ? ` ${progressed}/${total}` : workerRounds != null ? ` ${workerRounds} 轮` : ''}
+              {done ? ' ✓' : ''}
+            </Badge>
+          ),
+        })
+      }
+      if (state.fastEnabled === true) {
+        const done = fastFinished(state)
+        const queued = state.sinksQueued ?? 0
+        const progressed = state.sinksDone ?? 0
+        items.push({
+          id: 'fast',
+          node: (
+            <Badge variant={badgeVariant(fastTone(state))}>
+              快速扫描
+              {state.fastQueueFrozen ? ` ${progressed}/${queued}` : ' 准备中'}
+              {done ? ' ✓' : ''}
+            </Badge>
+          ),
+        })
+      }
+      return items
     }
     if (id === 'reviewer') {
       if (!state.dynamicVerifyEnabled) return []
@@ -274,7 +346,15 @@ export default function PhaseFlow({
     verifier: branchOf('verifier'),
     done: branchOf('done'),
   }
-  const spacerCount = Math.max(...Object.values(branches).map((items) => items.length), 0)
+  const workerPaths = branches.worker
+  const spacerCount = Math.max(
+    ...PHASES.filter((p) => p.id !== 'worker').map((p) => branches[p.id].length),
+    0,
+  )
+  const workerHints: Record<string, string> = {
+    mine: '按文件定权沿 source→sink 挖洞。缺鉴权、IDOR、业务逻辑靠这条。',
+    fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
+  }
 
   return (
     <TooltipProvider delay={200}>
@@ -283,29 +363,50 @@ export default function PhaseFlow({
           {PHASES.map((p, i) => (
             <Fragment key={p.id}>
               <div className="relative">
-                <div className="flex h-6 items-center">
-                  <FlowTip
-                    hint={p.hint}
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => onSelect?.(p.id)}
-                        className="h-auto rounded-md p-0"
-                      />
-                    }
-                  >
-                    <Badge variant={badgeVariant(phaseTone(p.id, state))}>
-                      {p.label}
-                      {p.id === 'worker' && workerRounds != null ? ` ${workerRounds} 轮` : ''}
-                      {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
-                      {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
-                    </Badge>
-                  </FlowTip>
+                <div className={p.id === 'worker' && workerPaths.length > 1 ? 'flex items-center' : 'flex h-6 items-center'}>
+                  {p.id === 'worker' && workerPaths.length > 0 ? (
+                    <div className="flex flex-col gap-1">
+                      {workerPaths.map((item) => (
+                        <FlowTip
+                          key={item.id}
+                          hint={workerHints[item.id] || p.hint}
+                          render={
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => onSelect?.(item.id)}
+                              className="h-auto rounded-md p-0"
+                            />
+                          }
+                        >
+                          {item.node}
+                        </FlowTip>
+                      ))}
+                    </div>
+                  ) : (
+                    <FlowTip
+                      hint={p.hint}
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => onSelect?.(p.id)}
+                          className="h-auto rounded-md p-0"
+                        />
+                      }
+                    >
+                      <Badge variant={badgeVariant(phaseTone(p.id, state))}>
+                        {p.label}
+                        {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
+                        {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
+                      </Badge>
+                    </FlowTip>
+                  )}
                 </div>
                 <div className="absolute left-0 top-full">
-                  <PhaseBranch items={branches[p.id]} />
+                  <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id]} />
                 </div>
               </div>
               {i < PHASES.length - 1 ? <span className="text-slate-600">→</span> : null}

@@ -32,7 +32,8 @@ const PHASE_TABS = [
   ['verifier', '验证'],
 ] as const
 const WORKER_LOG_TABS = [
-  ['mine', '挖掘'],
+  ['mine', '启发式'],
+  ['fast', '快速扫描'],
   ['fix', '修复'],
 ] as const
 const REVIEWER_LOG_TABS = [

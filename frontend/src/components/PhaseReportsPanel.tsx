@@ -25,7 +25,8 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
   ],
   worker: [
     ['all', '全部'],
-    ['mine', '挖掘'],
+    ['mine', '启发式'],
+    ['fast', '快速扫描'],
     ['fix', '修复'],
   ],
   reviewer: [

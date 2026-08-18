@@ -68,6 +68,15 @@ def test_event_matches_phase_groups_fix_under_worker():
     assert event_matches_phase({"role": "fix", "kind": "cmd"}, "worker")
     assert event_matches_phase({"phase": "worker", "kind": "agent"}, "mine")
     assert not event_matches_phase({"phase": "fix", "kind": "agent"}, "mine")
+    assert not event_matches_phase({"phase": "fast-worker", "kind": "agent"}, "mine")
+    assert not event_matches_phase({"phase": "sink-triage", "kind": "agent"}, "mine")
+    assert event_matches_phase({"phase": "fast-worker", "kind": "agent"}, "fast")
+    assert event_matches_phase({"phase": "sink-triage", "kind": "agent"}, "fast")
+    assert event_matches_phase({"role": "fast_worker", "kind": "cmd"}, "fast")
+    assert not event_matches_phase({"phase": "worker", "kind": "agent"}, "fast")
+    assert not event_matches_phase({"phase": "fix", "kind": "agent"}, "fast")
+    assert event_matches_phase({"phase": "fast-worker", "kind": "agent"}, "worker")
+    assert event_matches_phase({"phase": "sink-triage", "kind": "agent"}, "worker")
     assert event_matches_phase({"phase": "fix", "kind": "agent"}, "fix")
     assert not event_matches_phase({"phase": "worker", "kind": "agent"}, "fix")
     assert event_matches_phase({"phase": "recon-mark", "kind": "agent"}, "recon")
@@ -299,6 +308,55 @@ def test_subphase_sessions_are_independent(tmp_env, project, monkeypatch, tmp_pa
     assert live_log.current_session(project, "fix") == 2
     assert live_log.current_session(project, "recon") == 1
     assert live_log.current_session(project, "recon-mark") == 2
+
+
+def test_fast_worker_logs_are_separate_from_heuristic(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+
+    live_log.agent(project, "heuristic-1", phase="worker", role="worker")
+    live_log.agent(project, "triage-1", phase="sink-triage", role="sink_triage")
+    live_log.begin_session(project, "fast-worker", if_used=True)
+    live_log.system(project, "挖掘新开对话（Sink）", phase="fast-worker", role="fast_worker", session_start=True)
+    live_log.agent(project, "fast-1", phase="fast-worker", role="fast_worker")
+
+    assert (tmp_path / "live-events" / "worker" / "round-1.jsonl").exists()
+    assert (tmp_path / "live-events" / "sink-triage" / "round-1.jsonl").exists()
+    assert (tmp_path / "live-events" / "fast-worker" / "round-1.jsonl").exists()
+    assert not (tmp_path / "live-events" / "system" / "round-1.jsonl").exists()
+
+    mine = live_log.read_events(project, limit=10, tail=True, phase="mine")
+    assert [e["text"] for e in mine.events] == ["heuristic-1"]
+    fast = live_log.read_events(project, limit=10, tail=True, phase="fast")
+    assert "heuristic-1" not in [e["text"] for e in fast.events]
+    assert [e["text"] for e in fast.events] == ["triage-1", "挖掘新开对话（Sink）", "fast-1"]
+    worker = live_log.read_events(project, limit=20, tail=True, phase="worker")
+    assert [e["text"] for e in worker.events] == ["heuristic-1", "triage-1", "挖掘新开对话（Sink）", "fast-1"]
+
+
+def test_legacy_fast_logs_in_system_dir_still_readable(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+    legacy = tmp_path / "live-events" / "system" / "round-1.jsonl"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "kind": "agent",
+                "text": "old-fast",
+                "phase": "fast-worker",
+                "role": "fast_worker",
+                "seq": 0,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    page = live_log.read_events(project, limit=10, tail=True, phase="fast")
+    assert [e["text"] for e in page.events] == ["old-fast"]
 
 
 def test_purge_older_than_keeps_recent_events(tmp_env, project):

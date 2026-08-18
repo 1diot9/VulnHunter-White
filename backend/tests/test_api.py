@@ -82,19 +82,22 @@ def test_project_events_tail_and_before(tmp_env, project, monkeypatch, tmp_path)
     for i in range(6):
         live_log.agent(project, f"e{i}", phase="worker", role="worker")
     live_log.agent(project, "fix-1", phase="fix", role="fix")
+    live_log.agent(project, "fast-1", phase="fast-worker", role="fast_worker")
 
     with TestClient(app) as client:
         tail = client.get(f"/api/projects/{project}/events?tail=true&limit=3&phase=worker")
         assert tail.status_code == 200
         body = tail.json()
-        assert [e["text"] for e in body["events"]] == ["e4", "e5", "fix-1"]
+        assert [e["text"] for e in body["events"]] == ["e5", "fix-1", "fast-1"]
         assert body["has_older"] is True
         older = client.get(
             f"/api/projects/{project}/events?before={body['oldest']}&limit=3&phase=worker"
         )
-        assert [e["text"] for e in older.json()["events"]] == ["e1", "e2", "e3"]
+        assert [e["text"] for e in older.json()["events"]] == ["e2", "e3", "e4"]
         mine = client.get(f"/api/projects/{project}/events?tail=true&limit=10&phase=mine")
         assert [e["text"] for e in mine.json()["events"]] == ["e0", "e1", "e2", "e3", "e4", "e5"]
+        fast = client.get(f"/api/projects/{project}/events?tail=true&limit=10&phase=fast")
+        assert [e["text"] for e in fast.json()["events"]] == ["fast-1"]
         fix = client.get(f"/api/projects/{project}/events?tail=true&limit=10&phase=fix")
         assert [e["text"] for e in fix.json()["events"]] == ["fix-1"]
 

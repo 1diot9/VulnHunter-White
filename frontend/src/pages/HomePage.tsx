@@ -7,6 +7,7 @@ import { GithubLink } from '../components/GithubLink'
 import { DynamicVerifyToggle } from '../components/DynamicVerifyToggle'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
+import { AuditFlowPreview } from '../components/AuditFlowPreview'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
@@ -81,7 +82,9 @@ export default function HomePage() {
 
       <Card className="w-full">
         <CardContent className="w-full">
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
+            <div className="space-y-3">
           <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
           <DynamicVerifyToggle enabled={dynamicVerifyEnabled} onEnabledChange={setDynamicVerifyEnabled} />
           {dynamicVerifyEnabled ? (
@@ -93,6 +96,15 @@ export default function HomePage() {
             />
           ) : null}
           <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
+            </div>
+            <AuditFlowPreview
+              className="xl:sticky xl:top-[4.25rem]"
+              auditMode={auditMode}
+              dynamicVerifyEnabled={dynamicVerifyEnabled}
+              manualLab={manualLab}
+              verifierEnabled={verifierEnabled}
+            />
+          </div>
           <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
             <Input
               className="w-full"

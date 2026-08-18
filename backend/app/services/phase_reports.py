@@ -10,11 +10,14 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fix|reviewer(?:-lab)?|verifier)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|sink-triage|fix|reviewer(?:-lab)?|verifier)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
 _ROUND_NAME = re.compile(r"^round-(?P<n>\d+)\.md$")
+_FAST_ROUND_NAME = re.compile(r"^fast-round-(?P<n>\d+)\.md$")
+_ROUND_TITLE = "单轮挖掘方向"
+_FAST_ROUND_TITLE = "快速 Sink 回推"
 
 # filename phase -> (control phase, control label, subphase id)
 _PHASE_META: dict[str, tuple[str, str, str]] = {
@@ -23,6 +26,8 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "recon-old-vuln": ("recon", "侦察", "old_vulns"),
     "recon-old-vuln-ghsa": ("recon", "侦察", "old_vulns"),
     "recon-mark": ("recon", "侦察", "mark"),
+    "fast-worker": ("worker", "挖掘", "fast"),
+    "sink-triage": ("worker", "挖掘", "fast"),
     "worker": ("worker", "挖掘", "mine"),
     "fix": ("worker", "挖掘", "fix"),
     "reviewer": ("reviewer", "审核", "reviewer"),
@@ -36,14 +41,14 @@ _SUB_LABEL = {
     "source_ext": "扩展名",
     "old_vulns": "历史漏洞",
     "mark": "盖章",
-    "mine": "挖掘",
+    "mine": "启发式",
+    "fast": "快速扫描",
     "fix": "修复",
     "lab": "环境搭建",
     "reviewer": "审核",
     "verify": "互联网验证",
 }
 _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue": "抢救"}
-_ROUND_TITLE = "单轮挖掘方向"
 
 _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/code-map.md", "recon", "map", "代码地图"),
@@ -168,17 +173,30 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
         )
     if rel.startswith("workspace/rounds/"):
         m = _ROUND_NAME.match(path.name)
-        if not m:
+        if m:
+            n = int(m.group("n"))
+            return _item(
+                rel=rel,
+                path=path,
+                control="worker",
+                subphase="mine",
+                kind="round",
+                round_no=n,
+                title=_ROUND_TITLE,
+                content=content,
+            )
+        fm = _FAST_ROUND_NAME.match(path.name)
+        if not fm:
             raise FileNotFoundError(rel)
-        n = int(m.group("n"))
+        n = int(fm.group("n"))
         return _item(
             rel=rel,
             path=path,
             control="worker",
-            subphase="mine",
+            subphase="fast",
             kind="round",
             round_no=n,
-            title=_ROUND_TITLE,
+            title=_FAST_ROUND_TITLE,
             content=content,
         )
     if rel.startswith("docs/verifier/"):
@@ -261,6 +279,22 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                     kind="round",
                     round_no=n,
                     title=_ROUND_TITLE,
+                )
+            )
+        for path in rounds.glob("fast-round-*.md"):
+            m = _FAST_ROUND_NAME.match(path.name)
+            if not m or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            n = int(m.group("n"))
+            items.append(
+                _item(
+                    rel=f"workspace/rounds/{path.name}",
+                    path=path,
+                    control="worker",
+                    subphase="fast",
+                    kind="round",
+                    round_no=n,
+                    title=_FAST_ROUND_TITLE,
                 )
             )
 

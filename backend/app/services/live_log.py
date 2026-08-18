@@ -12,7 +12,7 @@ from typing import Any
 
 from .paths import iter_project_ids, live_events_path, project_dir
 
-# worker=挖掘页全部；mine=仅挖掘 Worker；fix=仅修复 Worker
+# worker=挖掘页全部；mine=启发式 Worker；fast=快速扫描；fix=仅修复 Worker
 PHASE_GROUPS: dict[str, frozenset[str]] = {
     "recon": frozenset(
         {
@@ -33,8 +33,11 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
         {"recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"}
     ),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
-    "worker": frozenset({"worker", "fix"}),
+    "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
     "mine": frozenset({"worker"}),
+    "fast": frozenset({"fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
+    "fast-worker": frozenset({"fast-worker", "fast_worker"}),
+    "sink-triage": frozenset({"sink-triage", "sink_triage"}),
     "fix": frozenset({"fix"}),
     "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab"}),
     "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
@@ -50,6 +53,8 @@ LOG_PHASES = (
     "recon-old-vuln-ghsa",
     "recon-mark",
     "worker",
+    "fast-worker",
+    "sink-triage",
     "fix",
     "reviewer-lab",
     "reviewer",
@@ -57,7 +62,7 @@ LOG_PHASES = (
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
-    "worker": ("worker", "fix"),
+    "worker": ("worker", "fast-worker", "sink-triage", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
 }
@@ -519,7 +524,7 @@ class LiveLog:
 
 
 def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
-    """phase 为空不过滤。recon=侦察子阶段；recon-map / recon-source-ext / recon-old-vuln / recon-mark 为子阶段。worker=挖掘+修复。"""
+    """phase 为空不过滤。recon=侦察子阶段；worker=挖掘+修复；mine=启发式；fast=快速扫描。"""
     if not phase:
         return True
     wanted = PHASE_GROUPS.get(phase, frozenset({phase}))
@@ -542,6 +547,10 @@ def log_phase_of(phase: str | None) -> str | None:
         return "recon-mark"
     if p in ("worker", "mine"):
         return "worker"
+    if p in ("fast-worker", "fast_worker", "fast"):
+        return "fast-worker"
+    if p in ("sink-triage", "sink_triage"):
+        return "sink-triage"
     if p == "fix":
         return "fix"
     if p in ("reviewer-lab", "reviewer_lab"):
@@ -567,6 +576,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return CONTROL_LOG_PHASES["verifier"]
     if phase in ("recon-old-vuln", "recon_old_vuln"):
         return ("recon-old-vuln", "recon-old-vuln-ghsa")
+    if phase == "fast":
+        return ("fast-worker", "sink-triage")
     lp = log_phase_of(phase)
     if lp:
         return (lp,)
@@ -591,7 +602,7 @@ def control_phase_of_filter(phase: str | None) -> str | None:
         return None
     if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"):
         return "recon"
-    if phase in ("worker", "mine", "fix"):
+    if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage"):
         return "worker"
     if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-review"):
         return "reviewer"
@@ -693,6 +704,9 @@ def _split_event_paths(project_id: int, phase: str | None, session: int | None =
         control = control_phase_of(lp)
         if control and control != lp and control not in dir_names:
             dir_names.append(control)
+    # 修复前 fast-worker / sink-triage 曾落入 system/，读快速扫描日志时一并扫入。
+    if any(name in ("fast-worker", "sink-triage") for name in wanted) and "system" not in dir_names:
+        dir_names.append("system")
     paths: list[Path] = []
     seen: set[str] = set()
     for name in dir_names:
@@ -752,6 +766,8 @@ def _session_count_log_phase(project_id: int, log_phase: str) -> int:
     control = control_phase_of(log_phase)
     if control and control != log_phase:
         n = max(n, _matching_session_max_in_dir(base / _safe_phase_dir(control), log_phase))
+    if log_phase in ("fast-worker", "sink-triage"):
+        n = max(n, _matching_session_max_in_dir(base / "system", log_phase))
     return max(n, _legacy_session_max(project_id, log_phase))
 
 
