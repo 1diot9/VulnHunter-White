@@ -12,7 +12,9 @@ from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, Settings
 
 LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
 LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer", "verifier")
-_RECON_AGENT_ROLES = frozenset({"recon", "recon_mark", "recon_old_vuln", "recon_source_ext"})
+_RECON_AGENT_ROLES = frozenset(
+    {"recon", "recon_mark", "recon_old_vuln", "recon_old_vuln_ghsa", "recon_source_ext"}
+)
 _WIRE = frozenset({"chat", "responses"})
 
 
@@ -91,8 +93,7 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
     return SettingsOut(
         llm_providers=providers_for_api(row),
         llm_roles=roles_for_api(row),
-        worker_concurrency=int(row.worker_concurrency or 1),
-        fix_concurrency=int(getattr(row, "fix_concurrency", None) or 1),
+        llm_thread_limit=max(1, int(getattr(row, "llm_thread_limit", None) or 6)),
         github_pat_set=bool((row.github_pat or "").strip()),
         fofa_key_set=bool((getattr(row, "fofa_key", None) or "").strip()),
         fofa_base_url=(getattr(row, "fofa_base_url", None) or "").strip() or "https://fofa.info",

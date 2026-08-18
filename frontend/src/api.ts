@@ -205,8 +205,7 @@ export type Settings = {
     api_key_set: boolean
   }>
   llm_roles: Record<string, { provider_id: string; model: string; reasoning_effort: string }>
-  worker_concurrency: number
-  fix_concurrency: number
+  llm_thread_limit: number
   github_pat_set: boolean
   fofa_key_set: boolean
   fofa_base_url: string

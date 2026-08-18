@@ -33,8 +33,7 @@ class LlmRoleAssignment(BaseModel):
 class SettingsOut(BaseModel):
     llm_providers: list[LlmProviderOut] = Field(default_factory=list)
     llm_roles: dict[str, LlmRoleAssignment] = Field(default_factory=dict)
-    worker_concurrency: int = 1
-    fix_concurrency: int = 1
+    llm_thread_limit: int = 6
     github_pat_set: bool = False
     fofa_key_set: bool = False
     fofa_base_url: str = "https://fofa.info"
@@ -47,8 +46,7 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     llm_providers: list[LlmProviderIn] | None = None
     llm_roles: dict[str, LlmRoleAssignment] | None = None
-    worker_concurrency: int | None = None
-    fix_concurrency: int | None = None
+    llm_thread_limit: int | None = None
     github_pat: str | None = None
     fofa_key: str | None = None
     fofa_base_url: str | None = None

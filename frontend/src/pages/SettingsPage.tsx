@@ -15,8 +15,7 @@ export default function SettingsPage() {
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
-  const [concurrency, setConcurrency] = useState(1)
-  const [fixConcurrency, setFixConcurrency] = useState(1)
+  const [llmThreadLimit, setLlmThreadLimit] = useState(6)
   const [contextWindow, setContextWindow] = useState(128000)
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
@@ -34,8 +33,7 @@ export default function SettingsPage() {
       setS(x)
       setDefaultModel(x.default_model || '')
       setDefaultBaseUrl(x.default_base_url || '')
-      setConcurrency(x.worker_concurrency || 1)
-      setFixConcurrency(x.fix_concurrency || 1)
+      setLlmThreadLimit(x.llm_thread_limit || 6)
       setContextWindow(x.context_window || 128000)
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
     })
@@ -142,8 +140,7 @@ export default function SettingsPage() {
       const body: Record<string, unknown> = {
         default_model: defaultModel,
         default_base_url: defaultBaseUrl,
-        worker_concurrency: concurrency,
-        fix_concurrency: fixConcurrency,
+        llm_thread_limit: llmThreadLimit,
         context_window: contextWindow,
       }
       if (defaultApiKey.trim()) body.default_api_key = defaultApiKey.trim()
@@ -263,22 +260,16 @@ export default function SettingsPage() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label>挖掘 Worker 并发数</Label>
+          <Label>总线程数</Label>
           <Input
             type="number"
             min={1}
-            value={concurrency}
-            onChange={(e) => setConcurrency(Number(e.target.value) || 1)}
+            value={llmThreadLimit}
+            onChange={(e) => setLlmThreadLimit(Math.max(1, Number(e.target.value) || 6))}
           />
-        </div>
-        <div className="space-y-1.5">
-          <Label>修复并发数（打回漏洞修改，与挖掘 Worker 隔离）</Label>
-          <Input
-            type="number"
-            min={1}
-            value={fixConcurrency}
-            onChange={(e) => setFixConcurrency(Number(e.target.value) || 1)}
-          />
+          <div className="text-xs text-slate-500">
+            所有运行中项目的侦察、挖掘、审核等 LLM 线程合计上限。超出的工作按到达顺序排队放行。默认 6。
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label>上下文窗口（token 估算上限）</Label>

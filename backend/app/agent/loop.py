@@ -13,6 +13,7 @@ from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
 from ..services.http_client import chat_http_client, chat_http_timeout
 from ..services.live_log import live_log
 from ..services.llm_gate import llm_gate, llm_slot
+from ..services.llm_thread import llm_thread_slot
 from ..services.llm_settings import ResolvedLlm, llm_role_for_agent, resolve_llm
 from ..tools import ToolContext, registry
 from .checkpoint import LoopCheckpoint, save_checkpoint
@@ -279,6 +280,20 @@ class AgentLoop:
             pass
 
     def run(self) -> LoopResult:
+        with llm_thread_slot(
+            self.cancel_event,
+            project_id=self.project_id,
+            phase=self.phase,
+            role=self.role,
+        ) as got_slot:
+            if not got_slot:
+                result = LoopResult(ok=False, state=self.state)
+                result.cancelled = True
+                result.stop_reason = "cancelled"
+                return result
+            return self._run_loop()
+
+    def _run_loop(self) -> LoopResult:
         deadline = time.time() + max(60, self.timeout_sec)
         if self._initial_messages:
             messages: list[dict[str, Any]] = list(self._initial_messages)

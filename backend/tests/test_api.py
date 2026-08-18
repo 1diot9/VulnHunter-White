@@ -11,18 +11,22 @@ def test_health_and_settings(tmp_env):
         s = client.get("/api/settings")
         assert s.status_code == 200
         body = s.json()
-        assert "worker_concurrency" in body
-        assert "fix_concurrency" in body
         assert "llm_providers" in body
+        assert "worker_concurrency" not in body
+        assert "fix_concurrency" not in body
+        assert "llm_thread_limit" in body
+        assert body["llm_thread_limit"] == 6
 
         upd = client.put(
             "/api/settings",
-            json={"worker_concurrency": 2, "fix_concurrency": 3, "default_model": "gpt-test"},
+            json={"llm_thread_limit": 8, "default_model": "gpt-test"},
         )
         assert upd.status_code == 200
-        assert upd.json()["worker_concurrency"] == 2
-        assert upd.json()["fix_concurrency"] == 3
+        assert upd.json()["llm_thread_limit"] == 8
         assert upd.json()["default_model"] == "gpt-test"
+        from app.services.llm_thread import llm_thread_limiter
+
+        assert llm_thread_limiter.current_limit() == 8
 
 
 def test_project_events_tail_and_before(tmp_env, project, monkeypatch, tmp_path):

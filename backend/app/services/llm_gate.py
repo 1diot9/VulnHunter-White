@@ -1,4 +1,4 @@
-"""Shared 429 cooldown only — concurrency is owned by role thread pools."""
+"""Shared 429 cooldown only — inflight LLM threads are gated by llm_thread.py."""
 
 from __future__ import annotations
 

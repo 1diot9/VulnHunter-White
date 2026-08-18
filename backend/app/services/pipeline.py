@@ -214,6 +214,9 @@ def reset_runtime_state() -> None:
         _verifier_inflight.clear()
         _fix_inflight.clear()
         _adopted_phase_runs.clear()
+    from .llm_thread import llm_thread_limiter
+
+    llm_thread_limiter.reset()
 
 
 def _cancel_event(project_id: int) -> threading.Event:

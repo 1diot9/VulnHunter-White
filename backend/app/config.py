@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # Agent defaults
     worker_concurrency: int = 1
     fix_concurrency: int = 1
+    llm_thread_limit: int = 6
     max_review_rejects: int = 2
     file_inject_max_bytes: int = 80 * 1024
     worker_round_history: int = 10

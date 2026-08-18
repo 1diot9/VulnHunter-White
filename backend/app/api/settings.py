@@ -45,10 +45,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
                 {k: v.model_dump() for k, v in body.llm_roles.items()},
                 ensure_ascii=False,
             )
-        if body.worker_concurrency is not None:
-            row.worker_concurrency = max(1, int(body.worker_concurrency))
-        if body.fix_concurrency is not None:
-            row.fix_concurrency = max(1, int(body.fix_concurrency))
+        if body.llm_thread_limit is not None:
+            row.llm_thread_limit = max(1, int(body.llm_thread_limit))
         if body.github_pat is not None:
             row.github_pat = body.github_pat
         if body.fofa_key is not None:
@@ -65,7 +63,11 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.context_window = int(body.context_window)
         db.commit()
         db.refresh(row)
-        return settings_out_from_row(row)
+        out = settings_out_from_row(row)
+    from ..services.llm_thread import llm_thread_limiter
+
+    llm_thread_limiter.refresh_limit(out.llm_thread_limit)
+    return out
 
 
 @router.post("/llm/models", response_model=LlmModelListOut)

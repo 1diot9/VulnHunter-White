@@ -57,6 +57,7 @@ pytest
 - 阶段调度、暂停/恢复/取消逻辑集中在 `backend/app/services/pipeline.py`；Agent 循环相关逻辑在 `backend/app/agent`。
 - 项目挖掘模式（赏金模式 `bounty` / 全量模式 `full`）在创建时确定，默认赏金模式；创建后仅当项目暂停才可更改。规则与闸门在 `backend/app/audit_mode.py` 和 `backend/app/prompts/modes/`。
 - 可选 Verifier（互联网验证）在创建时由用户决定，默认关闭；创建后可在项目设置中开启。开启后，Reviewer 确认前台漏洞会排队用 FOFA 搜索同款目标并按报告复测，默认 10 个、任一成功即结束。一个审计项目只搜一次 FOFA，结果给全部漏洞共享。报告与漏洞详情会列出全部 FOFA 目标并标注成功 / 失败 / 未测；互联网复现成功须附上搜索语法。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞自动跳过、不做互联网复测。FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
+- 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
 - 历史漏洞只收录本项目公开洞，以及本仓库确有调用点、版本仍可能受影响、默认部署可能打到的组件条目；已修复 / 未使用 / 仅传递依赖写进索引 `note`，不要一条一文。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
 - 出站 HTTP、LLM、MCP 路径等配置通过 `backend/app/config.py` 的 `Settings` 管理，环境变量前缀为 `VULNHUNTER_`。
