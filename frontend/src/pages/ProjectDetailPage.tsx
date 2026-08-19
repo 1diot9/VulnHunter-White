@@ -5,6 +5,7 @@ import { AuditModeSelect } from '../components/AuditModeSelect'
 import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { ResetProgressButton } from '../components/ResetProgressButton'
+import { ReconDocRerunButtons } from '../components/ReconDocRerunButtons'
 import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
@@ -86,51 +87,6 @@ function defaultPhaseTab(phase: string, status: string): string {
   }
   if (phase === 'worker' || phase === 'fix' || status === 'auditing') return 'worker'
   return 'recon'
-}
-
-function PhaseRunControls({
-  projectId,
-  phase,
-  project,
-}: {
-  projectId: number
-  phase: 'recon' | 'worker' | 'reviewer' | 'verifier'
-  project: Project
-}) {
-  const [busy, setBusy] = useState<string | null>(null)
-  const state = project.phase_states?.[phase]
-  const completed = project.status === 'completed'
-  const paused = Boolean(state?.paused || project.project_paused)
-  const label = phase === 'recon' ? '侦察' : phase === 'reviewer' ? '审核' : phase === 'verifier' ? '验证' : '挖掘'
-  const run = async (kind: 'pause' | 'resume' | 'restart') => {
-    setBusy(kind)
-    try {
-      if (kind === 'pause') await api.pausePhase(projectId, phase)
-      else if (kind === 'resume') await api.resumePhase(projectId, phase)
-      else await api.restartPhase(projectId, phase)
-    } finally {
-      setBusy(null)
-    }
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-slate-500">{label}</span>
-      <Button
-        variant="outline"
-        disabled={busy != null || paused || completed}
-        title={completed ? '已完成项目不可暂停' : undefined}
-        onClick={() => run('pause')}
-      >
-        {busy === 'pause' ? '暂停中…' : '暂停'}
-      </Button>
-      <Button variant="outline" disabled={busy != null} onClick={() => run('resume')}>
-        {busy === 'resume' ? '续跑中…' : '续跑'}
-      </Button>
-      <Button variant="outline" disabled={busy != null} onClick={() => run('restart')}>
-        {busy === 'restart' ? '新跑中…' : '新跑'}
-      </Button>
-    </div>
-  )
 }
 
 export default function ProjectDetailPage() {
@@ -461,6 +417,13 @@ export default function ProjectDetailPage() {
           <Button variant="outline" onClick={() => api.resume(projectId)}>
             全部续跑
           </Button>
+          <ReconDocRerunButtons
+            project={project}
+            onStarted={(subId) => {
+              setTab('logs')
+              selectPhase(subId === 'map' ? 'recon-map' : 'recon-old-vuln')
+            }}
+          />
           <ResetProgressButton project={project} onReset={setProject} />
           <Button variant="destructive" onClick={() => api.cancel(projectId)}>
             停止
@@ -609,7 +572,6 @@ export default function ProjectDetailPage() {
                 </div>
               ))}
             </div>
-            <PhaseRunControls projectId={projectId} phase={controlPhaseOf(phaseFilter)} project={project} />
           </div>
           <LiveLogPanel
             events={events}

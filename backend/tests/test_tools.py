@@ -1069,6 +1069,7 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "SearchGHSA" not in recon_names
     assert "WebSearch" not in recon_names
     assert "MarkSource" in recon_names
+    assert "FinishReconMap" in recon_names
     assert "AddSourceExt" not in recon_names
     assert "SubmitVuln" not in recon_names
     assert "MarkWeight" not in recon_names

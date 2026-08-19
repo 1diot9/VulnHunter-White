@@ -31,6 +31,35 @@ def recon_map_ready(project_id: int) -> bool:
     return _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
 
 
+# Map/auth refresh: session stays open until FinishReconMap clears the token.
+_map_refresh_pending: set[int] = set()
+
+
+def begin_map_refresh(project_id: int) -> None:
+    _map_refresh_pending.add(int(project_id))
+
+
+def clear_map_refresh(project_id: int) -> None:
+    _map_refresh_pending.discard(int(project_id))
+
+
+def map_refresh_pending(project_id: int) -> bool:
+    return int(project_id) in _map_refresh_pending
+
+
+def recon_map_refresh_ready(project_id: int) -> bool:
+    """Ready for a map refresh session: docs present and FinishReconMap called."""
+    return (not map_refresh_pending(project_id)) and recon_map_ready(project_id)
+
+
+def clear_old_vuln_completion(project_id: int) -> dict[str, Any]:
+    """Drop complete/llm_complete so old-vuln flow can re-run; keep existing vuln docs."""
+    old_dir = old_vulns_dir(project_id)
+    old_dir.mkdir(parents=True, exist_ok=True)
+    indexed = _rebuild_old_vuln_index(old_dir, complete=False, llm_complete=False)
+    return {"ok": True, "indexed": indexed, "complete": False, "llm_complete": False}
+
+
 def _truthy_meta(val: Any) -> bool:
     if isinstance(val, bool):
         return val
@@ -882,7 +911,34 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _finish_recon_map(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    if not map_refresh_pending(ctx.project_id):
+        return {"ok": False, "error": "当前不是地图/鉴权重跑会话，无需调用 FinishReconMap"}
+    if not recon_map_ready(ctx.project_id):
+        return {
+            "ok": False,
+            "error": "请先用 Write 更新并保留非空的 docs/code-map.md 与 docs/auth.md",
+        }
+    clear_map_refresh(ctx.project_id)
+    return {
+        "ok": True,
+        "hint": "地图/鉴权已确认更新，系统将结束本会话",
+        "path": ["docs/code-map.md", "docs/auth.md"],
+    }
+
+
 def register_recon_tools() -> None:
+    registry.register(
+        ToolSpec(
+            name="FinishReconMap",
+            description=(
+                "仅地图/鉴权重跑会话使用：在更新并写回 docs/code-map.md 与 docs/auth.md 后调用，"
+                "声明本会话结束。首次侦察两份文档写齐后由系统自动结束，不要调用本工具"
+            ),
+            parameters={"type": "object", "properties": {}},
+            handler=_finish_recon_map,
+        )
+    )
     registry.register(
         ToolSpec(
             name="MarkSource",

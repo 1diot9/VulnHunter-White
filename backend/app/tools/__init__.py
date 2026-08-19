@@ -64,6 +64,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "PowerShell",
             "TodoWrite",
             "MarkSource",
+            "FinishReconMap",
         }
     ),
     "recon_source_ext": frozenset(

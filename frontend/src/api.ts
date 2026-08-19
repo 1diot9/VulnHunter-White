@@ -416,12 +416,8 @@ export const api = {
     }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
-  pausePhase: (id: number, phase: string) =>
-    request(`/api/projects/${id}/phases/${phase}/pause`, { method: 'POST' }),
-  resumePhase: (id: number, phase: string) =>
-    request(`/api/projects/${id}/phases/${phase}/resume`, { method: 'POST' }),
-  restartPhase: (id: number, phase: string) =>
-    request(`/api/projects/${id}/phases/${phase}/restart`, { method: 'POST' }),
+  rerunReconSubphase: (id: number, subphase: 'map' | 'old_vulns') =>
+    request(`/api/projects/${id}/recon-subphases/${subphase}/rerun`, { method: 'POST' }),
   resetProgress: (id: number) =>
     request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST' }),
   cancel: (id: number) => request(`/api/projects/${id}/cancel`, { method: 'POST' }),

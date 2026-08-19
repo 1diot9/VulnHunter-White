@@ -143,7 +143,7 @@ class LiveLog:
         """该小阶段进入下一轮日志页。
 
         if_used=True 时：当前页还没有任何事件则保持页码（第一轮对话留在第 1 页）。
-        用户点「新跑」走默认（无条件翻页）；调度器新开 AgentLoop 走 if_used。
+        调度器 / 侦察子阶段重跑新开 AgentLoop 时走 if_used。
         """
         lp = log_phase_of(phase)
         if not lp:

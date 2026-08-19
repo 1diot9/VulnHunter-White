@@ -939,25 +939,39 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
 def test_phase_control_endpoints(tmp_env, project, monkeypatch):
     from app.main import app
     from app.services import pipeline
+    from app.services.paths import docs_dir, old_vulns_dir
+    from app.tools.phase_recon import mark_old_vuln_search_complete
 
-    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "_run_recon_map_refresh", lambda pid, cancel: True)
+    monkeypatch.setattr(pipeline, "_run_recon_old_vulns", lambda pid, cancel: True)
+    docs = docs_dir(project)
+    (docs / "code-map.md").write_text("# 地图\n", encoding="utf-8")
+    (docs / "auth.md").write_text("# 鉴权\n", encoding="utf-8")
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    mark_old_vuln_search_complete(project, note="seed")
+
     with TestClient(app) as client:
         body = client.get(f"/api/projects/{project}").json()
         assert "phase_states" in body
         assert "worker" in body["phase_states"]
         assert "verifier" in body["phase_states"]
-        bad = client.post(f"/api/projects/{project}/phases/nope/pause")
+        bad = client.post(f"/api/projects/{project}/recon-subphases/mark/rerun")
         assert bad.status_code == 400
-        paused = client.post(f"/api/projects/{project}/phases/worker/pause")
-        assert paused.status_code == 200
-        assert paused.json()["phases"]["worker"]["paused"] is True
-        assert paused.json()["phases"]["recon"]["paused"] is False
-        resumed = client.post(f"/api/projects/{project}/phases/worker/resume")
-        assert resumed.status_code == 200
-        assert resumed.json()["phases"]["worker"]["paused"] is False
-        restarted = client.post(f"/api/projects/{project}/phases/recon/restart")
-        assert restarted.status_code == 200
-        assert restarted.json()["ok"] is True
+        map_rerun = client.post(f"/api/projects/{project}/recon-subphases/map/rerun")
+        assert map_rerun.status_code == 200
+        assert map_rerun.json()["subphase"] == "map"
+        t = pipeline._recon_rerun_threads.get(project)
+        if t is not None:
+            t.join(timeout=5)
+        old_rerun = client.post(f"/api/projects/{project}/recon-subphases/old_vulns/rerun")
+        assert old_rerun.status_code == 200
+        assert old_rerun.json()["subphase"] == "old_vulns"
+        t2 = pipeline._recon_rerun_threads.get(project)
+        if t2 is not None:
+            t2.join(timeout=5)
+        gone = client.post(f"/api/projects/{project}/phases/worker/pause")
+        assert gone.status_code == 404
 
 
 def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monkeypatch):
@@ -979,9 +993,6 @@ def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monke
         paused = client.post(f"/api/projects/{project}/pause")
         assert paused.status_code == 400
         assert "不可暂停" in paused.json()["detail"]
-        phase_paused = client.post(f"/api/projects/{project}/phases/worker/pause")
-        assert phase_paused.status_code == 400
-        assert "不可暂停" in phase_paused.json()["detail"]
         shown = client.get(f"/api/projects/{project}").json()
         assert shown["status"] == "completed"
         assert shown["project_paused"] is False

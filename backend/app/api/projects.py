@@ -46,7 +46,6 @@ from ..services.llm_settings import normalize_project_llm_model
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.pipeline import (
-    control_phase,
     get_phase_states,
     note_audit_mode_changed,
     note_dynamic_verify_changed,
@@ -54,9 +53,7 @@ from ..services.pipeline import (
     note_verifier_enabled,
     request_cancel,
     request_pause,
-    request_phase_pause,
-    request_phase_restart,
-    request_phase_resume,
+    request_recon_subphase_rerun,
     request_resume,
     request_worker_progress_reset,
     start_audit,
@@ -598,38 +595,15 @@ def project_phase_state(project_id: int) -> dict:
     return get_phase_states(project_id)
 
 
-@router.post("/{project_id}/phases/{phase}/pause")
-def pause_project_phase(project_id: int, phase: str) -> dict:
-    try:
-        control_phase(phase)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    _ensure_can_pause(project_id)
-    return {"ok": True, **request_phase_pause(project_id, phase)}
-
-
-@router.post("/{project_id}/phases/{phase}/resume")
-def resume_project_phase(project_id: int, phase: str) -> dict:
-    try:
-        control_phase(phase)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+@router.post("/{project_id}/recon-subphases/{subphase}/rerun")
+def rerun_recon_subphase(project_id: int, subphase: str) -> dict:
     with SessionLocal() as db:
         if not db.get(Project, project_id):
             raise HTTPException(404, "项目不存在")
-    return {"ok": True, **request_phase_resume(project_id, phase)}
-
-
-@router.post("/{project_id}/phases/{phase}/restart")
-def restart_project_phase(project_id: int, phase: str) -> dict:
     try:
-        control_phase(phase)
+        return request_recon_subphase_rerun(project_id, subphase)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    with SessionLocal() as db:
-        if not db.get(Project, project_id):
-            raise HTTPException(404, "项目不存在")
-    return {"ok": True, **request_phase_restart(project_id, phase)}
 
 
 @router.post("/{project_id}/reset-progress", response_model=ProjectOut)

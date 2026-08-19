@@ -1,4 +1,4 @@
-"""Per-phase pause / 续跑 / 新跑."""
+"""Project pause / 侦察子阶段重跑 / generation cancel."""
 
 from __future__ import annotations
 
@@ -8,6 +8,12 @@ from app.agent.checkpoint import LoopCheckpoint, load_checkpoint, save_checkpoin
 from app.services import pipeline
 from app.services.ingest import build_file_index
 from app.services.live_log import event_matches_phase
+from app.services.paths import docs_dir, old_vulns_dir
+from app.tools.phase_recon import (
+    clear_old_vuln_completion,
+    recon_map_ready,
+    recon_old_vulns_ready,
+)
 
 
 def _sample_messages() -> list[dict]:
@@ -16,19 +22,6 @@ def _sample_messages() -> list[dict]:
         {"role": "user", "content": "orig-task"},
         {"role": "assistant", "content": "I was looking at login"},
     ]
-
-
-def test_phase_pause_does_not_pause_other_phases(tmp_env, project, monkeypatch):
-    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
-    pipeline.request_phase_pause(project, "worker")
-    assert pipeline._phase_is_paused(project, "worker")
-    assert not pipeline._phase_is_paused(project, "recon")
-    assert not pipeline._phase_is_paused(project, "reviewer")
-    assert pipeline._combined_pause(project, "worker").is_set()
-    assert not pipeline._combined_pause(project, "recon").is_set()
-    states = pipeline.get_phase_states(project)["phases"]
-    assert states["worker"]["paused"] is True
-    assert states["recon"]["paused"] is False
 
 
 def test_project_pause_pauses_all_phases(tmp_env, project):
@@ -49,75 +42,10 @@ def test_completed_project_pause_keeps_completed_status(tmp_env, project):
         p.phase = "done"
         db.commit()
     pipeline.request_pause(project)
-    pipeline.request_phase_pause(project, "worker")
     with SessionLocal() as db:
         p = db.get(Project, project)
         assert p.status == "completed"
     assert pipeline.get_phase_states(project)["project_paused"] is False
-    assert pipeline.get_phase_states(project)["phases"]["worker"]["paused"] is False
-
-
-def test_phase_resume_from_project_pause_keeps_others_paused(tmp_env, project, monkeypatch):
-    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
-    pipeline.request_pause(project)
-    pipeline.request_phase_resume(project, "reviewer")
-    assert not pipeline._phase_is_paused(project, "reviewer")
-    assert pipeline._phase_is_paused(project, "worker")
-    assert pipeline._phase_is_paused(project, "recon")
-    assert not pipeline._pause_event(project).is_set()
-
-
-def test_phase_restart_abandons_checkpoint_and_injects_file(tmp_env, project, monkeypatch):
-    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
-    build_file_index(project)
-    run_id = pipeline._new_phase_run(project, "worker", "worker", file_path="app/Main.java")
-    save_checkpoint(
-        LoopCheckpoint(
-            project_id=project,
-            phase_run_id=run_id,
-            role="worker",
-            phase="worker",
-            system_prompt="s",
-            user_prompt="u",
-            messages=_sample_messages(),
-            file_path="app/Main.java",
-        ),
-        status="paused",
-    )
-    assert load_checkpoint(project, run_id) is not None
-    pipeline.request_phase_restart(project, "worker")
-    assert load_checkpoint(project, run_id) is None
-    assert pipeline._should_skip_checkpoint(project, "worker")
-    inject = pipeline._pending_inject.get((project, "worker")) or []
-    assert any(x.get("file_path") == "app/Main.java" for x in inject)
-    fw = pipeline._take_inject_file(project, "worker-new")
-    assert fw is not None
-    assert fw.path == "app/Main.java"
-
-
-def test_phase_resume_keeps_checkpoint(tmp_env, project, monkeypatch):
-    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
-    run_id = pipeline._new_phase_run(project, "recon", "recon")
-    save_checkpoint(
-        LoopCheckpoint(
-            project_id=project,
-            phase_run_id=run_id,
-            role="recon",
-            phase="recon",
-            system_prompt="s",
-            user_prompt="u",
-            messages=_sample_messages(),
-        ),
-        status="paused",
-    )
-    pipeline.request_phase_pause(project, "recon")
-    pipeline.request_phase_resume(project, "recon")
-    assert load_checkpoint(project, run_id) is not None
-    assert not pipeline._should_skip_checkpoint(project, "recon")
-    cp = pipeline._adopt_resumable(project, "recon")
-    assert cp is not None
-    assert cp.messages[2]["content"] == "I was looking at login"
-    pipeline._release_adopted(project, run_id)
 
 
 def test_generation_cancel_only_old_loop(tmp_env, project):
@@ -146,10 +74,90 @@ def test_event_matches_mine_excludes_fix():
     assert event_matches_phase({"phase": "bypass-worker"}, "worker")
 
 
+def test_recon_map_rerun_keeps_docs_and_starts_refresh(tmp_env, project, monkeypatch):
+    docs = docs_dir(project)
+    (docs / "code-map.md").write_text("# 地图\n入口\n", encoding="utf-8")
+    (docs / "auth.md").write_text("# 鉴权\nJWT\n", encoding="utf-8")
+    assert recon_map_ready(project)
+
+    started: list[tuple[int, str]] = []
+
+    def fake_refresh(pid, cancel):
+        started.append((pid, "map"))
+        assert (docs / "code-map.md").read_text(encoding="utf-8").startswith("# 地图")
+        assert (docs / "auth.md").read_text(encoding="utf-8").startswith("# 鉴权")
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_recon_map_refresh", fake_refresh)
+    out = pipeline.request_recon_subphase_rerun(project, "map")
+    assert out["ok"] is True
+    assert out["subphase"] == "map"
+    t = pipeline._recon_rerun_threads.get(project)
+    assert t is not None
+    t.join(timeout=5)
+    assert started == [(project, "map")]
+    assert (docs / "code-map.md").is_file()
+    assert (docs / "auth.md").is_file()
+
+
+def test_recon_old_vulns_rerun_clears_complete_keeps_files(tmp_env, project, monkeypatch):
+    from app.tools.phase_recon import mark_old_vuln_search_complete
+
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "cve-1.md").write_text(
+        "---\ntitle: CVE-1\nsummary: s\nfix_status: patched\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    mark_old_vuln_search_complete(project, note="done")
+    assert recon_old_vulns_ready(project)
+
+    started: list[str] = []
+
+    def fake_old(pid, cancel):
+        started.append("old")
+        assert not recon_old_vulns_ready(pid)
+        assert (old / "cve-1.md").is_file()
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_recon_old_vulns", fake_old)
+    out = pipeline.request_recon_subphase_rerun(project, "old_vulns")
+    assert out["subphase"] == "old_vulns"
+    t = pipeline._recon_rerun_threads.get(project)
+    assert t is not None
+    t.join(timeout=5)
+    assert started == ["old"]
+    assert (old / "cve-1.md").is_file()
+    text = (old / "index.md").read_text(encoding="utf-8")
+    assert "complete: false" in text.replace(" ", "") or "complete:false" in text.replace(" ", "")
+
+
+def test_recon_subphase_rerun_requires_ready(tmp_env, project):
+    with pytest.raises(ValueError, match="地图/鉴权尚未完成"):
+        pipeline.request_recon_subphase_rerun(project, "map")
+    with pytest.raises(ValueError, match="历史漏洞尚未完成"):
+        pipeline.request_recon_subphase_rerun(project, "old_vulns")
+
+
+def test_clear_old_vuln_completion_preserves_docs(tmp_env, project):
+    from app.tools.phase_recon import mark_old_vuln_search_complete
+
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "keep.md").write_text(
+        "---\ntitle: Keep\nsummary: s\nfix_status: patched\n---\n\nx\n",
+        encoding="utf-8",
+    )
+    mark_old_vuln_search_complete(project)
+    assert recon_old_vulns_ready(project)
+    clear_old_vuln_completion(project)
+    assert not recon_old_vulns_ready(project)
+    assert (old / "keep.md").is_file()
+
+
 def test_worker_progress_reset_clears_audit_keeps_vulns_and_recon(tmp_env, project, monkeypatch):
     from app.models import BypassTarget, FileWeight, Project, SessionLocal, Sink, Source, Vuln
-    from app.services.ingest import build_file_index
-    from app.services.paths import docs_dir, summaries_dir, workspace_dir
+    from app.services.paths import summaries_dir, workspace_dir
 
     monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
     build_file_index(project)
@@ -316,4 +324,3 @@ def test_worker_progress_reset_requires_pause(tmp_env, project):
         db.commit()
     with pytest.raises(ValueError, match="暂停"):
         pipeline.request_worker_progress_reset(project)
-

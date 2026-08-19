@@ -59,11 +59,15 @@ from ..services.vuln_followup import archive_reviewer_checkpoint, latest_reviewe
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
     apply_recon_done,
+    begin_map_refresh,
+    clear_map_refresh,
+    clear_old_vuln_completion,
     paths_fully_marked,
     pick_unmarked_batch,
     recon_gates_met,
     recon_gates_status,
     recon_map_ready,
+    recon_map_refresh_ready,
     recon_old_vuln_llm_ready,
     recon_old_vulns_ready,
     recon_source_ext_ready,
@@ -81,6 +85,7 @@ _force_new_run: set[tuple[int, str]] = set()
 _pending_inject: dict[tuple[int, str], list[dict[str, Any]]] = {}
 _threads: dict[int, list[threading.Thread]] = {}
 _recon_threads: dict[int, threading.Thread] = {}
+_recon_rerun_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
 _verifier_threads: dict[int, threading.Thread] = {}
 _reviewer_inflight: dict[int, bool] = {}
@@ -105,6 +110,8 @@ CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "verifier": ("verifier",),
 }
 CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
+RECON_RERUN_SUBPHASES = ("map", "old_vulns")
+RECON_RERUN_LABELS = {"map": "地图/鉴权", "old_vulns": "历史漏洞"}
 WORKER_PROGRESS_RESET_STATUSES = ("paused", "completed", "cancelled", "error")
 
 
@@ -234,6 +241,7 @@ def reset_runtime_state() -> None:
         _pending_inject.clear()
         _threads.clear()
         _recon_threads.clear()
+        _recon_rerun_threads.clear()
         _reviewer_threads.clear()
         _verifier_threads.clear()
         _reviewer_inflight.clear()
@@ -242,6 +250,9 @@ def reset_runtime_state() -> None:
         _adopted_phase_runs.clear()
         _fast_prepare_threads.clear()
         _fast_last_dir.clear()
+    from ..tools.phase_recon import _map_refresh_pending
+
+    _map_refresh_pending.clear()
     from .llm_thread import llm_thread_limiter
 
     llm_thread_limiter.reset()
@@ -482,87 +493,102 @@ def _enabled_control_phases(project_id: int) -> tuple[str, ...]:
     return ("recon", "worker", "reviewer")
 
 
-def request_phase_pause(project_id: int, phase: str) -> dict[str, Any]:
+def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, Any]:
+    """Re-run recon map/auth or old-vulns while keeping existing docs for update."""
+    key = (subphase or "").strip().replace("-", "_")
+    if key in ("map", "recon_map", "reconmap"):
+        sub = "map"
+    elif key in ("old_vulns", "old_vuln", "recon_old_vuln", "recon_old_vulns"):
+        sub = "old_vulns"
+    else:
+        raise ValueError("仅支持重跑 map（地图/鉴权）或 old_vulns（历史漏洞）")
+
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        if proj and proj.status == "completed":
-            return get_phase_states(project_id)
-    control = control_phase(phase)
-    _phase_pause_event(project_id, control).set()
-    if all(_phase_pause_event(project_id, p).is_set() for p in _enabled_control_phases(project_id)):
-        _pause_event(project_id).set()
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可重跑侦察子阶段")
+
+    label = RECON_RERUN_LABELS[sub]
+    if sub == "map":
+        if not recon_map_ready(project_id):
+            raise ValueError("地图/鉴权尚未完成，完成后才能重跑更新")
+        db_phases = ("recon",)
+    else:
+        if not recon_old_vulns_ready(project_id):
+            raise ValueError("历史漏洞尚未完成，完成后才能重跑更新")
+        clear_old_vuln_completion(project_id)
+        db_phases = ("recon-old-vuln", "recon-old-vuln-ghsa")
+
+    with _lock:
+        t = _recon_rerun_threads.get(project_id)
+        if t is not None and t.is_alive():
+            raise ValueError("已有侦察子阶段正在重跑")
+
+    _abandon_db_phase_runs(project_id, db_phases, reason=f"用户重跑{label}")
+    _bump_phase_generation(project_id, "recon")
+    _force_new_run.discard((project_id, "recon"))
+
+    was_paused = _pause_event(project_id).is_set()
+    _pause_event(project_id).clear()
+    _phase_pause_event(project_id, "recon").clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    if not was_paused:
+        _set_project_running(project_id)
+    else:
+        # Keep other phases paused; only let this recon refresh session run.
+        for p in CONTROL_PHASES:
+            if p != "recon":
+                _phase_pause_event(project_id, p).set()
         with SessionLocal() as db:
             proj = db.get(Project, project_id)
-            if proj and proj.status not in ("completed", "cancelled"):
-                proj.status = "paused"
+            if proj and proj.status == "paused":
+                proj.status = "recon" if not proj.recon_done else "auditing"
+                proj.error = None
                 db.commit()
-    live_log.system(project_id, f"用户暂停{CONTROL_LABELS[control]}阶段", phase=control)
-    return get_phase_states(project_id)
 
-
-def request_phase_resume(project_id: int, phase: str) -> dict[str, Any]:
-    """续跑：接续检查点 / 同一段对话，对标 Codex CLI resume。"""
-    control = control_phase(phase)
-    if _pause_event(project_id).is_set():
-        for p in CONTROL_PHASES:
-            if p != control:
-                _phase_pause_event(project_id, p).set()
-        _pause_event(project_id).clear()
-    _phase_pause_event(project_id, control).clear()
-    cancel = _cancel_event(project_id)
-    if cancel.is_set():
-        cancel.clear()
-    _force_new_run.discard((project_id, control))
-    _prepare_phase_resume(project_id, control)
-    _set_project_running(project_id)
-    n_cp = len(_resumable_for_control(project_id, control))
-    live_log.system(
-        project_id,
-        f"{CONTROL_LABELS[control]}阶段续跑"
-        + (f"（{n_cp} 个检查点接续上下文）" if n_cp else "（无检查点，按当前进度继续）"),
-        phase=control,
+    # 日志并入地图/鉴权或历史漏洞小阶段；由后续 AgentLoop 的 _start_log_session 新开一轮。
+    rt = threading.Thread(
+        target=_run_recon_subphase_rerun,
+        args=(project_id, sub, was_paused),
+        daemon=True,
+        name=f"vh-recon-rerun-{project_id}-{sub}",
     )
-    start_audit(project_id)
-    return get_phase_states(project_id)
+    with _lock:
+        _recon_rerun_threads[project_id] = rt
+        _threads.setdefault(project_id, []).append(rt)
+    rt.start()
+    return {"ok": True, "subphase": sub, "label": label, **get_phase_states(project_id)}
 
 
-def request_phase_restart(project_id: int, phase: str) -> dict[str, Any]:
-    """新跑：丢弃当前对话，新开一轮并把文件等注入为初始上下文。"""
-    control = control_phase(phase)
-    inject = _collect_inject_targets(project_id, control)
-    _pending_inject[(project_id, control)] = inject
-    _force_new_run.add((project_id, control))
-    _abandon_phase_checkpoints(project_id, control)
-    if control == "worker":
-        _reset_fixing_to_returned(project_id, except_ids=set())
-    _bump_phase_generation(project_id, control)
-    if _pause_event(project_id).is_set():
-        for p in CONTROL_PHASES:
-            if p != control:
-                _phase_pause_event(project_id, p).set()
-        _pause_event(project_id).clear()
-    _phase_pause_event(project_id, control).clear()
+def _run_recon_subphase_rerun(project_id: int, subphase: str, restore_pause: bool) -> None:
     cancel = _cancel_event(project_id)
-    if cancel.is_set():
-        cancel.clear()
-    _set_project_running(project_id)
-    bits: list[str] = []
-    files = [x.get("file_path") for x in inject if x.get("file_path")]
-    vulns = [x.get("vuln_id") for x in inject if x.get("vuln_id") is not None]
-    if files:
-        bits.append("文件 " + ", ".join(str(p) for p in files[:4]))
-    if vulns:
-        bits.append("漏洞 " + ", ".join(f"#{v}" for v in vulns[:4]))
-    extra = f"（注入：{'；'.join(bits)}）" if bits else "（按当前进度注入初始上下文）"
-    live_log.begin_session(project_id, control)
-    live_log.system(
-        project_id,
-        f"{CONTROL_LABELS[control]}阶段新跑，新开对话{extra}",
-        phase=control,
-        session_start=True,
-    )
-    start_audit(project_id)
-    return get_phase_states(project_id)
+    label = RECON_RERUN_LABELS.get(subphase, subphase)
+    log_phase = "recon" if subphase == "map" else "recon-old-vuln"
+    try:
+        if subphase == "map":
+            ok = _run_recon_map_refresh(project_id, cancel)
+        else:
+            ok = _run_recon_old_vulns(project_id, cancel)
+        if not ok and not cancel.is_set():
+            live_log.system(project_id, f"{label}未完成", phase=log_phase)
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"{label}异常: {e}", phase=log_phase)
+    finally:
+        clear_map_refresh(project_id)
+        if restore_pause and not cancel.is_set():
+            _pause_event(project_id).set()
+            for phase in CONTROL_PHASES:
+                _phase_pause_event(project_id, phase).set()
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if proj and proj.status not in ("completed", "cancelled"):
+                    proj.status = "paused"
+                    db.commit()
+            live_log.system(project_id, "项目恢复暂停")
 
 
 def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
@@ -2158,6 +2184,31 @@ def _run_recon_map(project_id: int, cancel: threading.Event) -> bool:
         fail_status="Recon 地图/鉴权未完成，将自动再拉起",
         fail_log="Recon 地图/鉴权会话重试用尽，等待调度器再拉起",
     )
+
+
+def _run_recon_map_refresh(project_id: int, cancel: threading.Event) -> bool:
+    """Re-run map/auth with existing docs kept; FinishReconMap ends the session."""
+    begin_map_refresh(project_id)
+    try:
+        return _run_recon_gated_session(
+            project_id,
+            cancel,
+            phase="recon",
+            role="recon",
+            prompt_name="recon.md",
+            ready=lambda: recon_map_refresh_ready(project_id),
+            initial_doc="recon-map-refresh.md",
+            retry_loop_doc="recon-map-refresh-retry-loop.md",
+            retry_timeout_doc="recon-map-refresh-retry-timeout.md",
+            retry_other_doc="recon-map-refresh-retry-other.md",
+            done_log="代码地图与鉴权文档已更新",
+            fail_error="recon 地图/鉴权会话未在重试上限内完成",
+            fail_status="Recon 地图/鉴权未完成，将自动再拉起",
+            fail_log="Recon 地图/鉴权会话重试用尽，等待调度器再拉起",
+            extra_label="代码地图/鉴权",
+        )
+    finally:
+        clear_map_refresh(project_id)
 
 
 def _old_vuln_crawl_prompt_vars(result) -> dict:
