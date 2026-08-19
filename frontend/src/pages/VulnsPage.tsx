@@ -19,6 +19,8 @@ import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTie
 import {
   formatAttackSurface,
   formatDateTime,
+  formatEvidenceLevel,
+  formatMiningPath,
   formatSeverity,
   formatSeverityScore,
   formatSubmissionTier,
@@ -128,6 +130,7 @@ export default function VulnsPage() {
   const detailTier = formatSubmissionTier(detail?.submission_tier)
   const detailTracking = formatTrackingStatus(detail?.tracking_status)
   const detailVerifier = formatVerifierStatus(detail?.verifier_status)
+  const detailMiningPath = formatMiningPath(detail?.mining_path)
   const detailProject =
     detail?.project_name ||
     (detail ? projectNameById.get(detail.project_id) : undefined) ||
@@ -400,11 +403,14 @@ export default function VulnsPage() {
                   ) : null}
                   <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
                   <Badge variant="info">{detail.status}</Badge>
+                  {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
                   {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (
                     <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
                   ) : null}
-                  {detail.evidence_level && detail.evidence_level !== 'static_only' ? (
-                    <Badge variant="outline">{detail.evidence_level}</Badge>
+                  {formatEvidenceLevel(detail.evidence_level) ? (
+                    <Badge variant={detail.evidence_level === 'harness' ? 'info' : 'outline'}>
+                      {formatEvidenceLevel(detail.evidence_level)}
+                    </Badge>
                   ) : null}
                   {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
                   {detailVerifier ? (
@@ -543,7 +549,7 @@ export default function VulnsPage() {
                       {dynamicBusy || detail.dynamic_verify_queued ? (
                         <Loader2Icon className="animate-spin" data-icon="inline-start" />
                       ) : null}
-                      {detail.dynamic_verify_queued || dynamicBusy ? '动态验证中…' : '追加动态验证'}
+                      {detail.dynamic_verify_queued || dynamicBusy ? '追加验证中…' : '追加验证'}
                     </Button>
                   ) : null}
                 </div>
@@ -554,8 +560,8 @@ export default function VulnsPage() {
                 ) : null}
                 {detail.dynamic_verify_queued ? (
                   <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                    已接续原审核轮次，正在静态结论上追加动态验证。完成后证据等级会从 static_only 更新为
-                    dynamic 或 mcp。
+                    已接续原审核轮次，正在静态结论上追加验证。完成后证据等级会从 static_only 更新为
+                    动态验证或局部验证。
                   </div>
                 ) : null}
                 {detail.submission_reason ? (

@@ -6,6 +6,24 @@ from typing import Any
 
 MINING_PATH_EDITABLE_STATUSES = frozenset({"paused", "completed"})
 
+# Per-vuln origin (SubmitVuln); orthogonal to project enable flags.
+MINING_PATH_HEURISTIC = "heuristic"
+MINING_PATH_FAST = "fast"
+MINING_PATH_BYPASS = "bypass"
+ALLOWED_MINING_PATHS = frozenset(
+    {MINING_PATH_HEURISTIC, MINING_PATH_FAST, MINING_PATH_BYPASS}
+)
+MINING_PATH_LABELS = {
+    MINING_PATH_HEURISTIC: "启发式挖掘",
+    MINING_PATH_FAST: "快速扫描",
+    MINING_PATH_BYPASS: "历史漏洞绕过",
+}
+_ROLE_TO_MINING_PATH = {
+    "worker": MINING_PATH_HEURISTIC,
+    "fast_worker": MINING_PATH_FAST,
+    "bypass_worker": MINING_PATH_BYPASS,
+}
+
 # Lite heuristic only injects weight-100 user-controlled entries
 # (HTTP and non-HTTP: WebSocket / RPC / MQ / callbacks).
 HEURISTIC_LITE_WEIGHT = 100
@@ -13,6 +31,22 @@ HEURISTIC_LITE_WEIGHT = 100
 
 class MiningPathError(ValueError):
     """Invalid mining-path combination."""
+
+
+def normalize_mining_path(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    return s if s in ALLOWED_MINING_PATHS else None
+
+
+def mining_path_from_role(role: str | None) -> str | None:
+    return _ROLE_TO_MINING_PATH.get((role or "").strip().lower())
+
+
+def mining_path_display(raw: Any) -> str | None:
+    key = normalize_mining_path(raw)
+    return MINING_PATH_LABELS.get(key) if key else None
 
 
 def normalize_flag(raw: Any, *, default: bool) -> bool:

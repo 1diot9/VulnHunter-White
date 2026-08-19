@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import ROOT_DIR, resolve_repo_path, settings
-from app.services.mcp_router import mcp_root, resolve_mcp_command
+from app.services.mcp_router import mcp_root, resolve_mcp_command, reviewer_debug_plan
 
 
 def test_resolve_repo_path_relative_and_absolute(tmp_path):
@@ -49,3 +49,21 @@ def test_resolve_mcp_commands():
     python = resolve_mcp_command("python")
     assert python is not None
     assert python["args"][0].endswith("server.py")
+
+
+def test_reviewer_debug_plan_prefers_plain_dynamic(monkeypatch):
+    from app.services import mcp_router
+
+    monkeypatch.setattr(
+        mcp_router, "load_env", lambda _pid: {"target_url": "http://127.0.0.1:8080"}
+    )
+    monkeypatch.setattr(
+        mcp_router,
+        "debug_ports_for_runtime",
+        lambda _env: {"runtime": "java", "mcp": "java", "port": 5005},
+    )
+    plan = reviewer_debug_plan(1)
+    assert plan["preferred"] == "plain_dynamic"
+    assert plan["mcp"] is not None
+    assert "不要作为首选" in plan["mcp_when"]
+    assert "先运行" in plan["plain_dynamic"]["steps"][0]

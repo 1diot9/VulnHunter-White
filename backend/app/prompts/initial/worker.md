@@ -13,7 +13,7 @@ ${snippet}
 - has_source=true 或权重=100：用户可控入口（HTTP / WebSocket / RPC / MQ / 回调等），正向 source→sink。
 - 权重 70–90：过滤器 / 鉴权做控面审计；Service 盘点危险操作与鉴权缺口后回推 caller / 二阶数据。
 - Mapper / 模板 / 危险工具：只查执行面或做文件级 sink 回推。
-- DTO / 常量 / 启动类 / 死代码：薄扫硬编码密钥与反序列化 gadget 后 FinishFile 该焦点，再 FinishRound，不要改去挖其它模块。
+- DTO / 常量 / 启动类 / 死代码：薄扫有服务端机密危害的硬编码密钥与反序列化 gadget 后 FinishFile 该焦点，再 FinishRound，不要改去挖其它模块；前端传输混淆 AES 不要当洞。
 FinishFile 与 FinishRound 不是一对：读到没有独立审计价值的文件立刻 FinishFile(paths=[...])，然后继续分析本轮注入焦点，禁止立刻 FinishRound。
 仅当一开始注入的这份焦点文件已按角色分析完后，才 FinishFile 它（若尚未标）并 FinishRound。report 对齐 templates/round-report.md。不要只标注入文件。
 从摘要接续已分析的调用链，不要重复已 FinishFile 的文件。

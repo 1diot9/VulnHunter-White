@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     fofa_key: str = ""
     fofa_base_url: str = "https://fofa.info"
 
+    # Local (harness) verification sibling sandbox. Image must exist on the host daemon.
+    sandbox_image: str = "vulnhunter/sandbox:latest"
+    sandbox_memory: str = "512m"
+    sandbox_cpus: float = 1.0
+
 
 settings = Settings()
 DATA_DIR.mkdir(parents=True, exist_ok=True)

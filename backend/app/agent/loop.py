@@ -332,7 +332,7 @@ class AgentLoop:
             if last.get("role") != "user" or last.get("content") != INTERRUPT_RESUME:
                 messages.append({"role": "user", "content": INTERRUPT_RESUME})
             self._resumed = False
-        tools = registry.openai_tools_for_role(self.role)
+        tools = registry.openai_tools_for_role(self.role, project_id=self.project_id)
         result = LoopResult(ok=False, state=self.state)
         self._persist(messages)
 

@@ -157,6 +157,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "CollectLabFingerprints",
             "MergeIntoVuln",
             "ReturnToWorker",
+            "RunCode",
         }
     ),
     "reviewer_lab": frozenset(
@@ -288,10 +289,17 @@ class ToolRegistry:
             }
         return payload
 
-    def openai_tools_for_role(self, role: str) -> list[dict[str, Any]]:
+    def openai_tools_for_role(self, role: str, *, project_id: int | None = None) -> list[dict[str, Any]]:
         allowed = tools_allowed_for_role(role)
+        hide_run_code = role == "reviewer"
+        if role == "reviewer" and project_id is not None:
+            from ..dynamic_verify import project_is_harness
+
+            hide_run_code = not project_is_harness(project_id)
         out: list[dict[str, Any]] = []
         for name in sorted(allowed):
+            if name == "RunCode" and hide_run_code:
+                continue
             spec = self._tools.get(name)
             if not spec:
                 continue
@@ -460,3 +468,4 @@ def register_all_tools() -> None:
     from . import phase_bypass  # noqa: F401
     from . import phase_reviewer  # noqa: F401
     from . import phase_verifier  # noqa: F401
+    from . import run_code  # noqa: F401

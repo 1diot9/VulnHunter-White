@@ -548,6 +548,8 @@ def internet_test_block_reason(
 
 
 def internet_test_block_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
+    if (vuln.evidence_level or "").strip().lower() == "harness":
+        return "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测"
     text = report_md if report_md is not None else read_report_md(vuln.project_id, vuln.id)
     return internet_test_block_reason(
         vuln_type=vuln.vuln_type,

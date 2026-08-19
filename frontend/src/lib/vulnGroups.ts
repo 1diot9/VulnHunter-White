@@ -1,6 +1,8 @@
 import type { Vuln } from '../api'
 import {
   formatAttackSurface,
+  formatEvidenceLevel,
+  formatMiningPath,
   formatSeverity,
   formatSubmissionTier,
   formatTrackingStatus,
@@ -284,6 +286,10 @@ export function vulnMatchesQuery(
     v.tracking_status,
     formatTrackingStatus(v.tracking_status),
     formatAttackSurface(v.attack_surface, v.required_account),
+    v.evidence_level,
+    formatEvidenceLevel(v.evidence_level),
+    v.mining_path,
+    formatMiningPath(v.mining_path),
     v.verifier_status,
     formatVerifierStatus(v.verifier_status),
     v.verifier_verified_url,

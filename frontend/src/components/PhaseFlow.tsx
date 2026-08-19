@@ -17,7 +17,7 @@ const PHASES = [
   {
     id: 'reviewer',
     label: '审核',
-    hint: '独立验证 Worker 提交的漏洞。默认仅静态复核；勾选动态验证后才搭靶场并做 HTTP/MCP 复现。',
+    hint: '独立验证 Worker 提交的漏洞。默认仅静态复核；靶场动态先跑 HTTP PoC，局部验证用沙箱 harness。',
   },
   {
     id: 'verifier',
@@ -38,6 +38,7 @@ const BRANCH_HINTS: Record<string, string> = {
   mark: '按批次给源码定权或跳过，决定后续挖掘优先级。',
   lab: '用 Docker 搭建默认可复用靶场，供动态复现；不是制造利用条件。',
   manualLab: '使用用户提供的漏洞环境地址做动态验证，跳过 Docker 搭建。',
+  harness: '抽出函数并 mock 依赖，在沙箱跑 harness；不搭整项目靶场。',
 }
 
 type Tone = 'neutral' | 'success' | 'info'
@@ -69,6 +70,7 @@ type FlowState = {
   labSetupDone?: boolean
   manualLab?: boolean
   dynamicVerifyEnabled?: boolean
+  dynamicVerifyMode?: 'off' | 'lab' | 'harness'
   verifierEnabled?: boolean
   verifierPending?: number
   heuristicEnabled?: boolean
@@ -157,11 +159,12 @@ function phaseTone(id: string, s: FlowState): Tone {
   }
   if (id === 'reviewer') {
     const pending = s.vulnPending ?? 0
-    const dynamicOn = Boolean(s.dynamicVerifyEnabled)
-    const labOk = !dynamicOn || Boolean(s.labSetupDone)
+    const mode = s.dynamicVerifyMode || (s.dynamicVerifyEnabled ? 'lab' : 'off')
+    const dynamicOn = mode !== 'off'
+    const labOk = mode !== 'lab' || Boolean(s.labSetupDone)
     if (labOk && pending === 0 && (completed || workerDone)) return 'success'
     if (
-      dynamicOn &&
+      mode === 'lab' &&
       !s.labSetupDone &&
       s.status !== 'pending' &&
       s.status !== 'error' &&
@@ -251,6 +254,7 @@ export default function PhaseFlow({
   labSetupDone,
   manualLab,
   dynamicVerifyEnabled,
+  dynamicVerifyMode,
   verifierEnabled,
   verifierPending,
   heuristicEnabled,
@@ -280,6 +284,7 @@ export default function PhaseFlow({
     labSetupDone,
     manualLab,
     dynamicVerifyEnabled,
+    dynamicVerifyMode,
     verifierEnabled,
     verifierPending,
     heuristicEnabled,
@@ -314,16 +319,13 @@ export default function PhaseFlow({
       if (state.heuristicEnabled !== false) {
         const done = heuristicFinished(state)
         const lite = state.heuristicLite === true
-        const total = lite ? (state.filesWeight100 ?? 0) : (state.filesTotal ?? 0)
-        const progressed = lite
-          ? (state.filesWeight100Audited ?? 0)
-          : (state.filesAudited ?? 0) + (state.filesSkipped ?? 0)
+        const rounds = workerRounds ?? 0
         items.push({
           id: 'mine',
           node: (
             <Badge variant={badgeVariant(heuristicTone(state))}>
               {lite ? '启发式轻量' : '启发式'}
-              {total > 0 ? ` ${progressed}/${total}` : workerRounds != null ? ` ${workerRounds} 轮` : ''}
+              {` ${rounds} 轮`}
               {done ? ' ✓' : ''}
             </Badge>
           ),
@@ -362,7 +364,20 @@ export default function PhaseFlow({
       return items
     }
     if (id === 'reviewer') {
-      if (!state.dynamicVerifyEnabled) return []
+      const mode = state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')
+      if (mode === 'harness') {
+        return [
+          {
+            id: 'harness',
+            node: (
+              <FlowTip hint={BRANCH_HINTS.harness} side="right">
+                <Badge variant="info">局部验证</Badge>
+              </FlowTip>
+            ),
+          },
+        ]
+      }
+      if (mode !== 'lab') return []
       return [
         {
           id: 'lab',
@@ -452,7 +467,8 @@ export default function PhaseFlow({
                   >
                     <Badge variant={badgeVariant(phaseTone(p.id, state))}>
                       {p.label}
-                      {p.id === 'reviewer' && !state.dynamicVerifyEnabled ? ' 静态' : ''}
+                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'off' ? ' 静态' : ''}
+                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'harness' ? ' 局部' : ''}
                       {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
                     </Badge>
                   </FlowTip>

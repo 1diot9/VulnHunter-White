@@ -1,4 +1,9 @@
-"""Optional debug MCP helpers for Reviewer (stdio attach when available)."""
+"""Optional debug MCP helpers for Reviewer (stdio attach when rewriting PoC).
+
+Debug MCP is not the default verification path. Reviewer first runs the Worker
+poc.py against target_url; attach only when that PoC is missing, broken, or
+fails to reproduce and the Reviewer must rewrite/debug it.
+"""
 
 from __future__ import annotations
 
@@ -56,12 +61,16 @@ def reviewer_debug_plan(project_id: int) -> dict[str, Any]:
     plan: dict[str, Any] = {
         "target_url": env.get("target_url"),
         "runtime": dbg.get("runtime"),
-        "preferred": "mcp" if mcp and mcp.get("command") else "plain_dynamic",
+        "preferred": "plain_dynamic",
         "mcp": mcp,
+        "mcp_when": (
+            "Worker 的 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时，"
+            "才 attach debug MCP。不要作为首选验证方式。"
+        ),
         "debug_port": dbg.get("port"),
         "plain_dynamic": {
             "steps": [
-                "对 target_url 发送报告中的 HTTP 请求或运行 vulns/{id}/poc.py -u <target_url>（RCE 可加 -c/--cmd）",
+                "先运行 vulns/{id}/poc.py -u <target_url>（RCE 可加 -c/--cmd）或按报告对 target_url 发请求",
                 "docker exec / 容器日志 / 文件 / 进程确认冲击",
             ]
         },

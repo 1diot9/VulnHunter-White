@@ -334,13 +334,20 @@ def test_create_and_patch_dynamic_verify_enabled(tmp_env, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["dynamic_verify_enabled"] is False
+        assert created.json()["dynamic_verify_mode"] == "off"
         pid = created.json()["id"]
         enabled = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_enabled": True})
         assert enabled.status_code == 200
         assert enabled.json()["dynamic_verify_enabled"] is True
-        disabled = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_enabled": False})
+        assert enabled.json()["dynamic_verify_mode"] == "lab"
+        harness = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_mode": "harness"})
+        assert harness.status_code == 200
+        assert harness.json()["dynamic_verify_mode"] == "harness"
+        assert harness.json()["dynamic_verify_enabled"] is True
+        disabled = client.patch(f"/api/projects/{pid}", json={"dynamic_verify_mode": "off"})
         assert disabled.status_code == 200
         assert disabled.json()["dynamic_verify_enabled"] is False
+        assert disabled.json()["dynamic_verify_mode"] == "off"
         on = client.post(
             "/api/projects",
             json={
@@ -351,6 +358,18 @@ def test_create_and_patch_dynamic_verify_enabled(tmp_env, monkeypatch):
         )
         assert on.status_code == 200
         assert on.json()["dynamic_verify_enabled"] is True
+        assert on.json()["dynamic_verify_mode"] == "lab"
+        local = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/harness",
+                "dynamic_verify_mode": "harness",
+            },
+        )
+        assert local.status_code == 200
+        assert local.json()["dynamic_verify_mode"] == "harness"
+        assert local.json()["dynamic_verify_enabled"] is True
 
 
 def test_project_llm_model_create_patch_and_clear(tmp_env, monkeypatch):
@@ -537,11 +556,13 @@ def test_vulns_list_and_download(tmp_env, project):
         assert lst.status_code == 200
         hit = next(v for v in lst.json() if v["id"] == vid)
         assert hit["project_name"] == "demo"
+        assert hit["mining_path"] == "heuristic"
         detail = client.get(f"/api/vulns/{vid}")
         assert detail.status_code == 200
         body = detail.json()
         assert body["title"] == "RCE demo"
         assert body["project_name"] == "demo"
+        assert body["mining_path"] == "heuristic"
         assert body["created_at"]
         assert body["attack_surface"] is None
         assert body["required_account"] is None
@@ -793,7 +814,7 @@ def test_dynamic_verify_continues_archived_reviewer_round(tmp_env, project, monk
         assert off.json()["can_dynamic_verify"] is False
         blocked = client.post(f"/api/vulns/{vid}/dynamic-verify")
         assert blocked.status_code == 400
-        assert "开启动态验证" in blocked.json()["detail"]
+        assert "靶场动态或局部验证" in blocked.json()["detail"]
 
         with SessionLocal() as db:
             proj = db.get(Project, project)

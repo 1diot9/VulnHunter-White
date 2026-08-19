@@ -1,6 +1,8 @@
 # Debug MCP（随仓库）
 
-Reviewer 动态验证用的 Java / Node / Python debug MCP 放在本目录，路径相对仓库根目录，不依赖 `D:\AI\MCP_Tools`。
+Reviewer 改写 PoC 时用的 Java / Node / Python 动态调试 MCP 放在本目录，路径相对仓库根目录，不依赖 `D:\AI\MCP_Tools`。
+
+**用途**：动态验证先跑 Worker 提供的 `poc.py`。仅当该 PoC 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试时，才 attach 本目录 MCP（断点、看 sink 是否到达、payload 如何被处理）。不要作为首选验证方式。未构建时 Reviewer 只走普通动态（HTTP PoC + docker exec）。
 
 | 运行时 | 目录 | 启动 |
 |--------|------|------|
@@ -8,6 +10,6 @@ Reviewer 动态验证用的 Java / Node / Python debug MCP 放在本目录，路
 | Node | `tools/mcp/node-debug` | `npx tsx src/index.ts`（需已 `npm install`） |
 | Python | `tools/mcp/python-debug` | `python server.py`（需 `mcp`、`debugpy`） |
 
-构建产物（`target/`、`dist/`、`node_modules/`）不要提交。未构建时 Reviewer 会走普通动态（HTTP PoC + docker exec），不强制 MCP。
+构建产物（`target/`、`dist/`、`node_modules/`）不要提交。
 
 环境变量可覆盖目录：`VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON`（相对仓库根或绝对路径）。

@@ -13,7 +13,9 @@
 - sink 实际只消费固定子路径+固定后缀（如 `{逃逸路径}/templates/{view}.html`），默认文件系统上没有可被读的敏感对象。
 - 审核员用 `docker exec`/MCP **写入** payload 之后才打出的「动态证据」。
 - 项目配置、示例、compose、`.env`、文档或首次安装向导里的默认账号/默认密码/弱口令；以及本审计 lab 创建的演示凭据。这是部署约定，不要当成认证绕过，也不要用 `low_impact` 入库。
-- 配置文件里用户可修改的密钥/口令（`application.yml`、`.env`、compose 等）。**源码常量中的硬编码密钥**（JWT/AES/DES secret、私钥）可以确认，不要当成默认密码误报。
+- 配置文件里用户可修改的密钥/口令（`application.yml`、`.env`、compose 等）。
+- **前端传输混淆用的 AES/DES**：密钥写在前端 JS，或故意通过公开接口下发给前端；前后端同钥且设计上对客户端公开，危害只是解开本就会在前端解开的字段、或解开已拦截的登录包。这不是机密性边界，不要 Confirm。
+- **有服务端机密危害的源码硬编码密钥**可以确认（JWT/HMAC 签名密钥、接口签名 secret、私钥、第三方 API Key、保护库内/备份等本不应对未授权方公开的服务端加解密密钥），不要当成默认密码误报。
 
 `docker exec`、日志、文件读取只许**观察**已有状态，禁止为了让洞成立而创造利用条件。
 
@@ -28,7 +30,7 @@
 
 ### 价值分层规则
 价值只分两类，不要再用仅公告 / 加固建议这种拆法：
-- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网（含有回显读正文，以及仅响应差别探测内网端口）、**存储型 XSS（持久化后在其他用户浏览器执行）**、**源码硬编码密钥（可伪造 token 或解密）**等；影响强、复现清晰，值得单独提交 CVE。
+- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网（含有回显读正文，以及仅响应差别探测内网端口）、**存储型 XSS（持久化后在其他用户浏览器执行）**、**有服务端机密危害的源码硬编码密钥（可伪造 token、绕过签名、解密本不该公开的服务端密文等）**等；影响强、复现清晰，值得单独提交 CVE。不要把前端传输混淆 AES/公开下发密钥标成此项。
 - `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、影响达不到 CVE 强度的问题。
 
 另外一个是流程标记，不是价值分类：
@@ -51,11 +53,11 @@
    - 危害或鉴权不同才允许 Confirm 为 `duplicate_grouped` 并逐字复用已有键。
    - 若 ConfirmVuln 返回疑似重复：按 `candidates` 复查，优先 MergeIntoVuln。确认危害/鉴权不同仍要单独确认时，**再次** Confirm 并传 `confirm_not_duplicate=true`（仅本会话已提醒过一次后才接受）。
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
-3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。源码硬编码密钥不是这条否决。
-4. 动态验证阶梯（**仅当项目开启动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`）：
-   - env/env.json 中 runtime 为 java/nodejs/python 且调试端口可用 → 优先 debug MCP（若已接入）。
-   - 否则 **普通动态**：对 target_url 发请求，或运行 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`），结合 docker exec、日志、文件、进程**观察**冲击。若 poc.py 写死了地址或命令，先改成 CLI 参数化再跑。
-   - 原 PoC 无有害差异 → 不要标 `evidence_level=dynamic` 确认；按否决项误报或打回。
+3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。有服务端机密危害的源码硬编码密钥不是这条否决；前端传输混淆 AES/公开下发密钥仍按成立性否决误报。
+4. 动态验证阶梯（**仅当项目开启靶场动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`。**局部验证**由系统 overlay 覆盖本阶梯，改用 RunCode / harness，不要搭靶场、不要标 `dynamic`/`mcp`）：
+   - **先普通动态**：对 target_url 发请求，或运行 Worker 提供的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 只是写死了地址或命令 → 先改成 CLI 参数化再跑，这不算 PoC 不可用。
+   - **debug MCP 只用于改 PoC 时的动态调试**（不是首选）：Worker 的 poc.py 缺失、无法运行、或按报告跑不出冲击，且你需要自己改写/调试 PoC 时，才 attach（runtime 为 java/nodejs/python、调试端口可用且 MCP 已接入）。用断点/变量确认 sink 是否到达、payload 如何被处理，再据此修正 poc.py。不要一上来就挂 MCP，也不要用 MCP 往靶场写入 payload 制造利用条件。
+   - 原 PoC 无有害差异 → 不要标 `evidence_level=dynamic`/`mcp` 确认；按否决项误报或打回。
    - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
    - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。

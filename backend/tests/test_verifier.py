@@ -50,6 +50,7 @@ def _submit_and_confirm(
     poc_code="curl http://x/api/x",
     expected_evidence="200 + data",
     root_cause_key="unauthorized_access:XController",
+    file_path="a.java",
 ):
     if enable_verifier:
         with _db() as db:
@@ -60,7 +61,7 @@ def _submit_and_confirm(
         "title": title,
         "vuln_type": vuln_type,
         "cwe": "CWE-284",
-        "file_path": "a.java",
+        "file_path": file_path,
         "line_no": 1,
         "source_sink": "http -> sink",
         "auth_premise": "none",
@@ -253,6 +254,7 @@ def test_confirm_skips_sql_write_but_allows_select(tmp_env, project):
         title="SQL 注入读库",
         poc_code="' UNION SELECT 1,2,3--",
         root_cause_key="sqli:read",
+        file_path="b.java",
     )
     assert read_conf["verifier_queued"] is True
     with _db() as db:
@@ -498,6 +500,7 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
         enable_verifier=True,
         title="另一条前台未授权",
         root_cause_key="unauthorized_access:B",
+        file_path="b.java",
     )
     first = registry.dispatch(
         _ctx(project, "verifier", vuln_id=vuln1),

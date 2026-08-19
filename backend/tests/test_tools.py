@@ -215,12 +215,14 @@ def test_submit_and_confirm_flow(tmp_env, project):
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     assert out["ok"] is True
+    assert out["mining_path"] == "heuristic"
     vuln_id = out["vuln_id"]
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     with Session() as db:
         submitted = db.get(models.Vuln, vuln_id)
         assert submitted.severity == "pending"
+        assert submitted.mining_path == "heuristic"
 
     conf = registry.dispatch(
         _ctx(project, "reviewer"),
@@ -270,6 +272,65 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert "- 分层理由：" in report
     assert "原始类型映射" not in report
     assert "所需账号" not in report
+
+
+def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
+    def payload(title: str, file_path: str) -> dict:
+        return {
+            "title": title,
+            "vuln_type": "rce",
+            "cwe": "CWE-78",
+            "file_path": file_path,
+            "line_no": 1,
+            "source_sink": "a -> b",
+            "auth_premise": "未授权",
+            "http_request": "GET /x HTTP/1.1\nHost: t\n",
+            "poc_code": (
+                "import argparse\n"
+                "p=argparse.ArgumentParser()\n"
+                "p.add_argument('-u','--url',required=True)\n"
+                "print(p.parse_args())\n"
+            ),
+            "expected_evidence": "ok",
+        }
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+
+    fast = registry.dispatch(
+        _ctx(project, "fast_worker"),
+        "SubmitVuln",
+        payload("fast", "app/Fast.java"),
+    )
+    assert fast["ok"] is True
+    assert fast["mining_path"] == "fast"
+
+    bypass = registry.dispatch(
+        _ctx(project, "bypass_worker"),
+        "SubmitVuln",
+        payload("bypass", "app/Bypass.java"),
+    )
+    assert bypass["ok"] is True
+    assert bypass["mining_path"] == "bypass"
+
+    with Session() as db:
+        parent = db.get(models.Vuln, fast["vuln_id"])
+        parent.status = "returned"
+        parent.return_reason = "补证据"
+        db.commit()
+
+    fix = registry.dispatch(
+        _ctx(project, "fix", vuln_id=fast["vuln_id"]),
+        "SubmitVuln",
+        payload("from-fix", "app/Fix.java"),
+    )
+    assert fix["ok"] is True
+    assert fix["mining_path"] == "fast"
+
+    with Session() as db:
+        assert db.get(models.Vuln, fast["vuln_id"]).mining_path == "fast"
+        assert db.get(models.Vuln, bypass["vuln_id"]).mining_path == "bypass"
+        assert db.get(models.Vuln, fix["vuln_id"]).mining_path == "fast"
 
 
 def test_confirm_requires_attack_surface(tmp_env, project):
@@ -1124,6 +1185,7 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
+    assert "RunCode" not in reviewer_names
     assert "CollectLabFingerprints" in reviewer_names
     assert "FinishLab" not in reviewer_names
     lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}

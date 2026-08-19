@@ -225,6 +225,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "仅响应差别" in bounty_worker
     assert "存储型 XSS" in bounty_worker
     assert "源码硬编码密钥" in bounty_worker
+    assert "前端传输混淆" in bounty_worker
+    assert "服务端机密" in bounty_worker
     assert "应用自身提供的配置选项" in bounty_worker
     assert "不要 docker" in bounty_worker
     assert "禁止主动搭建漏洞利用环境" not in bounty_worker
@@ -278,6 +280,38 @@ def test_static_verify_overlay_prompt():
     assert "仅静态" in text
     assert "evidence_level=static_only" in text
     assert "debug MCP" in text
+
+
+def test_harness_verify_overlay_prompt(tmp_env, project):
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+
+    text = load_prompt("verify/harness.md")
+    assert "局部验证" in text
+    assert "evidence_level=harness" in text
+    assert "RunCode" in text
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.dynamic_verify_mode = "harness"
+        p.dynamic_verify_enabled = True
+        db.commit()
+    overlay = pipeline._phase_system_prompt(project, "reviewer.md")
+    assert "局部验证" in overlay
+    assert "RunCode" in overlay
+    assert "evidence_level=harness" in overlay
+
+
+def test_reviewer_debug_mcp_is_poc_rewrite_fallback():
+    reviewer = load_prompt("reviewer.md")
+    followup = load_prompt("initial/reviewer-dynamic-followup.md")
+    initial = load_prompt("initial/reviewer.md")
+    poc = load_prompt("poc.md")
+    assert "优先 debug MCP" not in reviewer
+    assert "debug MCP 只用于改 PoC 时的动态调试" in reviewer
+    assert "先普通动态" in reviewer
+    assert "debug MCP 不是首选" in followup
+    assert "才用 debug MCP 动态调试" in initial
+    assert "不是首选验证方式" in poc
 
 
 def test_worker_prompts_decouple_finish_file_and_round():

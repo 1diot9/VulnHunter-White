@@ -10,6 +10,8 @@ import {
   cn,
   formatAttackSurface,
   formatDateTime,
+  formatEvidenceLevel,
+  formatMiningPath,
   formatSeverity,
   formatSeverityScore,
   formatSubmissionTier,
@@ -33,6 +35,7 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const score = formatSeverityScore(v.severity_score)
   const tier = formatSubmissionTier(v.submission_tier)
   const verifier = formatVerifierStatus(v.verifier_status)
+  const miningPath = formatMiningPath(v.mining_path)
   return (
     <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', nested && 'mt-0.5 gap-1')}>
       {nested ? (
@@ -54,6 +57,11 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       >
         {STATUS_LABEL[v.status] || v.status}
       </Badge>
+      {miningPath ? (
+        <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
+          {miningPath}
+        </Badge>
+      ) : null}
       {v.tracking_status === 'submitted' || v.tracking_status === 'ignored' ? (
         <Badge
           className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
@@ -76,6 +84,14 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       >
         {tier}
       </Badge>
+      {formatEvidenceLevel(v.evidence_level) ? (
+        <Badge
+          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
+          variant={v.evidence_level === 'harness' ? 'info' : 'outline'}
+        >
+          {formatEvidenceLevel(v.evidence_level)}
+        </Badge>
+      ) : null}
       {surface ? (
         <span className={cn('text-xs text-slate-400', nested && 'text-[11px] text-slate-500')}>{surface}</span>
       ) : null}

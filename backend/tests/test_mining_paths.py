@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.mining_paths import MiningPathError, mining_path_label, parse_heuristic_lite, parse_mining_paths
+from app.mining_paths import (
+    MiningPathError,
+    mining_path_display,
+    mining_path_from_role,
+    mining_path_label,
+    parse_heuristic_lite,
+    parse_mining_paths,
+)
 from app.services.sink_queue import apply_triage_decisions, freeze_audit_queue, persist_candidates
 from app.tools import ROLE_ACL, ToolContext, registry
 from app.tools.phase_worker import mining_complete, project_complete_gates
@@ -38,6 +45,12 @@ def test_parse_mining_paths_requires_one():
         mining_path_label(heuristic_enabled=True, fast_enabled=True, bypass_enabled=True)
         == "启发式挖掘 + 快速扫描 + 历史漏洞绕过"
     )
+    assert mining_path_from_role("worker") == "heuristic"
+    assert mining_path_from_role("fast_worker") == "fast"
+    assert mining_path_from_role("bypass_worker") == "bypass"
+    assert mining_path_from_role("fix") is None
+    assert mining_path_display("fast") == "快速扫描"
+    assert mining_path_display("unknown") is None
 
 
 def test_create_github_mining_path_defaults(tmp_env, monkeypatch):
@@ -498,6 +511,39 @@ def test_ingest_old_vulns_and_finish_bypass(tmp_env, project):
         db.commit()
     assert mining_complete(project) is True
     assert parse_bypass_ref(f"bypass:{bid}") == bid
+
+
+def test_pick_next_bypass_newest_cve_first(tmp_env, project):
+    from app.services.bypass_queue import freeze_bypass_queue, pick_next_bypass
+    from app.services.paths import old_vulns_dir
+
+    old_dir = old_vulns_dir(project)
+    old_dir.mkdir(parents=True, exist_ok=True)
+    (old_dir / "index.md").write_text("---\ncomplete: true\n---\n", encoding="utf-8")
+    (old_dir / "CVE-2022-26619.md").write_text(
+        "---\ntitle: 旧洞\nsummary: upload\ncve: CVE-2022-26619\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    (old_dir / "CVE-2026-67921.md").write_text(
+        "---\ntitle: 新洞\nsummary: rce\ncve: CVE-2026-67921\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    (old_dir / "open-issue.md").write_text(
+        "---\ntitle: 无编号 Issue\nsummary: still open\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    queued = freeze_bypass_queue(project)
+    assert queued == 3
+    first = pick_next_bypass(project, "bypass-new")
+    assert first is not None
+    assert first.cve == "CVE-2026-67921"
+    second = pick_next_bypass(project, "bypass-old")
+    assert second is not None
+    assert second.cve == "CVE-2022-26619"
+    third = pick_next_bypass(project, "bypass-issue")
+    assert third is not None
+    assert (third.cve or "") == ""
+    assert str(third.file_path).endswith("open-issue.md")
 
 
 def test_mining_complete_waits_on_bypass_queue(tmp_env, project):

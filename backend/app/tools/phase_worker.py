@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_submit_block_reason, normalize_audit_mode
-from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active
+from ..mining_paths import (
+    HEURISTIC_LITE_WEIGHT,
+    heuristic_lite_active,
+    mining_path_from_role,
+    normalize_mining_path,
+)
 from ..models import FileWeight, Project, SessionLocal, Sink, Vuln
 from ..services.affected_locations import (
     AFFECTED_LOCATIONS_HEADING,
@@ -33,6 +38,22 @@ REQUIRED_SUBMIT_FIELDS = (
     "poc_code",
     "expected_evidence",
 )
+
+
+def _resolve_mining_path(ctx) -> str | None:
+    """Map Worker role → mining path; Fix inherits the returned vuln's path when possible."""
+    path = mining_path_from_role(ctx.role)
+    if path:
+        return path
+    if (ctx.role or "").strip().lower() != "fix":
+        return None
+    vid = ctx.vuln_id
+    if vid is None:
+        return None
+    with SessionLocal() as db:
+        src = db.get(Vuln, int(vid))
+        return normalize_mining_path(None if not src else src.mining_path)
+
 
 FINISH_FILE_CONTINUE_MSG = (
     "FinishFile 不等于结束本轮。请继续按角色分析一开始注入的焦点文件；"
@@ -241,6 +262,8 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if soft:
         return soft
 
+    mining_path = _resolve_mining_path(ctx)
+
     with SessionLocal() as db:
         vuln = Vuln(
             project_id=ctx.project_id,
@@ -257,6 +280,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             expected_evidence=str(args["expected_evidence"]),
             intended_behavior=intended,
             root_cause_key=root_key,
+            mining_path=mining_path,
             status="pending_review",
         )
         db.add(vuln)
@@ -305,6 +329,8 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
     if root_key:
         out["root_cause_key"] = root_key
+    if mining_path:
+        out["mining_path"] = mining_path
     return out
 
 
@@ -555,7 +581,9 @@ def register_worker_tools() -> None:
                 "（HTTP / WebSocket / RPC / MQ / 回调等）就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
                 "或只是配置/文档/compose/.env 里用户可改的默认密码弱口令的不要提交。"
-                "源码常量中的硬编码密钥（JWT/AES/DES secret 等）可以提交。"
+                "有服务端机密危害的源码硬编码密钥（JWT/HMAC 签名密钥、接口签名 secret、"
+                "私钥、第三方 API Key 等）可以提交；"
+                "前端传输混淆 AES/公开下发密钥不要提交。"
                 "同一根因同一危害只交一份：先 Grep 同类其余方法写入报告「同根因受影响点」；"
                 "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"
                 "应填写 root_cause_key（类型:稳定锚点）。"

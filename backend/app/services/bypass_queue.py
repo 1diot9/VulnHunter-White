@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from .paths import old_vulns_dir
 
 ACTIVE_STATUSES = ("queued", "claimed")
 OPEN_STATUSES = ("queued", "claimed")
+_CVE_RE = re.compile(r"CVE[-_](\d{4})[-_](\d+)", re.I)
 
 
 def _norm_rel(name: str) -> str:
@@ -33,11 +35,24 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return meta, parts[2].lstrip("\n")
 
 
+def _cve_recency_tuple(*parts: str | None) -> tuple[int, int]:
+    """Higher (year, sequence) is newer. Missing CVE sorts as oldest."""
+    blob = " ".join(str(p or "") for p in parts)
+    best = (0, 0)
+    for m in _CVE_RE.finditer(blob):
+        key = (int(m.group(1)), int(m.group(2)))
+        if key > best:
+            best = key
+    return best
+
+
 def _iter_old_vuln_files(project_id: int) -> list[Path]:
     old_dir = old_vulns_dir(project_id)
     if not old_dir.is_dir():
         return []
-    return sorted(fp for fp in old_dir.glob("*.md") if fp.name != "index.md" and fp.is_file())
+    files = [fp for fp in old_dir.glob("*.md") if fp.name != "index.md" and fp.is_file()]
+    files.sort(key=lambda fp: (_cve_recency_tuple(fp.name), fp.name.lower()), reverse=True)
+    return files
 
 
 def ingest_old_vulns(project_id: int) -> int:
@@ -135,11 +150,14 @@ def pick_next_bypass(project_id: int, worker_id: str) -> BypassTarget | None:
                 BypassTarget.status == "queued",
                 BypassTarget.claimed_by.is_(None),
             )
-            .order_by(BypassTarget.id.asc())
             .all()
         )
         if not rows:
             return None
+        rows.sort(
+            key=lambda row: (_cve_recency_tuple(row.cve, row.file_path), int(row.id or 0)),
+            reverse=True,
+        )
         chosen = rows[0]
         chosen.status = "claimed"
         chosen.claimed_by = worker_id

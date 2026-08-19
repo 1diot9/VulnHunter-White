@@ -36,6 +36,7 @@ def _enable_dynamic_verify(project_id: int, enabled: bool = True) -> None:
         proj = db.get(Project, project_id)
         assert proj is not None
         proj.dynamic_verify_enabled = enabled
+        proj.dynamic_verify_mode = "lab" if enabled else "off"
         db.commit()
 
 

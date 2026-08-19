@@ -7,6 +7,7 @@ from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
 from ..config import settings
+from ..dynamic_verify import coerce_evidence_level, normalize_evidence_level, project_verify_mode
 from ..models import Project, SessionLocal, Vuln
 from ..services.affected_locations import (
     append_affected_locations,
@@ -21,7 +22,7 @@ from ..services.asset_proof import (
 )
 from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
-from ..services.poc_script import poc_cli_block_reason, write_poc_code
+from ..services.poc_script import poc_cli_block_reason, write_harness_code, write_poc_code
 from ..services.report import upsert_report_section
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
@@ -328,8 +329,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not vuln_id:
         return {"ok": False, "error": "缺少 vuln_id"}
     evidence_raw = str(args.get("evidence_level") or "").strip()
-    if evidence_raw and evidence_raw not in ("dynamic", "static_only", "mcp"):
-        return {"ok": False, "error": "evidence_level 须为 dynamic|static_only|mcp"}
+    if evidence_raw and normalize_evidence_level(evidence_raw) is None:
+        return {"ok": False, "error": "evidence_level 须为 dynamic|static_only|mcp|harness"}
     surface = _normalize_attack_surface(args.get("attack_surface"))
     if not surface:
         return {"ok": False, "error": "必须标注 attack_surface=frontend|backend（前台/后台）"}
@@ -356,6 +357,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
     note = args.get("note") or ""
     poc_code = args.get("poc_code")
+    harness_code = args.get("harness_code")
+    harness_language = str(args.get("harness_language") or "python").strip() or "python"
     if poc_code:
         poc_blocked = poc_cli_block_reason(str(poc_code))
         if poc_blocked:
@@ -367,12 +370,10 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if vuln.status == "merged":
             return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         proj = db.get(Project, ctx.project_id)
-        dynamic_on = bool(proj and proj.dynamic_verify_enabled)
-        evidence = evidence_raw or ("dynamic" if dynamic_on else "static_only")
-        if not dynamic_on and evidence in ("dynamic", "mcp"):
-            evidence = "static_only"
-        mode = normalize_audit_mode(None if not proj else proj.audit_mode)
-        if mode == AUDIT_MODE_BOUNTY:
+        verify_mode = project_verify_mode(proj)
+        evidence = coerce_evidence_level(evidence_raw, mode=verify_mode)
+        audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
+        if audit_mode == AUDIT_MODE_BOUNTY:
             blocked = bounty_confirm_block_reason(
                 vuln_type=str(vuln.vuln_type or ""),
                 submission_tier=submission.tier,
@@ -449,6 +450,13 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if poc_code:
             vuln.poc_code = str(poc_code)
             write_poc_code(ctx.project_id, int(vuln_id), str(poc_code))
+        if harness_code:
+            write_harness_code(
+                ctx.project_id,
+                int(vuln_id),
+                str(harness_code),
+                language=harness_language,
+            )
         if note:
             vuln.return_reason = None
         upsert_report_section(
@@ -611,11 +619,15 @@ def register_reviewer_tools() -> None:
                 "只确认默认/官方部署下攻击者可单独利用、且能打出可观察有害冲击的问题；"
                 "不要把仅 sink 可达、靠 docker exec 种文件/组合独立写原语才成立、"
                 "或项目配置/文档/.env/compose 里用户可改的默认密码弱口令标成漏洞。"
-                "源码中的硬编码密钥（JWT/AES/DES secret 等）可以确认。"
+                "有服务端机密危害的源码硬编码密钥（JWT/HMAC 签名密钥、接口签名 secret、"
+                "私钥、第三方 API Key 等）可以确认；"
+                "前端传输混淆 AES/公开下发密钥应误报。"
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
-                "evidence_level=static_only|dynamic|mcp。"
-                "项目未开启动态验证时必须 static_only；开启后可标 dynamic/mcp。"
+                "evidence_level=static_only|dynamic|mcp|harness。"
+                "关闭时必须 static_only；靶场动态默认 dynamic（先跑 Worker poc.py），"
+                "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
+                "局部验证打通时标 harness，不要标 dynamic。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
@@ -635,7 +647,12 @@ def register_reviewer_tools() -> None:
                     "vuln_id": {"type": "integer"},
                     "evidence_level": {
                         "type": "string",
-                        "description": "dynamic | static_only | mcp。未开启动态验证时默认且仅允许 static_only；开启后默认 dynamic",
+                        "description": (
+                            "static_only | dynamic | mcp | harness。"
+                            "关闭时仅 static_only；靶场动态默认 dynamic（HTTP PoC）；"
+                            "mcp 仅在 debug MCP 改写/调试 PoC 后复现成功时使用；"
+                            "局部验证打通用 harness。"
+                        ),
                     },
                     "attack_surface": {
                         "type": "string",
@@ -718,6 +735,17 @@ def register_reviewer_tools() -> None:
                             "可选。若把 poc.py 改成 CLI 参数化（-u/--url，RCE 加 -c/--cmd），"
                             "在此传入完整脚本，系统会回写 vulns/{id}/poc.py。"
                         ),
+                    },
+                    "harness_code": {
+                        "type": "string",
+                        "description": (
+                            "可选。局部验证的 mock/harness 源码，写入 vulns/{id}/harness.*，"
+                            "不要放进 poc.py。"
+                        ),
+                    },
+                    "harness_language": {
+                        "type": "string",
+                        "description": "harness_code 的语言，默认 python。",
                     },
                     "note": {"type": "string"},
                 },

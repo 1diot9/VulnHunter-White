@@ -41,6 +41,47 @@ def write_poc_code(project_id: int, vuln_id: int, poc_code: str) -> Path:
     return path
 
 
+_HARNESS_NAMES = {
+    "python": "harness.py",
+    "python3": "harness.py",
+    "py": "harness.py",
+    "php": "harness.php",
+    "javascript": "harness.js",
+    "js": "harness.js",
+    "node": "harness.js",
+    "ruby": "harness.rb",
+    "rb": "harness.rb",
+    "go": "harness.go",
+    "golang": "harness.go",
+    "java": "Harness.java",
+    "bash": "harness.sh",
+    "sh": "harness.sh",
+    "shell": "harness.sh",
+}
+
+
+def harness_filename(language: str | None = None) -> str:
+    key = (language or "python").strip().lower()
+    return _HARNESS_NAMES.get(key, "harness.py")
+
+
+def harness_path(project_id: int, vuln_id: int, *, language: str | None = None) -> Path:
+    return vuln_dir(project_id, vuln_id) / harness_filename(language)
+
+
+def write_harness_code(
+    project_id: int,
+    vuln_id: int,
+    harness_code: str,
+    *,
+    language: str | None = None,
+) -> Path:
+    path = harness_path(project_id, vuln_id, language=language)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(harness_code, encoding="utf-8")
+    return path
+
+
 def read_poc_code(project_id: int, vuln_id: int, fallback: str | None = None) -> str | None:
     path = poc_path(project_id, vuln_id)
     if path.is_file():
