@@ -13,6 +13,7 @@ from ..services.affected_locations import (
     format_location_line,
     parse_locations,
 )
+from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import ensure_search_fingerprint_section, write_report_md
@@ -227,6 +228,20 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             blocked = bounty_submit_block_reason(vtype, file_path=file_path)
             if blocked:
                 return {"ok": False, "error": blocked}
+
+    soft = soft_duplicate_gate(
+        ctx,
+        args,
+        tool="SubmitVuln",
+        file_path=file_path,
+        vuln_type=vtype,
+        root_cause_key=root_key,
+        action_hint="用 AppendAffectedLocations 追加到 pending 主报告，或等 Reviewer MergeIntoVuln",
+    )
+    if soft:
+        return soft
+
+    with SessionLocal() as db:
         vuln = Vuln(
             project_id=ctx.project_id,
             title=str(args["title"]).strip(),
@@ -544,6 +559,8 @@ def register_worker_tools() -> None:
                 "同一根因同一危害只交一份：先 Grep 同类其余方法写入报告「同根因受影响点」；"
                 "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"
                 "应填写 root_cause_key（类型:稳定锚点）。"
+                "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次调用会提醒复查；"
+                "确认仍要单独交时，再次调用并传 confirm_not_duplicate=true（仅本会话提醒过一次后才接受）。"
                 "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
                 "SSRF 须在 expected_evidence 与报告危害中标明观察面："
                 "有回显（响应含目标正文）或仅响应差别（内网端口探测）；"
@@ -580,6 +597,13 @@ def register_worker_tools() -> None:
                     "root_cause_key": {
                         "type": "string",
                         "description": "同根因合并键，格式 类型:稳定锚点，如 idor:SysCommentController",
+                    },
+                    "confirm_not_duplicate": {
+                        "type": "boolean",
+                        "description": (
+                            "疑似重复提醒后仍确认单独提交时传 true。"
+                            "仅本会话已因同一指纹被提醒过一次后才接受；首次带上会被拒绝。"
+                        ),
                     },
                     "fofa_fingerprint": {"type": "string"},
                     "x_fingerprint": {"type": "string"},

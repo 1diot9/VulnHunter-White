@@ -8,7 +8,7 @@ def _ctx(project_id: int, role: str = "worker", vuln_id: int | None = None) -> T
     return ToolContext(project_id=project_id, role=role, phase=role, vuln_id=vuln_id)
 
 
-def _submit(project_id: int, title: str = "SQLI in login", **extra):
+def _submit(project_id: int, title: str = "SQLI in login", ctx: ToolContext | None = None, **extra):
     payload = {
         "title": title,
         "vuln_type": "sqli",
@@ -23,7 +23,11 @@ def _submit(project_id: int, title: str = "SQLI in login", **extra):
         "intended_behavior": False,
     }
     payload.update(extra)
-    return registry.dispatch(_ctx(project_id), "SubmitVuln", payload)
+    tool_ctx = ctx or _ctx(project_id)
+    out = registry.dispatch(tool_ctx, "SubmitVuln", payload)
+    if out.get("duplicate_soft_gate"):
+        out = registry.dispatch(tool_ctx, "SubmitVuln", {**payload, "confirm_not_duplicate": True})
+    return out
 
 
 def test_search_old_vuln_list_and_expand(tmp_env, project):
@@ -112,8 +116,9 @@ def test_search_old_vuln_stays_in_project(tmp_env, project):
 
 
 def test_search_old_vuln_excludes_current_review_vuln(tmp_env, project):
-    first = _submit(project, title="first submitted")
-    second = _submit(project, title="second submitted")
+    worker = _ctx(project)
+    first = _submit(project, title="first submitted", ctx=worker)
+    second = _submit(project, title="second submitted", ctx=worker)
     listed = registry.dispatch(
         _ctx(project, role="reviewer", vuln_id=second["vuln_id"]),
         "SearchOldVuln",

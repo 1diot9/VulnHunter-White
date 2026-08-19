@@ -49,6 +49,7 @@
    - 当前条是重复条、主报告已在（pending/confirmed/static_only）→ `MergeIntoVuln(into=主报告id)`，会话结束；不要 Confirm，不要打回，不要误报。
    - 目标已有攻击面时须传入相同的 `attack_surface`（后台再传 `required_account`）声明一致。
    - 危害或鉴权不同才允许 Confirm 为 `duplicate_grouped` 并逐字复用已有键。
+   - 若 ConfirmVuln 返回疑似重复：按 `candidates` 复查，优先 MergeIntoVuln。确认危害/鉴权不同仍要单独确认时，**再次** Confirm 并传 `confirm_not_duplicate=true`（仅本会话已提醒过一次后才接受）。
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
 3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。源码硬编码密钥不是这条否决。
 4. 动态验证阶梯（**仅当项目开启动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`）：

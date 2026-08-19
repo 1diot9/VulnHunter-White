@@ -23,6 +23,7 @@ from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import upsert_report_section
+from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
     canonical_root_cause_key,
     mismatched_root_cause_key_error,
@@ -398,6 +399,23 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             reused = mismatched_root_cause_key_error(probe, siblings, submission.root_cause_key)
             if reused:
                 return {"ok": False, "error": reused}
+        soft_file = str(vuln.file_path or "")
+        soft_type = str(vuln.vuln_type or "")
+        soft_root = submission.root_cause_key or normalize_root_cause_key(vuln.root_cause_key)
+
+    soft = soft_duplicate_gate(
+        ctx,
+        args,
+        tool="ConfirmVuln",
+        file_path=soft_file,
+        vuln_type=soft_type,
+        root_cause_key=soft_root,
+        exclude_vuln_id=int(vuln_id),
+        action_hint="用 MergeIntoVuln(into=主报告id) 并入，不要 Confirm 成多份",
+    )
+    if soft:
+        return soft
+
     proof = maybe_enrich_asset_proof(
         ctx.project_id,
         int(vuln_id),
@@ -602,6 +620,9 @@ def register_reviewer_tools() -> None:
                 "submission_tier、submission_reason。"
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
                 "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
+                "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次 Confirm 会提醒复查合并；"
+                "确认危害/鉴权不同仍要单独确认时，再次调用并传 confirm_not_duplicate=true"
+                "（仅本会话提醒过一次后才接受）。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
                 "SSRF 须按观察面确认：有回显才能写可读元数据/内网正文；"
                 "仅状态码/时延/报错差别只算内网端口探测，impact 用 limited_info。"
@@ -668,6 +689,13 @@ def register_reviewer_tools() -> None:
                             "主报告与后续变体必须完全相同。"
                             "duplicate_grouped 时必填，且必须原样复用 SearchOldVuln kind=found 已有键，"
                             "禁止按接口/方法另造新键。"
+                        ),
+                    },
+                    "confirm_not_duplicate": {
+                        "type": "boolean",
+                        "description": (
+                            "疑似重复提醒后仍确认单独 Confirm 时传 true。"
+                            "仅本会话已因同一指纹被提醒过一次后才接受；首次带上会被拒绝。"
                         ),
                     },
                     "fofa_fingerprint": {

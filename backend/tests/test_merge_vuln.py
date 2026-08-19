@@ -19,6 +19,21 @@ def _ctx(project_id: int, role: str, vuln_id: int | None = None) -> ToolContext:
     return ToolContext(project_id=project_id, role=role, phase=role, vuln_id=vuln_id)
 
 
+def _submit(ctx: ToolContext, payload: dict) -> dict:
+    """Submit, acknowledging soft duplicate gate when the test intentionally creates siblings."""
+    out = registry.dispatch(ctx, "SubmitVuln", payload)
+    if out.get("duplicate_soft_gate"):
+        out = registry.dispatch(ctx, "SubmitVuln", {**payload, "confirm_not_duplicate": True})
+    return out
+
+
+def _confirm(ctx: ToolContext, args: dict) -> dict:
+    out = registry.dispatch(ctx, "ConfirmVuln", args)
+    if out.get("duplicate_soft_gate"):
+        out = registry.dispatch(ctx, "ConfirmVuln", {**args, "confirm_not_duplicate": True})
+    return out
+
+
 def _submit_payload(**extra):
     payload = {
         "title": "IDOR update",
@@ -108,21 +123,10 @@ def test_append_affected_locations_pending_only(tmp_env, project):
 
 
 def test_merge_into_vuln_into_and_absorb(tmp_env, project):
-    primary = registry.dispatch(
-        _ctx(project, "worker"),
-        "SubmitVuln",
-        _submit_payload(title="IDOR primary", line_no=10),
-    )
-    sibling = registry.dispatch(
-        _ctx(project, "worker"),
-        "SubmitVuln",
-        _submit_payload(title="IDOR sibling", line_no=42),
-    )
-    third = registry.dispatch(
-        _ctx(project, "worker"),
-        "SubmitVuln",
-        _submit_payload(title="IDOR third", line_no=88),
-    )
+    worker = _ctx(project, "worker")
+    primary = _submit(worker, _submit_payload(title="IDOR primary", line_no=10))
+    sibling = _submit(worker, _submit_payload(title="IDOR sibling", line_no=42))
+    third = _submit(worker, _submit_payload(title="IDOR third", line_no=88))
     pid, sid, tid = primary["vuln_id"], sibling["vuln_id"], third["vuln_id"]
 
     absorb = registry.dispatch(
@@ -141,9 +145,8 @@ def test_merge_into_vuln_into_and_absorb(tmp_env, project):
     primary_report = (vuln_dir(project, pid) / "report.md").read_text(encoding="utf-8")
     assert "42" in primary_report or "SysCommentController" in primary_report
 
-    conf = registry.dispatch(
+    conf = _confirm(
         _ctx(project, "reviewer", vuln_id=pid),
-        "ConfirmVuln",
         {
             "vuln_id": pid,
             "evidence_level": "static_only",

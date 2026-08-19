@@ -72,6 +72,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
   - 已有 **pending_review** 同根因条目 → **禁止再 SubmitVuln**，用 `AppendAffectedLocations` 追加受影响点。
   - 已有 **confirmed/static_only** 同根因、且新方法尚未出现在主报告 → 可再交一条供 Reviewer `MergeIntoVuln`；不要自己改已确认 `report.md`。
   - 已并入（status=merged）的条目不要再交一模一样的点。
+- 若 `SubmitVuln` 返回疑似重复（同 `file_path`+`vuln_type` 或同 `root_cause_key`）：先按 `candidates` 复查；能合并则改用 AppendAffectedLocations / 等待 MergeIntoVuln。确认危害或鉴权不同、仍要单独交时，**再次**调用并传 `confirm_not_duplicate=true`（该参数仅在本会话已提醒过一次后才接受；首次就带会被拒绝）。
 - 危害或攻击面明显不同（例如同一过滤器既能 SSRF 又能读文件）才允许另交；不要为「多一个同构方法」另交。
 
 ## 流程

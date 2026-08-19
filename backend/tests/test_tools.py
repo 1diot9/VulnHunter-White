@@ -10,8 +10,8 @@ from app.tools import ROLE_ACL, SHELL_TOOLS, ToolContext, ToolSpec, native_shell
 from app.tools.common import todo_relpath
 
 
-def _ctx(project_id: int, role: str) -> ToolContext:
-    return ToolContext(project_id=project_id, role=role, phase=role)
+def _ctx(project_id: int, role: str, **kwargs) -> ToolContext:
+    return ToolContext(project_id=project_id, role=role, phase=role, **kwargs)
 
 
 SEVERITY_FACTORS = {
@@ -388,6 +388,7 @@ def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
 
 def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     _set_audit_mode(project, "full")
+    worker = _ctx(project, "worker")
     payload = {
         "title": "CORS",
         "vuln_type": "other",
@@ -400,7 +401,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         "poc_code": "print(1)\n",
         "expected_evidence": "reflected origin",
     }
-    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    out = registry.dispatch(worker, "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
     hard = registry.dispatch(
         _ctx(project, "reviewer"),
@@ -420,9 +421,14 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
 
     payload2 = dict(payload)
     payload2["title"] = "CORS again"
-    out2 = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload2)
+    warn2 = registry.dispatch(worker, "SubmitVuln", payload2)
+    assert warn2.get("duplicate_soft_gate") is True
+    out2 = registry.dispatch(worker, "SubmitVuln", {**payload2, "confirm_not_duplicate": True})
+    assert out2["ok"] is True
+
+    reviewer2 = _ctx(project, "reviewer", vuln_id=out2["vuln_id"])
     dup = registry.dispatch(
-        _ctx(project, "reviewer"),
+        reviewer2,
         "ConfirmVuln",
         {
             "vuln_id": out2["vuln_id"],
@@ -437,8 +443,9 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     assert dup["ok"] is False
     assert "root_cause_key" in dup["error"]
 
-    dup_ok = registry.dispatch(
-        _ctx(project, "reviewer"),
+    # Soft-gate first (sibling #vuln_id), then ack with correct root key.
+    soft = registry.dispatch(
+        reviewer2,
         "ConfirmVuln",
         {
             "vuln_id": out2["vuln_id"],
@@ -449,6 +456,22 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
             "submission_tier": "duplicate_grouped",
             "submission_reason": "与已确认 CORS 同根因",
             "root_cause_key": "cors:JwtFilter",
+        },
+    )
+    assert soft.get("duplicate_soft_gate") is True
+    dup_ok = registry.dispatch(
+        reviewer2,
+        "ConfirmVuln",
+        {
+            "vuln_id": out2["vuln_id"],
+            "attack_surface": "frontend",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "duplicate_grouped",
+            "submission_reason": "与已确认 CORS 同根因",
+            "root_cause_key": "cors:JwtFilter",
+            "confirm_not_duplicate": True,
         },
     )
     assert dup_ok["ok"] is True
@@ -465,9 +488,13 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
 
     payload3 = dict(payload)
     payload3["title"] = "CORS third"
-    out3 = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload3)
-    dup_new_key = registry.dispatch(
-        _ctx(project, "reviewer"),
+    warn3 = registry.dispatch(worker, "SubmitVuln", payload3)
+    assert warn3.get("duplicate_soft_gate") is True
+    out3 = registry.dispatch(worker, "SubmitVuln", {**payload3, "confirm_not_duplicate": True})
+    assert out3["ok"] is True
+    reviewer3 = _ctx(project, "reviewer", vuln_id=out3["vuln_id"])
+    soft3 = registry.dispatch(
+        reviewer3,
         "ConfirmVuln",
         {
             "vuln_id": out3["vuln_id"],
@@ -480,6 +507,25 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
             "root_cause_key": "cors:JwtFilter:again",
         },
     )
+    # Soft gate or key mismatch both fail; after ack, key mismatch still blocks.
+    if soft3.get("duplicate_soft_gate"):
+        dup_new_key = registry.dispatch(
+            reviewer3,
+            "ConfirmVuln",
+            {
+                "vuln_id": out3["vuln_id"],
+                "attack_surface": "frontend",
+                "impact": "limited_info",
+                "exploit_complexity": "single_request",
+                "defense_status": "none",
+                "submission_tier": "duplicate_grouped",
+                "submission_reason": "与已确认 CORS 同根因",
+                "root_cause_key": "cors:JwtFilter:again",
+                "confirm_not_duplicate": True,
+            },
+        )
+    else:
+        dup_new_key = soft3
     assert dup_new_key["ok"] is False
     assert "cors:JwtFilter" in dup_new_key["error"]
     assert "不要另写新键" in dup_new_key["error"]
