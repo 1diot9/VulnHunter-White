@@ -26,7 +26,7 @@ from typing import Any
 
 LAB_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。本轮是独立的 Docker 靶场搭建，请立刻 Read/Glob 找 Dockerfile/compose，"
-    "用 shell 构建并启动（自建镜像与 Web 容器必须使用提示词中的 lab_image / lab_container，命名含项目名与项目ID），"
+    "用 shell 构建并启动（自建镜像与 Web 容器必须使用提示词中的 lab_image / lab_container，命名含项目名与项目ID，并加 vulnhunter=1 标签），"
     "Write env/env.json；完成后 FinishLab。"
     "无法搭建则 FinishLab(skipped=true, reason=...)。不要审核漏洞。"
 )
@@ -39,12 +39,20 @@ VERIFIER_NO_TOOL_NUDGE = (
     "当前这批测完仍不足 3 个则保留成功的，FofaSearch(expand=true) 再搜下一轮（最多 5 轮 / 50 个目标）。不要空转。"
 )
 
+ATTACK_CHAIN_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。请立刻 SearchOldVuln 浏览本项目已确认漏洞，"
+    "对候选传 title/#id 读全文，必要时 Read/Grep 核对源码前置；"
+    "发现真串联则 SubmitAttackChain，全部评估完 FinishAttackChain。"
+    "找不到合理链也要 FinishAttackChain，不要硬凑、不要空转。"
+)
+
 NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。纯文字回复无法读取代码、执行命令或落盘结果，对任务没有进展。"
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
     "挖掘轮次：无独立审计价值的文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的焦点已按角色分析完后才 FinishRound；"
     "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员） / ReturnToWorker；"
-    "互联网验证请复用项目共享 FOFA 命中或用项目指纹 FofaSearch（0 条可改写最多 3 次；当前批次不足 3 个成功可 expand 再搜，最多 5 轮 / 50 个目标） / FinishVerifier；修复请 FinishFix。"
+    "互联网验证请复用项目共享 FOFA 命中或用项目指纹 FofaSearch（0 条可改写最多 3 次；当前批次不足 3 个成功可 expand 再搜，最多 5 轮 / 50 个目标） / FinishVerifier；"
+    "攻击链请 SearchOldVuln（仅已确认产出）/ SubmitAttackChain / FinishAttackChain；修复请 FinishFix。"
 )
 
 FAST_NO_TOOL_NUDGE = (
@@ -228,6 +236,8 @@ class AgentWatchdog:
             return LAB_NO_TOOL_NUDGE
         if self.phase == "verifier":
             return VERIFIER_NO_TOOL_NUDGE
+        if self.phase in ("attack_chain", "attack-chain"):
+            return ATTACK_CHAIN_NO_TOOL_NUDGE
         if self.phase in ("fast-worker", "fast_worker"):
             return FAST_NO_TOOL_NUDGE
         if self.phase in ("bypass-worker", "bypass_worker"):

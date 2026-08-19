@@ -603,6 +603,8 @@ def todo_relpath(ctx) -> str:
     if role == "verifier":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-verifier-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
+    if role in ("attack_chain", "attack-chain"):
+        return "workspace/todos-attack-chain.json"
     if role == "fix":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-fix-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"
@@ -772,6 +774,14 @@ def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
         ):
             if key in entry:
                 out[key] = entry[key]
+        for key in (
+            "auth_premise",
+            "attack_surface",
+            "required_account",
+            "source_sink",
+        ):
+            if key in entry and entry[key] not in (None, ""):
+                out[key] = entry[key]
         if entry.get("status") == "merged" and entry.get("merged_into_id"):
             out["merged_note"] = f"已并入 #{entry['merged_into_id']}"
     return out
@@ -783,6 +793,9 @@ def _full_doc(entry: dict[str, Any]) -> dict[str, Any]:
     out["matched"] = True
     out["content"] = entry.get("content") or ""
     out["meta"] = entry.get("meta") or {}
+    for key in ("http_request", "poc_code", "auth_premise", "source_sink"):
+        if key in entry and entry[key] not in (None, ""):
+            out[key] = entry[key]
     return out
 
 
@@ -802,6 +815,10 @@ def _search_blob(entry: dict[str, Any]) -> str:
         entry.get("root_cause_key") or "",
         str(entry.get("merged_into_id") or ""),
         entry.get("merged_note") or "",
+        entry.get("auth_premise") or "",
+        entry.get("attack_surface") or "",
+        entry.get("required_account") or "",
+        entry.get("source_sink") or "",
     ]
     return "\n".join(str(p) for p in parts).lower()
 
@@ -847,6 +864,9 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
     from ..models import SessionLocal, Vuln
 
     skip_id = int(ctx.vuln_id) if ctx.vuln_id is not None else None
+    role = (getattr(ctx, "role", None) or "").strip().replace("-", "_")
+    attack_chain_mode = role == "attack_chain"
+    confirmed_only = frozenset({"confirmed", "static_only"})
     entries: list[dict[str, Any]] = []
     with SessionLocal() as db:
         rows = (
@@ -858,6 +878,9 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
         for vuln in rows:
             if skip_id is not None and vuln.id == skip_id:
                 continue
+            if attack_chain_mode:
+                if (vuln.status or "") not in confirmed_only:
+                    continue
             report_rel = vuln.report_path or f"vulns/{vuln.id}/report.md"
             report_path = vuln_dir(ctx.project_id, vuln.id) / "report.md"
             text = ""
@@ -871,31 +894,43 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
                 summary = " | ".join(b for b in bits if b)
             if vuln.status == "merged" and vuln.merged_into_id:
                 summary = f"[已并入 #{vuln.merged_into_id}] {summary}".strip()
-            entries.append(
-                {
-                    "kind": KIND_FOUND,
-                    "title": vuln.title,
-                    "summary": summary,
-                    "file": report_rel,
-                    "content": body or text,
-                    "meta": meta,
-                    "vuln_id": vuln.id,
-                    "status": vuln.status,
-                    "file_path": vuln.file_path,
-                    "vuln_type": vuln.vuln_type,
-                    "cwe": vuln.cwe,
-                    "submission_tier": vuln.submission_tier,
-                    "root_cause_key": vuln.root_cause_key,
-                    "merged_into_id": vuln.merged_into_id,
-                }
-            )
+            entry: dict[str, Any] = {
+                "kind": KIND_FOUND,
+                "title": vuln.title,
+                "summary": summary,
+                "file": report_rel,
+                "content": body or text,
+                "meta": meta,
+                "vuln_id": vuln.id,
+                "status": vuln.status,
+                "file_path": vuln.file_path,
+                "vuln_type": vuln.vuln_type,
+                "cwe": vuln.cwe,
+                "submission_tier": vuln.submission_tier,
+                "root_cause_key": vuln.root_cause_key,
+                "merged_into_id": vuln.merged_into_id,
+            }
+            if attack_chain_mode:
+                entry["auth_premise"] = vuln.auth_premise or ""
+                entry["attack_surface"] = vuln.attack_surface or ""
+                entry["required_account"] = vuln.required_account or ""
+                entry["source_sink"] = vuln.source_sink or ""
+                entry["http_request"] = vuln.http_request or ""
+                entry["poc_code"] = vuln.poc_code or ""
+            entries.append(entry)
     return entries
 
 
 def _search_old_vuln_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     title = (args.get("title") or "").strip()
     query = (args.get("query") or "").strip().lower()
-    entries = _old_vuln_entries(ctx.project_id) + _found_vuln_entries(ctx)
+    role = (getattr(ctx, "role", None) or "").strip().replace("-", "_")
+    if role == "attack_chain":
+        entries = _found_vuln_entries(ctx)
+        kind_hint = "本阶段只允许查看本项目已确认产出（kind=found，confirmed/static_only），禁止历史旧漏洞。"
+    else:
+        entries = _old_vuln_entries(ctx.project_id) + _found_vuln_entries(ctx)
+        kind_hint = "kind=old 为侦察旧漏洞，kind=found 为本项目已提交。"
     if title:
         for e in entries:
             if _exact_title_match(e, title):
@@ -911,7 +946,7 @@ def _search_old_vuln_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
             "matched": False,
             "query_title": title,
             "suggestions": suggestions[:8],
-            "hint": "未精确命中标题，请用 suggestions 里的 title 再查，或改用 query 模糊搜索。kind=old 为侦察旧漏洞，kind=found 为本项目已提交。",
+            "hint": f"未精确命中标题，请用 suggestions 里的 title 再查，或改用 query 模糊搜索。{kind_hint}",
         }
     docs = []
     for e in entries:

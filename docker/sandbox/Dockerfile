@@ -1,5 +1,7 @@
 FROM debian:bookworm-slim
 
+LABEL vulnhunter="1" vulnhunter.kind="sandbox"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \

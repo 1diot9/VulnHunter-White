@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 const links = [
   { to: '/', label: '审计项目' },
   { to: '/vulns', label: '漏洞产出' },
+  { to: '/containers', label: '容器管理' },
   { to: '/settings', label: '设置' },
 ]
 

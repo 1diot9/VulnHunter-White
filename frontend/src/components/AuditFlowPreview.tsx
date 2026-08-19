@@ -16,6 +16,7 @@ type PreviewProps = {
   dynamicVerifyMode?: 'off' | 'lab' | 'harness'
   manualLab: boolean
   verifierEnabled: boolean
+  attackChainEnabled?: boolean
   heuristicEnabled?: boolean
   heuristicLite?: boolean
   fastEnabled?: boolean
@@ -39,6 +40,7 @@ function buildNodes({
   dynamicVerifyMode,
   manualLab,
   verifierEnabled,
+  attackChainEnabled = false,
   heuristicEnabled = true,
   heuristicLite = false,
   fastEnabled = false,
@@ -158,7 +160,7 @@ function buildNodes({
       skipped: !verifierEnabled,
       body: verifierEnabled
         ? 'Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认 10 个，成功 3 个即结束。'
-        : '未开启。确认后不搜互联网目标，审核结束即进入完成。',
+        : '未开启。确认后不搜互联网目标。',
       hint: verifierEnabled
         ? '当前这批 10 个凑不满 3 个成功时，保留已成功的并再搜下一轮，最多 5 轮（合计最多 50 个目标）。语法有命中后项目内共享。任意文件删除、DoS、SQL 增删改等破坏性漏洞会跳过。需配置 FOFA Key。'
         : '互联网验证默认关闭。勾选后才会在确认前台漏洞后做 FOFA 复测。',
@@ -171,12 +173,31 @@ function buildNodes({
         : [],
     },
     {
+      id: 'attack_chain',
+      title: '攻击链',
+      tag: attackChainEnabled ? '串联' : '未开',
+      skipped: !attackChainEnabled,
+      body: attackChainEnabled
+        ? '挖掘与审核结束后，根据已确认漏洞尝试多步串联利用，扩大危害。'
+        : '未开启。审核结束后不进入攻击链串联。',
+      hint: attackChainEnabled
+        ? '只看本项目已确认产出；已确认洞少于 2 条时自动跳过。不执行 PoC、不打靶场。'
+        : '攻击链串联默认关闭。勾选后才会在挖掘与审核都结束后尝试多漏洞串联。',
+      chips: attackChainEnabled
+        ? [
+            { id: 'confirmed', label: '仅已确认', hint: 'pending / 误报 / 已合并子条不参与。' },
+            { id: 'min2', label: '至少 2 条', hint: '少于 2 条已确认洞时跳过，不空跑 LLM。' },
+          ]
+        : [],
+    },
+    {
       id: 'done',
       title: '完成',
-      body: verifierEnabled
-        ? '侦察、挖掘、审核与互联网验证均结束，产出漏洞报告。'
-        : '侦察、挖掘与审核结束，产出漏洞报告。',
-      hint: '流水线结束。之后仍可在项目配置里改动态验证或互联网验证，或重置挖掘进度后换模式续跑。',
+      body:
+        verifierEnabled || attackChainEnabled
+          ? '侦察、挖掘、审核与已开启的后置阶段均结束，产出漏洞报告。'
+          : '侦察、挖掘与审核结束，产出漏洞报告。',
+      hint: '流水线结束。之后仍可在项目配置里改动态验证、互联网验证或攻击链串联，或重置挖掘进度后换模式续跑。',
       chips: [],
     },
   ]
@@ -304,6 +325,7 @@ function summaryText({
   dynamicVerifyMode,
   manualLab,
   verifierEnabled,
+  attackChainEnabled = false,
   heuristicEnabled = true,
   heuristicLite = false,
   fastEnabled = false,
@@ -328,7 +350,10 @@ function summaryText({
       : verifyMode === 'harness'
         ? '局部验证'
         : '静态复核'
-  const tail = verifierEnabled ? '互联网验证 → 完成' : '完成'
+  const post: string[] = []
+  if (verifierEnabled) post.push('互联网验证')
+  if (attackChainEnabled) post.push('攻击链')
+  const tail = post.length > 0 ? `${post.join(' ∥ ')} → 完成` : '完成'
   return `侦察 →（${mine}）→ 审核（${review}）→ ${tail}`
 }
 

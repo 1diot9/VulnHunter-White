@@ -104,8 +104,10 @@ _recon_threads: dict[int, threading.Thread] = {}
 _recon_rerun_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
 _verifier_threads: dict[int, threading.Thread] = {}
+_attack_chain_threads: dict[int, threading.Thread] = {}
 _reviewer_inflight: dict[int, bool] = {}
 _verifier_inflight: dict[int, bool] = {}
+_attack_chain_inflight: dict[int, bool] = {}
 _fix_inflight: dict[int, set[int]] = {}
 _adopted_phase_runs: set[tuple[int, int]] = set()
 _fast_prepare_threads: dict[int, threading.Thread] = {}
@@ -118,14 +120,21 @@ WORKER_MINE_POOL = 1
 WORKER_FIX_POOL = 1
 REVIEWER_POOL = 1
 
-CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier")
+CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker"),
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
+    "attack_chain": ("attack_chain",),
 }
-CONTROL_LABELS = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
+CONTROL_LABELS = {
+    "recon": "侦察",
+    "worker": "挖掘",
+    "reviewer": "审核",
+    "verifier": "验证",
+    "attack_chain": "攻击链",
+}
 RECON_RERUN_SUBPHASES = ("map", "old_vulns")
 RECON_RERUN_LABELS = {"map": "地图/鉴权", "old_vulns": "历史漏洞"}
 WORKER_PROGRESS_RESET_STATUSES = ("paused", "completed", "cancelled", "error")
@@ -211,6 +220,8 @@ def control_phase(phase: str) -> str:
         return "reviewer"
     if p == "verifier":
         return "verifier"
+    if p in ("attack_chain", "attack-chain"):
+        return "attack_chain"
     raise ValueError(f"未知阶段: {phase}")
 
 
@@ -262,8 +273,10 @@ def reset_runtime_state() -> None:
         _recon_rerun_threads.clear()
         _reviewer_threads.clear()
         _verifier_threads.clear()
+        _attack_chain_threads.clear()
         _reviewer_inflight.clear()
         _verifier_inflight.clear()
+        _attack_chain_inflight.clear()
         _fix_inflight.clear()
         _adopted_phase_runs.clear()
         _fast_prepare_threads.clear()
@@ -354,6 +367,17 @@ def note_verifier_enabled(project_id: int) -> None:
     """Enabling Verifier mid-run should not inherit a leftover phase-pause bit."""
     if not _pause_event(project_id).is_set():
         _phase_pause_event(project_id, "verifier").clear()
+
+
+def note_attack_chain_enabled(project_id: int) -> None:
+    """Enabling Attack Chain mid-run clears leftover pause and allows a fresh run."""
+    from ..tools.phase_attack_chain import clear_attack_chain_done
+
+    clear_attack_chain_done(project_id)
+    if not _pause_event(project_id).is_set():
+        _phase_pause_event(project_id, "attack_chain").clear()
+    _force_new_run.add((project_id, "attack_chain"))
+    _abandon_phase_checkpoints(project_id, "attack_chain")
 
 
 def note_dynamic_verify_changed(project_id: int, *, enabled: bool) -> None:
@@ -511,9 +535,12 @@ def request_resume(project_id: int) -> None:
 
 
 def _enabled_control_phases(project_id: int) -> tuple[str, ...]:
+    phases = ["recon", "worker", "reviewer"]
     if _read_verifier_enabled(project_id):
-        return CONTROL_PHASES
-    return ("recon", "worker", "reviewer")
+        phases.append("verifier")
+    if _read_attack_chain_enabled(project_id):
+        phases.append("attack_chain")
+    return tuple(phases)
 
 
 def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, Any]:
@@ -647,6 +674,9 @@ def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
         proj.status = "paused"
         proj.phase = "worker" if recon_done else "recon"
         proj.error = None
+        # Re-mining may add vulns; allow attack-chain to re-run after the next review drain.
+        if bool(getattr(proj, "attack_chain_enabled", False)):
+            proj.attack_chain_done = False
         db.commit()
 
     n_fix = _reset_fixing_to_returned(project_id, except_ids=set())
@@ -929,6 +959,9 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
         return t is not None and t.is_alive()
     if control == "verifier":
         t = _verifier_threads.get(project_id)
+        return t is not None and t.is_alive()
+    if control == "attack_chain":
+        t = _attack_chain_threads.get(project_id)
         return t is not None and t.is_alive()
     for t in _threads.get(project_id, []):
         name = t.name or ""
@@ -1224,6 +1257,12 @@ def _read_verifier_enabled(project_id: int) -> bool:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         return bool(proj and proj.verifier_enabled)
+
+
+def _read_attack_chain_enabled(project_id: int) -> bool:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return bool(proj and getattr(proj, "attack_chain_enabled", False))
 
 
 def _read_dynamic_verify_mode(project_id: int) -> str:
@@ -1633,10 +1672,19 @@ def _ensure_project_fingerprints_once(project_id: int) -> None:
         live_log.error(project_id, f"采集项目应用指纹失败: {e}")
 
 
-def _maybe_complete_project(project_id: int, *, reviewer_busy: bool, fix_busy: bool, verifier_busy: bool = False) -> bool:
-    if reviewer_busy or fix_busy or verifier_busy:
+def _maybe_complete_project(
+    project_id: int,
+    *,
+    reviewer_busy: bool,
+    fix_busy: bool,
+    verifier_busy: bool = False,
+    attack_chain_busy: bool = False,
+) -> bool:
+    if reviewer_busy or fix_busy or verifier_busy or attack_chain_busy:
         return False
     if list_resumable_runs(project_id, "reviewer") or list_resumable_runs(project_id, "reviewer-lab"):
+        return False
+    if list_resumable_runs(project_id, "attack_chain"):
         return False
     if not project_complete_gates(project_id):
         return False
@@ -1663,11 +1711,13 @@ def _refresh_project_after_reviewer(project_id: int) -> None:
     with _lock:
         fix_busy = bool(_fix_inflight.get(project_id))
         verifier_busy = bool(_verifier_inflight.get(project_id))
+        attack_chain_busy = bool(_attack_chain_inflight.get(project_id))
     if _maybe_complete_project(
         project_id,
         reviewer_busy=False,
         fix_busy=fix_busy,
         verifier_busy=verifier_busy,
+        attack_chain_busy=attack_chain_busy,
     ):
         return
     with SessionLocal() as db:
@@ -1687,8 +1737,16 @@ def _refresh_project_after_reviewer(project_id: int) -> None:
                 .count()
                 > 0
             )
+        chain_work = bool(getattr(proj, "attack_chain_enabled", False)) and not bool(
+            getattr(proj, "attack_chain_done", False)
+        )
         proj.status = "auditing"
-        proj.phase = "verifier" if verifier_work or verifier_busy else "worker"
+        if chain_work or attack_chain_busy:
+            proj.phase = "attack_chain"
+        elif verifier_work or verifier_busy:
+            proj.phase = "verifier"
+        else:
+            proj.phase = "worker"
         db.commit()
 
 
@@ -1862,6 +1920,102 @@ def _run_verifier_loop(project_id: int) -> None:
         live_log.error(project_id, f"Verifier 线程异常: {e}", phase="verifier")
         with _lock:
             _verifier_inflight[project_id] = False
+
+
+def _ensure_attack_chain(project_id: int, cancel: threading.Event) -> None:
+    from ..tools.phase_attack_chain import (
+        attack_chain_ready,
+        confirmed_vuln_count,
+        is_attack_chain_done,
+        is_attack_chain_enabled,
+        mark_attack_chain_done,
+    )
+
+    if not is_attack_chain_enabled(project_id):
+        return
+    if is_attack_chain_done(project_id):
+        return
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return
+    if _phase_is_paused(project_id, "attack_chain"):
+        return
+    if not attack_chain_ready(project_id) and not bool(
+        list_resumable_runs(project_id, "attack_chain")
+    ) and not _should_skip_checkpoint(project_id, "attack_chain"):
+        return
+    # Ready but fewer than 2 confirmed → skip without LLM.
+    if attack_chain_ready(project_id) and confirmed_vuln_count(project_id) < 2:
+        if not list_resumable_runs(project_id, "attack_chain"):
+            mark_attack_chain_done(project_id, reason="已确认漏洞少于 2 条，跳过串联")
+            return
+    with _lock:
+        t = _attack_chain_threads.get(project_id)
+        if t is not None and t.is_alive():
+            return
+        at = threading.Thread(
+            target=_run_attack_chain_loop,
+            args=(project_id,),
+            daemon=True,
+            name=f"vh-attack-chain-{project_id}",
+        )
+        _attack_chain_threads[project_id] = at
+        _threads.setdefault(project_id, []).append(at)
+    live_log.system(project_id, "拉起攻击链串联线程")
+    at.start()
+
+
+def _run_attack_chain_loop(project_id: int) -> None:
+    from ..tools.phase_attack_chain import (
+        attack_chain_ready,
+        confirmed_vuln_count,
+        is_attack_chain_done,
+        is_attack_chain_enabled,
+        mark_attack_chain_done,
+    )
+
+    cancel = _cancel_event(project_id)
+    try:
+        while not cancel.is_set():
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "attack_chain"), "attack_chain"):
+                break
+            if not is_attack_chain_enabled(project_id):
+                break
+            if is_attack_chain_done(project_id):
+                break
+            try:
+                with SessionLocal() as db:
+                    proj = db.get(Project, project_id)
+                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                        return
+                ready = attack_chain_ready(project_id)
+                resumable = bool(list_resumable_runs(project_id, "attack_chain"))
+                force = _should_skip_checkpoint(project_id, "attack_chain")
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
+            if not ready and not resumable and not force:
+                cancel.wait(timeout=5.0)
+                continue
+            if ready and confirmed_vuln_count(project_id) < 2 and not resumable:
+                mark_attack_chain_done(project_id, reason="已确认漏洞少于 2 条，跳过串联")
+                break
+            with _lock:
+                _attack_chain_inflight[project_id] = True
+            try:
+                _run_attack_chain_once(project_id)
+            finally:
+                with _lock:
+                    _attack_chain_inflight[project_id] = False
+            if is_attack_chain_done(project_id):
+                break
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"攻击链线程异常: {e}", phase="attack_chain")
+        with _lock:
+            _attack_chain_inflight[project_id] = False
 
 
 def _ensure_workers(
@@ -2157,18 +2311,21 @@ def _orchestrate(project_id: int) -> None:
 
                 _ensure_reviewer(project_id, cancel)
                 _ensure_verifier(project_id, cancel)
+                _ensure_attack_chain(project_id, cancel)
                 _refresh_project_after_reviewer(project_id)
 
                 with _lock:
                     fix_busy = bool(_fix_inflight.get(project_id))
                     reviewer_busy = bool(_reviewer_inflight.get(project_id))
                     verifier_busy = bool(_verifier_inflight.get(project_id))
+                    attack_chain_busy = bool(_attack_chain_inflight.get(project_id))
 
                 if _maybe_complete_project(
                     project_id,
                     reviewer_busy=reviewer_busy,
                     fix_busy=fix_busy,
                     verifier_busy=verifier_busy,
+                    attack_chain_busy=attack_chain_busy,
                 ):
                     break
 
@@ -3724,6 +3881,129 @@ def _run_verifier_once(project_id: int) -> None:
         )
     except Exception as e:  # noqa: BLE001
         live_log.error(project_id, f"Verifier 异常: {e}", phase="verifier")
+
+
+def _run_attack_chain_once(project_id: int) -> None:
+    from ..tools.phase_attack_chain import (
+        confirmed_vuln_count,
+        is_attack_chain_done,
+        mark_attack_chain_done,
+    )
+
+    cancel = _cancel_event(project_id)
+    try:
+        cp = _adopt_resumable(project_id, "attack_chain")
+        if cp:
+            with SessionLocal() as db:
+                proj = db.get(Project, project_id)
+                if proj and proj.status not in ("completed", "cancelled", "paused"):
+                    proj.phase = "attack_chain"
+                    proj.status = "auditing"
+                    db.commit()
+            try:
+                loop = _loop_from_checkpoint(
+                    cp,
+                    cancel=cancel,
+                    stop_when=lambda st: bool(st.get("attack_chain_done")),
+                    timeout_sec=settings.timeout_attack_chain,
+                )
+                result = loop.run()
+            finally:
+                _release_adopted(project_id, cp.phase_run_id)
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
+            if result.state.get("attack_chain_done") or is_attack_chain_done(project_id):
+                if not is_attack_chain_done(project_id):
+                    mark_attack_chain_done(project_id, reason="检查点会话结束")
+            live_log.system(
+                project_id,
+                f"攻击链结束 reason={result.stop_reason}",
+                phase="attack_chain",
+            )
+            return
+
+        if is_attack_chain_done(project_id):
+            return
+        n_confirmed = confirmed_vuln_count(project_id)
+        if n_confirmed < 2:
+            mark_attack_chain_done(project_id, reason="已确认漏洞少于 2 条，跳过串联")
+            return
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status not in ("completed", "cancelled", "paused"):
+                proj.phase = "attack_chain"
+                proj.status = "auditing"
+                db.commit()
+            rows = (
+                db.query(Vuln)
+                .filter(
+                    Vuln.project_id == project_id,
+                    Vuln.status.in_(("confirmed", "static_only")),
+                )
+                .order_by(Vuln.id.asc())
+                .all()
+            )
+            catalog = [
+                {
+                    "vuln_id": v.id,
+                    "title": v.title,
+                    "vuln_type": v.vuln_type,
+                    "status": v.status,
+                    "attack_surface": v.attack_surface,
+                    "required_account": v.required_account,
+                    "auth_premise": (v.auth_premise or "")[:200],
+                    "file_path": v.file_path,
+                    "cwe": v.cwe,
+                    "severity": v.severity,
+                }
+                for v in rows
+            ]
+
+        system = _phase_system_prompt(project_id, "attack_chain.md")
+        body = _initial_prompt(
+            "attack_chain.md",
+            confirmed_count=n_confirmed,
+            catalog=json_dumps(catalog),
+            **_audit_mode_vars(project_id),
+        )
+        user = _prompt_with_summary("attack_chain", project_id, body)
+        run_id = _new_phase_run(project_id, "attack_chain", "attack_chain")
+        _consume_force_new(project_id, "attack_chain")
+        _start_log_session(project_id, "attack_chain", extra=f"已确认 {n_confirmed} 条")
+        loop = AgentLoop(
+            project_id=project_id,
+            role="attack_chain",
+            phase="attack_chain",
+            system_prompt=system,
+            user_prompt=user,
+            phase_run_id=run_id,
+            cancel_event=_loop_cancel(project_id, "attack_chain"),
+            pause_event=_combined_pause(project_id, "attack_chain"),
+            timeout_sec=settings.timeout_attack_chain,
+            context_window=_context_window(),
+            stop_when=lambda st: bool(st.get("attack_chain_done")),
+        )
+        result = loop.run()
+        if result.stop_reason == "auth_error":
+            _pause_for_auth(project_id, result.error or "auth_error")
+            return
+        _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
+        if not is_attack_chain_done(project_id):
+            # Agent exited without FinishAttackChain — still close the gate.
+            mark_attack_chain_done(
+                project_id,
+                reason=f"会话结束未显式收工（{result.stop_reason}）",
+            )
+        live_log.system(
+            project_id,
+            f"攻击链结束 reason={result.stop_reason} submitted={len(result.state.get('attack_chains_submitted') or [])}",
+            phase="attack_chain",
+        )
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"攻击链异常: {e}", phase="attack_chain")
 
 
 def json_dumps(obj: Any) -> str:

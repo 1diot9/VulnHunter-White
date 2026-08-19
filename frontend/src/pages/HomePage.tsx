@@ -7,6 +7,7 @@ import { GithubLink } from '../components/GithubLink'
 import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
+import { AttackChainToggle } from '../components/AttackChainToggle'
 import { AuditFlowPreview } from '../components/AuditFlowPreview'
 import { MiningPathSelect } from '../components/MiningPathSelect'
 import { ProjectModelSelect } from '../components/ProjectModelSelect'
@@ -31,6 +32,7 @@ export default function HomePage() {
   const [manualLabPrompt, setManualLabPrompt] = useState('')
   const [dynamicVerifyMode, setDynamicVerifyMode] = useState<DynamicVerifyMode>('off')
   const [verifierEnabled, setVerifierEnabled] = useState(false)
+  const [attackChainEnabled, setAttackChainEnabled] = useState(false)
   const [heuristicEnabled, setHeuristicEnabled] = useState(true)
   const [heuristicLite, setHeuristicLite] = useState(false)
   const [fastEnabled, setFastEnabled] = useState(false)
@@ -63,6 +65,7 @@ export default function HomePage() {
         manual_lab: labMode && manualLab,
         manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
+        attack_chain_enabled: attackChainEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
         dynamic_verify_mode: dynamicVerifyMode,
         heuristic_enabled: heuristicEnabled,
@@ -94,6 +97,7 @@ export default function HomePage() {
         manual_lab: labMode && manualLab,
         manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
+        attack_chain_enabled: attackChainEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
         dynamic_verify_mode: dynamicVerifyMode,
         heuristic_enabled: heuristicEnabled,
@@ -153,6 +157,7 @@ export default function HomePage() {
                 />
               ) : null}
               <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
+              <AttackChainToggle enabled={attackChainEnabled} onEnabledChange={setAttackChainEnabled} />
             </div>
             <AuditFlowPreview
               className="xl:sticky xl:top-[4.25rem]"
@@ -161,6 +166,7 @@ export default function HomePage() {
               dynamicVerifyMode={dynamicVerifyMode}
               manualLab={manualLab}
               verifierEnabled={verifierEnabled}
+              attackChainEnabled={attackChainEnabled}
               heuristicEnabled={heuristicEnabled}
               heuristicLite={heuristicLite}
               fastEnabled={fastEnabled}
@@ -264,6 +270,8 @@ export default function HomePage() {
                 dynamicVerifyMode={normalizeDynamicVerifyMode(p.dynamic_verify_mode, p.dynamic_verify_enabled)}
                 verifierEnabled={p.verifier_enabled}
                 verifierPending={p.verifier_pending}
+                attackChainEnabled={p.attack_chain_enabled}
+                attackChainDone={p.attack_chain_done}
                 heuristicEnabled={p.heuristic_enabled}
                 heuristicLite={p.heuristic_lite}
                 fastEnabled={p.fast_enabled}

@@ -45,6 +45,7 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
     "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
     "reviewer-review": frozenset({"reviewer"}),
     "verifier": frozenset({"verifier"}),
+    "attack_chain": frozenset({"attack_chain", "attack-chain"}),
 }
 
 # 日志轮次按小阶段独立计数；recon / worker 目录历史上可能混有子阶段事件。
@@ -62,12 +63,14 @@ LOG_PHASES = (
     "reviewer-lab",
     "reviewer",
     "verifier",
+    "attack_chain",
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "worker": ("worker", "fast-worker", "sink-triage", "bypass-worker", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
+    "attack_chain": ("attack_chain",),
 }
 _MIXED_LOG_DIRS = frozenset({"recon", "worker"})
 _SESSION_START_MARK = "新开对话"
@@ -564,6 +567,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "reviewer"
     if p == "verifier":
         return "verifier"
+    if p in ("attack_chain", "attack-chain"):
+        return "attack_chain"
     return None
 
 
@@ -579,6 +584,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return CONTROL_LOG_PHASES["reviewer"]
     if phase == "verifier":
         return CONTROL_LOG_PHASES["verifier"]
+    if phase in ("attack_chain", "attack-chain"):
+        return CONTROL_LOG_PHASES["attack_chain"]
     if phase in ("recon-old-vuln", "recon_old_vuln"):
         return ("recon-old-vuln", "recon-old-vuln-ghsa")
     if phase == "fast":
@@ -601,6 +608,8 @@ def control_phase_of(phase: str | None) -> str | None:
         return "reviewer"
     if p in PHASE_GROUPS["verifier"]:
         return "verifier"
+    if p in PHASE_GROUPS["attack_chain"]:
+        return "attack_chain"
     return None
 
 

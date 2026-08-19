@@ -451,6 +451,7 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "不要搭 Docker" in text or "不是" in text
     assert "${lab_image}" in text
     assert "${lab_container}" in text
+    assert "${lab_label_args}" in text
     initial = load_prompt("initial/reviewer-lab.md")
     assert "FinishLab" in initial
     assert "不要审核漏洞" in initial
@@ -460,9 +461,12 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "${lab_image}" in docker
     assert "${lab_container}" in docker
     assert "${lab_compose_project}" in docker
+    assert "${lab_label_args}" in docker
+    assert "vulnhunter.project" in docker
     rendered = pipeline._lab_system_prompt(project)
     assert f"demo-{project}:lab" in rendered
     assert f"demo-{project}" in rendered
+    assert f"vulnhunter.project={project}" in rendered or f'vulnhunter.project: "{project}"' in rendered
     assert "${lab_image}" not in rendered
 
 

@@ -59,6 +59,7 @@ def ensure_project_dirs(project_id: int) -> Path:
         "docs/old-vulns",
         "docs/summaries",
         "docs/verifier",
+        "docs/attack-chains",
         "vulns",
         "env",
         "logs",
@@ -97,6 +98,12 @@ def app_fingerprints_path(project_id: int) -> Path:
 
 def old_vulns_dir(project_id: int) -> Path:
     return docs_dir(project_id) / "old-vulns"
+
+
+def attack_chains_dir(project_id: int) -> Path:
+    path = docs_dir(project_id) / "attack-chains"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def old_vuln_crawl_spec_path(project_id: int) -> Path:

@@ -20,6 +20,8 @@ export type Project = {
   manual_lab: boolean
   manual_lab_prompt: string
   verifier_enabled: boolean
+  attack_chain_enabled: boolean
+  attack_chain_done: boolean
   dynamic_verify_enabled: boolean
   dynamic_verify_mode: 'off' | 'lab' | 'harness'
   heuristic_enabled: boolean
@@ -54,10 +56,10 @@ export type Project = {
   tokens_total: number
   phase_states?: Record<string, PhaseState>
   project_paused?: boolean
-    recon_subphases?: ReconSubphase[]
-    lab_setup_done?: boolean
-    verifier_pending?: number
-  }
+  recon_subphases?: ReconSubphase[]
+  lab_setup_done?: boolean
+  verifier_pending?: number
+}
 
 export type CustomAuditMode = {
   id: number
@@ -290,6 +292,65 @@ export type LiveLogPurge = {
   bytes: number
 }
 
+export type DockerContainer = {
+  id: string
+  short_id: string
+  name: string
+  status: string
+  image: string
+  ports: string[]
+  labels: Record<string, string>
+  kind: 'lab' | 'sidecar' | 'sandbox' | 'other' | string
+  project_id: number | null
+  project_name: string | null
+  created: string | null
+}
+
+export type DockerImage = {
+  id: string
+  short_id: string
+  tags: string[]
+  label: string
+  status: string
+  size_bytes: number
+  size_mb: number
+  kind: 'lab' | 'sandbox' | 'dependency' | 'other' | string
+  project_id: number | null
+  project_name: string | null
+  deletable: boolean
+  in_use: boolean
+  dangling: boolean
+  created: string | null
+}
+
+export type DockerImageUsage = {
+  image_count: number
+  dangling_count: number
+  total_bytes: number
+  total_mb: number
+  total_gb: number
+}
+
+export type DockerActionItem = {
+  id: string
+  status: string
+  error: string | null
+}
+
+export type DockerActionBatch = {
+  results: DockerActionItem[]
+}
+
+export type DockerImagePruneResult = {
+  skipped: boolean
+  reason: string | null
+  containers_removed: number
+  images_deleted: number
+  freed_bytes: number
+  freed_mb: number
+  errors: string[]
+}
+
 export type FofaProbeBody = {
   key?: string | null
   base_url?: string | null
@@ -357,6 +418,7 @@ export const api = {
       manual_lab?: boolean
       manual_lab_prompt?: string
       verifier_enabled?: boolean
+      attack_chain_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -378,6 +440,7 @@ export const api = {
         manual_lab: Boolean(opts.manual_lab),
         manual_lab_prompt: opts.manual_lab_prompt || '',
         verifier_enabled: Boolean(opts.verifier_enabled),
+        attack_chain_enabled: Boolean(opts.attack_chain_enabled),
         dynamic_verify_enabled: Boolean(opts.dynamic_verify_enabled),
         dynamic_verify_mode: opts.dynamic_verify_mode || (opts.dynamic_verify_enabled ? 'lab' : 'off'),
         heuristic_enabled: opts.heuristic_enabled !== false,
@@ -396,6 +459,7 @@ export const api = {
       manual_lab?: boolean
       manual_lab_prompt?: string
       verifier_enabled?: boolean
+      attack_chain_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -415,6 +479,7 @@ export const api = {
     fd.append('manual_lab', opts.manual_lab ? 'true' : 'false')
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
+    fd.append('attack_chain_enabled', opts.attack_chain_enabled ? 'true' : 'false')
     fd.append('dynamic_verify_enabled', opts.dynamic_verify_enabled ? 'true' : 'false')
     fd.append(
       'dynamic_verify_mode',
@@ -435,6 +500,7 @@ export const api = {
       manual_lab?: boolean
       manual_lab_prompt?: string | null
       verifier_enabled?: boolean
+      attack_chain_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -582,5 +648,41 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ older_than_days: olderThanDays }),
+    }),
+  listContainers: (runningOnly = false) =>
+    request<DockerContainer[]>(`/api/docker/containers${runningOnly ? '?running_only=true' : ''}`),
+  stopContainer: (containerId: string) =>
+    request<DockerActionItem>(`/api/docker/containers/${encodeURIComponent(containerId)}/stop`, {
+      method: 'POST',
+    }),
+  startContainer: (containerId: string) =>
+    request<DockerActionItem>(`/api/docker/containers/${encodeURIComponent(containerId)}/start`, {
+      method: 'POST',
+    }),
+  stopContainers: (ids: string[]) =>
+    request<DockerActionBatch>('/api/docker/containers/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+  startContainers: (ids: string[]) =>
+    request<DockerActionBatch>('/api/docker/containers/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+  listDockerImages: () => request<DockerImage[]>('/api/docker/images'),
+  getDockerImageUsage: () => request<DockerImageUsage>('/api/docker/images/usage'),
+  removeDockerImages: (ids: string[]) =>
+    request<DockerActionBatch>('/api/docker/images/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+  pruneDockerImages: (removeStopped = false) =>
+    request<DockerImagePruneResult>('/api/docker/images/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remove_stopped: removeStopped }),
     }),
 }

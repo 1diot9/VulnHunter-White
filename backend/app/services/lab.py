@@ -18,6 +18,9 @@ _LAB_PREFIX = "vulnhunter"
 _LAB_IMAGE_TAG = "lab"
 _LAB_ROLE_RE = re.compile(r"[^a-z0-9]+")
 _MAX_NAME_SLUG = 48
+LAB_LABEL_KEY = "vulnhunter"
+LAB_LABEL_VALUE = "1"
+LAB_PROJECT_LABEL_KEY = "vulnhunter.project"
 
 
 def _lab_role_suffix(role: str | None) -> str:
@@ -98,7 +101,37 @@ def lab_naming(project_id: int, *, project_name: str | None = None) -> dict[str,
         "lab_image": lab_image_name(pid, project_name=name),
         "lab_container": container,
         "lab_compose_project": lab_compose_project(pid, project_name=name),
+        "lab_label_args": (
+            f"--label {LAB_LABEL_KEY}={LAB_LABEL_VALUE} "
+            f"--label {LAB_PROJECT_LABEL_KEY}={pid}"
+        ),
     }
+
+
+def lab_container_labels(project_id: int) -> dict[str, str]:
+    return {
+        LAB_LABEL_KEY: LAB_LABEL_VALUE,
+        LAB_PROJECT_LABEL_KEY: str(int(project_id)),
+    }
+
+
+def lab_name_prefixes(project_id: int, *, project_name: str | None = None) -> list[str]:
+    """Current and legacy compose/container prefixes for one project."""
+    current = lab_compose_project(project_id, project_name=project_name)
+    legacy = _legacy_lab_compose_project(project_id)
+    out = [current]
+    if legacy not in out:
+        out.append(legacy)
+    return out
+
+
+def name_matches_lab_prefix(name: str | None, prefix: str | None) -> bool:
+    """True if name is exactly prefix or a sidecar `{prefix}-{role}`."""
+    text = str(name or "").lstrip("/")
+    base = str(prefix or "").strip()
+    if not text or not base:
+        return False
+    return text == base or text.startswith(f"{base}-")
 
 
 def env_json_path(project_id: int) -> Path:

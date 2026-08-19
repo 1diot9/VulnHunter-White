@@ -76,7 +76,7 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | ingesting | recon | auditing | reviewing | paused | completed | error | cancelled
     phase: Mapped[str] = mapped_column(String(64), default="pending")
-    # pending | recon | worker | reviewer | verifier | done
+    # pending | recon | worker | reviewer | verifier | attack_chain | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # bounty | full | custom — set at create time; change only while paused or completed
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
@@ -89,6 +89,10 @@ class Project(Base):
     manual_lab_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Verifier：Reviewer 确认前台洞后用 FOFA 搜同款目标并复测；默认关闭
     verifier_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 攻击链串联：挖掘+审核结束后根据已确认漏洞尝试多步串联；默认关闭
+    attack_chain_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 攻击链阶段是否已跑完（含 <2 条已确认时跳过）
+    attack_chain_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # Reviewer 动态验证（Docker 靶场 / 先 HTTP PoC，PoC 不可用再 debug MCP）；默认关闭，仅静态复核
     dynamic_verify_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # off | lab | harness — 与 dynamic_verify_enabled 同步；旧库仅有布尔时 enabled=true 视为 lab
@@ -116,6 +120,9 @@ class Project(Base):
     sinks: Mapped[list["Sink"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     bypass_targets: Mapped[list["BypassTarget"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     vulns: Mapped[list[Vuln]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    attack_chains: Mapped[list["AttackChain"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
     phase_runs: Mapped[list[PhaseRun]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
 
@@ -268,13 +275,33 @@ class Vuln(Base):
     project: Mapped[Project] = relationship(back_populates="vulns")
 
 
+class AttackChain(Base):
+    """Multi-vuln exploit chain produced after mining + review."""
+
+    __tablename__ = "attack_chains"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    # JSON list of vuln ids in chain order
+    vuln_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Project] = relationship(back_populates="attack_chains")
+
+
 class PhaseRun(Base):
     __tablename__ = "phase_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
-    # recon | worker | reviewer | reviewer-lab | verifier | fix
+    # recon | worker | reviewer | reviewer-lab | verifier | attack_chain | fix
     role: Mapped[str] = mapped_column(String(64), default="worker")
     status: Mapped[str] = mapped_column(String(64), default="running")
     # running | completed | failed | cancelled | paused
@@ -387,6 +414,8 @@ def _ensure_columns() -> None:
             "manual_lab": "BOOLEAN DEFAULT 0",
             "manual_lab_prompt": "TEXT",
             "verifier_enabled": "BOOLEAN DEFAULT 0",
+            "attack_chain_enabled": "BOOLEAN DEFAULT 0",
+            "attack_chain_done": "BOOLEAN DEFAULT 0",
             "dynamic_verify_enabled": "BOOLEAN DEFAULT 0",
             "dynamic_verify_mode": "VARCHAR(32) DEFAULT 'off'",
             "heuristic_enabled": "BOOLEAN DEFAULT 1",

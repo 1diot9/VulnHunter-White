@@ -172,6 +172,9 @@ def llm_role_for_agent(role: str) -> LlmRole:
         return "reviewer"
     if r == "verifier":
         return "verifier"
+    if r in ("attack_chain", "attack-chain"):
+        # Post-review reasoning; reuse reviewer slot (no separate settings UI).
+        return "reviewer"
     return "worker"
 
 

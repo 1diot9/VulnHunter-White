@@ -377,3 +377,22 @@ export function saveBlob(blob: Blob, filename: string) {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || Number.isNaN(Number(bytes))) return '—'
+  const n = Number(bytes)
+  if (n < 1024) return `${Math.round(n)} B`
+  const mb = n / (1024 * 1024)
+  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`
+  return `${(mb / 1024).toFixed(2)} GB`
+}
+
+export function containerStatusBadgeVariant(
+  status: string | null | undefined,
+): 'success' | 'warning' | 'destructive' | 'secondary' {
+  const value = (status || '').toLowerCase()
+  if (value === 'running') return 'success'
+  if (value === 'paused' || value === 'restarting' || value === 'created') return 'warning'
+  if (value === 'dead' || value === 'removing') return 'destructive'
+  return 'secondary'
+}

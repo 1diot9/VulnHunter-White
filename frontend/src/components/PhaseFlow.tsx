@@ -25,9 +25,14 @@ const PHASES = [
     hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认每轮 10 个，成功 3 个即结束；不足则再搜下一轮，最多 5 轮 / 50 个目标。',
   },
   {
+    id: 'attack_chain',
+    label: '攻击链',
+    hint: '可选。挖掘与审核结束后，根据已确认漏洞尝试多步串联利用以扩大危害；已确认洞少于 2 条时跳过。',
+  },
+  {
     id: 'done',
     label: '完成',
-    hint: '侦察、挖掘、审核与（若开启）互联网验证均已结束。',
+    hint: '侦察、挖掘、审核与（若开启）互联网验证 / 攻击链串联均已结束。',
   },
 ] as const
 
@@ -73,6 +78,8 @@ type FlowState = {
   dynamicVerifyMode?: 'off' | 'lab' | 'harness'
   verifierEnabled?: boolean
   verifierPending?: number
+  attackChainEnabled?: boolean
+  attackChainDone?: boolean
   heuristicEnabled?: boolean
   heuristicLite?: boolean
   fastEnabled?: boolean
@@ -181,6 +188,12 @@ function phaseTone(id: string, s: FlowState): Tone {
     if (s.phase === 'verifier' || (s.verifierPending ?? 0) > 0) return 'info'
     return 'neutral'
   }
+  if (id === 'attack_chain') {
+    if (!s.attackChainEnabled) return 'neutral'
+    if (s.attackChainDone || s.status === 'completed' || s.phase === 'done') return 'success'
+    if (s.phase === 'attack_chain' || s.phase === 'attack-chain') return 'info'
+    return 'neutral'
+  }
   return 'neutral'
 }
 
@@ -215,8 +228,8 @@ function FlowTip({
   )
 }
 
-function PhaseBranch({ items }: { items: BranchItem[] }) {
-  if (items.length === 0) return null
+function PhaseBranch({ items }: { items?: BranchItem[] }) {
+  if (!items?.length) return null
   return (
     <div className="mt-0.5">
       <div className="ml-2.5 h-1.5 border-l border-slate-600" />
@@ -257,6 +270,8 @@ export default function PhaseFlow({
   dynamicVerifyMode,
   verifierEnabled,
   verifierPending,
+  attackChainEnabled,
+  attackChainDone,
   heuristicEnabled,
   heuristicLite,
   fastEnabled,
@@ -287,6 +302,8 @@ export default function PhaseFlow({
     dynamicVerifyMode,
     verifierEnabled,
     verifierPending,
+    attackChainEnabled,
+    attackChainDone,
     heuristicEnabled,
     heuristicLite,
     fastEnabled,
@@ -410,11 +427,12 @@ export default function PhaseFlow({
     return []
   }
 
-  const branches: Record<string, BranchItem[]> = {
+  const branches: Record<(typeof PHASES)[number]['id'], BranchItem[]> = {
     recon: branchOf('recon'),
     worker: branchOf('worker'),
     reviewer: branchOf('reviewer'),
     verifier: branchOf('verifier'),
+    attack_chain: branchOf('attack_chain'),
     done: branchOf('done'),
   }
   const workerPaths = branches.worker
@@ -470,11 +488,12 @@ export default function PhaseFlow({
                       {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'off' ? ' 静态' : ''}
                       {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'harness' ? ' 局部' : ''}
                       {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
+                      {p.id === 'attack_chain' && !state.attackChainEnabled ? ' 未开' : ''}
                     </Badge>
                   </FlowTip>
                 </div>
               )}
-              <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id]} />
+              <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id] ?? []} />
             </div>
             {i < PHASES.length - 1 ? (
               <span className="flex h-6 shrink-0 items-center text-slate-600">→</span>

@@ -19,11 +19,18 @@ This is a dedicated Reviewer round that starts after source ingest — do not re
 Every lab resource must be identifiable by this project's name and ID. Use these exact names:
 
 - Compose project (`name:` in compose, or `docker compose -p`): `${lab_compose_project}`
-- Image you **build** from this repo: `${lab_image}` (`docker build -t ${lab_image} …`). Extra built services: `${lab_compose_project}-<role>:lab` (role like `executor`)
+- Image you **build** from this repo: `${lab_image}` (`docker build -t ${lab_image} ${lab_label_args} …`). Extra built services: `${lab_compose_project}-<role>:lab` (role like `executor`)
 - Official pulled images (mysql, redis, nginx, …): keep the upstream name; do **not** retag them as vulnhunter-*
 - Container serving `target_url`: `${lab_container}` (`docker run --name` / compose `container_name`)
 - Sidecar containers: `${lab_container}-<role>` (`-db`, `-redis`, `-mysql`, `-executor`, …)
 - Optional user-defined network: `${lab_compose_project}-net`
+- Labels (required on every container you start, and on images you build): `${lab_label_args}`  
+  Compose equivalent on each service:
+  ```yaml
+  labels:
+    vulnhunter: "1"
+    vulnhunter.project: "${project_id}"
+  ```
 
 Do not use the `env` directory as the compose project name, random tags, `<none>` dangling images, or upstream names like `org/app:local` for images you build.
 

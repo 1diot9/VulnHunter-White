@@ -5,6 +5,7 @@ import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
 import { VerifierToggle } from './VerifierToggle'
+import { AttackChainToggle } from './AttackChainToggle'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -30,6 +31,7 @@ export function ProjectSettingsButton({
     normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled),
   )
   const [verifier, setVerifier] = useState(Boolean(project.verifier_enabled))
+  const [attackChain, setAttackChain] = useState(Boolean(project.attack_chain_enabled))
   const [heuristicEnabled, setHeuristicEnabled] = useState(project.heuristic_enabled !== false)
   const [heuristicLite, setHeuristicLite] = useState(project.heuristic_lite === true)
   const [fastEnabled, setFastEnabled] = useState(project.fast_enabled === true)
@@ -43,6 +45,7 @@ export function ProjectSettingsButton({
     setPrompt(project.manual_lab_prompt || '')
     setDynamicVerifyMode(normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled))
     setVerifier(Boolean(project.verifier_enabled))
+    setAttackChain(Boolean(project.attack_chain_enabled))
     setHeuristicEnabled(project.heuristic_enabled !== false)
     setHeuristicLite(project.heuristic_lite === true)
     setFastEnabled(project.fast_enabled === true)
@@ -77,6 +80,7 @@ export function ProjectSettingsButton({
         manual_lab: Boolean(text),
         manual_lab_prompt: text,
         verifier_enabled: verifier,
+        attack_chain_enabled: attackChain,
         dynamic_verify_enabled: dynamicVerifyMode !== 'off',
         dynamic_verify_mode: dynamicVerifyMode,
         llm_model: llmModel.trim(),
@@ -144,6 +148,7 @@ export function ProjectSettingsButton({
               </div>
             ) : null}
             <VerifierToggle enabled={verifier} onEnabledChange={setVerifier} />
+            <AttackChainToggle enabled={attackChain} onEnabledChange={setAttackChain} />
             {error ? <p className="text-sm text-red-300">{error}</p> : null}
           </div>
           <DialogFooter>

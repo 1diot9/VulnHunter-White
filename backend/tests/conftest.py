@@ -33,6 +33,7 @@ def tmp_env(tmp_path, monkeypatch):
     # Rebind every consumer that already imported SessionLocal
     import app.agent.checkpoint as agent_checkpoint
     import app.agent.loop as agent_loop
+    import app.api.docker as api_docker
     import app.api.projects as api_projects
     import app.api.settings as api_settings
     import app.api.vulns as api_vulns
@@ -54,6 +55,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.tools.phase_recon as phase_recon
     import app.tools.phase_reviewer as phase_reviewer
     import app.tools.phase_verifier as phase_verifier
+    import app.tools.phase_attack_chain as phase_attack_chain
     import app.tools.phase_worker as phase_worker
     import app.services.sink_queue as sink_queue
     import app.services.bypass_queue as bypass_queue
@@ -67,6 +69,7 @@ def tmp_env(tmp_path, monkeypatch):
         phase_bypass,
         phase_reviewer,
         phase_verifier,
+        phase_attack_chain,
         ingest,
         llm_settings,
         old_vuln_crawl,
@@ -86,6 +89,7 @@ def tmp_env(tmp_path, monkeypatch):
         api_projects,
         api_vulns,
         api_settings,
+        api_docker,
     ):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
@@ -93,6 +97,7 @@ def tmp_env(tmp_path, monkeypatch):
     assert inspect(engine).has_table("vulns")
     assert inspect(engine).has_table("sinks")
     assert inspect(engine).has_table("bypass_targets")
+    assert inspect(engine).has_table("attack_chains")
     assert inspect(engine).has_table("custom_audit_modes")
 
     with Session() as db:

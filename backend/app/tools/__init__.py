@@ -200,6 +200,16 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishVerifier",
         }
     ),
+    "attack_chain": frozenset(
+        {
+            "Read",
+            "Grep",
+            "TodoWrite",
+            "SearchOldVuln",
+            "SubmitAttackChain",
+            "FinishAttackChain",
+        }
+    ),
 }
 
 
@@ -468,4 +478,5 @@ def register_all_tools() -> None:
     from . import phase_bypass  # noqa: F401
     from . import phase_reviewer  # noqa: F401
     from . import phase_verifier  # noqa: F401
+    from . import phase_attack_chain  # noqa: F401
     from . import run_code  # noqa: F401

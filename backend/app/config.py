@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     timeout_worker_round: int = 7200
     timeout_reviewer_static: int = 1800
     timeout_verifier: int = 1800
+    timeout_attack_chain: int = 1800
     timeout_docker: int = 1800
     timeout_semgrep: int = 1800
     timeout_sink_triage: int = 1800

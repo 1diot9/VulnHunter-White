@@ -173,6 +173,7 @@ class ProjectCreate(BaseModel):
     manual_lab: bool = False
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool = False
+    attack_chain_enabled: bool = False
     dynamic_verify_enabled: bool = False
     dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool = True
@@ -188,6 +189,7 @@ class ProjectUpdate(BaseModel):
     manual_lab: bool | None = None
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool | None = None
+    attack_chain_enabled: bool | None = None
     dynamic_verify_enabled: bool | None = None
     dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool | None = None
@@ -219,6 +221,8 @@ class ProjectOut(BaseModel):
     manual_lab: bool = False
     manual_lab_prompt: str = ""
     verifier_enabled: bool = False
+    attack_chain_enabled: bool = False
+    attack_chain_done: bool = False
     dynamic_verify_enabled: bool = False
     dynamic_verify_mode: str = "off"
     heuristic_enabled: bool = True
@@ -435,3 +439,70 @@ class PhaseReportList(BaseModel):
 
 class PhaseReportDetail(PhaseReportItem):
     content: str = ""
+
+
+class DockerContainerOut(BaseModel):
+    id: str
+    short_id: str
+    name: str
+    status: str
+    image: str
+    ports: list[str] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+    kind: str = "lab"
+    project_id: int | None = None
+    project_name: str | None = None
+    created: str | None = None
+
+
+class DockerImageOut(BaseModel):
+    id: str
+    short_id: str
+    tags: list[str] = Field(default_factory=list)
+    label: str
+    status: str
+    size_bytes: int = 0
+    size_mb: float = 0.0
+    kind: str = "lab"
+    project_id: int | None = None
+    project_name: str | None = None
+    deletable: bool = False
+    in_use: bool = False
+    dangling: bool = False
+    created: str | None = None
+
+
+class DockerImageUsageOut(BaseModel):
+    image_count: int = 0
+    dangling_count: int = 0
+    total_bytes: int = 0
+    total_mb: float = 0.0
+    total_gb: float = 0.0
+
+
+class DockerIdList(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class DockerActionItemOut(BaseModel):
+    id: str
+    status: str
+    error: str | None = None
+
+
+class DockerActionBatchOut(BaseModel):
+    results: list[DockerActionItemOut]
+
+
+class DockerImagePruneRequest(BaseModel):
+    remove_stopped: bool = False
+
+
+class DockerImagePruneResult(BaseModel):
+    skipped: bool = False
+    reason: str | None = None
+    containers_removed: int = 0
+    images_deleted: int = 0
+    freed_bytes: int = 0
+    freed_mb: float = 0.0
+    errors: list[str] = Field(default_factory=list)

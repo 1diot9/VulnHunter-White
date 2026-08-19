@@ -196,6 +196,9 @@ def project_complete_gates(project_id: int) -> bool:
             )
             if vpending > 0:
                 return False
+        if proj and bool(getattr(proj, "attack_chain_enabled", False)):
+            if not bool(getattr(proj, "attack_chain_done", False)):
+                return False
         return True
 
 

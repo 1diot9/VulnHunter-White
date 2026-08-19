@@ -10,10 +10,12 @@ from app.services.lab import (
     lab_container_name,
     lab_doc_path,
     lab_image_name,
+    lab_name_prefixes,
     lab_naming,
     lab_setup_finished,
     load_env,
     mark_lab_setup_finished,
+    name_matches_lab_prefix,
     recreate_lab,
     remap_ports_if_needed,
     save_env,
@@ -37,6 +39,8 @@ def test_lab_resource_names_fallback_without_project_name():
     assert names["lab_image"] == "vulnhunter-7:lab"
     assert names["lab_container"] == "vulnhunter-7"
     assert names["lab_compose_project"] == "vulnhunter-7"
+    assert "--label vulnhunter=1" in names["lab_label_args"]
+    assert "vulnhunter.project=7" in names["lab_label_args"]
 
 
 def test_lab_resource_names_include_sanitized_project_name():
@@ -64,6 +68,16 @@ def test_lab_resource_names_lookup_project(project):
     names = lab_naming(project)
     assert names["lab_container"] == f"demo-{project}"
     assert names["lab_compose_project"] == f"demo-{project}"
+
+
+def test_lab_name_prefix_does_not_match_longer_id():
+    assert name_matches_lab_prefix("halo-10", "halo-10")
+    assert name_matches_lab_prefix("halo-10-mysql", "halo-10")
+    assert not name_matches_lab_prefix("halo-101", "halo-10")
+    assert not name_matches_lab_prefix("halo-1", "halo-10")
+    prefixes = lab_name_prefixes(7, project_name="demo")
+    assert prefixes[0] == "demo-7"
+    assert "vulnhunter-7" in prefixes
 
 
 def test_remap_when_busy(monkeypatch):

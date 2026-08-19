@@ -10,7 +10,7 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|sink-triage|fix|reviewer(?:-lab)?|verifier)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
@@ -36,9 +36,16 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "reviewer": ("reviewer", "审核", "reviewer"),
     "reviewer-lab": ("reviewer", "审核", "lab"),
     "verifier": ("verifier", "验证", "verify"),
+    "attack_chain": ("attack_chain", "攻击链", "chain"),
 }
 
-_CONTROL_LABEL = {"recon": "侦察", "worker": "挖掘", "reviewer": "审核", "verifier": "验证"}
+_CONTROL_LABEL = {
+    "recon": "侦察",
+    "worker": "挖掘",
+    "reviewer": "审核",
+    "verifier": "验证",
+    "attack_chain": "攻击链",
+}
 _SUB_LABEL = {
     "map": "地图/鉴权",
     "source_ext": "扩展名",
@@ -51,6 +58,7 @@ _SUB_LABEL = {
     "lab": "环境搭建",
     "reviewer": "审核",
     "verify": "互联网验证",
+    "chain": "攻击链串联",
 }
 _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue": "抢救"}
 
@@ -60,6 +68,7 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/source-exts.md", "recon", "source_ext", "额外源码扩展名"),
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
     ("docs/lab.md", "reviewer", "lab", "动态环境搭建"),
+    ("docs/attack-chains/index.md", "attack_chain", "chain", "攻击链索引"),
 )
 _DOC_BY_REL = {rel: (control, subphase, title) for rel, control, subphase, title in _DOC_SPECS}
 _PREVIEW_CHARS = 8192
@@ -348,6 +357,24 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                 )
             )
 
+    chain_dir = root / "docs" / "attack-chains"
+    if chain_dir.is_dir():
+        for path in chain_dir.glob("*.md"):
+            if path.name == "index.md" or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            heading, _ = _heading_or_preview(path.read_text(encoding="utf-8", errors="ignore"))
+            items.append(
+                _item(
+                    rel=f"docs/attack-chains/{path.name}",
+                    path=path,
+                    control="attack_chain",
+                    subphase="chain",
+                    kind="doc",
+                    round_no=None,
+                    title=heading or f"攻击链 · {path.stem}",
+                )
+            )
+
     d = summaries_dir(project_id)
     if d.is_dir():
         for path in d.glob("*.md"):
@@ -379,7 +406,13 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
 
 def reports_by_phase(project_id: int) -> dict[str, Any]:
     items = list_phase_reports(project_id)
-    grouped: dict[str, list[dict[str, Any]]] = {"recon": [], "worker": [], "reviewer": [], "verifier": []}
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "recon": [],
+        "worker": [],
+        "reviewer": [],
+        "verifier": [],
+        "attack_chain": [],
+    }
     for item in items:
         grouped.setdefault(item["phase"], []).append(item)
     phases = [
@@ -389,7 +422,7 @@ def reports_by_phase(project_id: int) -> dict[str, Any]:
             "count": len(grouped[key]),
             "reports": grouped[key],
         }
-        for key in ("recon", "worker", "reviewer", "verifier")
+        for key in ("recon", "worker", "reviewer", "verifier", "attack_chain")
     ]
     return {"phases": phases, "count": len(items)}
 

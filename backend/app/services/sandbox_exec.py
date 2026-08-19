@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
+from .lab import LAB_LABEL_KEY, LAB_LABEL_VALUE
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,10 @@ def execute_harness(
                 image=sandbox_image(),
                 command=["sh", "-c", command],
                 detach=True,
+                labels={
+                    LAB_LABEL_KEY: LAB_LABEL_VALUE,
+                    "vulnhunter.kind": "sandbox",
+                },
                 mem_limit=settings.sandbox_memory,
                 cpu_period=100000,
                 cpu_quota=int(100000 * float(settings.sandbox_cpus)),

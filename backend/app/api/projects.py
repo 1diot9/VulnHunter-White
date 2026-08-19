@@ -66,6 +66,7 @@ from ..services.pipeline import (
     note_dynamic_verify_changed,
     note_mining_paths_changed,
     note_verifier_enabled,
+    note_attack_chain_enabled,
     request_cancel,
     request_pause,
     request_recon_subphase_rerun,
@@ -256,6 +257,8 @@ def _project_out(
         manual_lab=bool(p.manual_lab),
         manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
         verifier_enabled=bool(p.verifier_enabled),
+        attack_chain_enabled=bool(getattr(p, "attack_chain_enabled", False)),
+        attack_chain_done=bool(getattr(p, "attack_chain_done", False)),
         dynamic_verify_enabled=verify_mode_enabled(project_verify_mode(p)),
         dynamic_verify_mode=project_verify_mode(p),
         heuristic_enabled=bool(getattr(p, "heuristic_enabled", True)),
@@ -357,6 +360,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             manual_lab=bool(body.manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
             manual_lab_prompt=manual_lab_prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(body.verifier_enabled),
+            attack_chain_enabled=bool(body.attack_chain_enabled),
             heuristic_enabled=heuristic_enabled,
             heuristic_lite=heuristic_lite,
             fast_enabled=fast_enabled,
@@ -389,6 +393,7 @@ async def create_project_zip(
     manual_lab: bool = Form(False),
     manual_lab_prompt: str = Form(""),
     verifier_enabled: bool = Form(False),
+    attack_chain_enabled: bool = Form(False),
     dynamic_verify_enabled: bool = Form(False),
     dynamic_verify_mode: str = Form(""),
     heuristic_enabled: str = Form("true"),
@@ -438,6 +443,7 @@ async def create_project_zip(
             manual_lab=bool(manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
             manual_lab_prompt=prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(verifier_enabled),
+            attack_chain_enabled=bool(attack_chain_enabled),
             heuristic_enabled=heuristic_on,
             heuristic_lite=lite_on,
             fast_enabled=fast_on,
@@ -471,6 +477,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.manual_lab is None
         and body.manual_lab_prompt is None
         and body.verifier_enabled is None
+        and body.attack_chain_enabled is None
         and body.dynamic_verify_enabled is None
         and body.dynamic_verify_mode is None
         and body.heuristic_enabled is None
@@ -500,6 +507,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_mode = normalize_audit_mode(p.audit_mode)
         old_custom_id = getattr(p, "custom_audit_mode_id", None)
         old_verifier = bool(p.verifier_enabled)
+        old_attack_chain = bool(getattr(p, "attack_chain_enabled", False))
         old_verify_mode = project_verify_mode(p)
         old_dynamic = old_verify_mode != VERIFY_MODE_OFF
         old_heuristic = bool(getattr(p, "heuristic_enabled", True))
@@ -570,6 +578,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.manual_lab = bool(body.manual_lab)
         if body.verifier_enabled is not None:
             p.verifier_enabled = bool(body.verifier_enabled)
+        if body.attack_chain_enabled is not None:
+            p.attack_chain_enabled = bool(body.attack_chain_enabled)
         if body.dynamic_verify_mode is not None or body.dynamic_verify_enabled is not None:
             try:
                 next_verify = resolve_verify_mode(
@@ -612,6 +622,20 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 restarted = True
         elif body.verifier_enabled is False and old_verifier:
             live_log.system(project_id, "已关闭 Verifier，不再对新的前台漏洞做互联网复测")
+        if body.attack_chain_enabled is True and not old_attack_chain:
+            live_log.system(project_id, "已开启攻击链串联，挖掘与审核结束后将尝试多漏洞串联")
+            note_attack_chain_enabled(project_id)
+            if p.status == "completed":
+                p.status = "auditing"
+                p.phase = "attack_chain"
+                db.commit()
+                db.refresh(p)
+                out = _project_out(db, p)
+                restarted = True
+            elif p.status not in ("completed", "cancelled", "error", "pending", "ingesting"):
+                restarted = True
+        elif body.attack_chain_enabled is False and old_attack_chain:
+            live_log.system(project_id, "已关闭攻击链串联")
         new_verify_mode = out.dynamic_verify_mode
         if new_verify_mode != old_verify_mode:
             if new_verify_mode == VERIFY_MODE_LAB:

@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zip 后，按 Recon、启发式 Worker（历史漏洞收集完毕后）和/或快速扫描和/或历史漏洞绕过、Reviewer 流程进行漏洞挖掘与验证；Reviewer 默认仅静态复核，可三选一关闭 / 靶场动态 / 局部验证；可选开启 Verifier，在 Reviewer 确认前台漏洞后用 FOFA 搜索同款目标并复测。
+VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zip 后，按 Recon、启发式 Worker（历史漏洞收集完毕后）和/或快速扫描和/或历史漏洞绕过、Reviewer 流程进行漏洞挖掘与验证；Reviewer 默认仅静态复核，可三选一关闭 / 靶场动态 / 局部验证；可选开启 Verifier，在 Reviewer 确认前台漏洞后用 FOFA 搜索同款目标并复测；可选开启攻击链串联，在挖掘与审核结束后根据已确认漏洞尝试多步利用。
 
 - 后端：`backend/app`，FastAPI + SQLAlchemy + SQLite，负责项目导入、阶段调度、Agent 循环、工具注册、报告与漏洞数据。
 - 前端：`frontend`，Vite + React + TypeScript + Tailwind，用于审计项目、实时日志、阶段报告、漏洞列表和设置页。
@@ -61,8 +61,9 @@ pytest
 - 挖掘路径与赏金/全量正交：`heuristic_enabled`（默认 true）/ `fast_enabled`（默认 false）/ `bypass_enabled`（默认 false）描述「怎么挖」。至少开一条；暂停或完成后可改。启发式在历史漏洞收集完毕后按文件挖。盖章时权重 100 / `MarkSource` 覆盖用户可控入口（HTTP 以及 WebSocket / RPC / MQ / 回调等），不要只标 HTTP；Service / 过滤器 70–90，执行面 40–60，DTO/常量 10–30。Worker 按焦点角色挖：入口正向 source→sink，Service/过滤器回推或控面，低权薄扫。可开 `heuristic_lite`（默认 false）只把权重 100 的文件当入口，更低权重不阻塞完成。快速扫描 Recon 后 Semgrep → 代码筛（候选 200）→ SinkTriage → 冻结约 60 条 → Fast Worker 每轮 1 个 Sink 回推。历史漏洞绕过在历史漏洞收集完毕后把 `docs/old-vulns/` 文档冻结成队列，Bypass Worker 每轮注入 1 条尝试绕过补丁或确认未修复洞仍可打。`mining_complete` 须所有开启路径都结束且无 returned/fixing。SubmitVuln 按角色写入 `vulns.mining_path`（`heuristic` / `fast` / `bypass`），漏洞产出列表与详情展示对应中文标签。规则在 `backend/app/mining_paths.py`、`backend/app/services/sink_filter.py`、`backend/app/services/bypass_queue.py`。
 - 验证方式在创建时三选一，默认关闭（Reviewer 只做静态复核）：`dynamic_verify_mode=off|lab|harness`（`dynamic_verify_enabled` 与 mode≠off 同步；旧库仅有布尔且为 true 视为 lab）。靶场动态：Reviewer 走独立环境轮搭建/复用 Docker 靶场，并先跑 Worker 的 HTTP PoC；PoC 缺失或复现失败且需改写时才用 debug MCP。局部验证：跳过环境轮，Reviewer 用 `RunCode` 在 sibling 沙箱跑 mock/harness，确认用 `evidence_level=harness`（列表与 `dynamic`/`mcp` 区分）；沙箱不可用或 mock 失败不因此误报。仅 harness 确认的前台洞不入队 Verifier。未开启时 ConfirmVuln 使用 `evidence_level=static_only`。已仅静态确认的漏洞可按当前模式追加靶场动态或局部验证。自建 lab 镜像 `{项目名}-{id}:lab`，Web 容器 `{项目名}-{id}`，依赖容器 `{项目名}-{id}-{role}`，compose 项目名 `{项目名}-{id}`；项目名会清洗成 Docker 合法字符，无法清洗时回退 `vulnhunter-{id}`。局部验证沙箱镜像 `vulnhunter/sandbox:latest`（`scripts\build-sandbox.cmd`）。Worker / Reviewer 产出的 `poc.py` 必须 CLI 参数化（`-u/--url` 任意目标，RCE 另支持 `-c/--cmd` 并打印回显），harness 另存 `harness.py`，细则见 `backend/app/prompts/poc.md`。
 - 可选 Verifier（互联网验证）在创建时由用户决定，默认关闭；创建后可在项目设置中开启。开启后，Reviewer 确认前台漏洞会排队用 FOFA 搜索同款目标并按报告复测，默认每批 10 个、成功 3 个即结束；当前这批不足 3 个则保留已成功的，再按同一语法补搜下一轮，最多 5 轮（合计最多 50 个目标）。应用指纹（FOFA/X 语句）按项目采集一次（源码 + 互联网检索，有靶场时可升级），写入 `docs/app-fingerprints.json`，所有漏洞复用。FOFA 有命中后项目内共享；占位或 0 条时可改写语法最多 3 次。报告与漏洞详情会列出全部 FOFA 目标并标注成功 / 失败 / 未测；互联网复现成功须附上搜索语法。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞自动跳过、不做互联网复测。FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
+- 可选攻击链串联在创建时由用户决定，默认关闭；创建后可在项目设置中开启。开启后，在挖掘完成且审核队列清空后启动一轮 Agent：用 `SearchOldVuln`（仅本项目已确认产出）+ `Read`/`Grep` 推理多步串联，经 `SubmitAttackChain` 写入 `docs/attack-chains/`；已确认洞少于 2 条时跳过。与 Verifier 互不依赖，可并行；`project_complete_gates` 在开启时须等 `attack_chain_done`。重置启发式挖掘进度会清 `attack_chain_done` 以便再跑。
 - 每个项目可单独设置 `llm_model`（创建时或项目配置中）；空则使用设置页全局 `default_model`。解析在 `resolve_llm(..., project_id=)`，对下一轮 Agent 生效。
-- 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
+- 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证 / 攻击链会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
 - 设置页可手动清理 X 天前的 SSE 实时日志（`live-events` / `live.events.jsonl`），实现集中在 `live_log.purge_older_than`。
 - 历史漏洞阶段只收集、不读源码。先跑 GHSA / GitHub Issues 爬虫并把结果交给 Agent 落盘（第一阶段禁止 WebSearch）；完成后再由 Agent 用 WebSearch 补漏。公开 CVE/公告标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含爬虫（GHSA、本仓库 GitHub Issues）与 WebSearch 补漏。框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
@@ -90,4 +91,4 @@ pytest
 - 不要提交 `frontend/dist`、`frontend/node_modules`、`backend/.venv`、`.pytest_cache`、`data/logs`、`data/projects`、`data/app.db` 等生成/运行态文件，除非用户明确要求。
 - 不要随意清空或重建 `data/`，其中可能包含用户审计项目和日志。
 - 需要启动服务前先确认是否已有后端 8000 或前端 5173 进程在运行，避免重复启动。
-- 若改动 Agent 提示词、阶段流程或漏洞判定逻辑，要保持已有中文术语一致：Recon、Worker、Reviewer、Verifier、Fix、历史漏洞、历史漏洞绕过、漏洞产出、审计项目、赏金模式、全量模式、自定义模式、启发式挖掘、快速扫描。
+- 若改动 Agent 提示词、阶段流程或漏洞判定逻辑，要保持已有中文术语一致：Recon、Worker、Reviewer、Verifier、Fix、历史漏洞、历史漏洞绕过、漏洞产出、审计项目、赏金模式、全量模式、自定义模式、启发式挖掘、快速扫描、攻击链、攻击链串联。

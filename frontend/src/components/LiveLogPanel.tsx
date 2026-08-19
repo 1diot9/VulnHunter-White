@@ -42,6 +42,8 @@ const PHASE_LABEL: Record<string, string> = {
   reviewer_lab: '审核/环境搭建',
   'reviewer-review': '审核',
   verifier: '验证',
+  attack_chain: '攻击链',
+  'attack-chain': '攻击链',
   fix: '修复',
   mine: '挖掘',
 }
@@ -104,6 +106,9 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   if (phaseFilter === 'reviewer-lab') return p === 'reviewer-lab' || p === 'reviewer_lab'
   if (phaseFilter === 'reviewer-review') return p === 'reviewer'
   if (phaseFilter === 'verifier') return p === 'verifier'
+  if (phaseFilter === 'attack_chain' || phaseFilter === 'attack-chain') {
+    return p === 'attack_chain' || p === 'attack-chain'
+  }
   return p === phaseFilter
 }
 

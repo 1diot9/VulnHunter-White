@@ -35,6 +35,7 @@ const PHASE_TABS = [
   ['worker', '挖掘'],
   ['reviewer', '审核'],
   ['verifier', '验证'],
+  ['attack_chain', '攻击链'],
 ] as const
 const REVIEWER_LOG_TABS = [
   ['reviewer-lab', '环境搭建'],
@@ -61,8 +62,9 @@ function isSessionStart(ev: LogEvent): boolean {
   return ev.kind === 'system' && (ev.text || '').includes('新开对话')
 }
 
-function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 'verifier' {
+function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 'verifier' | 'attack_chain' {
   if (logPhase === 'verifier') return 'verifier'
+  if (logPhase === 'attack_chain' || logPhase === 'attack-chain') return 'attack_chain'
   if (logPhase === 'reviewer' || logPhase === 'reviewer-lab' || logPhase === 'reviewer_lab' || logPhase === 'reviewer-review') return 'reviewer'
   if (
     logPhase === 'recon' ||
@@ -82,6 +84,7 @@ function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 've
 }
 
 function defaultPhaseTab(phase: string, status: string): string {
+  if (phase === 'attack_chain' || phase === 'attack-chain') return 'attack_chain'
   if (phase === 'verifier') return 'verifier'
   if (status === 'completed' || phase === 'done' || phase === 'reviewer' || status === 'reviewing') {
     return 'reviewer'
@@ -394,6 +397,8 @@ export default function ProjectDetailPage() {
               dynamicVerifyMode={normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled)}
               verifierEnabled={project.verifier_enabled}
               verifierPending={project.verifier_pending}
+              attackChainEnabled={project.attack_chain_enabled}
+              attackChainDone={project.attack_chain_done}
               heuristicEnabled={project.heuristic_enabled}
               heuristicLite={project.heuristic_lite}
               fastEnabled={project.fast_enabled}

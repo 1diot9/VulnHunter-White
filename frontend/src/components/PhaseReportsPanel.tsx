@@ -13,6 +13,7 @@ const PHASES = [
   ['worker', '挖掘'],
   ['reviewer', '审核'],
   ['verifier', '验证'],
+  ['attack_chain', '攻击链'],
 ] as const
 
 const SUB_TABS: Record<string, readonly [string, string][]> = {
@@ -38,6 +39,10 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
   verifier: [
     ['all', '全部'],
     ['verify', '互联网验证'],
+  ],
+  attack_chain: [
+    ['all', '全部'],
+    ['chain', '攻击链串联'],
   ],
 }
 
