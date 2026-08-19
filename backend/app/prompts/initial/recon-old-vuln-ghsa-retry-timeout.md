@@ -1,1 +1,1 @@
-上一轮超时，请从已有落盘接续核验 GHSA 与未关闭 GitHub Issues 候选。SearchOldVuln 核对 kind=old 后只补缺；符合口径立刻 WriteOldVuln。不要读源码。GHSA 标 patched，未关闭 Issue 默认 unpatched。全部核验完 WriteOldVuln(done=true, note=跳过说明)。
+上一轮超时，请从已有落盘接续 WebSearch 补漏。SearchOldVuln 核对 kind=old 后只补缺：符合口径立刻 WriteOldVuln（落盘不会结束本会话）。不要读源码。只收本项目公开历史洞（patched）；不要搜未修复洞。不要删第一轮文档。本轮完成再 WriteOldVuln(done=true, note=跳过说明)。不要把 kind=found 写入 old-vulns。

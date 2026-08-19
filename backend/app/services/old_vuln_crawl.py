@@ -1,4 +1,4 @@
-"""Historical-vuln GHSA crawl: keyword from LLM pass, then GitHub Advisories supplement."""
+"""Historical-vuln GHSA crawl: product keyword from project identity, then Agent writes docs."""
 
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def resolve_crawl_inputs(project_id: int) -> tuple[str, list[str], tuple[str, ..
 
 
 def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
-    """Crawl GHSA + GitHub Issues; write workspace/ghsa_new.json (new vs LLM pass)."""
+    """Crawl GHSA + GitHub Issues; write workspace/ghsa_new.json for the first Agent pass."""
     keyword, affects, ecosystems = resolve_crawl_inputs(project_id)
     repo = resolve_project_github_repo(project_id)
     out_path = ghsa_new_path(project_id)
@@ -200,15 +200,15 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
 
     live_log.system(
         project_id,
-        "启动 GHSA / GitHub Issues 爬虫补漏（"
+        "启动 GHSA / GitHub Issues 爬虫收集（"
         + (f"关键词 {keyword}" if keyword else "无关键词")
         + (f"；仓库 {repo}" if repo else "；无 GitHub 仓库，跳过 Issues")
         + (f"；额外包 {', '.join(affects)}" if affects else "")
         + (f"；生态 {','.join(ecosystems)}" if keyword else "")
         + "）",
         source="crawler",
-        phase="recon-old-vuln-ghsa",
-        role="recon_old_vuln_ghsa",
+        phase="recon-old-vuln",
+        role="recon_old_vuln",
     )
 
     ghsa_vulns: list[dict[str, Any]] = []
@@ -233,8 +233,8 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
             live_log.error(
                 project_id,
                 f"GHSA 爬虫失败: {exc}",
-                phase="recon-old-vuln-ghsa",
-                role="recon_old_vuln_ghsa",
+                phase="recon-old-vuln",
+                role="recon_old_vuln",
             )
         else:
             for rec in ghsa_vulns:
@@ -250,8 +250,8 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
             live_log.error(
                 project_id,
                 f"GitHub Issues 爬虫失败: {exc}",
-                phase="recon-old-vuln-ghsa",
-                role="recon_old_vuln_ghsa",
+                phase="recon-old-vuln",
+                role="recon_old_vuln",
             )
     else:
         issue_meta = {"repo": "", "fetched": 0, "errors": [], "skipped": "无 GitHub 仓库"}
@@ -303,8 +303,8 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
         + (f"；跳过已落盘 {skipped}" if skipped else "")
         + (f"；警告 {len(errors)}" if errors else ""),
         source="crawler",
-        phase="recon-old-vuln-ghsa",
-        role="recon_old_vuln_ghsa",
+        phase="recon-old-vuln",
+        role="recon_old_vuln",
     )
     return GhsaCrawlResult(
         ok=ok,

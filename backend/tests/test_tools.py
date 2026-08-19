@@ -86,7 +86,7 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     assert recon_docs_ready(project) is False
     assert recon_old_vulns_ready(project) is False
     status = recon_gates_status(project)
-    assert any("LLM 检索尚未结束" in e for e in status["errors"])
+    assert any("爬虫落盘尚未结束" in e for e in status["errors"])
     by_id = {s["id"]: s["done"] for s in status["subphases"]}
     assert by_id["old_vulns"] is False
     assert by_id["source_ext"] is False
@@ -1032,13 +1032,16 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "Glob" not in old_names
     assert "SearchGHSA" not in old_names
     assert "SearchGitHubIssues" not in old_names
+    assert "WebSearch" not in old_names
     denied_ghsa = registry.dispatch(_ctx(project, "recon_old_vuln"), "SearchGHSA", {"query": "halo"})
     assert denied_ghsa["ok"] is False
     assert "无权" in denied_ghsa["error"]
     denied_issues = registry.dispatch(_ctx(project, "recon_old_vuln"), "SearchGitHubIssues", {"query": "RCE"})
     assert denied_issues["ok"] is False
     assert "无权" in denied_issues["error"]
-    assert "WebSearch" in old_names
+    denied_web = registry.dispatch(_ctx(project, "recon_old_vuln"), "WebSearch", {"query": "halo cve"})
+    assert denied_web["ok"] is False
+    assert "无权" in denied_web["error"]
     assert "MarkSource" not in old_names
     assert "AddSourceExt" not in old_names
     assert "Write" not in old_names
@@ -1133,7 +1136,7 @@ def test_websearch_empty_or_non_json_is_ok(monkeypatch, project):
             return FakeResp()
 
     monkeypatch.setattr("app.services.fingerprint_search.http_client", lambda timeout=20.0: FakeClient())
-    out = registry.dispatch(_ctx(project, "recon_old_vuln"), "WebSearch", {"query": "halo cve"})
+    out = registry.dispatch(_ctx(project, "recon_old_vuln_ghsa"), "WebSearch", {"query": "halo cve"})
     assert out["ok"] is True
     assert out.get("results") == []
     note = out.get("note") or ""

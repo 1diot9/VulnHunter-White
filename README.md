@@ -63,7 +63,7 @@ npm run dev
 - LLM 报错对齐 AutoPoc：429 休眠续跑、超时 conclude、死循环新开、阶段最多再试 2 次
 - 全局 LLM 总线程数默认 6：所有运行中项目的侦察 / 挖掘 / 审核等会话合计占用，超出排队顺序放行
 - 设置页可手动清理 X 天前的实时日志（SSE）
-- 历史漏洞：SearchGHSA + SearchGitHubIssues + WebSearch + SearchOldVuln；阶段只收集不读源码。公开洞标 `patched`，未修复仅来自未关闭 GitHub Issues（`unpatched`）
+- 历史漏洞：先 GHSA / GitHub Issues 爬虫交给 Agent 落盘（第一阶段禁止 WebSearch），再 WebSearch 补漏；阶段只收集不读源码。公开洞标 `patched`，未修复仅来自未关闭 GitHub Issues（`unpatched`）
 - 可重置启发式 Worker 挖掘进度（保留漏洞产出与侦察文档），用于更换模型重审启发式路径。快速扫描 Sink 队列与历史漏洞绕过进度不重置
 
 ## 目录

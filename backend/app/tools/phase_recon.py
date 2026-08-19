@@ -65,12 +65,12 @@ def _old_vuln_llm_complete(index_path: Path) -> bool:
 
 
 def recon_old_vuln_llm_ready(project_id: int) -> bool:
-    """True after the LLM research pass concludes (GHSA crawler may still run)."""
+    """True after the crawler-write pass concludes (WebSearch supplement may still run)."""
     return _old_vuln_llm_complete(_old_vuln_index_path(project_id))
 
 
 def recon_old_vulns_ready(project_id: int) -> bool:
-    """True only after LLM + GHSA supplement both declare complete — not after the first WriteOldVuln."""
+    """True only after crawler-write + WebSearch supplement both declare complete — not after the first WriteOldVuln."""
     return _old_vuln_search_complete(_old_vuln_index_path(project_id))
 
 
@@ -138,13 +138,13 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     elif not old_done:
         if recon_old_vuln_llm_ready(project_id):
             errors.append(
-                "历史漏洞 GHSA / Issues 补漏尚未结束；核验爬虫候选后逐条 WriteOldVuln，"
-                "全部核验完再 WriteOldVuln(done=true)"
+                "历史漏洞 WebSearch 补漏尚未结束；按产品短名检索公开 CVE/公告后逐条 WriteOldVuln，"
+                "全部补漏完再 WriteOldVuln(done=true)"
             )
         else:
             errors.append(
-                "历史漏洞 LLM 检索尚未结束；逐条 WriteOldVuln 只落盘、不会结束本会话，"
-                "本轮结束后再 WriteOldVuln(done=true)，随后系统会跑 GHSA / GitHub Issues 爬虫补漏"
+                "历史漏洞爬虫落盘尚未结束；只根据 workspace/ghsa_new.json 逐条 WriteOldVuln，"
+                "不要调用 WebSearch。落盘不会结束本会话，本轮结束后再 WriteOldVuln(done=true)"
             )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
@@ -577,11 +577,11 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
 _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
 _WRITE_NOW_HINT = (
     "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
-    "本阶段只收集、不读源码：WebSearch/GHSA 标 patched；未关闭 GitHub Issues 标 unpatched。"
+    "本阶段只收集、不读源码：GHSA/WebSearch 标 patched；未关闭 GitHub Issues 标 unpatched。"
     "框架 CVE 清单、安全政策帖、错误产品不要建档。"
-    "落盘不会结束本会话；本轮检索结束后再 WriteOldVuln(done=true, note=跳过说明)。"
+    "落盘不会结束本会话；本轮结束后再 WriteOldVuln(done=true, note=跳过说明)。"
 )
-_LLM_PASS_DONE_HINT = "LLM 检索已声明结束，系统将结束本会话并启动 GHSA / GitHub Issues 爬虫补漏。"
+_CRAWL_PASS_DONE_HINT = "爬虫核验已声明结束，系统将结束本会话并启动 WebSearch 补漏。"
 _SEARCH_DONE_HINT = "检索已声明结束，系统将结束本会话。"
 _INDEX_NOTE_MARKERS = ("\n\n检索说明", "\n\n经 WebSearch", "\n\n经 LLM", "\n\n经 GHSA")
 
@@ -693,7 +693,7 @@ def _append_search_note(old_dir: Path, *, note: str, no_findings: bool, count: i
     if note:
         extra = f"\n\n检索说明：{note}\n"
     elif no_findings and count == 0:
-        extra = "\n\n经 LLM / WebSearch / GHSA 检索，未发现需单独建档的公开历史漏洞。\n"
+        extra = "\n\n经 GHSA / GitHub Issues 爬虫与 WebSearch 补漏，未发现需单独建档的公开历史漏洞。\n"
     if not extra:
         return
     index = old_dir / "index.md"
@@ -759,7 +759,7 @@ def _conclude_old_vuln_search(
 
 
 def mark_old_vuln_search_complete(project_id: int, *, note: str = "") -> dict[str, Any]:
-    """Pipeline helper: GHSA / Issues crawler found nothing new, close the historical-vuln phase."""
+    """Pipeline helper: close the historical-vuln phase (e.g. tests or empty-queue short-circuit)."""
     old_dir = old_vulns_dir(project_id)
     old_dir.mkdir(parents=True, exist_ok=True)
     return _conclude_old_vuln_search(
@@ -782,7 +782,7 @@ def _write_old_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     ghsa_pass = _is_old_vuln_ghsa_pass(ctx)
     llm_complete = True if conclude else None
     complete = True if (conclude and ghsa_pass) else (False if conclude else None)
-    hint = _SEARCH_DONE_HINT if ghsa_pass else _LLM_PASS_DONE_HINT
+    hint = _SEARCH_DONE_HINT if ghsa_pass else _CRAWL_PASS_DONE_HINT
 
     if conclude and not ghsa_pass:
         _persist_pass1_crawl_spec(ctx, args)
@@ -980,10 +980,10 @@ def register_recon_tools() -> None:
             name="WriteOldVuln",
             description=(
                 "立即写入一条历史漏洞到 docs/old-vulns/ 并自动更新 index.md。"
-                "本阶段只收集、不读源码。WebSearch/GHSA 公开洞标 patched；未关闭 GitHub Issues 标 unpatched（可省略，按 source 默认）。"
+                "本阶段只收集、不读源码。GHSA/WebSearch 公开洞标 patched；未关闭 GitHub Issues 标 unpatched（可省略，按 source 默认）。"
                 "不要扫框架 CVE 清单。每确认一条就调用；禁止调查完再一次性写入。"
                 "逐条落盘不会结束本会话。本轮结束后设 done=true；无符合口径的条目时设 no_findings=true。"
-                "LLM 检索轮结束时可带 keyword（产品短名）和 affects（相关包），供随后 GHSA / GitHub Issues 爬虫补漏。"
+                "爬虫落盘轮不要调用 WebSearch；搜索补漏轮再用 WebSearch 按产品短名补缺。"
             ),
             parameters={
                 "type": "object",
@@ -1003,7 +1003,7 @@ def register_recon_tools() -> None:
                     "fix_status": {
                         "type": "string",
                         "description": (
-                            "patched=已修复历史洞（WebSearch/GHSA 默认）；"
+                            "patched=已修复历史洞（GHSA/WebSearch 默认）；"
                             "unpatched=未关闭 GitHub Issue（source=github_issue 时默认）。可省略"
                         ),
                     },
@@ -1014,12 +1014,12 @@ def register_recon_tools() -> None:
                     "filename": {"type": "string", "description": "可选文件名，默认由 CVE/标题生成"},
                     "keyword": {
                         "type": "string",
-                        "description": "LLM 轮结束时填写产品短名（如 halo），供 GHSA 爬虫；不要填框架名",
+                        "description": "可选产品短名（如 halo）；爬虫已用项目身份，此处仅作记录",
                     },
                     "affects": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "可选额外包名，供 GHSA 爬虫 affects= 查询",
+                        "description": "可选额外包名，仅作记录",
                     },
                     "ecosystems": {
                         "type": "array",

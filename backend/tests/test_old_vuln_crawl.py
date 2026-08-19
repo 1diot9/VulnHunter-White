@@ -73,30 +73,29 @@ def test_run_old_vuln_ghsa_crawl_writes_new_only(tmp_env, project, monkeypatch):
 
 
 def test_mark_complete_after_empty_crawl(tmp_env, project):
-    mark_old_vuln_search_complete(project, note="GHSA / GitHub Issues 爬虫无新候选，沿用 LLM 检索结果")
+    mark_old_vuln_search_complete(project, note="GHSA / GitHub Issues 爬虫无新候选")
     assert recon_old_vulns_ready(project) is True
     text = (old_vulns_dir(project) / "index.md").read_text(encoding="utf-8")
     assert "\ncomplete: true\n" in text
     assert "GitHub Issues" in text
 
 
-def test_run_recon_old_vulns_llm_then_ghsa(tmp_env, project, monkeypatch):
+def test_run_recon_old_vulns_crawl_then_search(tmp_env, project, monkeypatch):
     order: list[str] = []
     monkeypatch.setattr(pipeline, "recon_old_vuln_llm_ready", lambda pid: False)
     monkeypatch.setattr(pipeline, "recon_old_vulns_ready", lambda pid: False)
-
-    def fake_gated(pid, cancel, **kwargs):
-        order.append(kwargs["phase"])
-        return True
-
-    monkeypatch.setattr(pipeline, "_run_recon_gated_session", fake_gated)
+    monkeypatch.setattr(
+        pipeline,
+        "_run_recon_old_vuln_crawl_pass",
+        lambda pid, cancel: order.append("crawl-pass") or True,
+    )
     monkeypatch.setattr(
         pipeline,
         "_run_recon_old_vuln_ghsa",
-        lambda pid, cancel: order.append("ghsa-run") or True,
+        lambda pid, cancel: order.append("search-pass") or True,
     )
     assert pipeline._run_recon_old_vulns(project, __import__("threading").Event()) is True
-    assert order == ["recon-old-vuln", "ghsa-run"]
+    assert order == ["crawl-pass", "search-pass"]
 
 
 def test_run_old_vuln_crawl_merges_github_issues(tmp_env, project, monkeypatch):
@@ -148,7 +147,7 @@ def test_run_old_vuln_crawl_merges_github_issues(tmp_env, project, monkeypatch):
     assert payload["meta"]["repo"] == "halo-dev/halo"
 
 
-def test_run_recon_old_vuln_ghsa_runs_session_for_issues_only(tmp_env, project, monkeypatch):
+def test_run_recon_old_vuln_crawl_pass_hands_results_to_agent(tmp_env, project, monkeypatch):
     from app.services.old_vuln_crawl import GhsaCrawlResult
 
     called: list[str] = []
@@ -167,21 +166,43 @@ def test_run_recon_old_vuln_ghsa_runs_session_for_issues_only(tmp_env, project, 
             ok=True, keyword="halo", new_count=2, ghsa_count=0, issue_count=2, repo="halo-dev/halo"
         ),
     )
-    assert pipeline._run_recon_old_vuln_ghsa(project, __import__("threading").Event()) is True
-    assert called == ["recon-old-vuln-ghsa"]
+    assert pipeline._run_recon_old_vuln_crawl_pass(project, __import__("threading").Event()) is True
+    assert called == ["recon-old-vuln"]
 
 
-def test_run_recon_old_vuln_ghsa_skips_session_when_empty(tmp_env, project, monkeypatch):
+def test_run_recon_old_vuln_crawl_pass_runs_session_when_empty(tmp_env, project, monkeypatch):
     from app.services.old_vuln_crawl import GhsaCrawlResult
+
+    called: list[str] = []
+
+    def fake_gated(pid, cancel, **kwargs):
+        called.append(kwargs["phase"])
+        assert kwargs["prompt_vars"]["ghsa_count"] == 0
+        assert kwargs["prompt_vars"]["issues_count"] == 0
+        return True
 
     monkeypatch.setattr(
         "app.services.old_vuln_crawl.run_old_vuln_ghsa_crawl",
         lambda pid: GhsaCrawlResult(ok=True, keyword="halo", new_count=0, ghsa_count=0, issue_count=0),
     )
+    monkeypatch.setattr(pipeline, "_run_recon_gated_session", fake_gated)
+    assert pipeline._run_recon_old_vuln_crawl_pass(project, __import__("threading").Event()) is True
+    assert called == ["recon-old-vuln"]
+    assert recon_old_vulns_ready(project) is False
+
+
+def test_run_recon_old_vuln_ghsa_is_search_pass(tmp_env, project, monkeypatch):
+    called: list[str] = []
+
+    def fake_gated(pid, cancel, **kwargs):
+        called.append(kwargs["phase"])
+        assert not kwargs.get("prompt_vars")
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_recon_gated_session", fake_gated)
     monkeypatch.setattr(
-        pipeline,
-        "_run_recon_gated_session",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip LLM")),
+        "app.services.old_vuln_crawl.run_old_vuln_ghsa_crawl",
+        lambda pid: (_ for _ in ()).throw(AssertionError("search pass should not crawl")),
     )
     assert pipeline._run_recon_old_vuln_ghsa(project, __import__("threading").Event()) is True
-    assert recon_old_vulns_ready(project) is True
+    assert called == ["recon-old-vuln-ghsa"]

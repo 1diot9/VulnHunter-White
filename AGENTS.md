@@ -63,7 +63,7 @@ pytest
 - 每个项目可单独设置 `llm_model`（创建时或项目配置中）；空则使用设置页全局 `default_model`。解析在 `resolve_llm(..., project_id=)`，对下一轮 Agent 生效。
 - 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
 - 设置页可手动清理 X 天前的 SSE 实时日志（`live-events` / `live.events.jsonl`），实现集中在 `live_log.purge_older_than`。
-- 历史漏洞阶段只收集、不读源码。公开 CVE/公告来自 WebSearch 与 GHSA，标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含 WebSearch、GHSA 与本仓库 GitHub Issues。框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。
+- 历史漏洞阶段只收集、不读源码。先跑 GHSA / GitHub Issues 爬虫并把结果交给 Agent 落盘（第一阶段禁止 WebSearch）；完成后再由 Agent 用 WebSearch 补漏。公开 CVE/公告标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含爬虫（GHSA、本仓库 GitHub Issues）与 WebSearch 补漏。框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
 - 出站 HTTP、Chat 代理优先用设置页；未保存过时可用 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY`。不要硬编码代理地址。代理不可用时自动直连。
 - Debug MCP 放在 `tools/mcp/`，用相对仓库根目录的路径；可用 `VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON` 覆盖。

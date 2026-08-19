@@ -1070,7 +1070,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索本项目已公开的历史漏洞（CVE/公告）。本轮只收集，不要读源码；命中标 fix_status=patched。未修复洞留给随后的 GitHub Issues 爬虫。符合口径立刻 WriteOldVuln；落盘不会结束本会话。",
+            description="网络搜索本项目已公开的历史漏洞（CVE/公告）。仅历史漏洞第二轮（搜索补漏）使用；第一轮爬虫落盘禁止调用。本轮只收集，不要读源码；命中标 fix_status=patched。未修复洞只来自未关闭 GitHub Issues。符合口径立刻 WriteOldVuln；落盘不会结束本会话。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1085,7 +1085,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="SearchGHSA",
-            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞 LLM 检索轮不要用；GHSA / Issues 补漏轮在爬虫结果不足时作兜底。命中按已修复历史洞落盘（fix_status=patched），不要读源码判断是否已修。",
+            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞爬虫落盘轮不要用；搜索补漏轮在公开公告不足时作兜底。命中按已修复历史洞落盘（fix_status=patched），不要读源码判断是否已修。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1104,7 +1104,7 @@ def register_common_tools() -> None:
             name="SearchGitHubIssues",
             description=(
                 "搜索本仓库未关闭的 GitHub Issues（自动加 is:open）。"
-                "仅用于未修复洞：未关闭即默认 unpatched。历史漏洞 LLM 检索轮不要用；补漏轮在爬虫结果不足时再搜。"
+                "仅用于未修复洞：未关闭即默认 unpatched。历史漏洞爬虫落盘轮不要用；搜索补漏轮在爬虫结果不足时再搜。"
             ),
             parameters={
                 "type": "object",

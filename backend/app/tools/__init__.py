@@ -79,7 +79,6 @@ ROLE_ACL: dict[str, frozenset[str]] = {
         {
             "Read",
             "TodoWrite",
-            "WebSearch",
             "SearchOldVuln",
             "WriteOldVuln",
         }

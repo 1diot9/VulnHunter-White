@@ -87,20 +87,20 @@ RECON_PERSIST_PHASES = frozenset({"recon-old-vuln", "recon-old-vuln-ghsa", "reco
 
 RECON_OLD_VULN_PERSIST_NUDGE = (
     "看门狗提醒：侦察（历史漏洞）已连续 {n} 轮未调用 WriteOldVuln。"
-    "请立刻把已确认的条目落盘，不要等全部检索完再写——"
+    "请立刻核验 workspace/ghsa_new.json 中的 GHSA 与未关闭 GitHub Issues 候选并落盘——"
     "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
-    "若无公开历史漏洞立刻 WriteOldVuln(no_findings=true)；"
-    "本轮完成后 WriteOldVuln(done=true, keyword=产品短名)。"
-    "不要读源码。不要调用 SearchGHSA / SearchGitHubIssues（随后由系统爬虫补漏）。不要改写 code-map/auth，不要标权重。"
+    "若无符合口径的候选立刻 WriteOldVuln(no_findings=true)；"
+    "本轮完成后 WriteOldVuln(done=true)。"
+    "不要读源码。不要调用 WebSearch（随后由搜索补漏轮检索）。不要改写 code-map/auth，不要标权重。"
     "上下文会被压缩，延迟写入会丢失。"
 )
 
 RECON_OLD_VULN_GHSA_PERSIST_NUDGE = (
-    "看门狗提醒：侦察（历史漏洞/GHSA与Issues补漏）已连续 {n} 轮未调用 WriteOldVuln。"
-    "请立刻核验 workspace/ghsa_new.json 中的 GHSA 与未关闭 GitHub Issues 候选并落盘——"
+    "看门狗提醒：侦察（历史漏洞/搜索补漏）已连续 {n} 轮未调用 WriteOldVuln。"
+    "请立刻用 WebSearch 按产品短名补漏公开 CVE/公告并落盘——"
     "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
-    "不要读源码；GHSA 标 patched，未关闭 Issue 默认 unpatched；"
-    "全部核验完再 WriteOldVuln(done=true)；无符合口径则 no_findings=true。"
+    "不要读源码；公开公告标 patched，不要搜未修复洞；"
+    "第一轮爬虫落盘不要删除。全部补漏完再 WriteOldVuln(done=true)；无符合口径则 no_findings=true。"
     "不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
 )
 
@@ -216,7 +216,7 @@ class AgentWatchdog:
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-old-vuln-ghsa":
-            return f"看门狗：侦察（历史漏洞/GHSA与Issues补漏）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
+            return f"看门狗：侦察（历史漏洞/搜索补漏）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-source-ext":
             return f"看门狗：侦察（扩展名）连续 {n} 轮未 AddSourceExt，已提醒立即落盘"
         return f"看门狗：连续 {n} 轮未落盘，已提醒"

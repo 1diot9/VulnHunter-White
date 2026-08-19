@@ -59,7 +59,6 @@ from ..services.vuln_followup import archive_reviewer_checkpoint, latest_reviewe
 from ..tools import register_all_tools
 from ..tools.phase_recon import (
     apply_recon_done,
-    mark_old_vuln_search_complete,
     paths_fully_marked,
     pick_unmarked_batch,
     recon_gates_met,
@@ -2161,10 +2160,37 @@ def _run_recon_map(project_id: int, cancel: threading.Event) -> bool:
     )
 
 
+def _old_vuln_crawl_prompt_vars(result) -> dict:
+    ghsa_error = f"；爬虫警告：{result.error}" if result.error else ""
+    return {
+        "ghsa_count": result.ghsa_count,
+        "issues_count": result.issue_count,
+        "issues_repo": result.repo or "无",
+        "keyword": result.keyword or "无",
+        "ghsa_error": ghsa_error,
+    }
+
+
 def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
     if recon_old_vuln_llm_ready(project_id):
         _finish_resumable_phase(project_id, "recon-old-vuln")
-    elif not _run_recon_gated_session(
+    elif not _run_recon_old_vuln_crawl_pass(project_id, cancel):
+        return False
+    if cancel.is_set():
+        return False
+    if recon_old_vulns_ready(project_id):
+        _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
+        return True
+    return _run_recon_old_vuln_ghsa(project_id, cancel)
+
+
+def _run_recon_old_vuln_crawl_pass(project_id: int, cancel: threading.Event) -> bool:
+    from .old_vuln_crawl import run_old_vuln_ghsa_crawl
+
+    result = run_old_vuln_ghsa_crawl(project_id)
+    if cancel.is_set():
+        return False
+    return _run_recon_gated_session(
         project_id,
         cancel,
         phase="recon-old-vuln",
@@ -2175,40 +2201,16 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-old-vuln-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-retry-timeout.md",
         retry_other_doc="recon-old-vuln-retry-other.md",
-        done_log="历史漏洞 LLM 检索已结束，进入 GHSA / GitHub Issues 爬虫补漏",
-        fail_error="recon 历史漏洞 LLM 检索未在重试上限内完成",
-        fail_status="Recon 历史漏洞 LLM 检索未完成，将自动再拉起",
-        fail_log="Recon 历史漏洞 LLM 检索重试用尽，等待调度器再拉起",
-        extra_label="历史漏洞",
-    ):
-        return False
-    if cancel.is_set():
-        return False
-    if recon_old_vulns_ready(project_id):
-        _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
-        return True
-    return _run_recon_old_vuln_ghsa(project_id, cancel)
+        done_log="历史漏洞爬虫核验已结束，进入 WebSearch 补漏",
+        fail_error="recon 历史漏洞爬虫落盘未在重试上限内完成",
+        fail_status="Recon 历史漏洞爬虫落盘未完成，将自动再拉起",
+        fail_log="Recon 历史漏洞爬虫落盘重试用尽，等待调度器再拉起",
+        extra_label="历史漏洞/爬虫落盘",
+        prompt_vars=_old_vuln_crawl_prompt_vars(result),
+    )
 
 
 def _run_recon_old_vuln_ghsa(project_id: int, cancel: threading.Event) -> bool:
-    from .old_vuln_crawl import run_old_vuln_ghsa_crawl
-
-    result = run_old_vuln_ghsa_crawl(project_id)
-    if cancel.is_set():
-        return False
-    if result.ok and result.new_count == 0:
-        mark_old_vuln_search_complete(
-            project_id,
-            note="GHSA / GitHub Issues 爬虫无新候选，沿用 LLM 检索结果",
-        )
-        live_log.system(
-            project_id,
-            "GHSA / GitHub Issues 无新候选，历史漏洞检索已结束，进入盖章轮",
-            phase="recon-old-vuln-ghsa",
-            role="recon_old_vuln_ghsa",
-        )
-        return True
-    ghsa_error = f"；爬虫警告：{result.error}" if result.error else ""
     return _run_recon_gated_session(
         project_id,
         cancel,
@@ -2220,17 +2222,11 @@ def _run_recon_old_vuln_ghsa(project_id: int, cancel: threading.Event) -> bool:
         retry_loop_doc="recon-old-vuln-ghsa-retry-loop.md",
         retry_timeout_doc="recon-old-vuln-ghsa-retry-timeout.md",
         retry_other_doc="recon-old-vuln-ghsa-retry-other.md",
-        done_log="历史漏洞 GHSA / Issues 补漏已结束，进入盖章轮",
-        fail_error="recon 历史漏洞 GHSA / Issues 补漏未在重试上限内完成",
-        fail_status="Recon 历史漏洞 GHSA / Issues 补漏未完成，将自动再拉起",
-        fail_log="Recon 历史漏洞 GHSA / Issues 补漏重试用尽，等待调度器再拉起",
-        extra_label="历史漏洞/GHSA与Issues补漏",
-        prompt_vars={
-            "ghsa_count": result.ghsa_count,
-            "issues_count": result.issue_count,
-            "issues_repo": result.repo,
-            "ghsa_error": ghsa_error,
-        },
+        done_log="历史漏洞 WebSearch 补漏已结束，进入盖章轮",
+        fail_error="recon 历史漏洞 WebSearch 补漏未在重试上限内完成",
+        fail_status="Recon 历史漏洞 WebSearch 补漏未完成，将自动再拉起",
+        fail_log="Recon 历史漏洞 WebSearch 补漏重试用尽，等待调度器再拉起",
+        extra_label="历史漏洞/搜索补漏",
     )
 
 
@@ -2301,10 +2297,10 @@ def _run_recon_gated_session(
             else:
                 _consume_force_new(project_id, "recon")
                 extra = extra_label or {
-                    "recon-old-vuln": "历史漏洞",
-                    "recon_old_vuln": "历史漏洞",
-                    "recon-old-vuln-ghsa": "历史漏洞/GHSA与Issues补漏",
-                    "recon_old_vuln_ghsa": "历史漏洞/GHSA与Issues补漏",
+                    "recon-old-vuln": "历史漏洞/爬虫落盘",
+                    "recon_old_vuln": "历史漏洞/爬虫落盘",
+                    "recon-old-vuln-ghsa": "历史漏洞/搜索补漏",
+                    "recon_old_vuln_ghsa": "历史漏洞/搜索补漏",
                     "recon-source-ext": "扩展名",
                     "recon_source_ext": "扩展名",
                 }.get(phase, "代码地图/鉴权")

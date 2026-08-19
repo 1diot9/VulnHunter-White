@@ -72,7 +72,7 @@ def test_web_search_falls_back_to_nvd_when_ddg_times_out(monkeypatch, project):
         }
     )
     monkeypatch.setattr(fs, "http_client", lambda timeout=None: client)
-    out = registry.dispatch(_ctx(project, "recon_old_vuln"), "WebSearch", {"query": "jeecgboot CVE"})
+    out = registry.dispatch(_ctx(project, "recon_old_vuln_ghsa"), "WebSearch", {"query": "jeecgboot CVE"})
     assert out["ok"] is True
     titles = [item["title"] for item in out.get("results") or []]
     assert "CVE-2021-46089" in titles

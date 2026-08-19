@@ -6,7 +6,7 @@ import { cn, formatAuditMode, formatMiningPaths } from '@/lib/utils'
 const RECON_STEPS = [
   { id: 'map', label: '代码地图/鉴权', hint: '梳理模块、HTTP 与非 HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。' },
   { id: 'source_ext', label: '扩展名', hint: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。' },
-  { id: 'old_vulns', label: '历史漏洞', hint: '先检索本项目公开洞与仍可能打到的组件调用点，再跑 GHSA 与 GitHub Issues 爬虫补漏并核验。' },
+  { id: 'old_vulns', label: '历史漏洞', hint: '先跑 GHSA 与 GitHub Issues 爬虫，由 Agent 按爬虫结果落盘；完成后再用 WebSearch 补漏。' },
   { id: 'mark', label: '文件定权', hint: '按批次给源码定权或跳过，决定后续挖掘优先级。' },
 ] as const
 

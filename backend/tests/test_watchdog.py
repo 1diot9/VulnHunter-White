@@ -224,11 +224,11 @@ def test_idle_counter_resets_when_target_tool_called():
 
 def test_write_old_vuln_resets_old_vuln_idle():
     w = AgentWatchdog(phase="recon-old-vuln", persist_nudge_interval=2)
-    assert w.note_turn(["WebSearch"]) is None
+    assert w.note_turn(["Read"]) is None
     assert w.note_turn(["WriteOldVuln"]) is None
     assert w.idle_turns == 0
     assert w.note_turn() is None
-    msg = w.note_turn(["SearchGHSA"])
+    msg = w.note_turn(["SearchOldVuln"])
     assert msg == RECON_OLD_VULN_PERSIST_NUDGE.format(n=2)
 
 

@@ -448,22 +448,23 @@ def test_old_vuln_prompt_persist_is_not_completion():
     assert "unpatched" in text
     assert "只落盘，不会结束本会话" in text
     assert "WriteOldVuln(done=true)" in text
-    assert "SearchGHSA" in text
-    assert "不要" in text
+    assert "ghsa_new.json" in text
+    assert "WebSearch" in text
+    assert "不要" in text or "禁止" in text
     assert "索引齐全后系统会结束" not in text
     initial = load_prompt("initial/recon-old-vuln.md")
     assert "落盘不会结束本会话" in initial
     assert "WriteOldVuln(done=true" in initial
-    assert "fix_status" in initial
-    assert "SearchGHSA" in initial
+    assert "ghsa_new.json" in initial
+    assert "${ghsa_count}" in initial
+    assert "WebSearch" in initial
     ghsa = load_prompt("recon-old-vuln-ghsa.md")
-    assert "ghsa_new.json" in ghsa
-    assert "github_issue" in ghsa
+    assert "WebSearch" in ghsa
     assert "SearchGitHubIssues" in ghsa
     assert "fix_status" in ghsa
     assert "不要读源码" in ghsa
     assert "WriteOldVuln(done=true" in ghsa
     ghsa_initial = load_prompt("initial/recon-old-vuln-ghsa.md")
-    assert "ghsa_new.json" in ghsa_initial
-    assert "GitHub Issues" in ghsa_initial
-    assert "${issues_count}" in ghsa_initial
+    assert "WebSearch" in ghsa_initial
+    assert "补漏" in ghsa_initial
+    assert "WriteOldVuln(done=true" in ghsa_initial
