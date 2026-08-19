@@ -11,8 +11,9 @@ const RECON_STEPS = [
 ] as const
 
 type PreviewProps = {
-  auditMode: 'bounty' | 'full'
+  auditMode: 'bounty' | 'full' | 'custom'
   dynamicVerifyEnabled: boolean
+  dynamicVerifyMode?: 'off' | 'lab' | 'harness'
   manualLab: boolean
   verifierEnabled: boolean
   heuristicEnabled?: boolean
@@ -35,6 +36,7 @@ type FlowNode = {
 function buildNodes({
   auditMode,
   dynamicVerifyEnabled,
+  dynamicVerifyMode,
   manualLab,
   verifierEnabled,
   heuristicEnabled = true,
@@ -43,13 +45,16 @@ function buildNodes({
   bypassEnabled = false,
 }: PreviewProps): FlowNode[] {
   const bounty = auditMode !== 'full'
-  const useManual = dynamicVerifyEnabled && manualLab
+  const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
+  const useManual = verifyMode === 'lab' && manualLab
+  const labOn = verifyMode === 'lab'
+  const harnessOn = verifyMode === 'harness'
   const heuristicOn = heuristicEnabled !== false
   const liteOn = heuristicOn && heuristicLite === true
   const fastOn = fastEnabled === true
   const bypassOn = bypassEnabled === true
   const scopeChip = bounty
-    ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、源码硬编码密钥等。' }
+    ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的硬编码密钥等。' }
     : { id: 'scope', label: '含低危害难利用', hint: 'CORS、反射 XSS、缺速率限制、安全头等由 Reviewer 分层。' }
 
   const mines: FlowNode[] = []
@@ -108,16 +113,20 @@ function buildNodes({
     {
       id: 'reviewer',
       title: '审核',
-      tag: dynamicVerifyEnabled ? '动态' : '静态',
-      body: dynamicVerifyEnabled
+      tag: labOn ? '靶场动态' : harnessOn ? '局部验证' : '静态',
+      body: labOn
         ? useManual
-          ? '优先用你提供的靶场，不可达再回退 Docker。用 HTTP PoC 或 debug MCP 复现后再确认。'
-          : '独立环境轮搭建 Docker 靶场，用 HTTP PoC 或 debug MCP 复现后再确认。'
-        : '只做静态复核。能证明默认可利用则以 static_only 入库，不搭靶场。',
-      hint: dynamicVerifyEnabled
-        ? '动态验证开启后，Reviewer 才搭靶场并做 HTTP / MCP 复现；靶场只提供默认部署。'
-        : '默认关闭动态验证。静态已能证明默认可利用时直接入库，不跑 Docker。',
-      chips: dynamicVerifyEnabled
+          ? '优先用你提供的靶场，不可达再回退 Docker。先跑 Worker 的 HTTP PoC；PoC 不可用需改写时才用 debug MCP。'
+          : '独立环境轮搭建 Docker 靶场。先跑 Worker 的 HTTP PoC；PoC 不可用需改写时才用 debug MCP。'
+        : harnessOn
+          ? '不搭整项目靶场。Reviewer 抽出函数、mock 依赖，在沙箱跑 harness；打通记为局部验证。'
+          : '只做静态复核。能证明默认可利用则以 static_only 入库，不搭靶场。',
+      hint: labOn
+        ? '靶场动态开启后，Reviewer 才搭靶场并先跑 HTTP PoC；PoC 不可用需改写时才用 debug MCP。靶场只提供默认部署。'
+        : harnessOn
+          ? '局部验证与靶场动态互斥。无 Docker 或 mock 失败不因此误报。'
+          : '默认关闭动态验证。静态已能证明默认可利用时直接入库，不跑 Docker。',
+      chips: labOn
         ? [
             {
               id: 'lab',
@@ -129,10 +138,18 @@ function buildNodes({
             {
               id: 'poc',
               label: 'HTTP / MCP',
-              hint: '有 Java / Node / Python debug MCP 则优先动态复现，否则走 HTTP PoC 与容器日志。',
+              hint: '先跑 Worker 的 HTTP PoC 与容器日志。PoC 缺失、跑不通或复现失败且需改写时，才用 Java / Node / Python debug MCP 动态调试。',
             },
           ]
-        : [{ id: 'static', label: 'static_only', hint: '不搭靶场；静态证据充分即可确认入库。' }],
+        : harnessOn
+          ? [
+              {
+                id: 'harness',
+                label: '沙箱 harness',
+                hint: 'RunCode 在一次性 sibling 容器执行；脚本写入 harness.py，不覆盖 poc.py。',
+              },
+            ]
+          : [{ id: 'static', label: 'static_only', hint: '不搭靶场；静态证据充分即可确认入库。' }],
     },
     {
       id: 'verifier',
@@ -284,6 +301,7 @@ function isMineNode(id: string) {
 function summaryText({
   auditMode,
   dynamicVerifyEnabled,
+  dynamicVerifyMode,
   manualLab,
   verifierEnabled,
   heuristicEnabled = true,
@@ -301,11 +319,15 @@ function summaryText({
   const onCount =
     (heuristicEnabled !== false ? 1 : 0) + (fastEnabled === true ? 1 : 0) + (bypassEnabled === true ? 1 : 0)
   const mine = onCount > 1 ? `${mode} · ${paths.replaceAll(' + ', ' ∥ ')}` : `${mode} · ${paths}`
-  const review = dynamicVerifyEnabled
-    ? manualLab
-      ? '动态验证（人工靶场优先）'
-      : '动态验证'
-    : '静态复核'
+  const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
+  const review =
+    verifyMode === 'lab'
+      ? manualLab
+        ? '靶场动态（人工靶场优先）'
+        : '靶场动态'
+      : verifyMode === 'harness'
+        ? '局部验证'
+        : '静态复核'
   const tail = verifierEnabled ? '互联网验证 → 完成' : '完成'
   return `侦察 →（${mine}）→ 审核（${review}）→ ${tail}`
 }

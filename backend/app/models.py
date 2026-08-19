@@ -51,6 +51,20 @@ class AppSettings(Base):
     )
 
 
+class CustomAuditMode(Base):
+    """Named global custom audit-mode prompts (settings library)."""
+
+    __tablename__ = "custom_audit_modes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -64,15 +78,21 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | recon | worker | reviewer | verifier | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
-    # bounty | full — set at create time; change only while paused or completed
+    # bounty | full | custom — set at create time; change only while paused or completed
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
+    # custom 模式：绑定全局预设 id（删库校验）+ 切换时快照名称/正文
+    custom_audit_mode_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    custom_audit_mode_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    custom_audit_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 人工靶场：跳过 Docker 环境轮，审核时注入用户提供的环境说明
     manual_lab: Mapped[bool] = mapped_column(Boolean, default=False)
     manual_lab_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Verifier：Reviewer 确认前台洞后用 FOFA 搜同款目标并复测；默认关闭
     verifier_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Reviewer 动态验证（Docker 靶场 / HTTP PoC / debug MCP）；默认关闭，仅静态复核
+    # Reviewer 动态验证（Docker 靶场 / 先 HTTP PoC，PoC 不可用再 debug MCP）；默认关闭，仅静态复核
     dynamic_verify_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # off | lab | harness — 与 dynamic_verify_enabled 同步；旧库仅有布尔时 enabled=true 视为 lab
+    dynamic_verify_mode: Mapped[str] = mapped_column(String(32), default="off")
     # 挖掘路径：启发式按文件 / 快速按 Sink / 历史漏洞绕过；至少开一条
     heuristic_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 启发式轻量：仅权重 100 的文件作为 Worker 入口
@@ -216,7 +236,7 @@ class Vuln(Base):
     # none | submitted | ignored — 用户对产出的提交跟踪，与审核 status 独立
     tracking_status: Mapped[str] = mapped_column(String(32), default="none")
     evidence_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # dynamic | static_only | mcp
+    # dynamic | static_only | mcp | harness
     attack_surface: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # frontend | backend — Reviewer 确认时标注
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -224,6 +244,8 @@ class Vuln(Base):
     submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # cve_candidate | low_impact | duplicate_grouped
     submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # heuristic | fast | bypass — SubmitVuln 时按 Worker 角色写入
+    mining_path: Mapped[str | None] = mapped_column(String(32), nullable=True)
     root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
     merged_into_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -303,6 +325,7 @@ class TokenUsage(Base):
 
 REQUIRED_TABLES = (
     "app_settings",
+    "custom_audit_modes",
     "projects",
     "file_weights",
     "sources",
@@ -358,10 +381,14 @@ def _ensure_columns() -> None:
         "phase_runs": {"file_path": "VARCHAR(1024)"},
         "projects": {
             "audit_mode": "VARCHAR(32) DEFAULT 'bounty'",
+            "custom_audit_mode_id": "INTEGER",
+            "custom_audit_mode_name": "VARCHAR(128)",
+            "custom_audit_prompt": "TEXT",
             "manual_lab": "BOOLEAN DEFAULT 0",
             "manual_lab_prompt": "TEXT",
             "verifier_enabled": "BOOLEAN DEFAULT 0",
             "dynamic_verify_enabled": "BOOLEAN DEFAULT 0",
+            "dynamic_verify_mode": "VARCHAR(32) DEFAULT 'off'",
             "heuristic_enabled": "BOOLEAN DEFAULT 1",
             "heuristic_lite": "BOOLEAN DEFAULT 0",
             "fast_enabled": "BOOLEAN DEFAULT 0",
@@ -376,6 +403,7 @@ def _ensure_columns() -> None:
             "severity_score": "INTEGER",
             "submission_tier": "VARCHAR(64)",
             "submission_reason": "TEXT",
+            "mining_path": "VARCHAR(32)",
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",
             "tracking_status": "VARCHAR(32) DEFAULT 'none'",
@@ -443,6 +471,30 @@ def _backfill_tracking_status() -> None:
         )
 
 
+def _backfill_dynamic_verify_mode() -> None:
+    insp = inspect(engine)
+    if "projects" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("projects")}
+    if "dynamic_verify_mode" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE projects SET dynamic_verify_mode = 'lab' "
+                "WHERE COALESCE(dynamic_verify_enabled, 0) = 1 "
+                "AND COALESCE(dynamic_verify_mode, 'off') IN ('', 'off')"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE projects SET dynamic_verify_mode = 'off' "
+                "WHERE COALESCE(dynamic_verify_enabled, 0) = 0 "
+                "AND (dynamic_verify_mode IS NULL OR dynamic_verify_mode = '')"
+            )
+        )
+
+
 def _backfill_verifier_status() -> None:
     insp = inspect(engine)
     if "vulns" not in insp.get_table_names():
@@ -483,6 +535,7 @@ def ensure_schema() -> None:
     _migrate_submission_tiers()
     _backfill_tracking_status()
     _backfill_verifier_status()
+    _backfill_dynamic_verify_mode()
     _backfill_parent_root_cause_keys()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]

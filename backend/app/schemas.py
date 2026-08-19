@@ -140,15 +140,41 @@ def normalize_manual_lab_prompt(raw: Any) -> str:
     return text
 
 
+class CustomAuditModeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    body: str = Field(..., min_length=1, max_length=16000)
+
+
+class CustomAuditModeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    body: str | None = Field(default=None, min_length=1, max_length=16000)
+
+
+class CustomAuditModeOut(BaseModel):
+    id: int
+    name: str
+    body: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BuiltinAuditModeOut(BaseModel):
+    id: Literal["bounty", "full"]
+    label: str
+    body: str
+
+
 class ProjectCreate(BaseModel):
     name: str = ""
     source_type: Literal["github", "zip"] = "github"
     source_url: str | None = None
-    audit_mode: Literal["bounty", "full"] = "bounty"
+    audit_mode: Literal["bounty", "full", "custom"] = "bounty"
+    custom_audit_mode_id: int | None = None
     manual_lab: bool = False
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool = False
     dynamic_verify_enabled: bool = False
+    dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool = True
     heuristic_lite: bool = False
     fast_enabled: bool = False
@@ -157,11 +183,13 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    audit_mode: Literal["bounty", "full"] | None = None
+    audit_mode: Literal["bounty", "full", "custom"] | None = None
+    custom_audit_mode_id: int | None = None
     manual_lab: bool | None = None
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool | None = None
     dynamic_verify_enabled: bool | None = None
+    dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool | None = None
     heuristic_lite: bool | None = None
     fast_enabled: bool | None = None
@@ -185,10 +213,14 @@ class ProjectOut(BaseModel):
     phase: str
     recon_done: bool
     audit_mode: str = "bounty"
+    custom_audit_mode_id: int | None = None
+    custom_audit_mode_name: str = ""
+    custom_audit_prompt: str = ""
     manual_lab: bool = False
     manual_lab_prompt: str = ""
     verifier_enabled: bool = False
     dynamic_verify_enabled: bool = False
+    dynamic_verify_mode: str = "off"
     heuristic_enabled: bool = True
     heuristic_lite: bool = False
     fast_enabled: bool = False
@@ -246,6 +278,8 @@ class VulnOut(BaseModel):
     required_account: str | None = None
     submission_tier: str | None = None
     submission_reason: str | None = None
+    # heuristic | fast | bypass
+    mining_path: str | None = None
     root_cause_key: str | None = None
     merged_into_id: int | None = None
     review_rounds: int = 0

@@ -93,6 +93,7 @@ def tmp_env(tmp_path, monkeypatch):
     assert inspect(engine).has_table("vulns")
     assert inspect(engine).has_table("sinks")
     assert inspect(engine).has_table("bypass_targets")
+    assert inspect(engine).has_table("custom_audit_modes")
 
     with Session() as db:
         if db.query(models.AppSettings).first() is None:

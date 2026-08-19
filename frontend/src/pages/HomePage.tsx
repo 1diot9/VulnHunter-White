@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Project } from '../api'
+import { api, type CustomAuditMode, type Project } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { GithubLink } from '../components/GithubLink'
-import { DynamicVerifyToggle } from '../components/DynamicVerifyToggle'
+import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import { ManualLabToggle } from '../components/ManualLabFields'
 import { VerifierToggle } from '../components/VerifierToggle'
 import { AuditFlowPreview } from '../components/AuditFlowPreview'
@@ -18,16 +18,18 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { githubRepoHref } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage, type AuditMode } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [url, setUrl] = useState('')
-  const [auditMode, setAuditMode] = useState<'bounty' | 'full'>('bounty')
+  const [auditMode, setAuditMode] = useState<AuditMode>('bounty')
+  const [customModes, setCustomModes] = useState<CustomAuditMode[]>([])
+  const [customModeId, setCustomModeId] = useState<number | null>(null)
   const [manualLab, setManualLab] = useState(false)
   const [manualLabPrompt, setManualLabPrompt] = useState('')
-  const [dynamicVerifyEnabled, setDynamicVerifyEnabled] = useState(false)
+  const [dynamicVerifyMode, setDynamicVerifyMode] = useState<DynamicVerifyMode>('off')
   const [verifierEnabled, setVerifierEnabled] = useState(false)
   const [heuristicEnabled, setHeuristicEnabled] = useState(true)
   const [heuristicLite, setHeuristicLite] = useState(false)
@@ -36,21 +38,33 @@ export default function HomePage() {
   const [llmModel, setLlmModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
+  const labMode = dynamicVerifyMode === 'lab'
+  const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
 
   const refresh = () => api.listProjects().then(setProjects).catch((e) => setError(String(e)))
 
   useEffect(() => startVisibilityPoll(refresh, 4000), [])
+  useEffect(() => {
+    api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
+  }, [])
 
   async function createGithub() {
     if (!url.trim()) return
+    if (auditMode === 'custom' && customModeId == null) {
+      setError('请先选择自定义审计模式（可在设置页创建）')
+      return
+    }
     setBusy(true)
     setError('')
     try {
       await api.createGithub(url.trim(), '', auditMode, {
-        manual_lab: dynamicVerifyEnabled && manualLab,
-        manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
+        custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
+        manual_lab: labMode && manualLab,
+        manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
+        dynamic_verify_mode: dynamicVerifyMode,
         heuristic_enabled: heuristicEnabled,
         heuristic_lite: heuristicLite,
         fast_enabled: fastEnabled,
@@ -68,14 +82,20 @@ export default function HomePage() {
 
   async function onZip(file: File | null) {
     if (!file) return
+    if (auditMode === 'custom' && customModeId == null) {
+      setError('请先选择自定义审计模式（可在设置页创建）')
+      return
+    }
     setBusy(true)
     setError('')
     try {
       await api.uploadZip(file, '', auditMode, {
-        manual_lab: dynamicVerifyEnabled && manualLab,
-        manual_lab_prompt: dynamicVerifyEnabled && manualLab ? manualLabPrompt : '',
+        custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
+        manual_lab: labMode && manualLab,
+        manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
         verifier_enabled: verifierEnabled,
         dynamic_verify_enabled: dynamicVerifyEnabled,
+        dynamic_verify_mode: dynamicVerifyMode,
         heuristic_enabled: heuristicEnabled,
         heuristic_lite: heuristicLite,
         fast_enabled: fastEnabled,
@@ -94,7 +114,7 @@ export default function HomePage() {
     <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量，并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。每个项目可单独选择模型，不选则使用设置里的全局模型。动态验证与互联网验证默认关闭。</p>
+        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量/自定义（自定义需先在设置页配置），并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。每个项目可单独选择模型，不选则使用设置里的全局模型。验证方式默认关闭（仅静态），可改为靶场动态或局部验证；互联网验证默认关闭。</p>
       </div>
 
       <Card className="w-full">
@@ -102,7 +122,14 @@ export default function HomePage() {
         <div className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
             <div className="space-y-3">
-              <AuditModeSelect value={auditMode} onValueChange={setAuditMode} />
+              <AuditModeSelect
+                value={auditMode}
+                customModeId={customModeId}
+                customModes={customModes}
+                customModeName={selectedCustomName}
+                onValueChange={setAuditMode}
+                onCustomModeIdChange={setCustomModeId}
+              />
               <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
@@ -116,8 +143,8 @@ export default function HomePage() {
                   setBypassEnabled(nextB)
                 }}
               />
-              <DynamicVerifyToggle enabled={dynamicVerifyEnabled} onEnabledChange={setDynamicVerifyEnabled} />
-              {dynamicVerifyEnabled ? (
+              <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />
+              {labMode ? (
                 <ManualLabToggle
                   enabled={manualLab}
                   prompt={manualLabPrompt}
@@ -131,6 +158,7 @@ export default function HomePage() {
               className="xl:sticky xl:top-[4.25rem]"
               auditMode={auditMode}
               dynamicVerifyEnabled={dynamicVerifyEnabled}
+              dynamicVerifyMode={dynamicVerifyMode}
               manualLab={manualLab}
               verifierEnabled={verifierEnabled}
               heuristicEnabled={heuristicEnabled}
@@ -177,7 +205,7 @@ export default function HomePage() {
                   </Link>
                 </CardTitle>
                 <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
-                  <span>{formatAuditMode(p.audit_mode)}</span>
+                  <span>{formatAuditMode(p.audit_mode, p.custom_audit_mode_name)}</span>
                   <span>·</span>
                   <span>{p.llm_model || '全局模型'}</span>
                   <span>·</span>
@@ -233,6 +261,7 @@ export default function HomePage() {
                 labSetupDone={p.lab_setup_done}
                 manualLab={Boolean(p.manual_lab_prompt)}
                 dynamicVerifyEnabled={p.dynamic_verify_enabled}
+                dynamicVerifyMode={normalizeDynamicVerifyMode(p.dynamic_verify_mode, p.dynamic_verify_enabled)}
                 verifierEnabled={p.verifier_enabled}
                 verifierPending={p.verifier_pending}
                 heuristicEnabled={p.heuristic_enabled}

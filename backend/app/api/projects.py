@@ -8,7 +8,21 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 
-from ..audit_mode import AUDIT_MODE_EDITABLE_STATUSES, normalize_audit_mode, parse_audit_mode
+from ..audit_mode import (
+    AUDIT_MODE_CUSTOM,
+    AUDIT_MODE_EDITABLE_STATUSES,
+    normalize_audit_mode,
+    parse_audit_mode,
+)
+from ..dynamic_verify import (
+    VERIFY_MODE_HARNESS,
+    VERIFY_MODE_LAB,
+    VERIFY_MODE_OFF,
+    apply_verify_mode,
+    project_verify_mode,
+    resolve_verify_mode,
+    verify_mode_enabled,
+)
 from ..mining_paths import (
     HEURISTIC_LITE_WEIGHT,
     MINING_PATH_EDITABLE_STATUSES,
@@ -43,6 +57,7 @@ from ..services.ingest import indexed_weight_exts
 from ..services.lab import lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
 from ..services.llm_settings import normalize_project_llm_model
+from ..services import custom_audit_modes as cam
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.pipeline import (
@@ -235,10 +250,14 @@ def _project_out(
         phase=p.phase,
         recon_done=p.recon_done,
         audit_mode=normalize_audit_mode(p.audit_mode),
+        custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),
+        custom_audit_mode_name=(getattr(p, "custom_audit_mode_name", None) or "").strip(),
+        custom_audit_prompt=(getattr(p, "custom_audit_prompt", None) or "").strip(),
         manual_lab=bool(p.manual_lab),
         manual_lab_prompt=(p.manual_lab_prompt or "").strip(),
         verifier_enabled=bool(p.verifier_enabled),
-        dynamic_verify_enabled=bool(p.dynamic_verify_enabled),
+        dynamic_verify_enabled=verify_mode_enabled(project_verify_mode(p)),
+        dynamic_verify_mode=project_verify_mode(p),
         heuristic_enabled=bool(getattr(p, "heuristic_enabled", True)),
         heuristic_lite=bool(getattr(p, "heuristic_lite", False)),
         fast_enabled=bool(getattr(p, "fast_enabled", False)),
@@ -311,9 +330,23 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             bypass_enabled=body.bypass_enabled,
         )
         heuristic_lite = parse_heuristic_lite(body.heuristic_lite)
+        verify_mode = resolve_verify_mode(
+            mode=body.dynamic_verify_mode,
+            enabled=body.dynamic_verify_enabled,
+            manual_lab=body.manual_lab,
+            manual_lab_prompt=manual_lab_prompt,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
+        try:
+            custom_preset = None
+            if audit_mode == AUDIT_MODE_CUSTOM:
+                custom_preset = cam.resolve_custom_for_project(
+                    db, custom_audit_mode_id=body.custom_audit_mode_id
+                )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         p = Project(
             name=name,
             source_type="github",
@@ -321,16 +354,20 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             status="pending",
             phase="pending",
             audit_mode=audit_mode,
-            manual_lab=bool(body.manual_lab),
-            manual_lab_prompt=manual_lab_prompt or None,
+            manual_lab=bool(body.manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
+            manual_lab_prompt=manual_lab_prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(body.verifier_enabled),
-            dynamic_verify_enabled=bool(body.dynamic_verify_enabled),
             heuristic_enabled=heuristic_enabled,
             heuristic_lite=heuristic_lite,
             fast_enabled=fast_enabled,
             bypass_enabled=bypass_enabled,
             llm_model=normalize_project_llm_model(body.llm_model),
         )
+        if custom_preset is not None:
+            cam.apply_project_custom_snapshot(p, custom_preset)
+        else:
+            cam.clear_project_custom_snapshot(p)
+        apply_verify_mode(p, verify_mode)
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -348,10 +385,12 @@ async def create_project_zip(
     file: UploadFile = File(...),
     name: str = Form(""),
     audit_mode: str = Form("bounty"),
+    custom_audit_mode_id: str = Form(""),
     manual_lab: bool = Form(False),
     manual_lab_prompt: str = Form(""),
     verifier_enabled: bool = Form(False),
     dynamic_verify_enabled: bool = Form(False),
+    dynamic_verify_mode: str = Form(""),
     heuristic_enabled: str = Form("true"),
     heuristic_lite: str = Form("false"),
     fast_enabled: str = Form("false"),
@@ -368,25 +407,48 @@ async def create_project_zip(
             bypass_enabled=bypass_enabled,
         )
         lite_on = parse_heuristic_lite(heuristic_lite)
+        verify_mode = resolve_verify_mode(
+            mode=dynamic_verify_mode or None,
+            enabled=dynamic_verify_enabled,
+            manual_lab=manual_lab,
+            manual_lab_prompt=prompt,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    custom_id = None
+    raw_custom = (custom_audit_mode_id or "").strip()
+    if raw_custom:
+        try:
+            custom_id = int(raw_custom)
+        except ValueError as exc:
+            raise HTTPException(400, "custom_audit_mode_id 必须是整数") from exc
     with SessionLocal() as db:
+        try:
+            custom_preset = None
+            if mode == AUDIT_MODE_CUSTOM:
+                custom_preset = cam.resolve_custom_for_project(db, custom_audit_mode_id=custom_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         p = Project(
             name=raw_name,
             source_type="zip",
             status="pending",
             phase="pending",
             audit_mode=mode,
-            manual_lab=bool(manual_lab),
-            manual_lab_prompt=prompt or None,
+            manual_lab=bool(manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
+            manual_lab_prompt=prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(verifier_enabled),
-            dynamic_verify_enabled=bool(dynamic_verify_enabled),
             heuristic_enabled=heuristic_on,
             heuristic_lite=lite_on,
             fast_enabled=fast_on,
             bypass_enabled=bypass_on,
             llm_model=normalize_project_llm_model(llm_model),
         )
+        if custom_preset is not None:
+            cam.apply_project_custom_snapshot(p, custom_preset)
+        else:
+            cam.clear_project_custom_snapshot(p)
+        apply_verify_mode(p, verify_mode)
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -405,10 +467,12 @@ async def create_project_zip(
 def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
     if (
         body.audit_mode is None
+        and body.custom_audit_mode_id is None
         and body.manual_lab is None
         and body.manual_lab_prompt is None
         and body.verifier_enabled is None
         and body.dynamic_verify_enabled is None
+        and body.dynamic_verify_mode is None
         and body.heuristic_enabled is None
         and body.heuristic_lite is None
         and body.fast_enabled is None
@@ -426,13 +490,18 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     paths_changed = False
+    audit_mode_changed = False
+    new_mode_for_note = "bounty"
+    custom_name_for_note = None
     with SessionLocal() as db:
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "项目不存在")
         old_mode = normalize_audit_mode(p.audit_mode)
+        old_custom_id = getattr(p, "custom_audit_mode_id", None)
         old_verifier = bool(p.verifier_enabled)
-        old_dynamic = bool(p.dynamic_verify_enabled)
+        old_verify_mode = project_verify_mode(p)
+        old_dynamic = old_verify_mode != VERIFY_MODE_OFF
         old_heuristic = bool(getattr(p, "heuristic_enabled", True))
         old_lite = bool(getattr(p, "heuristic_lite", False))
         old_fast = bool(getattr(p, "fast_enabled", False))
@@ -471,10 +540,28 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 or bypass_on != old_bypass
                 or lite_on != old_lite
             )
-        if mode is not None:
+        next_mode = mode if mode is not None else old_mode
+        wants_custom_change = (
+            mode == AUDIT_MODE_CUSTOM
+            or (mode is None and old_mode == AUDIT_MODE_CUSTOM and body.custom_audit_mode_id is not None)
+        )
+        if mode is not None or wants_custom_change:
             if p.status not in AUDIT_MODE_EDITABLE_STATUSES:
                 raise HTTPException(400, "挖掘模式仅在项目暂停或完成后可更改")
-            p.audit_mode = mode
+        if next_mode == AUDIT_MODE_CUSTOM and (mode is not None or body.custom_audit_mode_id is not None):
+            preset_id = (
+                body.custom_audit_mode_id
+                if body.custom_audit_mode_id is not None
+                else old_custom_id
+            )
+            try:
+                preset = cam.resolve_custom_for_project(db, custom_audit_mode_id=preset_id)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            cam.apply_project_custom_snapshot(p, preset)
+        elif mode is not None and next_mode != AUDIT_MODE_CUSTOM:
+            p.audit_mode = next_mode
+            cam.clear_project_custom_snapshot(p)
         if prompt is not None:
             p.manual_lab_prompt = prompt or None
             if body.manual_lab is None:
@@ -483,13 +570,30 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.manual_lab = bool(body.manual_lab)
         if body.verifier_enabled is not None:
             p.verifier_enabled = bool(body.verifier_enabled)
-        if body.dynamic_verify_enabled is not None:
-            p.dynamic_verify_enabled = bool(body.dynamic_verify_enabled)
+        if body.dynamic_verify_mode is not None or body.dynamic_verify_enabled is not None:
+            try:
+                next_verify = resolve_verify_mode(
+                    mode=body.dynamic_verify_mode,
+                    enabled=body.dynamic_verify_enabled,
+                    current_mode=old_verify_mode,
+                    current_enabled=old_dynamic,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            apply_verify_mode(p, next_verify)
+            if next_verify != VERIFY_MODE_LAB:
+                if body.manual_lab is None and prompt is None:
+                    p.manual_lab = False
         if body.llm_model is not None:
             p.llm_model = normalize_project_llm_model(body.llm_model)
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
+        new_mode_for_note = normalize_audit_mode(out.audit_mode)
+        custom_name_for_note = out.custom_audit_mode_name or None
+        audit_mode_changed = new_mode_for_note != old_mode or (
+            new_mode_for_note == AUDIT_MODE_CUSTOM and out.custom_audit_mode_id != old_custom_id
+        )
         sync_notes = prompt is not None
         notes_text = out.manual_lab_prompt
         restarted = False
@@ -508,14 +612,23 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 restarted = True
         elif body.verifier_enabled is False and old_verifier:
             live_log.system(project_id, "已关闭 Verifier，不再对新的前台漏洞做互联网复测")
-        if body.dynamic_verify_enabled is True and not old_dynamic:
-            live_log.system(project_id, "已开启动态验证，后续审核将搭建靶场并做动态复现")
-            note_dynamic_verify_changed(project_id, enabled=True)
-            if p.status not in ("completed", "cancelled", "error", "pending", "ingesting"):
+        new_verify_mode = out.dynamic_verify_mode
+        if new_verify_mode != old_verify_mode:
+            if new_verify_mode == VERIFY_MODE_LAB:
+                live_log.system(project_id, "已开启靶场动态验证，后续审核将搭建靶场并做动态复现")
+            elif new_verify_mode == VERIFY_MODE_HARNESS:
+                live_log.system(project_id, "已开启局部验证，后续审核用沙箱 harness 复现，不搭建 Docker 靶场")
+            else:
+                live_log.system(project_id, "已关闭动态验证，后续审核仅静态复核")
+            note_dynamic_verify_changed(project_id, enabled=new_verify_mode != VERIFY_MODE_OFF)
+            if new_verify_mode != VERIFY_MODE_OFF and p.status not in (
+                "completed",
+                "cancelled",
+                "error",
+                "pending",
+                "ingesting",
+            ):
                 restarted = True
-        elif body.dynamic_verify_enabled is False and old_dynamic:
-            live_log.system(project_id, "已关闭动态验证，后续审核仅静态复核")
-            note_dynamic_verify_changed(project_id, enabled=False)
         if body.llm_model is not None:
             new_llm_model = normalize_project_llm_model(out.llm_model)
             if new_llm_model != old_llm_model:
@@ -526,8 +639,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                     )
                 else:
                     live_log.system(project_id, "项目模型已改回全局默认，下一轮 Agent 生效")
-    if mode is not None and old_mode != mode:
-        note_audit_mode_changed(project_id, mode)
+    if audit_mode_changed:
+        note_audit_mode_changed(project_id, new_mode_for_note, custom_name=custom_name_for_note)
     if paths_changed:
         note_mining_paths_changed(
             project_id,

@@ -34,11 +34,26 @@ from ..agent.compression import (
     max_round_report_no,
 )
 from ..agent.loop import AgentLoop
-from ..audit_mode import audit_mode_label, initial_hint, is_bounty_mode, normalize_audit_mode
+from ..audit_mode import (
+    AUDIT_MODE_CUSTOM,
+    audit_mode_label,
+    initial_hint,
+    is_bounty_mode,
+    normalize_audit_mode,
+)
 from ..config import settings
+from ..dynamic_verify import (
+    VERIFY_MODE_HARNESS,
+    VERIFY_MODE_OFF,
+    is_harness_mode,
+    is_lab_mode,
+    project_verify_mode,
+    verify_mode_enabled,
+)
 from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active, mining_path_label
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
+from ..services.custom_audit_modes import project_custom_overlay
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
     debug_ports_for_runtime,
@@ -53,6 +68,7 @@ from ..services.lab import (
 from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
+from ..services.sandbox_exec import harness_debug_plan
 from ..services.paths import ensure_project_dirs, src_dir, summaries_dir, workspace_dir
 from ..services.poc_script import read_poc_code
 from ..services.vuln_followup import archive_reviewer_checkpoint, latest_reviewer_context
@@ -232,6 +248,8 @@ def _phase_is_paused(project_id: int, phase: str) -> bool:
 
 def reset_runtime_state() -> None:
     """Test helper: drop in-memory orchestrator flags."""
+    from ..tools.phase_recon import _map_refresh_pending
+
     with _lock:
         _cancel_events.clear()
         _pause_flags.clear()
@@ -250,9 +268,7 @@ def reset_runtime_state() -> None:
         _adopted_phase_runs.clear()
         _fast_prepare_threads.clear()
         _fast_last_dir.clear()
-    from ..tools.phase_recon import _map_refresh_pending
-
-    _map_refresh_pending.clear()
+        _map_refresh_pending.clear()
     from .llm_thread import llm_thread_limiter
 
     llm_thread_limiter.reset()
@@ -317,7 +333,12 @@ def note_mining_paths_changed(
     )
 
 
-def note_audit_mode_changed(project_id: int, mode: str) -> None:
+def note_audit_mode_changed(
+    project_id: int,
+    mode: str,
+    *,
+    custom_name: str | None = None,
+) -> None:
     """Keep the project paused; next resume must use the new Worker/Reviewer rules."""
     for control in ("worker", "reviewer"):
         _force_new_run.add((project_id, control))
@@ -325,7 +346,7 @@ def note_audit_mode_changed(project_id: int, mode: str) -> None:
         _bump_phase_generation(project_id, control)
     live_log.system(
         project_id,
-        f"挖掘模式已改为{audit_mode_label(mode)}，续跑后 Worker/Reviewer 将按新规则新开",
+        f"挖掘模式已改为{audit_mode_label(mode, custom_name=custom_name)}，续跑后 Worker/Reviewer 将按新规则新开",
     )
 
 
@@ -380,7 +401,7 @@ def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple
     can = bool(
         is_static_only_vuln(vuln)
         and proj is not None
-        and proj.dynamic_verify_enabled
+        and verify_mode_enabled(project_verify_mode(proj))
         and proj.status not in ("cancelled", "error", "pending", "ingesting")
         and vuln.status != "merged"
     )
@@ -400,14 +421,15 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
         db.expunge(proj)
     if proj.status in ("cancelled", "error", "pending", "ingesting"):
         raise DynamicVerifyRequestError("当前项目状态不可追加动态验证")
-    if not proj.dynamic_verify_enabled:
-        raise DynamicVerifyRequestError("请先在项目设置中开启动态验证")
+    verify_mode = project_verify_mode(proj)
+    if not verify_mode_enabled(verify_mode):
+        raise DynamicVerifyRequestError("请先在项目设置中开启靶场动态或局部验证")
     if vuln.status == "merged":
         raise DynamicVerifyRequestError("该漏洞已并入其他报告")
     if not is_static_only_vuln(vuln):
-        raise DynamicVerifyRequestError("仅 static_only 的漏洞可追加动态验证")
+        raise DynamicVerifyRequestError("仅 static_only 的漏洞可追加验证")
     if reviewer_run_active_for_vuln(proj.id, vuln.id):
-        raise DynamicVerifyRequestError("该漏洞已在动态验证中", status_code=409)
+        raise DynamicVerifyRequestError("该漏洞已在追加验证中", status_code=409)
 
     ctx = latest_reviewer_context(proj.id, vuln.id)
     system = _phase_system_prompt(proj.id, "reviewer.md")
@@ -464,9 +486,10 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
             row.phase = "reviewer"
             row.error = None
             db.commit()
+    followup_kind = "局部验证" if is_harness_mode(verify_mode) else "动态验证"
     live_log.system(
         proj.id,
-        f"漏洞 #{vuln.id} 接续原审核轮次追加动态验证",
+        f"漏洞 #{vuln.id} 接续原审核轮次追加{followup_kind}",
         phase="reviewer",
     )
     start_audit(proj.id)
@@ -1203,14 +1226,18 @@ def _read_verifier_enabled(project_id: int) -> bool:
         return bool(proj and proj.verifier_enabled)
 
 
-def _read_dynamic_verify_enabled(project_id: int) -> bool:
+def _read_dynamic_verify_mode(project_id: int) -> str:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        return bool(proj and proj.dynamic_verify_enabled)
+        return project_verify_mode(proj)
+
+
+def _read_dynamic_verify_enabled(project_id: int) -> bool:
+    return verify_mode_enabled(_read_dynamic_verify_mode(project_id))
 
 
 def _reviewer_has_lab_work(project_id: int) -> bool:
-    if not _read_dynamic_verify_enabled(project_id):
+    if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
         return False
     return not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
 
@@ -1242,6 +1269,13 @@ _STATIC_REVIEW_NOTE = (
     "不要每条漏洞重新识别，Confirm 会写入报告。不要编造 hash。"
 )
 
+_HARNESS_REVIEW_NOTE = (
+    "本项目为局部验证：不要搭建 Docker 靶场，不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
+    "用 RunCode 按目标语言写 mock/harness；打通且成立性满足时 evidence_level=harness。"
+    "沙箱不可用或 mock 失败不要误报，静态已能证明默认可利用则 static_only。"
+    "不要把 harness 写进 poc.py。应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"
+)
+
 
 def _docker_lab_note(project_id: int) -> str | None:
     env = load_env(project_id)
@@ -1253,8 +1287,11 @@ def _docker_lab_note(project_id: int) -> str | None:
 
 
 def _reviewer_lab_note(project_id: int) -> str:
-    if not _read_dynamic_verify_enabled(project_id):
+    mode = _read_dynamic_verify_mode(project_id)
+    if mode == VERIFY_MODE_OFF:
         return _STATIC_REVIEW_NOTE
+    if mode == VERIFY_MODE_HARNESS:
+        return _HARNESS_REVIEW_NOTE
     _enabled, prompt = _read_manual_lab(project_id)
     docker_note = _docker_lab_note(project_id)
     if prompt:
@@ -1295,10 +1332,15 @@ def _next_reviewer_step(project_id: int, pending: int) -> str:
 
 def _audit_mode_vars(project_id: int) -> dict[str, str]:
     mode = _read_audit_mode(project_id)
+    custom_name = ""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if proj:
+            custom_name = (getattr(proj, "custom_audit_mode_name", None) or "").strip()
     return {
         "audit_mode": mode,
-        "audit_mode_label": audit_mode_label(mode),
-        "audit_mode_hint": initial_hint(mode),
+        "audit_mode_label": audit_mode_label(mode, custom_name=custom_name or None),
+        "audit_mode_hint": initial_hint(mode, custom_name=custom_name or None),
     }
 
 
@@ -1309,12 +1351,27 @@ _POC_PROMPT_PHASES = frozenset(
 
 def _phase_system_prompt(project_id: int, name: str) -> str:
     base = load_prompt(name).rstrip()
-    overlay = load_prompt(f"modes/{_read_audit_mode(project_id)}.md").strip()
+    mode = _read_audit_mode(project_id)
+    if mode == AUDIT_MODE_CUSTOM:
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            overlay = project_custom_overlay(proj).strip()
+        if not overlay:
+            overlay = (
+                "## 当前挖掘模式：自定义模式\n\n"
+                "自定义提示词快照为空；请勿提交或确认任何漏洞，并提示用户在设置中配置后再续跑。"
+            )
+    else:
+        overlay = load_prompt(f"modes/{mode}.md").strip()
     parts = [base, overlay]
     if name in _POC_PROMPT_PHASES:
         parts.append(load_prompt("poc.md").strip())
-    if name == "reviewer.md" and not _read_dynamic_verify_enabled(project_id):
-        parts.append(load_prompt("verify/static.md").strip())
+    if name == "reviewer.md":
+        verify_mode = _read_dynamic_verify_mode(project_id)
+        if verify_mode == VERIFY_MODE_OFF:
+            parts.append(load_prompt("verify/static.md").strip())
+        elif verify_mode == VERIFY_MODE_HARNESS:
+            parts.append(load_prompt("verify/harness.md").strip())
     return "\n\n".join(parts) + "\n"
 
 
@@ -3228,7 +3285,7 @@ def _lab_system_prompt(project_id: int) -> str:
 def _run_reviewer_lab(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
-        if not _read_dynamic_verify_enabled(project_id):
+        if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
             _finish_resumable_phase(project_id, "reviewer-lab")
             return
         if lab_setup_finished(project_id):
@@ -3377,9 +3434,17 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
     else:
         messages.insert(0, {"role": "system", "content": system})
     lab_note = _reviewer_lab_note(cp.project_id)
-    debug_plan = {**reviewer_debug_plan(cp.project_id), "enabled": True}
+    mode = _read_dynamic_verify_mode(cp.project_id)
+    if mode == VERIFY_MODE_HARNESS:
+        debug_plan = harness_debug_plan()
+        followup = "reviewer-harness-followup.md"
+        extra_label = "追加局部验证"
+    else:
+        debug_plan = {**reviewer_debug_plan(cp.project_id), "enabled": True}
+        followup = "reviewer-dynamic-followup.md"
+        extra_label = "追加动态验证"
     body = _initial_prompt(
-        "reviewer-dynamic-followup.md",
+        followup,
         vuln_id=cp.vuln_id,
         lab_note=lab_note,
         debug_plan=json_dumps(debug_plan),
@@ -3391,6 +3456,7 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
     cp.state.pop("review_verdict", None)
     cp.state["dynamic_followup"] = True
     cp.state["dynamic_followup_prompted"] = True
+    cp.state["followup_label"] = extra_label
 
 
 def _run_reviewer_once(project_id: int) -> None:
@@ -3404,7 +3470,11 @@ def _run_reviewer_once(project_id: int) -> None:
             if first_followup:
                 _append_dynamic_followup_turn(cp)
                 save_checkpoint(cp)
-                _start_log_session(project_id, "reviewer", extra=f"漏洞 #{cp.vuln_id} 追加动态验证")
+                _start_log_session(
+                    project_id,
+                    "reviewer",
+                    extra=f"漏洞 #{cp.vuln_id} {cp.state.get('followup_label') or '追加动态验证'}",
+                )
             with SessionLocal() as db:
                 proj = db.get(Project, project_id)
                 if proj and proj.status not in ("completed", "cancelled", "paused"):
@@ -3464,11 +3534,13 @@ def _run_reviewer_once(project_id: int) -> None:
             }
 
         lab_note = _reviewer_lab_note(project_id)
-        debug_plan = (
-            {"enabled": False, "preferred": "static_only"}
-            if not _read_dynamic_verify_enabled(project_id)
-            else {**reviewer_debug_plan(project_id), "enabled": True}
-        )
+        mode = _read_dynamic_verify_mode(project_id)
+        if mode == VERIFY_MODE_OFF:
+            debug_plan = {"enabled": False, "preferred": "static_only"}
+        elif mode == VERIFY_MODE_HARNESS:
+            debug_plan = harness_debug_plan()
+        else:
+            debug_plan = {**reviewer_debug_plan(project_id), "enabled": True}
 
         with SessionLocal() as db:
             proj = db.get(Project, project_id)

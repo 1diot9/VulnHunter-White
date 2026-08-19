@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type LogEvent, type Project, type Vuln } from '../api'
+import { api, type CustomAuditMode, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
@@ -10,6 +10,7 @@ import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
 import PhaseFlow from '../components/PhaseFlow'
+import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import VulnGroupList from '../components/VulnGroupList'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
@@ -94,6 +95,7 @@ export default function ProjectDetailPage() {
   const navigate = useNavigate()
   const projectId = Number(id)
   const [project, setProject] = useState<Project | null>(null)
+  const [customModes, setCustomModes] = useState<CustomAuditMode[]>([])
   const [events, setEvents] = useState<LogEvent[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
   const [vulnsLoading, setVulnsLoading] = useState(false)
@@ -147,6 +149,10 @@ export default function ProjectDetailPage() {
     setDisplaySession(1)
     setSessionCount(1)
   }, [projectId])
+
+  useEffect(() => {
+    api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
+  }, [])
 
   useEffect(() => {
     if (!projectId) return
@@ -385,6 +391,7 @@ export default function ProjectDetailPage() {
               labSetupDone={project.lab_setup_done}
               manualLab={Boolean(project.manual_lab_prompt)}
               dynamicVerifyEnabled={project.dynamic_verify_enabled}
+              dynamicVerifyMode={normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled)}
               verifierEnabled={project.verifier_enabled}
               verifierPending={project.verifier_pending}
               heuristicEnabled={project.heuristic_enabled}
@@ -444,11 +451,34 @@ export default function ProjectDetailPage() {
           {project.status === 'paused' || project.status === 'completed' ? (
             <AuditModeSelect
               value={project.audit_mode}
+              customModeId={project.custom_audit_mode_id}
+              customModes={customModes}
+              customModeName={project.custom_audit_mode_name}
               showHint={false}
               onValueChange={async (value) => {
-                if (value === project.audit_mode) return
                 try {
-                  const next = await api.updateProject(projectId, { audit_mode: value })
+                  const body: {
+                    audit_mode: 'bounty' | 'full' | 'custom'
+                    custom_audit_mode_id?: number | null
+                  } = { audit_mode: value }
+                  if (value === 'custom') {
+                    const id = project.custom_audit_mode_id ?? customModes[0]?.id ?? null
+                    if (id == null) return
+                    body.custom_audit_mode_id = id
+                  }
+                  const next = await api.updateProject(projectId, body)
+                  setProject(next)
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onCustomModeIdChange={async (id) => {
+                if (id == null) return
+                try {
+                  const next = await api.updateProject(projectId, {
+                    audit_mode: 'custom',
+                    custom_audit_mode_id: id,
+                  })
                   setProject(next)
                 } catch {
                   /* ignore */
@@ -457,10 +487,13 @@ export default function ProjectDetailPage() {
             />
           ) : (
             <span className="inline-flex items-center gap-2">
-              <Badge variant="outline" title={formatAuditModeHint(project.audit_mode)}>
-                {formatAuditMode(project.audit_mode)}
+              <Badge
+                variant="outline"
+                title={formatAuditModeHint(project.audit_mode, project.custom_audit_mode_name)}
+              >
+                {formatAuditMode(project.audit_mode, project.custom_audit_mode_name)}
               </Badge>
-              <BountyScopeButton />
+              {project.audit_mode === 'custom' ? null : <BountyScopeButton />}
             </span>
           )}
           <Badge variant="outline">{formatMiningPaths(project)}</Badge>
@@ -475,7 +508,7 @@ export default function ProjectDetailPage() {
         </div>
         <WeightExtBadges exts={project.weight_exts} />
         <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
-          {formatAuditModeHint(project.audit_mode)}
+          {formatAuditModeHint(project.audit_mode, project.custom_audit_mode_name)}
           {project.fast_enabled
             ? ' 快速扫描覆盖 SAST Sink（命令执行、注入、反序列化等）；缺鉴权、IDOR、业务逻辑仍靠启发式。'
             : ''}
@@ -553,7 +586,7 @@ export default function ProjectDetailPage() {
                   ) : null}
                   {k === 'reviewer' ? (
                     <div className="vh-phase-subs">
-                      {(project.dynamic_verify_enabled
+                      {(normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled) === 'lab'
                         ? REVIEWER_LOG_TABS
                         : REVIEWER_LOG_TABS.filter(([sk]) => sk !== 'reviewer-lab')
                       ).map(([sk, slabel]) => (

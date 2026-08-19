@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Settings } from '../api'
+import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -446,6 +447,7 @@ export default function SettingsPage() {
         </div>
         </CardContent>
       </Card>
+      <CustomAuditModesCard />
       <Card>
         <CardContent className="space-y-3 p-4">
           <div className="space-y-1.5">

@@ -13,11 +13,15 @@ export type Project = {
   status: string
   phase: string
   recon_done: boolean
-  audit_mode: 'bounty' | 'full'
+  audit_mode: 'bounty' | 'full' | 'custom'
+  custom_audit_mode_id: number | null
+  custom_audit_mode_name: string
+  custom_audit_prompt: string
   manual_lab: boolean
   manual_lab_prompt: string
   verifier_enabled: boolean
   dynamic_verify_enabled: boolean
+  dynamic_verify_mode: 'off' | 'lab' | 'harness'
   heuristic_enabled: boolean
   heuristic_lite: boolean
   fast_enabled: boolean
@@ -55,6 +59,20 @@ export type Project = {
     verifier_pending?: number
   }
 
+export type CustomAuditMode = {
+  id: number
+  name: string
+  body: string
+  created_at: string
+  updated_at: string
+}
+
+export type BuiltinAuditMode = {
+  id: 'bounty' | 'full'
+  label: string
+  body: string
+}
+
 export type ReconSubphase = {
   id: string
   label: string
@@ -88,6 +106,8 @@ export type Vuln = {
   required_account: string | null
   submission_tier: string | null
   submission_reason: string | null
+  /** heuristic | fast | bypass — which mining path submitted this vuln */
+  mining_path?: string | null
   root_cause_key: string | null
   merged_into_id: number | null
   review_rounds: number
@@ -331,12 +351,14 @@ export const api = {
   createGithub: (
     source_url: string,
     name = '',
-    audit_mode: 'bounty' | 'full' = 'bounty',
+    audit_mode: 'bounty' | 'full' | 'custom' = 'bounty',
     opts: {
+      custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
       heuristic_lite?: boolean
       fast_enabled?: boolean
@@ -352,10 +374,12 @@ export const api = {
         source_url,
         name,
         audit_mode,
+        custom_audit_mode_id: opts.custom_audit_mode_id ?? null,
         manual_lab: Boolean(opts.manual_lab),
         manual_lab_prompt: opts.manual_lab_prompt || '',
         verifier_enabled: Boolean(opts.verifier_enabled),
         dynamic_verify_enabled: Boolean(opts.dynamic_verify_enabled),
+        dynamic_verify_mode: opts.dynamic_verify_mode || (opts.dynamic_verify_enabled ? 'lab' : 'off'),
         heuristic_enabled: opts.heuristic_enabled !== false,
         heuristic_lite: Boolean(opts.heuristic_lite),
         fast_enabled: Boolean(opts.fast_enabled),
@@ -366,12 +390,14 @@ export const api = {
   uploadZip: async (
     file: File,
     name = '',
-    audit_mode: 'bounty' | 'full' = 'bounty',
+    audit_mode: 'bounty' | 'full' | 'custom' = 'bounty',
     opts: {
+      custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
       heuristic_lite?: boolean
       fast_enabled?: boolean
@@ -383,10 +409,17 @@ export const api = {
     fd.append('file', file)
     if (name) fd.append('name', name)
     fd.append('audit_mode', audit_mode)
+    if (opts.custom_audit_mode_id != null) {
+      fd.append('custom_audit_mode_id', String(opts.custom_audit_mode_id))
+    }
     fd.append('manual_lab', opts.manual_lab ? 'true' : 'false')
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
     fd.append('dynamic_verify_enabled', opts.dynamic_verify_enabled ? 'true' : 'false')
+    fd.append(
+      'dynamic_verify_mode',
+      opts.dynamic_verify_mode || (opts.dynamic_verify_enabled ? 'lab' : 'off'),
+    )
     fd.append('heuristic_enabled', opts.heuristic_enabled === false ? 'false' : 'true')
     fd.append('heuristic_lite', opts.heuristic_lite ? 'true' : 'false')
     fd.append('fast_enabled', opts.fast_enabled ? 'true' : 'false')
@@ -397,11 +430,13 @@ export const api = {
   updateProject: (
     id: number,
     body: {
-      audit_mode?: 'bounty' | 'full'
+      audit_mode?: 'bounty' | 'full' | 'custom'
+      custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string | null
       verifier_enabled?: boolean
       dynamic_verify_enabled?: boolean
+      dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
       heuristic_lite?: boolean
       fast_enabled?: boolean
@@ -414,6 +449,22 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  listBuiltinAuditModes: () => request<BuiltinAuditMode[]>('/api/settings/builtin-audit-modes'),
+  listCustomAuditModes: () => request<CustomAuditMode[]>('/api/settings/custom-audit-modes'),
+  createCustomAuditMode: (body: { name: string; body: string }) =>
+    request<CustomAuditMode>('/api/settings/custom-audit-modes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  updateCustomAuditMode: (id: number, body: { name?: string; body?: string }) =>
+    request<CustomAuditMode>(`/api/settings/custom-audit-modes/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteCustomAuditMode: (id: number) =>
+    request<{ ok: boolean }>(`/api/settings/custom-audit-modes/${id}`, { method: 'DELETE' }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
   rerunReconSubphase: (id: number, subphase: 'map' | 'old_vulns') =>

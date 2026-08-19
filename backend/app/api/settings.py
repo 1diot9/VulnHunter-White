@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from ..models import AppSettings, SessionLocal
+from ..models import AppSettings, CustomAuditMode, SessionLocal
 from ..schemas import (
+    BuiltinAuditModeOut,
+    CustomAuditModeCreate,
+    CustomAuditModeOut,
+    CustomAuditModeUpdate,
     FofaProbeIn,
     FofaTestOut,
     GithubProbeIn,
@@ -18,6 +22,7 @@ from ..schemas import (
     SettingsOut,
     SettingsUpdate,
 )
+from ..services import custom_audit_modes as cam
 from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.github_probe import test_connectivity as test_github_connectivity
 from ..services.llm_probe import list_models, test_connectivity
@@ -85,6 +90,63 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
 
     llm_thread_limiter.refresh_limit(out.llm_thread_limit)
     return out
+
+
+@router.get("/builtin-audit-modes", response_model=list[BuiltinAuditModeOut])
+def list_builtin_audit_modes() -> list[BuiltinAuditModeOut]:
+    return [BuiltinAuditModeOut(**row) for row in cam.builtin_prompts()]
+
+
+@router.get("/custom-audit-modes", response_model=list[CustomAuditModeOut])
+def list_custom_audit_modes() -> list[CustomAuditModeOut]:
+    with SessionLocal() as db:
+        return [CustomAuditModeOut(**cam.custom_mode_out_fields(r)) for r in cam.list_presets(db)]
+
+
+@router.post("/custom-audit-modes", response_model=CustomAuditModeOut)
+def create_custom_audit_mode(body: CustomAuditModeCreate) -> CustomAuditModeOut:
+    with SessionLocal() as db:
+        try:
+            row = cam.create_preset(db, name=body.name, body=body.body)
+            db.commit()
+            db.refresh(row)
+            return CustomAuditModeOut(**cam.custom_mode_out_fields(row))
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+
+
+@router.patch("/custom-audit-modes/{mode_id}", response_model=CustomAuditModeOut)
+def update_custom_audit_mode(mode_id: int, body: CustomAuditModeUpdate) -> CustomAuditModeOut:
+    if body.name is None and body.body is None:
+        raise HTTPException(400, "没有需要更新的字段")
+    with SessionLocal() as db:
+        row = db.get(CustomAuditMode, mode_id)
+        if not row:
+            raise HTTPException(404, "自定义审计模式不存在")
+        try:
+            cam.update_preset(db, row, name=body.name, body=body.body)
+            db.commit()
+            db.refresh(row)
+            return CustomAuditModeOut(**cam.custom_mode_out_fields(row))
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/custom-audit-modes/{mode_id}")
+def delete_custom_audit_mode(mode_id: int) -> dict:
+    with SessionLocal() as db:
+        row = db.get(CustomAuditMode, mode_id)
+        if not row:
+            raise HTTPException(404, "自定义审计模式不存在")
+        try:
+            cam.delete_preset(db, row)
+            db.commit()
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/llm/models", response_model=LlmModelListOut)

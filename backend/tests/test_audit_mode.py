@@ -23,8 +23,10 @@ def test_normalize_and_parse_audit_mode():
     assert normalize_audit_mode("") == "bounty"
     assert normalize_audit_mode("赏金模式") == "bounty"
     assert normalize_audit_mode("全量") == "full"
+    assert normalize_audit_mode("自定义") == "custom"
     assert parse_audit_mode(None) == "bounty"
     assert parse_audit_mode("full") == "full"
+    assert parse_audit_mode("custom") == "custom"
     with pytest.raises(ValueError, match="audit_mode"):
         parse_audit_mode("nope")
 
@@ -35,11 +37,17 @@ def test_initial_hint_mentions_mode_rules():
     assert "默认配置" in bounty
     assert "存储型 XSS" in bounty
     assert "源码硬编码密钥" in bounty
+    assert "服务端机密" in bounty
+    assert "前端传输混淆" in bounty
     assert "禁止主动搭建漏洞利用环境" not in bounty
     assert "Docker 靶场" in bounty
     full = initial_hint("full")
     assert "全量模式" in full
     assert "低危害难利用" in full
+    custom = initial_hint("custom", custom_name="demo")
+    assert "自定义模式" in custom
+    assert "demo" in custom
+    assert "硬闸门" in custom
 
 
 def test_bounty_gates_allow_stored_xss_and_source_secrets():

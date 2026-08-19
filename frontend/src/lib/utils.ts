@@ -44,6 +44,32 @@ export function formatTrackingStatus(value: string | null | undefined): string {
   }
 }
 
+export function formatEvidenceLevel(value: string | null | undefined): string | null {
+  switch (value) {
+    case 'harness':
+      return '局部验证'
+    case 'dynamic':
+      return '动态验证'
+    case 'mcp':
+      return '动态验证 · MCP'
+    default:
+      return null
+  }
+}
+
+export function formatMiningPath(value: string | null | undefined): string | null {
+  switch ((value || '').trim().toLowerCase()) {
+    case 'heuristic':
+      return '启发式挖掘'
+    case 'fast':
+      return '快速扫描'
+    case 'bypass':
+      return '历史漏洞绕过'
+    default:
+      return null
+  }
+}
+
 export function formatVerifierStatus(value: string | null | undefined): string | null {
   switch (value) {
     case 'pending':
@@ -78,7 +104,7 @@ export const AUDIT_MODE_OPTIONS = [
     label: '赏金模式',
     short: '只报默认可利用的高危害漏洞',
     hint:
-      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令不算硬编码密钥。利用须在默认配置或应用自身配置下成立。',
+      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。利用须在默认配置或应用自身配置下成立。',
   },
   {
     value: 'full' as const,
@@ -86,6 +112,13 @@ export const AUDIT_MODE_OPTIONS = [
     short: '同时收录低危害难利用项',
     hint:
       '除高危害外，也收录难以利用但仍能打出差异的项（CORS、反射 XSS、缺速率限制、安全头等），由 Reviewer 标为低危害难利用。',
+  },
+  {
+    value: 'custom' as const,
+    label: '自定义模式',
+    short: '按设置页命名提示词判定范围',
+    hint:
+      '漏洞收录完全按所选自定义提示词（项目内快照）判定，无赏金模式代码硬闸门。请先在设置页创建自定义审计模式。',
   },
 ] as const
 
@@ -106,7 +139,7 @@ export const BOUNTY_SCOPE_ROWS = [
   { type: '越权', included: true, note: '' },
   { type: 'DoS', included: true, note: '' },
   { type: '存储型 XSS', included: true, note: '须持久化后在其他用户浏览器执行；不要把反射 XSS 写成存储型' },
-  { type: '源码硬编码密钥', included: true, note: '仅程序常量中的 JWT / AES / DES / HMAC secret、私钥' },
+  { type: '源码硬编码密钥', included: true, note: '须为服务端机密：JWT/HMAC 签名、接口签名 secret、私钥、第三方 API Key、保护库内/备份密文等；能造成未授权危害' },
   { type: '其他实际危害', included: true, note: '须证明代码执行、敏感数据泄露、越权读写删或任意文件操作等' },
   { type: '仅公网 SSRF', included: false, note: '打不到内网 / 元数据 / 本机敏感口' },
   { type: '反射 XSS / DOM XSS / Self-XSS', included: false, note: '' },
@@ -114,6 +147,7 @@ export const BOUNTY_SCOPE_ROWS = [
   { type: '开放重定向', included: false, note: '除非能升级为鉴权劫持、token 盗取等实际危害' },
   { type: '缺速率限制 / 验证码爆破', included: false, note: '无进一步危害时不收录' },
   { type: '弱随机 / 可预测 token', included: false, note: '除非直接导致认证绕过' },
+  { type: '前端传输混淆 AES', included: false, note: '密钥在前端 JS 或故意公开下发；解开前端本就会解的字段 / 已拦截登录包不算 CVE' },
   { type: '配置文件默认口令', included: false, note: 'application.yml、.env、compose、文档里用户可改的口令或密钥' },
   { type: '纯配置加固建议', included: false, note: '信息性扫描项' },
 ] as const
@@ -121,11 +155,27 @@ export const BOUNTY_SCOPE_ROWS = [
 export const BOUNTY_SCOPE_PREMISE =
   '利用须在默认配置，或只改应用自身配置选项下成立。禁止种文件、改非应用配置、组合第二个独立漏洞。全量模式额外收录上表「不收录」中仍能打出差异的项，由 Reviewer 标为低危害难利用。'
 
-export function formatAuditMode(value: string | null | undefined): string {
+export function formatAuditMode(
+  value: string | null | undefined,
+  customName?: string | null,
+): string {
+  if (value === 'custom') {
+    const name = (customName || '').trim()
+    return name ? `自定义（${name}）` : '自定义模式'
+  }
   return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.label ?? AUDIT_MODE_OPTIONS[0].label
 }
 
-export function formatAuditModeHint(value: string | null | undefined): string {
+export function formatAuditModeHint(
+  value: string | null | undefined,
+  customName?: string | null,
+): string {
+  if (value === 'custom') {
+    const name = (customName || '').trim()
+    return name
+      ? `当前按自定义模式「${name}」的项目快照提示词判定漏洞范围；无赏金硬闸门。续跑后下一轮生效。`
+      : AUDIT_MODE_OPTIONS.find((o) => o.value === 'custom')!.hint
+  }
   return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.hint ?? AUDIT_MODE_OPTIONS[0].hint
 }
 
