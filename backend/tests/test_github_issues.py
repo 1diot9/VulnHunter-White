@@ -3,7 +3,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from app.services.github_issues import (
+    GITHUB_SEARCH_MAX_OPERATORS,
     crawl_github_issues,
+    github_search_operator_count,
     issue_keys_from_text,
     issue_search_queries,
     issue_to_record,
@@ -97,9 +99,17 @@ def test_issue_keys_from_text_and_queries():
     assert "HALO-DEV/HALO#7" in keys
     queries = issue_search_queries("halo-dev/halo", "2023-01-01")
     assert any("label:security" in q for q in queries)
-    assert any("Security" in q and "in:title" in q for q in queries)
+    assert any(q.endswith(" CVE") or " CVE" in q for q in queries)
     assert all("repo:halo-dev/halo" in q for q in queries)
     assert all("is:open" in q for q in queries)
+    assert all("(" not in q and " OR " not in q for q in queries)
+    assert all(github_search_operator_count(q) <= GITHUB_SEARCH_MAX_OPERATORS for q in queries)
+    fat = (
+        "repo:halo-dev/halo is:issue is:open in:title "
+        '(RCE OR SQLi OR SSRF OR XSS OR LFI OR unauth OR advisory OR Security OR 漏洞 OR 未授权 OR 越权 OR "code execution") '
+        "created:>=2023-01-01"
+    )
+    assert github_search_operator_count(fat) > GITHUB_SEARCH_MAX_OPERATORS
 
 
 def test_crawl_github_issues_filters_policy_and_dedupes(monkeypatch):
@@ -163,3 +173,35 @@ def test_crawl_github_issues_filters_policy_and_dedupes(monkeypatch):
     assert [r["number"] for r in recs] == [12, 10]
     assert recs[0]["source"] == "github_issue"
     assert recs[0]["fix_status"] == "unpatched"
+
+
+def test_crawl_github_issues_continues_after_422(monkeypatch):
+    class DummyCM:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *args):
+            return False
+
+    hit = {
+        "number": 88,
+        "title": "CVE-2024-1111 XSS in comment",
+        "body": "stored xss",
+        "html_url": "https://github.com/halo-dev/halo/issues/88",
+        "state": "open",
+        "created_at": "2024-06-01T00:00:00Z",
+        "labels": [{"name": "security"}],
+    }
+
+    def fake_search(query, **kwargs):
+        if "RCE" in query:
+            return [], ["GitHub Search HTTP 422（操作符过多或查询无效）: too many AND/OR/NOT"]
+        if query.endswith(" CVE"):
+            return [hit], []
+        return [], []
+
+    monkeypatch.setattr("app.services.github_issues.http_client", lambda **kwargs: DummyCM())
+    monkeypatch.setattr("app.services.github_issues._search_issue_pages", fake_search)
+    recs, meta = crawl_github_issues("halo-dev/halo")
+    assert [r["number"] for r in recs] == [88]
+    assert any("422" in e for e in meta["errors"])

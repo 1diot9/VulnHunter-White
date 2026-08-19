@@ -16,6 +16,7 @@ from ..models import AppSettings, SessionLocal
 from .http_client import http_client
 
 GHSA_ADVISORIES = "https://api.github.com/advisories"
+REPO_ADVISORIES = "https://api.github.com/repos/{repo}/security-advisories"
 DEFAULT_ECOSYSTEMS = ("maven", "npm", "pip", "composer")
 DEFAULT_SINCE_DAYS = 365 * 3
 _RATE_LIMIT_UNAUTH = 60
@@ -412,6 +413,74 @@ def crawl_ghsa(
             "min_interval_sec": round(limiter._min_interval, 4),
             "authenticated": _has_github_token(),
         },
+    }
+    return results, meta
+
+
+def crawl_repo_advisories(
+    repo: str,
+    *,
+    since_days: int = DEFAULT_SINCE_DAYS,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch published/closed security advisories for owner/repo."""
+    slug = (repo or "").strip().strip("/")
+    if slug.count("/") != 1:
+        return [], {"repo": slug, "fetched": 0, "errors": ["无效仓库"], "source": "repo_advisories"}
+    published_since = since_date(since_days)
+    url = REPO_ADVISORIES.format(repo=slug)
+    limiter = _GitHubRateLimiter()
+    raw: list[dict[str, Any]] = []
+    errors: list[str] = []
+    with http_client(timeout=45.0) as client:
+        for page in range(1, 6):
+            try:
+                r = github_get(
+                    url,
+                    params={"per_page": 100, "page": page},
+                    client=client,
+                    limiter=limiter,
+                )
+            except httpx.HTTPError as exc:
+                errors.append(str(exc))
+                break
+            if r.status_code == 404:
+                break
+            if r.status_code == 403:
+                errors.append(f"仓库 Advisory 403: {r.text[:200]}")
+                break
+            if r.status_code != 200:
+                errors.append(f"仓库 Advisory HTTP {r.status_code}: {r.text[:200]}")
+                break
+            batch = r.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            raw.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < 100:
+                break
+    merged: dict[str, dict[str, Any]] = {}
+    for adv in raw:
+        state = str(adv.get("state") or "").strip().lower()
+        if state in {"draft", "triage", "withdrawn"} or adv.get("withdrawn_at"):
+            continue
+        published = str(adv.get("published_at") or adv.get("created_at") or "")[:10]
+        if published_since and published and published < published_since:
+            continue
+        rec = advisory_to_record(adv, keyword=slug.split("/")[-1])
+        key = merge_key(str(rec.get("identifier") or ""))
+        if key == "UNKNOWN":
+            continue
+        rec.setdefault("source", "ghsa")
+        rec.setdefault("fix_status", "patched")
+        merged.setdefault(key, rec)
+    results = list(merged.values())
+    results.sort(key=lambda x: (x.get("identifier") or "").upper())
+    meta = {
+        "repo": slug,
+        "since": published_since,
+        "since_days": since_days,
+        "fetched": len(results),
+        "errors": errors,
+        "source": "repo_advisories",
     }
     return results, meta
 

@@ -14,6 +14,7 @@ from .ghsa_service import (
     DEFAULT_ECOSYSTEMS,
     DEFAULT_SINCE_DAYS,
     crawl_ghsa,
+    crawl_repo_advisories,
     filter_new_vulns,
     merge_key,
     write_ghsa_output,
@@ -84,6 +85,61 @@ def infer_ecosystems(project_id: int) -> tuple[str, ...]:
         if len(found) >= len(_ECOSYSTEM_MARKERS):
             break
     return tuple(found) if found else DEFAULT_ECOSYSTEMS
+
+
+def _packages_from_pom(text: str) -> list[str]:
+    stripped = re.sub(r"<parent>.*?</parent>", "", text, count=1, flags=re.S)
+    group = re.search(r"<groupId>([^<]+)</groupId>", stripped)
+    art = re.search(r"<artifactId>([^<]+)</artifactId>", stripped)
+    out: list[str] = []
+    artifact = art.group(1).strip() if art else ""
+    group_id = group.group(1).strip() if group else ""
+    if artifact:
+        out.append(artifact)
+    if group_id:
+        out.append(group_id)
+        if artifact:
+            out.append(f"{group_id}:{artifact}")
+    return out
+
+
+def infer_affected_packages(project_id: int) -> list[str]:
+    """Best-effort package names from pom.xml / package.json for GHSA affects=."""
+    root = src_dir(project_id)
+    if not root.exists():
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str) -> None:
+        item = (raw or "").strip()
+        key = item.lower()
+        if not item or key in seen:
+            return
+        seen.add(key)
+        found.append(item)
+
+    for dirpath, dirnames, filenames in os_walk_limited(root, max_depth=3):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
+        names = {n.lower(): n for n in filenames}
+        if "pom.xml" in names:
+            try:
+                text = (Path(dirpath) / names["pom.xml"]).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                text = ""
+            for pkg in _packages_from_pom(text):
+                add(pkg)
+        if "package.json" in names:
+            try:
+                text = (Path(dirpath) / names["package.json"]).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                text = ""
+            m = re.search(r'"name"\s*:\s*"([^"]+)"', text)
+            if m:
+                add(m.group(1))
+        if len(found) >= 8:
+            break
+    return found
 
 
 def os_walk_limited(root: Path, *, max_depth: int):
@@ -166,7 +222,7 @@ def resolve_crawl_inputs(project_id: int) -> tuple[str, list[str], tuple[str, ..
     keyword = _slug_keyword(str(spec.get("keyword") or "")) or default_product_keyword(project_id)
     affects: list[str] = []
     seen: set[str] = set()
-    for raw in spec.get("affects") or []:
+    for raw in list(spec.get("affects") or []) + infer_affected_packages(project_id):
         item = str(raw or "").strip()
         key = item.lower()
         if not item or key in seen:
@@ -239,6 +295,37 @@ def run_old_vuln_ghsa_crawl(project_id: int) -> GhsaCrawlResult:
         else:
             for rec in ghsa_vulns:
                 rec.setdefault("source", "ghsa")
+
+    if repo:
+        try:
+            repo_vulns, repo_adv_meta = crawl_repo_advisories(repo)
+        except Exception as exc:  # noqa: BLE001
+            repo_adv_meta = {"error": str(exc), "repo": repo, "fetched": 0, "errors": [str(exc)]}
+            live_log.error(
+                project_id,
+                f"仓库 Advisory 爬虫失败: {exc}",
+                phase="recon-old-vuln",
+                role="recon_old_vuln",
+            )
+            repo_vulns = []
+            ghsa_meta["errors"] = list(ghsa_meta.get("errors") or []) + [str(exc)]
+        else:
+            ghsa_meta.setdefault("errors", [])
+            ghsa_meta["errors"] = list(ghsa_meta.get("errors") or []) + list(repo_adv_meta.get("errors") or [])
+            ghsa_meta["repo_advisories"] = {
+                "fetched": int(repo_adv_meta.get("fetched") or 0),
+                "repo": repo,
+            }
+            seen_ghsa = {merge_key(str(v.get("identifier") or "")) for v in ghsa_vulns}
+            for rec in repo_vulns:
+                rec.setdefault("source", "ghsa")
+                key = merge_key(str(rec.get("identifier") or ""))
+                if not key or key == "UNKNOWN" or key in seen_ghsa:
+                    continue
+                seen_ghsa.add(key)
+                ghsa_vulns.append(rec)
+            ghsa_meta["fetched"] = len(ghsa_vulns)
+            ghsa_meta["packages"] = list(ghsa_meta.get("packages") or ([keyword, *affects] if keyword else []))
 
     issue_vulns: list[dict[str, Any]] = []
     issue_meta: dict[str, Any] = {"fetched": 0, "errors": [], "repo": repo or ""}

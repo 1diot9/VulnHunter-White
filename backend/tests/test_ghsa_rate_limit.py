@@ -107,3 +107,48 @@ def test_filter_new_vulns_skips_known_cve() -> None:
     )
     assert skipped == 2
     assert [x["identifier"] for x in kept] == ["CVE-2024-2"]
+
+
+def test_crawl_repo_advisories_keeps_published_skips_draft(monkeypatch, tmp_env) -> None:
+    from app.services.ghsa_service import crawl_repo_advisories
+
+    class DummyResp:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return [
+                {
+                    "ghsa_id": "GHSA-1111-2222-3333",
+                    "cve_id": "CVE-2024-5555",
+                    "state": "published",
+                    "summary": "Halo path traversal",
+                    "description": "unauth read",
+                    "html_url": "https://github.com/halo-dev/halo/security/advisories/GHSA-1111-2222-3333",
+                    "published_at": "2024-02-01T00:00:00Z",
+                    "severity": "high",
+                },
+                {
+                    "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+                    "cve_id": None,
+                    "state": "draft",
+                    "summary": "not public",
+                    "html_url": "https://github.com/halo-dev/halo/security/advisories/GHSA-aaaa-bbbb-cccc",
+                    "published_at": "2024-02-02T00:00:00Z",
+                },
+            ]
+
+    class DummyCM:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr("app.services.ghsa_service.http_client", lambda **kwargs: DummyCM())
+    monkeypatch.setattr("app.services.ghsa_service.github_get", lambda *args, **kwargs: DummyResp())
+    recs, meta = crawl_repo_advisories("halo-dev/halo")
+    assert meta["fetched"] == 1
+    assert recs[0]["identifier"] == "CVE-2024-5555"
+    assert recs[0]["source"] == "ghsa"
+    assert recs[0]["fix_status"] == "patched"

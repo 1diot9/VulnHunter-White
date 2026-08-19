@@ -24,6 +24,19 @@ GITHUB_SEARCH_ISSUES = "https://api.github.com/search/issues"
 MAX_ISSUE_CANDIDATES = 80
 _SEARCH_PER_PAGE = 50
 _SEARCH_MAX_PAGES = 2
+# GitHub Search bills explicit AND/OR/NOT plus implicit AND between terms; max is 5.
+GITHUB_SEARCH_MAX_OPERATORS = 5
+_BOOLEAN_OP_RE = re.compile(r"\b(?:AND|OR|NOT)\b", re.I)
+_ISSUE_SEARCH_TERMS = (
+    "CVE",
+    "GHSA",
+    "label:security",
+    "label:vulnerability",
+    "RCE",
+    "XSS",
+    "漏洞",
+    "未授权",
+)
 
 _REPO_URL_RE = re.compile(
     r"(?:github\.com[:/]|git@github\.com:)(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)",
@@ -125,17 +138,33 @@ def issue_keys_from_text(text: str) -> set[str]:
     return {k for k in keys if k and k != "UNKNOWN"}
 
 
-def issue_search_queries(repo: str, since: str) -> list[str]:
-    created = f"created:>={since}"
-    return [
-        f"repo:{repo} is:issue is:open (CVE OR GHSA) {created}",
-        (
-            f"repo:{repo} is:issue is:open in:title "
-            f'(RCE OR SQLi OR SSRF OR XSS OR LFI OR unauth OR advisory OR Security OR 漏洞 OR 未授权 OR 越权 OR "code execution") '
-            f"{created}"
-        ),
-        f"repo:{repo} is:issue is:open (label:security OR label:vulnerability OR label:cve) {created}",
+def github_search_operator_count(query: str) -> int:
+    """Count AND/OR/NOT operators GitHub Search enforces, including implicit AND."""
+    stripped = re.sub(r'"[^"]*"', "Q", query or "")
+    explicit = len(_BOOLEAN_OP_RE.findall(stripped))
+    tokens = [
+        tok
+        for tok in re.split(r"\s+", stripped.replace("(", " ").replace(")", " "))
+        if tok and not _BOOLEAN_OP_RE.fullmatch(tok)
     ]
+    implicit = max(0, len(tokens) - 1)
+    return explicit + implicit
+
+
+def issue_search_queries(repo: str, since: str = "") -> list[str]:
+    """Build Search queries that stay under GitHub's 5 AND/OR/NOT cap.
+
+    `since` is kept for callers; date filtering happens client-side so `created:`
+    does not add another implicit AND.
+    """
+    _ = since
+    queries: list[str] = []
+    for term in _ISSUE_SEARCH_TERMS:
+        q = f"repo:{repo} is:issue is:open {term}"
+        if github_search_operator_count(q) > GITHUB_SEARCH_MAX_OPERATORS:
+            continue
+        queries.append(q)
+    return queries
 
 
 def _label_names(item: dict[str, Any]) -> list[str]:
@@ -236,6 +265,9 @@ def _search_issue_pages(
         if r.status_code == 403:
             errors.append(f"GitHub Search 403/限流: {r.text[:300]}")
             break
+        if r.status_code == 422:
+            errors.append(f"GitHub Search HTTP 422（操作符过多或查询无效）: {r.text[:300]}")
+            break
         if r.status_code != 200:
             errors.append(f"GitHub Search HTTP {r.status_code}: {r.text[:200]}")
             break
@@ -280,6 +312,9 @@ def crawl_github_issues(
             errors.extend(q_errors)
             for item in items:
                 if str(item.get("state") or "").strip().lower() != "open":
+                    continue
+                created = str(item.get("created_at") or "")[:10]
+                if published_since and created and created < published_since:
                     continue
                 if not _has_security_signal(item):
                     continue

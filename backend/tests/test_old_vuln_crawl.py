@@ -5,6 +5,7 @@ import json
 from app.services.old_vuln_crawl import (
     collect_old_vuln_skip_keys,
     default_product_keyword,
+    infer_affected_packages,
     infer_ecosystems,
     run_old_vuln_ghsa_crawl,
     save_crawl_spec,
@@ -28,6 +29,24 @@ def test_default_keyword_from_identity(tmp_env, project):
 def test_infer_ecosystems_from_pom(tmp_env, project):
     (src_dir(project) / "pom.xml").write_text("<project/>", encoding="utf-8")
     assert infer_ecosystems(project) == ("maven",)
+
+
+def test_infer_affected_packages_from_pom(tmp_env, project):
+    (src_dir(project) / "pom.xml").write_text(
+        """
+        <project>
+          <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId></parent>
+          <groupId>run.halo.app</groupId>
+          <artifactId>application</artifactId>
+        </project>
+        """,
+        encoding="utf-8",
+    )
+    pkgs = infer_affected_packages(project)
+    assert "application" in pkgs
+    assert "run.halo.app" in pkgs
+    assert "run.halo.app:application" in pkgs
+    assert "spring-boot-starter-parent" not in pkgs
 
 
 def test_collect_skip_keys_from_old_vuln_docs(tmp_env, project):
@@ -135,6 +154,10 @@ def test_run_old_vuln_crawl_merges_github_issues(tmp_env, project, monkeypatch):
 
     monkeypatch.setattr("app.services.old_vuln_crawl.crawl_ghsa", fake_ghsa)
     monkeypatch.setattr("app.services.old_vuln_crawl.crawl_github_issues", fake_issues)
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.crawl_repo_advisories",
+        lambda repo, **kwargs: ([], {"repo": repo, "fetched": 0, "errors": []}),
+    )
     result = run_old_vuln_ghsa_crawl(project)
     assert result.ok is True
     assert result.issue_count == 1
@@ -145,6 +168,45 @@ def test_run_old_vuln_crawl_merges_github_issues(tmp_env, project, monkeypatch):
     assert "CVE-2024-0001" in ids
     assert "halo-dev/halo#99" in ids
     assert payload["meta"]["repo"] == "halo-dev/halo"
+
+
+def test_run_old_vuln_crawl_merges_repo_advisories(tmp_env, project, monkeypatch):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        row = db.get(models.Project, project)
+        row.identity = "halo-dev/halo"
+        db.commit()
+    save_crawl_spec(project, keyword="halo")
+
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.crawl_ghsa",
+        lambda keyword, **kwargs: ([], {"fetched": 0, "errors": [], "packages": ["halo"]}),
+    )
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.crawl_repo_advisories",
+        lambda repo, **kwargs: (
+            [
+                {
+                    "identifier": "CVE-2024-1234",
+                    "title": "repo advisory",
+                    "source": "ghsa",
+                    "fix_status": "patched",
+                }
+            ],
+            {"repo": repo, "fetched": 1, "errors": []},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.old_vuln_crawl.crawl_github_issues",
+        lambda repo, **kwargs: ([], {"fetched": 0, "errors": [], "repo": repo}),
+    )
+    result = run_old_vuln_ghsa_crawl(project)
+    assert result.ok is True
+    assert result.ghsa_count == 1
+    assert result.new_count == 1
+    payload = json.loads(ghsa_new_path(project).read_text(encoding="utf-8"))
+    assert payload["vulnerabilities"][0]["identifier"] == "CVE-2024-1234"
 
 
 def test_run_recon_old_vuln_crawl_pass_hands_results_to_agent(tmp_env, project, monkeypatch):
