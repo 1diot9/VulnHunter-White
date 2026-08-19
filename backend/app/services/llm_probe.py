@@ -1,4 +1,4 @@
-"""List remote models and ping Chat Completions for settings UI."""
+"""List remote models and ping chat / Anthropic Messages for settings UI."""
 
 from __future__ import annotations
 
@@ -8,6 +8,13 @@ from typing import Any
 
 import httpx
 
+from ..agent.anthropic_compat import (
+    anthropic_headers,
+    anthropic_message_to_openai,
+    anthropic_url,
+    build_anthropic_body,
+    is_anthropic_wire,
+)
 from ..schemas import LlmModelListOut, LlmProbeIn, LlmTestOut
 from .http_client import chat_http_client
 from .llm_settings import resolve_probe_target
@@ -15,7 +22,9 @@ from .llm_settings import resolve_probe_target
 _PROBE_TIMEOUT = 30.0
 
 
-def _headers(api_key: str) -> dict[str, str]:
+def _headers(api_key: str, wire_api: str = "chat") -> dict[str, str]:
+    if is_anthropic_wire(wire_api):
+        return anthropic_headers(api_key)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -113,16 +122,17 @@ def _choice_text(data: dict[str, Any]) -> str:
 
 
 def list_models(body: LlmProbeIn) -> LlmModelListOut:
-    base_url, api_key, _model = resolve_probe_target(
+    base_url, api_key, _model, wire_api = resolve_probe_target(
         base_url=body.base_url,
         api_key=body.api_key,
         model=body.model,
+        wire_api=body.wire_api,
     )
     url = base_url + "/models"
     started = time.perf_counter()
     try:
         with chat_http_client(timeout=_PROBE_TIMEOUT) as client:
-            r = client.get(url, headers=_headers(api_key))
+            r = client.get(url, headers=_headers(api_key, wire_api))
     except Exception as e:  # noqa: BLE001
         return LlmModelListOut(ok=False, error=_transport_error(e))
 
@@ -141,32 +151,43 @@ def list_models(body: LlmProbeIn) -> LlmModelListOut:
         return LlmModelListOut(
             ok=False,
             latency_ms=latency,
-            error="未解析到模型列表，请确认该接口兼容 OpenAI GET /models",
+            error=(
+                "未解析到模型列表，请确认该接口兼容 GET /models"
+                + ("（Anthropic Messages）" if is_anthropic_wire(wire_api) else "（OpenAI）")
+            ),
         )
     return LlmModelListOut(ok=True, models=models, count=len(models), latency_ms=latency)
 
 
 def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
-    base_url, api_key, model = resolve_probe_target(
+    base_url, api_key, model, wire_api = resolve_probe_target(
         base_url=body.base_url,
         api_key=body.api_key,
         model=body.model,
+        wire_api=body.wire_api,
     )
     if not model:
         return LlmTestOut(ok=False, error="请填写模型名")
     if not api_key:
         return LlmTestOut(ok=False, model=model, error="未配置 API Key")
 
-    url = base_url + "/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Reply with the single word pong."}],
-        "max_tokens": 16,
-    }
+    probe_messages = [{"role": "user", "content": "Reply with the single word pong."}]
+    if is_anthropic_wire(wire_api):
+        url = anthropic_url(base_url)
+        payload = build_anthropic_body(model=model, messages=probe_messages, max_tokens=16)
+        headers = _headers(api_key, wire_api)
+    else:
+        url = base_url + "/chat/completions"
+        payload = {
+            "model": model,
+            "messages": probe_messages,
+            "max_tokens": 16,
+        }
+        headers = _headers(api_key, wire_api)
     started = time.perf_counter()
     try:
         with chat_http_client(timeout=_PROBE_TIMEOUT) as client:
-            r = client.post(url, headers=_headers(api_key), json=payload)
+            r = client.post(url, headers=headers, json=payload)
     except Exception as e:  # noqa: BLE001
         return LlmTestOut(ok=False, model=model, error=_transport_error(e))
 
@@ -187,5 +208,7 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
     err = _provider_error(data)
     if err:
         return LlmTestOut(ok=False, model=model, latency_ms=latency, error=err)
+    if is_anthropic_wire(wire_api) or data.get("type") == "message":
+        data = anthropic_message_to_openai(data)
     reply = _choice_text(data)
     return LlmTestOut(ok=True, model=model, latency_ms=latency, reply=reply or None)

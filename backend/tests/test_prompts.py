@@ -260,6 +260,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     dynamic_overlay = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "仅静态" not in dynamic_overlay
     assert "动态验证阶梯" in dynamic_overlay
+    forced = pipeline._phase_system_prompt(project, "reviewer.md", verify_mode="off")
+    assert "仅静态" in forced
 
     initial = pipeline._initial_prompt(
         "worker.md",

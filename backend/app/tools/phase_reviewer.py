@@ -1,4 +1,4 @@
-"""Reviewer tools: ConfirmVuln, MergeIntoVuln, ReturnToWorker, FinishLab."""
+"""Reviewer tools: ConfirmVuln, MergeIntoVuln, MarkFalsePositive, ReturnToWorker, FinishLab."""
 
 from __future__ import annotations
 
@@ -7,7 +7,13 @@ from typing import Any
 
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
 from ..config import settings
-from ..dynamic_verify import coerce_evidence_level, normalize_evidence_level, project_verify_mode
+from ..dynamic_verify import (
+    VERIFY_MODE_OFF,
+    coerce_evidence_level,
+    normalize_evidence_level,
+    project_verify_mode,
+    static_after_review_timeouts,
+)
 from ..models import Project, SessionLocal, Vuln
 from ..services.affected_locations import (
     append_affected_locations,
@@ -371,6 +377,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         proj = db.get(Project, ctx.project_id)
         verify_mode = project_verify_mode(proj)
+        if static_after_review_timeouts(vuln.review_timeout_streak):
+            verify_mode = VERIFY_MODE_OFF
         evidence = coerce_evidence_level(evidence_raw, mode=verify_mode)
         audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if audit_mode == AUDIT_MODE_BOUNTY:
@@ -551,6 +559,20 @@ def _collect_lab_fingerprints(ctx, args: dict[str, Any]) -> dict[str, Any]:
     return collected
 
 
+def _mark_false_positive(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    vuln_id = args.get("vuln_id") or ctx.vuln_id
+    reason = (args.get("reason") or args.get("failure_reason") or "").strip()
+    if not vuln_id:
+        return {"ok": False, "error": "缺少 vuln_id"}
+    if not reason:
+        return {"ok": False, "error": "误报必须附带原因 reason"}
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != ctx.project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        return _commit_false_positive(ctx, db, vuln, vuln_id, reason, "已判误报")
+
+
 def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     reason = (args.get("reason") or args.get("failure_reason") or "").strip()
@@ -558,12 +580,13 @@ def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "缺少 vuln_id"}
     if not reason:
         return {"ok": False, "error": "打回必须附带失败原因 reason"}
-    false_positive = bool(args.get("false_positive") or args.get("is_false_positive"))
+    if bool(args.get("false_positive") or args.get("is_false_positive")):
+        return _mark_false_positive(ctx, args)
     with SessionLocal() as db:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:
             return {"ok": False, "error": "漏洞不存在"}
-        if false_positive or vuln.intended_behavior:
+        if vuln.intended_behavior:
             return _commit_false_positive(ctx, db, vuln, vuln_id, reason, "已判误报")
         vuln.review_rounds = int(vuln.review_rounds or 0) + 1
         if vuln.review_rounds > settings.max_review_rejects:
@@ -581,7 +604,7 @@ def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "vuln_id": int(vuln_id),
         "status": "returned",
         "review_rounds": rounds,
-        "message": "已打回 Worker 修改",
+        "message": "已打回 Worker 补分析债务",
     }
 
 
@@ -625,7 +648,7 @@ def register_reviewer_tools() -> None:
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp|harness。"
-                "关闭时必须 static_only；靶场动态默认 dynamic（先跑 Worker poc.py），"
+                "关闭时必须 static_only；靶场动态默认 dynamic（先跑当前 poc.py，同链校准由本轮完成），"
                 "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
                 "局部验证打通时标 harness，不要标 dynamic。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
@@ -732,8 +755,8 @@ def register_reviewer_tools() -> None:
                     "poc_code": {
                         "type": "string",
                         "description": (
-                            "可选。若把 poc.py 改成 CLI 参数化（-u/--url，RCE 加 -c/--cmd），"
-                            "在此传入完整脚本，系统会回写 vulns/{id}/poc.py。"
+                            "可选。本轮改写后的完整 poc.py（CLI 形态，以及同链上的 payload 校准），"
+                            "系统会回写 vulns/{id}/poc.py。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。"
                         ),
                     },
                     "harness_code": {
@@ -811,6 +834,7 @@ def register_reviewer_tools() -> None:
                 "二选一：into=主报告id（把当前条并入目标，当前条 status=merged，会话结束）；"
                 "或 absorb=[兄弟id...]（把队列里的 pending 兄弟并入当前主报告，然后继续 ConfirmVuln）。"
                 "不要用打回或误报来「合并」；不要 Write 已确认 report.md。"
+                "PoC/报告包装由本轮 Reviewer 自己改，不要为此 ReturnToWorker。"
                 "危害或攻击面不同时不要调用本工具。"
             ),
             parameters={
@@ -857,15 +881,40 @@ def register_reviewer_tools() -> None:
     )
     registry.register(
         ToolSpec(
-            name="ReturnToWorker",
-            description="打回 Worker 修改报告，或直接判误报。不要用打回做同根因合并。",
+            name="MarkFalsePositive",
+            description=(
+                "判定误报并结束本审核会话。用于成立性不成立、赏金禁止类型、"
+                "需种文件/第二个独立漏洞才成立、默认口令、前端传输混淆密钥等。"
+                "不要用来改 PoC、降危害口径或合并同根因。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "vuln_id": {"type": "integer"},
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "description": "误报原因，写入报告底部"},
                     "failure_reason": {"type": "string"},
-                    "false_positive": {"type": "boolean"},
+                },
+            },
+            handler=_mark_false_positive,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="ReturnToWorker",
+            description=(
+                "仅当入口/sink/根因分析错了、需要 Worker 重新读源码补分析债务时打回。"
+                "不要用来改 PoC、CLI 形态、指纹、危害口径或报告文案——那些由本轮 Reviewer Write 后 ConfirmVuln。"
+                "误报请用 MarkFalsePositive。不要用打回做同根因合并。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "vuln_id": {"type": "integer"},
+                    "reason": {
+                        "type": "string",
+                        "description": "必须写清缺哪一块分析（错误入口/sink/根因），不要只写 PoC 跑不通",
+                    },
+                    "failure_reason": {"type": "string"},
                 },
             },
             handler=_return_to_worker,

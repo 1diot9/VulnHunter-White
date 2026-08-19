@@ -15,7 +15,14 @@ LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer", "verifier")
 _RECON_AGENT_ROLES = frozenset(
     {"recon", "recon_mark", "recon_old_vuln", "recon_old_vuln_ghsa", "recon_source_ext"}
 )
-_WIRE = frozenset({"chat", "responses"})
+_WIRE = frozenset({"chat", "responses", "anthropic"})
+_WIRE_ALIASES = {"messages": "anthropic", "claude": "anthropic"}
+
+
+def normalize_wire_api(value: str | None) -> str:
+    wire = (value or "chat").strip().lower()
+    wire = _WIRE_ALIASES.get(wire, wire)
+    return wire if wire in _WIRE else "chat"
 
 
 @dataclass(frozen=True)
@@ -57,9 +64,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
         pid = str(p.get("id") or "").strip()
         if not pid:
             continue
-        wire = str(p.get("wire_api") or "chat").strip().lower()
-        if wire not in _WIRE:
-            wire = "chat"
+        wire = normalize_wire_api(str(p.get("wire_api") or "chat"))
         out.append(
             LlmProviderOut(
                 id=pid,
@@ -137,9 +142,10 @@ def merge_providers_update(
         if pid in seen:
             raise ValueError(f"重复的 Provider id: {pid}")
         seen.add(pid)
-        wire = (item.wire_api or "chat").strip().lower()
-        if wire not in _WIRE:
-            raise ValueError(f"Provider {pid}: wire_api 须为 chat 或 responses")
+        wire = normalize_wire_api(item.wire_api)
+        raw_wire = (item.wire_api or "chat").strip().lower()
+        if raw_wire and raw_wire not in _WIRE and raw_wire not in _WIRE_ALIASES:
+            raise ValueError(f"Provider {pid}: wire_api 须为 chat、responses 或 anthropic")
         prev = old_by_id.get(pid) or {}
         if item.api_key is None:
             api_key = str(prev.get("api_key") or "")
@@ -151,7 +157,8 @@ def merge_providers_update(
                 "name": (item.name or "").strip() or pid,
                 "base_url": (item.base_url or "").strip(),
                 "wire_api": wire,
-                "env_key": (item.env_key or "").strip() or "OPENAI_API_KEY",
+                "env_key": (item.env_key or "").strip()
+                or ("ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"),
                 "api_key": api_key,
             }
         )
@@ -206,12 +213,15 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip()
         if not api_key:
             api_key = (os.environ.get(env_key) or "").strip()
-        wire = str(provider.get("wire_api") or "chat").strip().lower()
+        wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
+        if not api_key and wire == "anthropic":
+            api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         if not model:
             model = (row.default_model if row else "") or "gpt-4o"
+        default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
         return ResolvedLlm(
-            base_url=base_url.rstrip("/") or "https://api.openai.com/v1",
-            wire_api=wire if wire in _WIRE else "chat",
+            base_url=base_url.rstrip("/") or default_url,
+            wire_api=wire,
             model=model,
             api_key=api_key,
             source=f"provider:{provider_id}" + ("+project" if project_model else ""),
@@ -230,34 +240,48 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
     )
 
 
+def _saved_provider(row: AppSettings | None) -> dict[str, Any] | None:
+    providers = load_providers_raw(row)
+    if not providers:
+        return None
+    for p in providers:
+        if str(p.get("id") or "").strip() == "default":
+            return p
+    return providers[0]
+
+
 def resolve_probe_target(
     *,
     base_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
-) -> tuple[str, str, str]:
-    """Resolve Base URL / API key / model from form overrides, then saved settings."""
+    wire_api: str | None = None,
+) -> tuple[str, str, str, str]:
+    """Resolve Base URL / API key / model / wire_api from form overrides, then saved settings."""
     row = get_settings_row()
     saved_url = (row.default_base_url or "").strip()
     saved_key = (row.default_api_key or "").strip()
     saved_model = (row.default_model or "").strip()
-
-    if not saved_url or not saved_key:
-        providers = load_providers_raw(row)
-        if providers:
-            p = providers[0]
-            if not saved_url:
-                saved_url = str(p.get("base_url") or "").strip()
+    saved_wire = "chat"
+    provider = _saved_provider(row)
+    if provider:
+        saved_wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
+        if not saved_url:
+            saved_url = str(provider.get("base_url") or "").strip()
+        if not saved_key:
+            saved_key = str(provider.get("api_key") or "").strip()
             if not saved_key:
-                saved_key = str(p.get("api_key") or "").strip()
-                if not saved_key:
-                    env_key = str(p.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
-                    saved_key = (os.environ.get(env_key) or "").strip()
+                env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
+                saved_key = (os.environ.get(env_key) or "").strip()
 
-    url = (base_url or "").strip() or saved_url or "https://api.openai.com/v1"
+    wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
+    default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
+    url = (base_url or "").strip() or saved_url or default_url
     key = (api_key or "").strip() or saved_key or (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not key and wire == "anthropic":
+        key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     mdl = (model or "").strip() or saved_model
-    return url.rstrip("/"), key, mdl
+    return url.rstrip("/"), key, mdl, wire
 
 
 def get_settings_row() -> AppSettings:

@@ -48,6 +48,8 @@ from ..dynamic_verify import (
     is_harness_mode,
     is_lab_mode,
     project_verify_mode,
+    review_timeouts_before_static,
+    static_after_review_timeouts,
     verify_mode_enabled,
 )
 from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active, mining_path_label
@@ -1037,7 +1039,7 @@ def _worker_concurrency(project_id: int) -> int:
 
 
 def _fix_concurrency() -> int:
-    """打回报告修改用独立池，不占用挖掘 Worker 名额。"""
+    """打回分析债务用独立池，不占用挖掘 Worker 名额。"""
     return WORKER_FIX_POOL
 
 
@@ -1296,7 +1298,7 @@ _ASSET_PROOF_LAB_HINT = (
     "应用指纹是项目级的（docs/app-fingerprints.json），全项目只识别一次。"
     "有可访问的漏洞环境时，用 CollectLabFingerprints 升级项目指纹（标题/body/header/favicon），"
     "再写入本条报告（apply=true 或 ConfirmVuln 传 fofa_fingerprint/x_fingerprint）。"
-    "不要把「待运行环境确认」留到确认后，也不要为此 ReturnToWorker。"
+    "不要把「待运行环境确认」留到确认后，也不要为此 ReturnToWorker。报告包装与 PoC 由本轮 Reviewer 改完 Confirm。"
 )
 
 
@@ -1388,7 +1390,12 @@ _POC_PROMPT_PHASES = frozenset(
 )
 
 
-def _phase_system_prompt(project_id: int, name: str) -> str:
+def _phase_system_prompt(
+    project_id: int,
+    name: str,
+    *,
+    verify_mode: str | None = None,
+) -> str:
     base = load_prompt(name).rstrip()
     mode = _read_audit_mode(project_id)
     if mode == AUDIT_MODE_CUSTOM:
@@ -1406,12 +1413,80 @@ def _phase_system_prompt(project_id: int, name: str) -> str:
     if name in _POC_PROMPT_PHASES:
         parts.append(load_prompt("poc.md").strip())
     if name == "reviewer.md":
-        verify_mode = _read_dynamic_verify_mode(project_id)
-        if verify_mode == VERIFY_MODE_OFF:
+        chosen = verify_mode if verify_mode is not None else _read_dynamic_verify_mode(project_id)
+        if chosen == VERIFY_MODE_OFF:
             parts.append(load_prompt("verify/static.md").strip())
-        elif verify_mode == VERIFY_MODE_HARNESS:
+        elif chosen == VERIFY_MODE_HARNESS:
             parts.append(load_prompt("verify/harness.md").strip())
     return "\n\n".join(parts) + "\n"
+
+
+def _timeout_forced_static_note(streak: int) -> str:
+    threshold = review_timeouts_before_static()
+    return (
+        f"本条漏洞已连续超时 {streak} 轮（阈值 {threshold}），系统已强制本轮仅静态审核。"
+        "忽略上一轮未完成的动态环境、认证或路由排查。"
+        f"\n{_STATIC_REVIEW_NOTE}"
+    )
+
+
+def _reviewer_round_verify(
+    project_id: int, *, timeout_streak: int
+) -> tuple[str, dict[str, Any], str, bool]:
+    """lab_note, debug_plan, system_prompt, force_static."""
+    force_static = static_after_review_timeouts(timeout_streak)
+    if force_static:
+        lab_note = _timeout_forced_static_note(timeout_streak)
+        debug_plan: dict[str, Any] = {
+            "enabled": False,
+            "preferred": "static_only",
+            "reason": "consecutive_review_timeouts",
+        }
+        system = _phase_system_prompt(project_id, "reviewer.md", verify_mode=VERIFY_MODE_OFF)
+        return lab_note, debug_plan, system, True
+    lab_note = _reviewer_lab_note(project_id)
+    mode = _read_dynamic_verify_mode(project_id)
+    if mode == VERIFY_MODE_OFF:
+        debug_plan = {"enabled": False, "preferred": "static_only"}
+    elif mode == VERIFY_MODE_HARNESS:
+        debug_plan = harness_debug_plan()
+    else:
+        debug_plan = {**reviewer_debug_plan(project_id), "enabled": True}
+    return lab_note, debug_plan, _phase_system_prompt(project_id, "reviewer.md"), False
+
+
+def _note_reviewer_round_end(project_id: int, vuln_id: int | None, result: Any) -> None:
+    """Count consecutive timeouts on a pending vuln; reset after a verdict."""
+    if vuln_id is None:
+        return
+    review_done = bool((getattr(result, "state", None) or {}).get("review_done"))
+    timed_out = bool(getattr(result, "timed_out", False)) or getattr(result, "stop_reason", "") == "timeout"
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != project_id:
+            return
+        if review_done:
+            vuln.review_timeout_streak = 0
+            db.commit()
+            return
+        if not timed_out:
+            return
+        streak = int(vuln.review_timeout_streak or 0) + 1
+        vuln.review_timeout_streak = streak
+        db.commit()
+    threshold = review_timeouts_before_static()
+    if streak >= threshold:
+        live_log.system(
+            project_id,
+            f"漏洞 #{vuln_id} 已连续超时 {streak} 轮，下一轮强制仅静态审核",
+            phase="reviewer",
+        )
+    else:
+        live_log.system(
+            project_id,
+            f"漏洞 #{vuln_id} 审核超时（连续 {streak}/{threshold}）",
+            phase="reviewer",
+        )
 
 
 def _initial_prompt(name: str, **kwargs: object) -> str:
@@ -3653,6 +3728,7 @@ def _run_reviewer_once(project_id: int) -> None:
                 _pause_for_auth(project_id, result.error or "auth_error")
                 return
             _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
+            _note_reviewer_round_end(project_id, cp.vuln_id, result)
             live_log.system(
                 project_id,
                 f"Reviewer 结束 vuln={cp.vuln_id} verdict={result.state.get('review_verdict')} reason={result.stop_reason}",
@@ -3677,6 +3753,7 @@ def _run_reviewer_once(project_id: int) -> None:
             if not vuln:
                 return
             vuln_id = vuln.id
+            timeout_streak = int(vuln.review_timeout_streak or 0)
             payload = {
                 "title": vuln.title,
                 "type": vuln.vuln_type,
@@ -3690,14 +3767,15 @@ def _run_reviewer_once(project_id: int) -> None:
                 "source_sink": vuln.source_sink,
             }
 
-        lab_note = _reviewer_lab_note(project_id)
-        mode = _read_dynamic_verify_mode(project_id)
-        if mode == VERIFY_MODE_OFF:
-            debug_plan = {"enabled": False, "preferred": "static_only"}
-        elif mode == VERIFY_MODE_HARNESS:
-            debug_plan = harness_debug_plan()
-        else:
-            debug_plan = {**reviewer_debug_plan(project_id), "enabled": True}
+        lab_note, debug_plan, system, force_static = _reviewer_round_verify(
+            project_id, timeout_streak=timeout_streak
+        )
+        if force_static:
+            live_log.system(
+                project_id,
+                f"漏洞 #{vuln_id} 已连续超时 {timeout_streak} 轮，本轮强制仅静态审核",
+                phase="reviewer",
+            )
 
         with SessionLocal() as db:
             proj = db.get(Project, project_id)
@@ -3706,7 +3784,6 @@ def _run_reviewer_once(project_id: int) -> None:
                 proj.status = "reviewing"
                 db.commit()
 
-        system = _phase_system_prompt(project_id, "reviewer.md")
         body = _initial_prompt(
             "reviewer.md",
             vuln_id=vuln_id,
@@ -3715,10 +3792,13 @@ def _run_reviewer_once(project_id: int) -> None:
             debug_plan=json_dumps(debug_plan),
             **_audit_mode_vars(project_id),
         )
-        user = _prompt_with_summary("reviewer", project_id, body)
+        user = body if force_static else _prompt_with_summary("reviewer", project_id, body)
         run_id = _new_phase_run(project_id, "reviewer", "reviewer", vuln_id=vuln_id)
         _consume_force_new(project_id, "reviewer")
-        _start_log_session(project_id, "reviewer", extra=f"漏洞 #{vuln_id}")
+        extra = f"漏洞 #{vuln_id}"
+        if force_static:
+            extra = f"{extra} 强制仅静态"
+        _start_log_session(project_id, "reviewer", extra=extra)
         loop = AgentLoop(
             project_id=project_id,
             role="reviewer",
@@ -3738,6 +3818,7 @@ def _run_reviewer_once(project_id: int) -> None:
             _pause_for_auth(project_id, result.error or "auth_error")
             return
         _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
+        _note_reviewer_round_end(project_id, vuln_id, result)
         live_log.system(
             project_id,
             f"Reviewer 结束 vuln={vuln_id} verdict={result.state.get('review_verdict')} reason={result.stop_reason}",

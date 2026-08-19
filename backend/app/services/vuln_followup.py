@@ -6,6 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..agent.anthropic_compat import (
+    anthropic_headers,
+    anthropic_url,
+    build_anthropic_body,
+    consume_anthropic_stream,
+    is_anthropic_wire,
+)
 from ..agent.checkpoint import LoopCheckpoint, load_checkpoint
 from ..agent.chat_stream import ChatStreamError, ChatStreamProviderError, consume_chat_stream
 from ..config import settings
@@ -321,18 +328,30 @@ def _build_chat_messages(
 
 def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
     llm = resolve_llm("reviewer", project_id=project_id)
-    url = llm.base_url.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {llm.api_key}",
-        "Content-Type": "application/json",
-    }
-    body: dict[str, Any] = {
-        "model": llm.model,
-        "messages": messages,
-        "temperature": settings.temperature,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
+    if is_anthropic_wire(llm.wire_api):
+        url = anthropic_url(llm.base_url)
+        headers = anthropic_headers(llm.api_key)
+        body: dict[str, Any] = build_anthropic_body(
+            model=llm.model,
+            messages=list(messages),
+            stream=True,
+            temperature=settings.temperature,
+        )
+        consume = consume_anthropic_stream
+    else:
+        url = llm.base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {llm.api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": llm.model,
+            "messages": messages,
+            "temperature": settings.temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        consume = consume_chat_stream
     timeout = chat_http_timeout(float(settings.timeout_reviewer_static or 180), 0)
     try:
         with chat_http_client(timeout=timeout) as client:
@@ -346,7 +365,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                     if res.status_code >= 400:
                         text = res.read().decode("utf-8", errors="replace")
                         raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
-                    data = consume_chat_stream(res.iter_lines())
+                    data = consume(res.iter_lines())
                     choice = (data.get("choices") or [None])[0] or {}
                     msg = choice.get("message") or {}
                     content = msg.get("content")

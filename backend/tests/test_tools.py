@@ -978,7 +978,7 @@ def test_confirm_frontend_ignores_account(tmp_env, project):
         assert v.required_account is None
 
 
-def test_return_to_worker_false_positive(tmp_env, project):
+def test_mark_false_positive(tmp_env, project):
     payload = {
         "title": "intended",
         "vuln_type": "info_disclosure",
@@ -996,14 +996,38 @@ def test_return_to_worker_false_positive(tmp_env, project):
     vuln_id = out["vuln_id"]
     ret = registry.dispatch(
         _ctx(project, "reviewer"),
-        "ReturnToWorker",
-        {"vuln_id": vuln_id, "reason": "已知业务能力", "false_positive": True},
+        "MarkFalsePositive",
+        {"vuln_id": vuln_id, "reason": "已知业务能力"},
     )
     assert ret["status"] == "false_positive"
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert report.rstrip().endswith("已知业务能力")
     assert "## 误报判定" in report
     assert report.index("## 误报判定") > report.index("# intended")
+
+
+def test_return_to_worker_false_positive_compat(tmp_env, project):
+    payload = {
+        "title": "legacy fp",
+        "vuln_type": "info_disclosure",
+        "cwe": "CWE-200",
+        "file_path": "app/Main.java",
+        "line_no": 2,
+        "source_sink": "a->b",
+        "auth_premise": "登录后",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "ok",
+        "intended_behavior": False,
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    vuln_id = out["vuln_id"]
+    ret = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ReturnToWorker",
+        {"vuln_id": vuln_id, "reason": "旧参数误报", "false_positive": True},
+    )
+    assert ret["status"] == "false_positive"
 
 
 def test_return_to_worker_keeps_report_when_not_fp(tmp_env, project):
@@ -1054,7 +1078,7 @@ def test_return_to_worker_max_rejects_appends_reason(tmp_env, project):
     Session = tmp_env["Session"]
     with Session() as db:
         v = db.get(models.Vuln, vuln_id)
-        v.review_rounds = 2
+        v.review_rounds = 1
         db.commit()
     ret = registry.dispatch(
         _ctx(project, "reviewer"),
@@ -1185,15 +1209,25 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
+    assert "MarkFalsePositive" in reviewer_names
+    assert "ReturnToWorker" in reviewer_names
     assert "RunCode" not in reviewer_names
     assert "CollectLabFingerprints" in reviewer_names
     assert "FinishLab" not in reviewer_names
+    reviewer_descs = {
+        t["function"]["name"]: t["function"]["description"]
+        for t in registry.openai_tools_for_role("reviewer")
+    }
+    assert "分析债务" in reviewer_descs["ReturnToWorker"]
+    assert "MarkFalsePositive" in reviewer_descs["ReturnToWorker"]
+    assert "不要用来改 PoC" in reviewer_descs["MarkFalsePositive"]
     lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}
     assert "FinishLab" in lab_names
     assert "Write" in lab_names
     assert "ConfirmVuln" not in lab_names
     assert "CollectLabFingerprints" not in lab_names
     assert "ReturnToWorker" not in lab_names
+    assert "MarkFalsePositive" not in lab_names
     verifier_names = {t["function"]["name"] for t in registry.openai_tools_for_role("verifier")}
     assert "FofaSearch" in verifier_names
     assert "FinishVerifier" in verifier_names

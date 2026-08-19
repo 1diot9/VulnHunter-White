@@ -23,6 +23,10 @@ ToolHandler = Callable[["ToolContext", dict[str, Any]], dict[str, Any]]
 PARALLEL_SAFE = frozenset({"Read", "Grep", "Glob", "SearchOldVuln", "WebSearch"})
 
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
+# Hidden and rejected when a pending vuln has hit consecutive reviewer timeouts.
+_STATIC_FORCED_BLOCKED_TOOLS = frozenset(
+    {"Bash", "PowerShell", "CollectLabFingerprints", "RunCode"}
+)
 _SHELL_DISPATCH_TIMEOUT_DEFAULT = 120
 _SHELL_DISPATCH_TIMEOUT_MAX = 180
 _SHELL_DISPATCH_TIMEOUT_GRACE = 10
@@ -156,6 +160,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "ConfirmVuln",
             "CollectLabFingerprints",
             "MergeIntoVuln",
+            "MarkFalsePositive",
             "ReturnToWorker",
             "RunCode",
         }
@@ -299,16 +304,28 @@ class ToolRegistry:
             }
         return payload
 
-    def openai_tools_for_role(self, role: str, *, project_id: int | None = None) -> list[dict[str, Any]]:
+    def openai_tools_for_role(
+        self,
+        role: str,
+        *,
+        project_id: int | None = None,
+        vuln_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         allowed = tools_allowed_for_role(role)
         hide_run_code = role == "reviewer"
+        hide_dynamic_tools = False
         if role == "reviewer" and project_id is not None:
-            from ..dynamic_verify import project_is_harness
+            from ..dynamic_verify import project_is_harness, vuln_forces_static_review
 
             hide_run_code = not project_is_harness(project_id)
+            hide_dynamic_tools = vuln_forces_static_review(project_id=project_id, vuln_id=vuln_id)
+            if hide_dynamic_tools:
+                hide_run_code = True
         out: list[dict[str, Any]] = []
         for name in sorted(allowed):
             if name == "RunCode" and hide_run_code:
+                continue
+            if hide_dynamic_tools and name in _STATIC_FORCED_BLOCKED_TOOLS:
                 continue
             spec = self._tools.get(name)
             if not spec:
@@ -342,6 +359,27 @@ class ToolRegistry:
                 }
             live_log.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
             return result
+        if ctx.role == "reviewer" and name in _STATIC_FORCED_BLOCKED_TOOLS:
+            from ..dynamic_verify import vuln_forces_static_review
+
+            if vuln_forces_static_review(project_id=ctx.project_id, vuln_id=ctx.vuln_id):
+                result = {
+                    "ok": False,
+                    "error": (
+                        "本条漏洞已连续超时，本轮仅允许静态审核"
+                        "（禁止 Shell / poc.py / docker / CollectLabFingerprints / RunCode）"
+                    ),
+                    "error_class": "call",
+                }
+                live_log.tool(
+                    ctx.project_id,
+                    name,
+                    arguments if isinstance(arguments, dict) else {},
+                    result,
+                    phase=ctx.phase,
+                    role=ctx.role,
+                )
+                return result
         spec = self._tools.get(name)
         if not spec:
             result = {"ok": False, "error": f"未知工具: {name}", "error_class": "call"}

@@ -2,7 +2,7 @@
 
 Reviewer 改写 PoC 时用的 Java / Node / Python 动态调试 MCP 放在本目录，路径相对仓库根目录，不依赖 `D:\AI\MCP_Tools`。
 
-**用途**：动态验证先跑 Worker 提供的 `poc.py`。仅当该 PoC 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试时，才 attach 本目录 MCP（断点、看 sink 是否到达、payload 如何被处理）。不要作为首选验证方式。未构建时 Reviewer 只走普通动态（HTTP PoC + docker exec）。
+**用途**：动态验证先跑当前 `poc.py`。PoC 由 Reviewer 收口；仅当缺失、跑不通或复现失败，且需要自己改写/调试时，才 attach 本目录 MCP（断点、看 sink 是否到达、payload 如何被处理）。不要作为首选验证方式，也不要为此打回 Worker。未构建时 Reviewer 只走普通动态（HTTP PoC + docker exec）。
 
 | 运行时 | 目录 | 启动 |
 |--------|------|------|

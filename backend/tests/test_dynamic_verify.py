@@ -55,7 +55,86 @@ def test_resolve_verify_mode_legacy_boolean():
     assert resolve_verify_mode(mode="off", manual_lab=True) == VERIFY_MODE_OFF
 
 
-def test_coerce_evidence_level_by_mode():
+def test_static_after_review_timeouts_threshold():
+    from app.dynamic_verify import static_after_review_timeouts
+
+    assert static_after_review_timeouts(0) is False
+    assert static_after_review_timeouts(1) is False
+    assert static_after_review_timeouts(2) is True
+    assert static_after_review_timeouts(3) is True
+
+
+def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "SQLI",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "a.java",
+            "line_no": 1,
+            "source_sink": "a",
+            "auth_premise": "none",
+            "http_request": "GET /",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "x",
+        },
+    )
+    from app.models import SessionLocal
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, out["vuln_id"])
+        assert vuln is not None
+        vuln.review_timeout_streak = 2
+        db.commit()
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True
+    assert conf["evidence_level"] == "static_only"
+    assert conf["status"] == "static_only"
+
+
+def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
+    from app.models import SessionLocal
+    from app.tools import native_shell_tool
+
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    with SessionLocal() as db:
+        v = Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+            review_timeout_streak=2,
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+    names = {
+        t["function"]["name"]
+        for t in registry.openai_tools_for_role("reviewer", project_id=project, vuln_id=vid)
+    }
+    assert native_shell_tool() not in names
+    assert "CollectLabFingerprints" not in names
+    assert "RunCode" not in names
+    assert "ConfirmVuln" in names
+    blocked = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=vid),
+        native_shell_tool(),
+        {"command": "echo hi"},
+    )
+    assert blocked["ok"] is False
+    assert "仅允许静态审核" in blocked["error"]
     assert coerce_evidence_level("dynamic", mode="off") == "static_only"
     assert coerce_evidence_level("harness", mode="lab") == "static_only"
     assert coerce_evidence_level("dynamic", mode="harness") == "static_only"

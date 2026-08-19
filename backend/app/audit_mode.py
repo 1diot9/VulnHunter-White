@@ -206,6 +206,6 @@ def bounty_confirm_block_reason(
     if submission_tier in BOUNTY_DISALLOWED_TIERS:
         return (
             "赏金模式不入库低危害难利用项（CORS/安全头/开放重定向/弱随机/单点限速绕过/反射 XSS 等）。"
-            "请 ReturnToWorker(false_positive=true) 丢弃，不要 ConfirmVuln。"
+            "请 MarkFalsePositive 丢弃，不要 ConfirmVuln。"
         )
     return None

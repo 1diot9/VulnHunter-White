@@ -63,3 +63,5 @@ def test_bounty_gates_allow_stored_xss_and_source_secrets():
         file_path="CommentController.java",
     ) is None
     assert bounty_confirm_block_reason(vuln_type="xss", submission_tier="cve_candidate")
+    low = bounty_confirm_block_reason(vuln_type="rce", submission_tier="low_impact")
+    assert low and "MarkFalsePositive" in low

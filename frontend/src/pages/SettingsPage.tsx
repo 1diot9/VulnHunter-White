@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [defaultModel, setDefaultModel] = useState('')
   const [defaultBaseUrl, setDefaultBaseUrl] = useState('')
   const [defaultApiKey, setDefaultApiKey] = useState('')
+  const [wireApi, setWireApi] = useState<'chat' | 'anthropic'>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
@@ -52,6 +53,8 @@ export default function SettingsPage() {
       setS(x)
       setDefaultModel(x.default_model || '')
       setDefaultBaseUrl(x.default_base_url || '')
+      const provider = x.llm_providers?.find((p) => p.id === 'default') || x.llm_providers?.[0]
+      setWireApi(provider?.wire_api === 'anthropic' ? 'anthropic' : 'chat')
       setLlmThreadLimit(x.llm_thread_limit || 6)
       setContextWindow(x.context_window || 128000)
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
@@ -67,7 +70,9 @@ export default function SettingsPage() {
   }, [models, modelFilter])
 
   function probeBody() {
-    const body: { base_url?: string; api_key?: string; model?: string } = {}
+    const body: { base_url?: string; api_key?: string; model?: string; wire_api?: string } = {
+      wire_api: wireApi,
+    }
     if (defaultBaseUrl.trim()) body.base_url = defaultBaseUrl.trim()
     if (defaultApiKey.trim()) body.api_key = defaultApiKey.trim()
     if (defaultModel.trim()) body.model = defaultModel.trim()
@@ -209,8 +214,8 @@ export default function SettingsPage() {
             id: 'default',
             name: 'Default',
             base_url: defaultBaseUrl.trim(),
-            wire_api: 'chat',
-            env_key: 'OPENAI_API_KEY',
+            wire_api: wireApi,
+            env_key: wireApi === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY',
             api_key: defaultApiKey.trim() || null,
           },
         ]
@@ -267,8 +272,36 @@ export default function SettingsPage() {
       <Card>
         <CardContent className="space-y-3 p-4">
         <div className="space-y-1.5">
-          <Label>Chat Completions Base URL</Label>
-          <Input value={defaultBaseUrl} onChange={(e) => setDefaultBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
+          <Label>接口协议</Label>
+          <Select
+            value={wireApi}
+            onValueChange={(value) => {
+              if (value === 'anthropic' || value === 'chat') setWireApi(value)
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue>
+                {wireApi === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="chat">OpenAI Chat Completions</SelectItem>
+              <SelectItem value="anthropic">Anthropic Messages</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="text-xs text-slate-500">
+            {wireApi === 'anthropic'
+              ? '走 POST /messages：system 独立字段，工具为 tool_use / tool_result。适用于官方 Claude 及兼容 Anthropic Messages 的中转。'
+              : '走 POST /chat/completions。适用于 OpenAI 及兼容 Chat Completions 的模型商。'}
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>API Base URL</Label>
+          <Input
+            value={defaultBaseUrl}
+            onChange={(e) => setDefaultBaseUrl(e.target.value)}
+            placeholder={wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'}
+          />
         </div>
         <div className="space-y-1.5">
           <Label>
@@ -337,7 +370,11 @@ export default function SettingsPage() {
                 <span className={probeOk === false ? 'text-red-300' : 'text-slate-300'}>{probeMsg}</span>
               </div>
             ) : (
-              <div className="text-xs text-slate-500">拉取走 GET /models，连通测试发一条极短 chat/completions。均使用当前表单值，不会自动保存。</div>
+              <div className="text-xs text-slate-500">
+                {wireApi === 'anthropic'
+                  ? '拉取走 GET /models，连通测试发一条极短 POST /messages。均使用当前表单值，不会自动保存。Base URL 须包含 /v1。'
+                  : '拉取走 GET /models，连通测试发一条极短 chat/completions。均使用当前表单值，不会自动保存。'}
+              </div>
             )}
           </div>
         </div>

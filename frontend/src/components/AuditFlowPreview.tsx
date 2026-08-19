@@ -118,13 +118,13 @@ function buildNodes({
       tag: labOn ? '靶场动态' : harnessOn ? '局部验证' : '静态',
       body: labOn
         ? useManual
-          ? '优先用你提供的靶场，不可达再回退 Docker。先跑 Worker 的 HTTP PoC；PoC 不可用需改写时才用 debug MCP。'
-          : '独立环境轮搭建 Docker 靶场。先跑 Worker 的 HTTP PoC；PoC 不可用需改写时才用 debug MCP。'
+          ? '优先用你提供的靶场，不可达再回退 Docker。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。'
+          : '独立环境轮搭建 Docker 靶场。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。'
         : harnessOn
           ? '不搭整项目靶场。Reviewer 抽出函数、mock 依赖，在沙箱跑 harness；打通记为局部验证。'
           : '只做静态复核。能证明默认可利用则以 static_only 入库，不搭靶场。',
       hint: labOn
-        ? '靶场动态开启后，Reviewer 才搭靶场并先跑 HTTP PoC；PoC 不可用需改写时才用 debug MCP。靶场只提供默认部署。'
+        ? '靶场动态开启后，Reviewer 才搭靶场并收口 HTTP PoC；PoC 不可用需改写时才用 debug MCP。靶场只提供默认部署。'
         : harnessOn
           ? '局部验证与靶场动态互斥。无 Docker 或 mock 失败不因此误报。'
           : '默认关闭动态验证。静态已能证明默认可利用时直接入库，不跑 Docker。',
@@ -140,7 +140,7 @@ function buildNodes({
             {
               id: 'poc',
               label: 'HTTP / MCP',
-              hint: '先跑 Worker 的 HTTP PoC 与容器日志。PoC 缺失、跑不通或复现失败且需改写时，才用 Java / Node / Python debug MCP 动态调试。',
+              hint: '先跑当前 HTTP PoC 与容器日志。PoC 由 Reviewer 改到可复现；缺失、跑不通或复现失败且需改写时，才用 Java / Node / Python debug MCP。不要打回 Worker 改 PoC。',
             },
           ]
         : harnessOn
@@ -378,7 +378,7 @@ export function AuditFlowPreview(props: PreviewProps) {
           {rest.map((node) => (
             <div key={node.id}>
               {node.id === 'reviewer' ? (
-                <FlowConnector down="提交漏洞" back="打回 / Fix" />
+                <FlowConnector down="提交漏洞" back="分析债务 / Fix" />
               ) : node.id === 'verifier' && node.skipped ? (
                 <FlowConnector down="跳过" />
               ) : (
@@ -389,7 +389,7 @@ export function AuditFlowPreview(props: PreviewProps) {
           ))}
         </div>
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          历史漏洞收集完毕后启发式与历史漏洞绕过可与定权并行；快速扫描等侦察四步完成。开启的挖掘路径并行推进，并与审核并行：一边挖一边审。证据不足或需改报告时，打回 Worker / Fix 再审。开启的挖掘路径都结束后项目才完成。
+          历史漏洞收集完毕后启发式与历史漏洞绕过可与定权并行；快速扫描等侦察四步完成。开启的挖掘路径并行推进，并与审核并行：一边挖一边审。明显误报本轮丢弃；PoC 与报告包装由 Reviewer 改完确认；仅根因分析错了才打回 Fix 再审。开启的挖掘路径都结束后项目才完成。
         </p>
       </section>
     </TooltipProvider>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -133,6 +134,141 @@ def test_connectivity_requires_model_and_key(tmp_env, monkeypatch):
     assert "模型" in missing_model.json()["error"]
     assert missing_key.json()["ok"] is False
     assert "API Key" in missing_key.json()["error"]
+
+
+def test_connectivity_anthropic_messages(tmp_env, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["x_api_key"] = request.headers.get("x-api-key", "")
+        seen["version"] = request.headers.get("anthropic-version", "")
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "pong"}],
+                "stop_reason": "end_turn",
+            },
+        )
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/test",
+            json={
+                "base_url": "https://api.anthropic.com/v1",
+                "api_key": "sk-ant",
+                "model": "claude-test",
+                "wire_api": "anthropic",
+            },
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["reply"] == "pong"
+    assert str(seen["url"]).endswith("/messages")
+    assert seen["x_api_key"] == "sk-ant"
+    assert seen["version"] == "2023-06-01"
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    assert payload["max_tokens"] == 16
+    assert payload["messages"][0]["role"] == "user"
+    assert "stream" not in payload
+
+
+def test_list_models_anthropic_headers(tmp_env, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization", "")
+        seen["x_api_key"] = request.headers.get("x-api-key", "")
+        seen["version"] = request.headers.get("anthropic-version", "")
+        return httpx.Response(200, json={"data": [{"id": "claude-sonnet-4-20250514"}]})
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/models",
+            json={
+                "base_url": "https://api.anthropic.com/v1",
+                "api_key": "sk-ant",
+                "wire_api": "anthropic",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["models"] == ["claude-sonnet-4-20250514"]
+    assert seen["x_api_key"] == "sk-ant"
+    assert seen["auth"] == "Bearer sk-ant"
+    assert seen["version"] == "2023-06-01"
+
+
+def test_merge_providers_accepts_anthropic(tmp_env):
+    from app.schemas import LlmProviderIn
+    from app.services.llm_settings import merge_providers_update
+
+    merged = merge_providers_update(
+        [],
+        [
+            LlmProviderIn(
+                id="default",
+                name="Claude",
+                base_url="https://api.anthropic.com/v1",
+                wire_api="messages",
+                env_key="",
+                api_key="sk-ant",
+            )
+        ],
+    )
+    assert merged[0]["wire_api"] == "anthropic"
+    assert merged[0]["env_key"] == "ANTHROPIC_API_KEY"
+
+
+def test_merge_providers_rejects_unknown_wire():
+    from app.schemas import LlmProviderIn
+    from app.services.llm_settings import merge_providers_update
+
+    with pytest.raises(ValueError, match="wire_api"):
+        merge_providers_update(
+            [],
+            [LlmProviderIn(id="x", name="x", base_url="https://x", wire_api="grpc")],
+        )
+
+
+def test_resolve_llm_anthropic_provider(tmp_env):
+    from app.models import AppSettings, SessionLocal
+    from app.services.llm_settings import resolve_llm
+
+    with SessionLocal() as db:
+        row = db.query(AppSettings).first()
+        row.llm_providers = json.dumps(
+            [
+                {
+                    "id": "claude",
+                    "name": "Claude",
+                    "base_url": "https://api.anthropic.com/v1",
+                    "wire_api": "anthropic",
+                    "env_key": "ANTHROPIC_API_KEY",
+                    "api_key": "sk-ant",
+                }
+            ]
+        )
+        row.llm_roles = json.dumps(
+            {"worker": {"provider_id": "claude", "model": "claude-test", "reasoning_effort": ""}}
+        )
+        db.commit()
+
+    llm = resolve_llm("worker")
+    assert llm.wire_api == "anthropic"
+    assert llm.base_url == "https://api.anthropic.com/v1"
+    assert llm.model == "claude-test"
+    assert llm.api_key == "sk-ant"
 
 
 def test_llm_role_for_recon_sub_sessions():

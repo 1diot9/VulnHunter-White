@@ -862,6 +862,93 @@ def test_reviewer_once_injects_manual_lab_prompt(tmp_env, project, monkeypatch):
     assert "不要搭建或复用 Docker 靶场" not in prompt
 
 
+def test_reviewer_timeout_streak_forces_static_then_resets(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+
+    _enable_dynamic_verify(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.manual_lab_prompt = "http://127.0.0.1:18080 账号 admin/admin"
+        v = models.Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+
+    class TimeoutLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            pass
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, stop_reason="timeout", timed_out=True, state={})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", TimeoutLoop)
+    pipeline._run_reviewer_once(project)
+    with Session() as db:
+        assert db.get(models.Vuln, vid).review_timeout_streak == 1
+    pipeline._run_reviewer_once(project)
+    with Session() as db:
+        assert db.get(models.Vuln, vid).review_timeout_streak == 2
+
+    captured: dict[str, object] = {}
+
+    class DoneLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["user_prompt"] = kwargs.get("user_prompt") or ""
+            captured["system_prompt"] = kwargs.get("system_prompt") or ""
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=True, stop_reason="stop_when", state={"review_done": True})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", DoneLoop)
+    pipeline._run_reviewer_once(project)
+    prompt = str(captured["user_prompt"])
+    system = str(captured["system_prompt"])
+    assert "已连续超时 2 轮" in prompt
+    assert "本项目仅静态验证" in prompt
+    assert "consecutive_review_timeouts" in prompt
+    assert "优先使用用户提供的人工靶场" not in prompt
+    assert "仅静态" in system
+    with Session() as db:
+        assert db.get(models.Vuln, vid).review_timeout_streak == 0
+
+
+def test_reviewer_non_timeout_failure_does_not_increment_streak(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        v = models.Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+            review_timeout_streak=1,
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+
+    class CancelledLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            pass
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, stop_reason="cancelled", cancelled=True, state={})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", CancelledLoop)
+    pipeline._run_reviewer_once(project)
+    with Session() as db:
+        assert db.get(models.Vuln, vid).review_timeout_streak == 1
+
+
 def test_reviewer_lab_note_prefers_manual_then_docker(tmp_env, project, monkeypatch):
     from app.services.lab import save_env
 

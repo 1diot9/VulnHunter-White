@@ -201,3 +201,30 @@ def coerce_evidence_level(raw: Any, *, mode: str) -> str:
 
 def default_evidence_for_mode(mode: str) -> str:
     return coerce_evidence_level(None, mode=mode)
+
+
+def review_timeouts_before_static() -> int:
+    from .config import settings
+
+    return max(1, int(getattr(settings, "review_timeouts_before_static", 2) or 2))
+
+
+def static_after_review_timeouts(streak: Any) -> bool:
+    """True when consecutive reviewer timeouts have reached the static-only fallback."""
+    try:
+        n = int(streak or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n >= review_timeouts_before_static()
+
+
+def vuln_forces_static_review(*, project_id: int | None, vuln_id: int | None) -> bool:
+    if project_id is None or vuln_id is None:
+        return False
+    from .models import SessionLocal, Vuln
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or int(vuln.project_id) != int(project_id):
+            return False
+        return static_after_review_timeouts(vuln.review_timeout_streak)

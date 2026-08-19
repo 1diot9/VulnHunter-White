@@ -66,6 +66,7 @@ class LlmProbeIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
+    wire_api: str | None = None
 
 
 class LlmModelListOut(BaseModel):

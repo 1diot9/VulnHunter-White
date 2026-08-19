@@ -730,7 +730,7 @@ def register_worker_tools() -> None:
     registry.register(
         ToolSpec(
             name="FinishFix",
-            description="完成打回修改，重新入审核队列",
+            description="完成分析债务修改，重新入审核队列。只纠正入口/sink/根因，不要去调通 PoC。",
             parameters={
                 "type": "object",
                 "properties": {

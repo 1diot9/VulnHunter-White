@@ -266,6 +266,7 @@ export type LlmProbeBody = {
   base_url?: string | null
   api_key?: string | null
   model?: string | null
+  wire_api?: string | null
 }
 
 export type LlmModelList = {

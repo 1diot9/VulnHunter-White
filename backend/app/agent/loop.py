@@ -17,6 +17,14 @@ from ..services.llm_thread import llm_thread_slot
 from ..services.llm_settings import ResolvedLlm, llm_role_for_agent, resolve_llm
 from ..tools import ToolContext, registry
 from .checkpoint import LoopCheckpoint, save_checkpoint
+from .anthropic_compat import (
+    anthropic_headers,
+    anthropic_message_to_openai,
+    anthropic_url,
+    build_anthropic_body,
+    consume_anthropic_stream,
+    is_anthropic_wire,
+)
 from .chat_stream import (
     ChatStreamCancelled,
     ChatStreamProviderError,
@@ -332,7 +340,9 @@ class AgentLoop:
             if last.get("role") != "user" or last.get("content") != INTERRUPT_RESUME:
                 messages.append({"role": "user", "content": INTERRUPT_RESUME})
             self._resumed = False
-        tools = registry.openai_tools_for_role(self.role, project_id=self.project_id)
+        tools = registry.openai_tools_for_role(
+            self.role, project_id=self.project_id, vuln_id=self.vuln_id
+        )
         result = LoopResult(ok=False, state=self.state)
         self._persist(messages)
 
@@ -660,20 +670,34 @@ class AgentLoop:
         tools: list[dict[str, Any]],
         remaining: float,
     ) -> tuple[dict[str, Any], dict[str, int], float | None]:
-        url = self.llm.base_url.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.llm.api_key}",
-            "Content-Type": "application/json",
-        }
-        body: dict[str, Any] = {
-            "model": self.llm.model,
-            "messages": _sanitize_chat_messages(messages),
-            "temperature": settings.temperature,
-            "tools": tools,
-            "tool_choice": "auto",
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
+        anthropic = is_anthropic_wire(self.llm.wire_api)
+        if anthropic:
+            url = anthropic_url(self.llm.base_url)
+            headers = anthropic_headers(self.llm.api_key)
+            body = build_anthropic_body(
+                model=self.llm.model,
+                messages=messages,
+                tools=tools,
+                stream=True,
+                temperature=settings.temperature,
+            )
+            consume = consume_anthropic_stream
+        else:
+            url = self.llm.base_url.rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.llm.api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "model": self.llm.model,
+                "messages": _sanitize_chat_messages(messages),
+                "temperature": settings.temperature,
+                "tools": tools,
+                "tool_choice": "auto",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            consume = consume_chat_stream
         last_err: Exception | None = None
         est_tokens = estimate_tokens(messages, tools)
         for attempt in range(settings.request_backoff_retries):
@@ -710,7 +734,7 @@ class AgentLoop:
                         raise TransientError("cancelled")
                     with chat_http_client(timeout=timeout) as client:
                         status, header_map, data, err_text = self._stream_chat_with_heartbeat(
-                            client, url, headers, body, est_tokens
+                            client, url, headers, body, est_tokens, consume=consume
                         )
                 if status == 401:
                     raise AuthError("401 密钥无效，请检查设置页模型配置")
@@ -750,6 +774,8 @@ class AgentLoop:
                 details = usage_raw.get("prompt_tokens_details") or {}
                 if isinstance(details, dict):
                     cached = int(details.get("cached_tokens") or 0)
+                if not cached:
+                    cached = int(usage_raw.get("cached_tokens") or 0)
                 usage = {
                     "prompt_tokens": int(usage_raw.get("prompt_tokens") or 0),
                     "completion_tokens": int(usage_raw.get("completion_tokens") or 0),
@@ -800,6 +826,8 @@ class AgentLoop:
         headers: dict[str, str],
         body: dict[str, Any],
         est_tokens: int,
+        *,
+        consume=consume_chat_stream,
     ) -> tuple[int, dict[str, str], dict[str, Any] | None, str]:
         stop_hb = threading.Event()
         first_payload = threading.Event()
@@ -851,7 +879,7 @@ class AgentLoop:
                 if status != 200:
                     err_text = r.read().decode("utf-8", errors="replace")
                     return status, header_map, None, err_text
-                data = consume_chat_stream(
+                data = consume(
                     r.iter_lines(),
                     cancel_check=self._cancelled,
                     on_first_payload=_on_first_payload,
@@ -901,33 +929,44 @@ class AgentLoop:
 
     def _request_summary(self, messages: list[dict[str, Any]], *, rescue: bool = False) -> str:
         try:
-            url = self.llm.base_url.rstrip("/") + "/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.llm.api_key}",
-                "Content-Type": "application/json",
-            }
             prompt_msgs = [
                 {"role": "system", "content": "你是上下文压缩助手。用中文输出结构化摘要，保留关键路径、已完成工作、未完成待办、当前焦点。"},
                 {
                     "role": "user",
                     "content": "请总结以下对话（截断后）：\n"
-                    + json.dumps(messages[-30:], ensure_ascii=False)[:12000],
+                    + json.dumps(messages[-100:], ensure_ascii=False)[:12000],
                 },
             ]
             timeout_budget = float(
                 settings.timeout_conclude_rescue if rescue else settings.timeout_conclude
             )
+            if is_anthropic_wire(self.llm.wire_api):
+                url = anthropic_url(self.llm.base_url)
+                headers = anthropic_headers(self.llm.api_key)
+                payload: dict[str, Any] = build_anthropic_body(
+                    model=self.llm.model,
+                    messages=prompt_msgs,
+                    temperature=0.2,
+                    max_tokens=1024,
+                )
+            else:
+                url = self.llm.base_url.rstrip("/") + "/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.llm.api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {"model": self.llm.model, "messages": prompt_msgs, "temperature": 0.2}
             with llm_slot(self.cancel_event) as got_slot:
                 if not got_slot:
                     return "（自动摘要取消）"
                 with chat_http_client(timeout=chat_http_timeout(timeout_budget, 4000)) as client:
-                    r = client.post(
-                        url,
-                        headers=headers,
-                        json={"model": self.llm.model, "messages": prompt_msgs, "temperature": 0.2},
-                    )
+                    r = client.post(url, headers=headers, json=payload)
                     r.raise_for_status()
                     data = r.json()
+            if is_anthropic_wire(self.llm.wire_api) or (
+                isinstance(data, dict) and data.get("type") == "message"
+            ):
+                data = anthropic_message_to_openai(data if isinstance(data, dict) else {})
             return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "（空摘要）"
         except Exception as e:  # noqa: BLE001
             return f"（自动摘要失败: {e}）\n最近消息数: {len(messages)}，估算 token: {estimate_tokens(messages)}"
@@ -951,7 +990,7 @@ class AgentLoop:
         except Exception as e:  # noqa: BLE001
             live_log.error(self.project_id, f"conclude 抢救失败: {e}", phase=self.phase)
             try:
-                fallback = json.dumps(messages[-8:], ensure_ascii=False)[:8000]
+                fallback = json.dumps(messages[-50:], ensure_ascii=False)[:8000]
                 write_summary(self.project_id, f"{self.phase}-rescue", f"（抢救摘要失败，截断消息）\n{fallback}")
             except Exception:  # noqa: BLE001
                 pass

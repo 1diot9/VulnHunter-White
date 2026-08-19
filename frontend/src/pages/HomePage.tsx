@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { SearchIcon, XIcon } from 'lucide-react'
 import { api, type CustomAuditMode, type Project } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
@@ -18,9 +19,33 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { githubRepoHref } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage, type AuditMode } from '../lib/utils'
+import { githubRepoHref, githubRepoLabel } from '../lib/github'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatProjectStatus, formatTokenUsage, type AuditMode } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+
+function projectMatchesQuery(p: Project, query: string): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!tokens.length) return true
+  const haystack = [
+    p.name,
+    String(p.id),
+    `#${p.id}`,
+    p.identity,
+    p.source_url,
+    p.source_type,
+    p.llm_model || '全局模型',
+    formatAuditMode(p.audit_mode, p.custom_audit_mode_name),
+    p.custom_audit_mode_name,
+    formatMiningPaths(p),
+    formatProjectRunStatus(p.status, p.project_paused),
+    formatProjectStatus(p.status),
+    githubRepoLabel(p),
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+  return tokens.every((token) => haystack.includes(token))
+}
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -40,6 +65,7 @@ export default function HomePage() {
   const [llmModel, setLlmModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
   const labMode = dynamicVerifyMode === 'lab'
   const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
@@ -50,6 +76,11 @@ export default function HomePage() {
   useEffect(() => {
     api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
   }, [])
+
+  const filteredProjects = useMemo(
+    () => projects.filter((p) => projectMatchesQuery(p, search)),
+    [projects, search],
+  )
 
   async function createGithub() {
     if (!url.trim()) return
@@ -198,8 +229,29 @@ export default function HomePage() {
         </CardContent>
       </Card>
 
+      <div className="relative">
+        <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          className="pr-8 pl-8"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索项目名称、仓库、模式、模型、状态…"
+          aria-label="搜索审计项目"
+        />
+        {search ? (
+          <button
+            type="button"
+            className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            aria-label="清除搜索"
+            onClick={() => setSearch('')}
+          >
+            <XIcon className="size-4" />
+          </button>
+        ) : null}
+      </div>
+
       <div className="flex w-full flex-col gap-3">
-        {projects.map((p) => {
+        {filteredProjects.map((p) => {
           const runStatus = formatProjectRunStatus(p.status, p.project_paused)
           return (
           <Card key={p.id} className="w-full">
@@ -296,9 +348,11 @@ export default function HomePage() {
           </Card>
           )
         })}
-        {projects.length === 0 ? (
+        {filteredProjects.length === 0 ? (
           <Card className="w-full">
-            <CardContent className="text-sm text-muted-foreground">暂无项目，先导入一个 Web 源码仓。</CardContent>
+            <CardContent className="text-sm text-muted-foreground">
+              {search.trim() ? '无匹配项目' : '暂无项目，先导入一个 Web 源码仓。'}
+            </CardContent>
           </Card>
         ) : null}
       </div>

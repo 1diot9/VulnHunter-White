@@ -59,7 +59,9 @@ class Settings(BaseSettings):
     worker_concurrency: int = 1
     fix_concurrency: int = 1
     llm_thread_limit: int = 6
-    max_review_rejects: int = 2
+    max_review_rejects: int = 1
+    # Same pending vuln: after this many consecutive reviewer timeouts, next round is static-only.
+    review_timeouts_before_static: int = 2
     file_inject_max_bytes: int = 80 * 1024
     worker_round_history: int = 10
     recon_doc_inject_max_chars: int = 32 * 1024

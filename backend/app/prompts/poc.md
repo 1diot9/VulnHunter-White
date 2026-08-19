@@ -47,6 +47,6 @@ python poc.py -u http://TARGET:PORT -c "id" --cookie "SESSION=..."
 
 ## Reviewer / Verifier
 - 动态验证或互联网复测：先跑 `python vulns/{id}/poc.py -u <该目标>`，按需加 `-c` 等参数，不要把地址写回脚本。
-- **允许**把写死地址/参数的脚本改成上述 CLI 形态：Write `poc.py`，ConfirmVuln 同时传入 `poc_code`。
-- **debug MCP**：仅当 Worker 的 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。
-- **禁止**为了让洞过关而改利用链、改 payload 语义、或改靶场替 Worker 圆谎。
+- **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
+- **debug MCP**：仅当 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。
+- **禁止**换一条利用链或换一个 sink 来让洞过关，也禁止改靶场替 Worker 圆谎。同一条链上的 payload 校准（编码、参数名、鉴权头）不算换链。

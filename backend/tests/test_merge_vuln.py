@@ -210,8 +210,8 @@ def test_merge_into_vuln_gates(tmp_env, project):
 
     registry.dispatch(
         _ctx(project, "reviewer"),
-        "ReturnToWorker",
-        {"vuln_id": b["vuln_id"], "reason": "误报样例", "false_positive": True},
+        "MarkFalsePositive",
+        {"vuln_id": b["vuln_id"], "reason": "误报样例"},
     )
     into_fp = registry.dispatch(ctx, "MergeIntoVuln", {"into": b["vuln_id"]})
     assert into_fp["ok"] is False
