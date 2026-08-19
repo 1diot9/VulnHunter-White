@@ -359,6 +359,7 @@ summary: {args.get('source_sink', '')[:200]}
 - 已证明危害：{args.get('expected_evidence')}
 - 潜在危害：待根据漏洞类型补全。
 - SQL 注入须明确：是否能获取 OS-Shell：未验证
+- SSRF 须明确：观察面：有回显 / 仅响应差别（内网端口探测） / 不适用
 
 ## 漏洞厂商全称
 暂未明确
@@ -544,6 +545,9 @@ def register_worker_tools() -> None:
                 "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"
                 "应填写 root_cause_key（类型:稳定锚点）。"
                 "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
+                "SSRF 须在 expected_evidence 与报告危害中标明观察面："
+                "有回显（响应含目标正文）或仅响应差别（内网端口探测）；"
+                "不要把端口探测写成已获取云元数据凭据。"
             ),
             parameters={
                 "type": "object",
@@ -561,9 +565,17 @@ def register_worker_tools() -> None:
                         "description": (
                             "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                            "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
                         ),
                     },
-                    "expected_evidence": {"type": "string"},
+                    "expected_evidence": {
+                        "type": "string",
+                        "description": (
+                            "成功利用后应观察到的冲击。"
+                            "SSRF 须写清观察面：有回显则摘录目标正文；"
+                            "仅响应差别则给出通/不通对照，不要写已获取云凭据。"
+                        ),
+                    },
                     "intended_behavior": {"type": "boolean"},
                     "root_cause_key": {
                         "type": "string",
@@ -678,9 +690,17 @@ def register_worker_tools() -> None:
                         "description": (
                             "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                            "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
                         ),
                     },
-                    "expected_evidence": {"type": "string"},
+                    "expected_evidence": {
+                        "type": "string",
+                        "description": (
+                            "成功利用后应观察到的冲击。"
+                            "SSRF 须写清观察面：有回显则摘录目标正文；"
+                            "仅响应差别则给出通/不通对照，不要写已获取云凭据。"
+                        ),
+                    },
                     "fofa_fingerprint": {"type": "string"},
                     "x_fingerprint": {"type": "string"},
                     "fingerprint_basis": {"type": "string"},

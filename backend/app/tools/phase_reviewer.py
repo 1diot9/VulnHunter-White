@@ -603,6 +603,8 @@ def register_reviewer_tools() -> None:
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
                 "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
                 "严重度只按利用上下文校准，不沿用漏洞类型。"
+                "SSRF 须按观察面确认：有回显才能写可读元数据/内网正文；"
+                "仅状态码/时延/报错差别只算内网端口探测，impact 用 limited_info。"
                 "有漏洞环境时若项目指纹仍缺，用 CollectLabFingerprints 升级项目共享指纹，"
                 "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会写入 docs/app-fingerprints.json 的共享指纹。"
             ),
@@ -628,6 +630,8 @@ def register_reviewer_tools() -> None:
                             "必填。影响范围：rce_or_full_data=RCE/全库/完整控制；"
                             "sensitive_data_or_privilege=敏感数据/权限提升/部分数据；"
                             "limited_info=有限信息泄露/信息收集。也可写中文。"
+                            "SSRF：有回显且能读元数据/内网敏感正文用 sensitive_data_or_privilege；"
+                            "仅响应差别探测内网端口用 limited_info，不要按凭据窃取。"
                         ),
                     },
                     "exploit_complexity": {

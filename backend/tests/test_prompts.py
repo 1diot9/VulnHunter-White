@@ -143,6 +143,9 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "不要按漏洞类型" in text
     assert "默认密码" in text
     assert "弱口令" in text
+    assert "SSRF 观察面" in text
+    assert "仅响应差别" in text
+    assert "limited_info" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
     followup = load_prompt("initial/reviewer-dynamic-followup.md")
     assert "追加动态验证" in followup
@@ -158,6 +161,13 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "audit_mode_hint" in load_prompt("initial/worker.md")
     assert "AppendAffectedLocations" in load_prompt("initial/worker.md")
     assert "audit_mode_hint" in load_prompt("initial/fix.md")
+    assert "观察面" in load_prompt("initial/worker.md")
+    assert "观察面" in load_prompt("initial/reviewer.md")
+    assert "观察面" in load_prompt("initial/fix.md")
+    assert "仅响应差别" in load_prompt("fast_worker.md")
+    assert "仅响应差别" in load_prompt("bypass_worker.md")
+    assert "观察面" in load_prompt("modes/full.md")
+    assert "观察面" in load_prompt("verifier.md")
 
 
 def test_worker_prompt_requires_default_exploitability():
@@ -176,6 +186,10 @@ def test_worker_prompt_requires_default_exploitability():
     assert "-u/--url" in worker
     assert "-c/--cmd" in worker
     assert "回显" in worker
+    assert "SSRF 必须标明观察面" in worker
+    assert "仅响应差别" in worker
+    assert "内网端口" in worker
+    assert "云元数据" in worker
 
 
 def test_poc_prompt_requires_cli_parameters():
@@ -184,6 +198,8 @@ def test_poc_prompt_requires_cli_parameters():
     assert "-c/--cmd" in poc
     assert "argparse" in poc
     assert "命令输出" in poc
+    assert "SSRF 回显" in poc
+    assert "通/不通" in poc
     assert "不要写死" in poc
     reviewer = load_prompt("reviewer.md")
     assert "poc_code" in reviewer
@@ -201,6 +217,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     bounty_worker = load_prompt("modes/bounty.md")
     assert "赏金模式" in bounty_worker
     assert "不要 Confirm、不要标 `low_impact`" in bounty_worker
+    assert "有回显" in bounty_worker
+    assert "仅响应差别" in bounty_worker
     assert "存储型 XSS" in bounty_worker
     assert "源码硬编码密钥" in bounty_worker
     assert "应用自身提供的配置选项" in bounty_worker
@@ -367,6 +385,10 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "不要每条漏洞重新识别" in worker
     assert "docs/lab.md" in worker
     assert "不允许出现「或」" in worker
+    report = Path(__file__).resolve().parents[2] / "templates" / "vuln-report.md"
+    text = report.read_text(encoding="utf-8")
+    assert "SSRF 须明确：观察面" in text
+    assert "仅响应差别（内网端口探测）" in text
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():

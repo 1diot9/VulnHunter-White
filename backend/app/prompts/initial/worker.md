@@ -19,4 +19,4 @@ FinishFile 与 FinishRound 不是一对：读到没有独立审计价值的文�
 从摘要接续已分析的调用链，不要重复已 FinishFile 的文件。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞也不要做绕过。不要把框架 CVE 清单当本项目新洞。
 同一根因同一危害只 SubmitVuln 一次（填 root_cause_key，报告含同根因受影响点）；pending 同根因用 AppendAffectedLocations，不要拆成多份报告。
-poc_code 必须可对任意目标复测：`python poc.py -u <url>`，RCE 加 `-c/--cmd` 并打印回显；不要写死靶场地址。
+poc_code 必须可对任意目标复测：`python poc.py -u <url>`，RCE 加 `-c/--cmd` 并打印回显；不要写死靶场地址。SSRF 须标明观察面：有回显（打印目标正文）或仅响应差别（通/不通对照），不要把端口探测写成已读云元数据。
