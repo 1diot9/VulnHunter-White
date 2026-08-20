@@ -13,7 +13,7 @@
    - SQLi / SSTI：`--payload`（默认探测句）。
    - 需登录：`--cookie` / `--token`，或 `-U/--user` `-P/--password`。
    - 其它入口（path、id、filename 等）同样做成 CLI，不要写死本次样本。
-4. **打印结果**：打印 HTTP 状态、关键响应头、响应正文（过长可截断并注明）。RCE 有回显时单独打印命令输出。打出预期冲击退出码 0，否则非 0。
+4. **打印结果**：打印 HTTP 状态、关键响应头、响应正文（过长可截断并注明）。RCE 有回显时单独打印命令输出。打出预期冲击退出码 0，否则非 0。靶场动态下 ConfirmVuln 会系统再跑一遍落盘脚本，非 0 则拒绝确认。
 5. 不要写成 notebook 片段、伪代码，或依赖当前工作目录之外的文件。
 
 ## 推荐骨架
@@ -54,6 +54,7 @@ def main() -> int:
     #           session.trust_env = False; session.proxies = {"http": args.proxy, "https": args.proxy}
     # print("状态:", ...); print("响应:", ...)
     # 有回显: print("命令输出:"); print(output)
+    # 打出预期冲击才 return 0，否则 return 1
     return 0
 
 if __name__ == "__main__":
@@ -71,6 +72,7 @@ python poc.py -u http://TARGET:PORT -c "id" --cookie "SESSION=..." --proxy http:
 
 ## Reviewer / Verifier
 - 动态验证或互联网复测：先跑 `python vulns/{id}/poc.py -u <该目标>`，按需加 `-c`、`--proxy` 等参数，不要把地址或代理写回脚本。
+- **靶场动态收口闸门**：ConfirmVuln 会系统再执行即将落盘的 `poc.py -u <target_url>`；退出码非 0 则拒绝确认。你仍须先自己跑一遍观察冲击。
 - **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI（含 `--proxy`）、有代理却让 `127.0.0.1` 旁路、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
 - **debug MCP**：仅当 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。
 - **禁止**换一条利用链或换一个 sink 来让洞过关，也禁止改靶场替 Worker 圆谎。同一条链上的 payload 校准（编码、参数名、鉴权头）不算换链。

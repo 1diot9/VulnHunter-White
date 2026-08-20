@@ -44,6 +44,7 @@ from ..audit_mode import (
 from ..config import settings
 from ..dynamic_verify import (
     VERIFY_MODE_HARNESS,
+    VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     is_harness_mode,
     is_lab_mode,
@@ -1356,7 +1357,12 @@ def _reviewer_lab_note(project_id: int) -> str:
         parts.append(_ASSET_PROOF_LAB_HINT)
         return "\n".join(parts)
     if docker_note:
-        return f"{docker_note}\n{_ASSET_PROOF_LAB_HINT}"
+        return (
+            f"{docker_note}\n"
+            "ConfirmVuln 会系统执行即将落盘的 poc.py（python poc.py -u <target_url>，直连）；"
+            "退出码非 0 则拒绝确认，不要用 static_only 跳过。\n"
+            f"{_ASSET_PROOF_LAB_HINT}"
+        )
     return (
         "动态环境搭建轮已结束；靶场未就绪，见 docs/lab.md。"
         "本轮只审核漏洞，不要再搭建 Docker 靶场。"
@@ -1424,6 +1430,8 @@ def _phase_system_prompt(
             parts.append(load_prompt("verify/static.md").strip())
         elif chosen == VERIFY_MODE_HARNESS:
             parts.append(load_prompt("verify/harness.md").strip())
+        elif chosen == VERIFY_MODE_LAB:
+            parts.append(load_prompt("verify/lab.md").strip())
     return "\n\n".join(parts) + "\n"
 
 

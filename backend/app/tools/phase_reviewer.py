@@ -8,6 +8,10 @@ from typing import Any
 from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
 from ..config import settings
 from ..dynamic_verify import (
+    EVIDENCE_DYNAMIC,
+    EVIDENCE_MCP,
+    EVIDENCE_STATIC,
+    VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     coerce_evidence_level,
     normalize_evidence_level,
@@ -28,7 +32,8 @@ from ..services.asset_proof import (
 )
 from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
-from ..services.poc_script import poc_cli_block_reason, write_harness_code, write_poc_code
+from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
+from ..services.poc_script import poc_cli_block_reason, read_poc_code, write_harness_code, write_poc_code
 from ..services.report import upsert_report_section, write_advisory_md
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
@@ -378,6 +383,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     advisory_md = args.get("advisory_md")
     harness_code = args.get("harness_code")
     harness_language = str(args.get("harness_language") or "python").strip() or "python"
+    stored_poc = ""
+    verify_mode = VERIFY_MODE_OFF
+    evidence = EVIDENCE_STATIC
     if poc_code:
         poc_blocked = poc_cli_block_reason(str(poc_code))
         if poc_blocked:
@@ -389,6 +397,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if vuln.status == "merged":
             return {"ok": False, "error": "该漏洞已并入其他报告，不能 Confirm"}
         proj = db.get(Project, ctx.project_id)
+        stored_poc = vuln.poc_code or ""
         verify_mode = project_verify_mode(proj)
         if static_after_review_timeouts(vuln.review_timeout_streak):
             verify_mode = VERIFY_MODE_OFF
@@ -437,6 +446,29 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     )
     if soft:
         return soft
+
+    poc_run: dict[str, Any] | None = None
+    if verify_mode == VERIFY_MODE_LAB:
+        landed = (str(poc_code).strip() if poc_code else "") or (
+            read_poc_code(ctx.project_id, int(vuln_id), fallback=stored_poc) or ""
+        )
+        target = resolve_lab_target_url(ctx.project_id)
+        if target:
+            poc_run = verify_landed_poc(ctx.project_id, int(vuln_id), landed)
+            if not poc_run.get("ok"):
+                return {
+                    "ok": False,
+                    "error": str(poc_run.get("error") or "落盘 poc.py 未能利用成功"),
+                    "target_url": poc_run.get("target_url") or target,
+                    "exit_code": poc_run.get("exit_code"),
+                    "stdout": poc_run.get("stdout") or "",
+                    "stderr": poc_run.get("stderr") or "",
+                    "hint": poc_run.get("hint") or "",
+                }
+            if evidence == EVIDENCE_STATIC:
+                evidence = EVIDENCE_DYNAMIC
+        elif evidence in (EVIDENCE_DYNAMIC, EVIDENCE_MCP):
+            evidence = EVIDENCE_STATIC
 
     proof = maybe_enrich_asset_proof(
         ctx.project_id,
@@ -525,6 +557,14 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "verifier_queued": queued,
         "asset_proof_updated": bool(proof.get("updated")),
     }
+    if poc_run:
+        out["poc_run"] = {
+            "ok": True,
+            "target_url": poc_run.get("target_url"),
+            "exit_code": poc_run.get("exit_code"),
+            "stdout": poc_run.get("stdout") or "",
+            "stderr": poc_run.get("stderr") or "",
+        }
     if proof.get("fofa"):
         out["fofa_fingerprint"] = proof["fofa"]
     if proof.get("x"):
@@ -671,7 +711,9 @@ def register_reviewer_tools() -> None:
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp|harness。"
-                "关闭时必须 static_only；靶场动态默认 dynamic（先跑当前 poc.py，同链校准由本轮完成），"
+                "关闭时必须 static_only；靶场动态默认 dynamic。"
+                "靶场可用时系统会执行即将落盘的 poc.py（python poc.py -u <target_url>），"
+                "退出码非 0 则拒绝确认；不要用 static_only 跳过。"
                 "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
                 "局部验证打通时标 harness，不要标 dynamic。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
@@ -697,7 +739,8 @@ def register_reviewer_tools() -> None:
                         "type": "string",
                         "description": (
                             "static_only | dynamic | mcp | harness。"
-                            "关闭时仅 static_only；靶场动态默认 dynamic（HTTP PoC）；"
+                            "关闭时仅 static_only；靶场动态默认 dynamic（HTTP PoC）。"
+                            "靶场可用时系统会跑落盘 poc.py，失败则拒绝确认。"
                             "mcp 仅在 debug MCP 改写/调试 PoC 后复现成功时使用；"
                             "局部验证打通用 harness。"
                         ),

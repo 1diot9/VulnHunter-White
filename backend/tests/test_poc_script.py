@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from app.services.poc_script import (
     POC_CLI_ERROR,
+    POC_LAB_RUN_ERROR,
     poc_cli_block_reason,
+    poc_lab_run_block_reason,
     read_poc_code,
     write_poc_code,
 )
@@ -69,3 +71,17 @@ def test_write_and_read_poc_prefers_file(tmp_env, project):
     write_poc_code(project, 9, "print('from-file')\n")
     assert read_poc_code(project, 9, fallback="db") == "print('from-file')\n"
     assert read_poc_code(project, 99, fallback="db") == "db"
+
+
+def test_poc_lab_run_requires_url_flag():
+    assert poc_lab_run_block_reason("") == POC_LAB_RUN_ERROR
+    assert poc_lab_run_block_reason("print('poc')\n") == POC_LAB_RUN_ERROR
+    ok = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+args = p.parse_args()
+print(args.url)
+"""
+    assert poc_lab_run_block_reason(ok) is None

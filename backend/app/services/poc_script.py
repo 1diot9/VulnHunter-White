@@ -25,6 +25,11 @@ POC_CLI_ERROR = (
     "RCE 另须支持 -c/--cmd，有回显须打印命令输出。"
 )
 
+POC_LAB_RUN_ERROR = (
+    "靶场动态确认时 poc.py 必须可独立运行，并用 argparse 接收 -u/--url；"
+    "ConfirmVuln 会执行 python poc.py -u <target_url>，打出预期冲击须退出码 0。"
+)
+
 
 def _has_url_flag(text: str) -> bool:
     lower = text.lower()
@@ -47,6 +52,16 @@ def poc_cli_block_reason(poc_code: str | None) -> str | None:
     ):
         return None
     return POC_CLI_ERROR
+
+
+def poc_lab_run_block_reason(poc_code: str | None) -> str | None:
+    """Reject PoCs that cannot be executed against a lab target_url."""
+    text = poc_code or ""
+    if not text.strip():
+        return POC_LAB_RUN_ERROR
+    if not _has_url_flag(text):
+        return POC_LAB_RUN_ERROR
+    return poc_cli_block_reason(text)
 
 
 def poc_path(project_id: int, vuln_id: int) -> Path:

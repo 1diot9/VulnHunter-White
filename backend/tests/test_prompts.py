@@ -214,6 +214,8 @@ def test_poc_prompt_requires_cli_parameters():
     assert "SSRF 回显" in poc
     assert "通/不通" in poc
     assert "不要写死" in poc
+    assert "退出码 0" in poc
+    assert "系统再执行" in poc
     reviewer = load_prompt("reviewer.md")
     assert "poc_code" in reviewer
     assert "-c/--cmd" in reviewer
@@ -274,6 +276,7 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     dynamic_overlay = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "仅静态" not in dynamic_overlay
     assert "动态验证阶梯" in dynamic_overlay
+    assert "即将落盘" in dynamic_overlay
     forced = pipeline._phase_system_prompt(project, "reviewer.md", verify_mode="off")
     assert "仅静态" in forced
 
@@ -296,6 +299,13 @@ def test_static_verify_overlay_prompt():
     assert "仅静态" in text
     assert "evidence_level=static_only" in text
     assert "debug MCP" in text
+
+
+def test_lab_verify_overlay_prompt():
+    text = load_prompt("verify/lab.md")
+    assert "靶场动态" in text
+    assert "即将落盘" in text
+    assert "退出码" in text
 
 
 def test_harness_verify_overlay_prompt(tmp_env, project):

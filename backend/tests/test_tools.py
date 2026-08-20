@@ -760,11 +760,16 @@ def test_confirm_defaults_static_only_when_dynamic_off(tmp_env, project):
 
 def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
     from app.models import Project, SessionLocal
+    from app.services.lab import save_env
 
     with SessionLocal() as db:
         proj = db.get(Project, project)
         proj.dynamic_verify_enabled = True
         db.commit()
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
     payload = {
         "title": "SQLI in login",
         "vuln_type": "sqli",
@@ -774,7 +779,14 @@ def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
         "source_sink": "login -> query",
         "auth_premise": "未授权",
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
-        "poc_code": "print('poc')\n",
+        "poc_code": (
+            "import argparse\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('-u', '--url', required=True)\n"
+            "p.add_argument('--proxy', default='')\n"
+            "args = p.parse_args()\n"
+            "print('hit', args.url)\n"
+        ),
         "expected_evidence": "error based",
         "config_premise": "default",
     }
@@ -790,9 +802,11 @@ def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
             **SEVERITY_FACTORS,
         },
     )
-    assert conf["ok"] is True
+    assert conf["ok"] is True, conf
     assert conf["evidence_level"] == "dynamic"
     assert conf["status"] == "confirmed"
+    assert conf["poc_run"]["exit_code"] == 0
+    assert "http://127.0.0.1:18080" in conf["poc_run"]["stdout"]
 
 
 def test_collect_lab_fingerprints_allows_static_only(tmp_env, project, monkeypatch):

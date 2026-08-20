@@ -37,7 +37,7 @@
 另外一个是流程标记，不是价值分类：
 - `duplicate_grouped`：危害或鉴权前提**明显不同**、但仍属同一根因家族、值得单独留档的变体。同一根因同一危害、只是方法不同 → **不要**用本标记，改用 `MergeIntoVuln` 并入主报告。若仍用本标记，**必须原样复用** SearchOldVuln `kind=found` 里该主报告已有的 `root_cause_key`。
 
-缺动态复现不是价值分层：环境没打出来、但静态已能证明默认可利用时，Confirm 用 `evidence_level=static_only`，价值仍标 `cve_candidate` 或 `low_impact`。
+缺动态复现不是价值分层：仅当靶场未就绪时，Confirm 才可用 `evidence_level=static_only`，价值仍标 `cve_candidate` 或 `low_impact`。靶场可用时系统会执行落盘 `poc.py`，退出码非 0 不能确认。
 
 `root_cause_key` 是家族合并键，不是本条报告的标题。格式固定为 `类型:稳定锚点`（如 `idor:SysCommentController`、`ssrf:checkSsrfHttpUrl`），锚点用过滤器/工具类/权限注解所在类，不要用接口名、方法名、行号、文件名去生成「每条一个」的新键。
 
@@ -59,7 +59,8 @@
    - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址/命令/代理，或缺少 `--proxy` → 先改成 CLI 参数化再跑。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。
    - **debug MCP 只用于改 PoC 时的动态调试**（不是首选）：poc.py 缺失、无法运行、或按报告跑不出冲击，且你需要自己改写/调试时，才 attach（runtime 为 java/nodejs/python、调试端口可用且 MCP 已接入）。用断点/变量确认 sink 是否到达、payload 如何被处理，再据此修正 poc.py。不要一上来就挂 MCP，也不要用 MCP 往靶场写入 payload 制造利用条件。
    - 原 PoC 无有害差异 → 先分清：同链 payload 细节问题则自己改再跑；需种文件、换 sink、或另找一条利用链才成立 → MarkFalsePositive。不要标 `evidence_level=dynamic`/`mcp` 把未证明的冲击确认掉，也不要为此打回 Worker。
-   - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
+   - **ConfirmVuln 闸门**：靶场可用时系统会再跑一遍即将落盘的 `poc.py`（`python poc.py -u <target_url>`，直连）。退出码 0 才允许确认，非 0 / 超时 / 缺 `-u/--url` 则拒绝，漏洞保持 pending。不要用 `static_only` 跳过。跑通后标 `dynamic`（用了 debug MCP 则 `mcp`）。
+   - 环境起不来（无 target_url），但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
    - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。
 5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。确认前必须按四维校准：

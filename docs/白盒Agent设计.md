@@ -224,7 +224,7 @@ Recon 完成后：
 
 #### 靶场动态（`lab`）
 
-独立环境轮（`reviewer-lab`）在审核漏洞之前搭建/复用 Docker 靶场，不审核漏洞。优先复用 `src/` 里已有 Dockerfile/compose。完成后 `FinishLab`；无法搭建则 `FinishLab(skipped=true)`。环境起不来但静态已能证明默认可利用 → 仍可 `static_only` 确认。
+独立环境轮（`reviewer-lab`）在审核漏洞之前搭建/复用 Docker 靶场，不审核漏洞。优先复用 `src/` 里已有 Dockerfile/compose。被测应用必须用导入的 `src/` 当前代码（最新版本），禁止换成旧发行版、旧 git tag、旧应用镜像或 vulhub 历史靶场。完成后 `FinishLab`；无法搭建则 `FinishLab(skipped=true)`。环境起不来但静态已能证明默认可利用 → 仍可 `static_only` 确认。靶场可用时 ConfirmVuln **系统执行**即将落盘的 `poc.py`（`python poc.py -u <target_url>`），退出码非 0 则拒绝确认，不能用 `static_only` 跳过。
 
 命名（项目名清洗成 Docker 合法字符，无法清洗时回退 `vulnhunter-{id}`）：
 
@@ -243,7 +243,8 @@ Recon 完成后：
 
 1. **先跑当前 HTTP PoC**：`python vulns/{id}/poc.py -u <target_url>`（需要抓包时加 `--proxy`），结合 docker exec / 日志**观察**冲击。写死地址或缺 `--proxy` 只改 CLI 形态；同链 payload 不对由 Reviewer 改，不算分析债务。
 2. **debug MCP 仅当** PoC 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试时才用。不要一上来挂 MCP，禁止往靶场种 payload 制造利用条件。
-3. 复现成功：`evidence_level=dynamic`（HTTP PoC）或 `mcp`（用了 debug MCP）。
+3. **ConfirmVuln 闸门**：系统再跑一遍即将落盘的 `poc.py -u <target_url>`。退出码 0 才允许确认（`dynamic` / `mcp`）；非 0 保持 pending。靶场可用时禁止用 `static_only` 跳过。
+4. 复现成功：`evidence_level=dynamic`（HTTP PoC）或 `mcp`（用了 debug MCP）。
 
 有靶场且项目指纹仍缺标题/hash 时，用 `CollectLabFingerprints` 升级共享指纹。
 

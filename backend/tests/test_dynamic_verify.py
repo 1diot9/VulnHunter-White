@@ -105,6 +105,126 @@ def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
     assert conf["status"] == "static_only"
 
 
+_LAB_POC_OK = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+args = p.parse_args()
+print("hit", args.url)
+raise SystemExit(0)
+"""
+
+_LAB_POC_FAIL = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+args = p.parse_args()
+print("miss", args.url)
+raise SystemExit(2)
+"""
+
+
+def _submit_sqli(project: int, poc_code: str) -> int:
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "SQLI",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "a.java",
+            "line_no": 1,
+            "source_sink": "a",
+            "auth_premise": "none",
+            "http_request": "GET /",
+            "poc_code": poc_code,
+            "expected_evidence": "x",
+            "config_premise": "default",
+        },
+    )
+    assert out["ok"] is True, out
+    return int(out["vuln_id"])
+
+
+def test_confirm_lab_without_target_is_static_only(tmp_env, project):
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    vuln_id = _submit_sqli(project, _LAB_POC_OK)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True, conf
+    assert conf["evidence_level"] == "static_only"
+    assert "poc_run" not in conf
+
+
+def test_confirm_lab_rejects_failed_poc(tmp_env, project):
+    from app.models import SessionLocal
+    from app.services.lab import save_env
+    from app.services.poc_script import read_poc_code
+
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    vuln_id = _submit_sqli(project, _LAB_POC_OK)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            "poc_code": _LAB_POC_FAIL,
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is False
+    assert "退出码" in conf["error"] or "未打出冲击" in conf["error"]
+    assert conf.get("exit_code") == 2
+    saved = read_poc_code(project, vuln_id) or ""
+    assert "hit" in saved
+    assert "miss" not in saved
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        assert vuln is not None
+        assert vuln.status == "pending_review"
+
+
+def test_confirm_lab_upgrades_static_only_after_poc_success(tmp_env, project):
+    from app.services.lab import save_env
+
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    save_env(
+        project,
+        {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
+    )
+    vuln_id = _submit_sqli(project, _LAB_POC_OK)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True, conf
+    assert conf["evidence_level"] == "dynamic"
+    assert conf["status"] == "confirmed"
+    assert conf["poc_run"]["exit_code"] == 0
+
+
 def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
     from app.models import SessionLocal
     from app.tools import native_shell_tool
