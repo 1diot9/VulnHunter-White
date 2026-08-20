@@ -607,7 +607,7 @@ _SLUG_RE = re.compile(r"[^\w.\-\u4e00-\u9fff]+", re.UNICODE)
 _WRITE_NOW_HINT = (
     "已落盘。请立即继续下一条/下一批，不要等全部调查完再调用工具。"
     "本阶段只收集、不读源码：GHSA/WebSearch 标 patched；未关闭 GitHub Issues 标 unpatched。"
-    "框架 CVE 清单、安全政策帖、错误产品不要建档。"
+    "框架 CVE 清单、依赖历史漏洞、安全政策帖、错误产品不要建档。"
     "落盘不会结束本会话；本轮结束后再 WriteOldVuln(done=true, note=跳过说明)。"
 )
 _CRAWL_PASS_DONE_HINT = "爬虫核验已声明结束，系统将结束本会话并启动 WebSearch 补漏。"
@@ -1037,7 +1037,7 @@ def register_recon_tools() -> None:
             description=(
                 "立即写入一条历史漏洞到 docs/old-vulns/ 并自动更新 index.md。"
                 "本阶段只收集、不读源码。GHSA/WebSearch 公开洞标 patched；未关闭 GitHub Issues 标 unpatched（可省略，按 source 默认）。"
-                "不要扫框架 CVE 清单。每确认一条就调用；禁止调查完再一次性写入。"
+                "不要扫框架 CVE 清单，不要收录依赖/框架自身的历史漏洞。每确认一条就调用；禁止调查完再一次性写入。"
                 "逐条落盘不会结束本会话。本轮结束后设 done=true；无符合口径的条目时设 no_findings=true。"
                 "爬虫落盘轮不要调用 WebSearch；搜索补漏轮再用 WebSearch 按产品短名补缺。"
             ),
@@ -1075,7 +1075,7 @@ def register_recon_tools() -> None:
                     "affects": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "可选额外包名，仅作记录",
+                        "description": "可选本项目包名，仅作记录；不要填 Spring 等依赖坐标",
                     },
                     "ecosystems": {
                         "type": "array",
@@ -1092,7 +1092,7 @@ def register_recon_tools() -> None:
                     },
                     "note": {
                         "type": "string",
-                        "description": "结束说明：跳过的框架 CVE 清单、错误产品或安全政策帖",
+                        "description": "结束说明：跳过的依赖/框架 CVE 清单、错误产品或安全政策帖",
                     },
                 },
             },

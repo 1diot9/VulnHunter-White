@@ -117,7 +117,7 @@ Chat Completions 默认直连；需要时代理走设置页「Chat 代理」，�
 2. Agent 只根据爬虫结果 `WriteOldVuln` 落盘（第一轮**禁止** WebSearch）。
 3. 完成后再开一轮，用 WebSearch 按产品短名补漏公开 CVE/公告。
 
-每确认一条立刻写一条；落盘不会结束会话。本轮结束再 `WriteOldVuln(done=true)`；无符合口径则 `no_findings=true`。框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。文档必须有 YAML 元数据（标题、摘要）。禁止用 `Read`/`Write`/`Shell` 直接碰 `docs/old-vulns/`。
+每确认一条立刻写一条；落盘不会结束会话。本轮结束再 `WriteOldVuln(done=true)`；无符合口径则 `no_findings=true`。只收本项目自身历史洞；依赖 / 框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。文档必须有 YAML 元数据（标题、摘要）。禁止用 `Read`/`Write`/`Shell` 直接碰 `docs/old-vulns/`。
 
 启发式与绕过路径在**历史漏洞收集完毕**后即可启动，不必等盖章结束。盖章未完成前，系统不会因「启发式文件未审完」而结束项目。
 

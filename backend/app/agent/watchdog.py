@@ -100,7 +100,7 @@ RECON_OLD_VULN_PERSIST_NUDGE = (
     "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
     "若无符合口径的候选立刻 WriteOldVuln(no_findings=true)；"
     "本轮完成后 WriteOldVuln(done=true)。"
-    "不要读源码。不要调用 WebSearch（随后由搜索补漏轮检索）。不要改写 code-map/auth，不要标权重。"
+    "不要收录依赖/框架 CVE。不要读源码。不要调用 WebSearch（随后由搜索补漏轮检索）。不要改写 code-map/auth，不要标权重。"
     "上下文会被压缩，延迟写入会丢失。"
 )
 
@@ -110,7 +110,7 @@ RECON_OLD_VULN_GHSA_PERSIST_NUDGE = (
     "每确认一条立刻 WriteOldVuln（落盘不会结束本会话）；"
     "不要读源码；公开公告标 patched，不要搜未修复洞；"
     "第一轮爬虫落盘不要删除。全部补漏完再 WriteOldVuln(done=true)；无符合口径则 no_findings=true。"
-    "不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
+    "不要收录依赖/框架 CVE。不要改写 code-map/auth，不要标权重。上下文会被压缩，延迟写入会丢失。"
 )
 
 RECON_SOURCE_EXT_PERSIST_NUDGE = (

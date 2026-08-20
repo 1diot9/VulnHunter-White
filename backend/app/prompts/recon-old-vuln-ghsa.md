@@ -16,15 +16,17 @@
 
 ## 收录口径（强制）
 
-只收 **本项目自身**的公开 CVE / 安全公告（产品名、仓库名或发行版对得上）。旧版本已修复的也要落盘，一律 `fix_status=patched`。
+只收 **本项目自身**的公开 CVE / 安全公告（产品名、仓库名、发行版或本仓库 Maven/npm 坐标对得上）。旧版本已修复的也要落盘，一律 `fix_status=patched`。
 
 不要读 `src/`，不要 Grep，不要根据源码分析调用点或补丁。正文写公告摘要、影响版本、参考链接即可。
+
+**不要收录依赖 / 框架 / 中间件的历史漏洞**（Spring、Tomcat、MyBatis、Fastjson、Redis、Netty 等）。不要按 pom 里的依赖坐标去 SearchGHSA / WebSearch。依赖 CVE 不在本阶段收集。
 
 ## 禁止一条一文（写进结束说明即可）
 
 以下 **不要** `WriteOldVuln` 建档，结束时用 `WriteOldVuln(done=true, note=...)` 交代：
 
-- 按框架 / BOM 扫出来的 Spring / Tomcat / 组件通告大全
+- 依赖或框架自身的 CVE / 组件通告（含按 BOM 扫出来的 Spring / Tomcat 大全）
 - 安全政策讨论、撤稿、错误产品
 - 第一轮已覆盖的条目
 
@@ -32,7 +34,7 @@
 
 ## 目标
 
-1. 结合 `docs/code-map.md` / `docs/auth.md` 确认**产品短名**，再用 WebSearch / SearchOldVuln 按产品名检索。**不要**按 Spring Boot / Tomcat 版本把生态 CVE 扫一遍。
+1. 结合 `docs/code-map.md` / `docs/auth.md` 确认**产品短名**，再用 WebSearch / SearchOldVuln 按产品名检索。**不要**按 Spring Boot / Tomcat / 其它依赖版本把生态 CVE 扫一遍。
 2. 第一轮爬虫文件缺失或明显漏收时，也可用 SearchGHSA / SearchGitHubIssues 兜底（Issues 只搜未关闭）。
 3. 符合口径且尚未落盘的每条立刻 `WriteOldVuln`。
 4. 本轮结束后 `WriteOldVuln(done=true, note=跳过说明)`。结束本轮即结束整个历史漏洞阶段，系统随后进入盖章。

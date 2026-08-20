@@ -257,6 +257,71 @@ def _affected_versions(adv: dict[str, Any], ecosystem: str | None = None) -> str
     return "; ".join(parts)[:500]
 
 
+def _package_name_matches(pkg_name: str, needles: list[str]) -> bool:
+    n = (pkg_name or "").strip().lower()
+    if not n:
+        return False
+    n_group, sep, n_art = n.partition(":")
+    if not sep:
+        n_art = n
+        n_group = n if "." in n else ""
+    for raw in needles:
+        needle = (raw or "").strip().lower()
+        if not needle:
+            continue
+        if n == needle:
+            return True
+        if ":" in needle:
+            continue
+        if "." in needle:
+            if n_group == needle or n_group.startswith(needle + "."):
+                return True
+            continue
+        if n_art == needle or n == needle:
+            return True
+    return False
+
+
+def advisory_matches_project(
+    adv: dict[str, Any],
+    *,
+    packages: list[str] | tuple[str, ...] | None = None,
+    keyword: str = "",
+) -> bool:
+    """True when a GHSA advisory targets this product, not a third-party dependency."""
+    needles: list[str] = []
+    seen: set[str] = set()
+    for raw in [keyword, *(packages or [])]:
+        item = str(raw or "").strip()
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        needles.append(item)
+    if not needles:
+        return False
+    names: list[str] = []
+    for block in adv.get("vulnerabilities") or []:
+        if not isinstance(block, dict):
+            continue
+        pkg = block.get("package") or {}
+        if not isinstance(pkg, dict):
+            continue
+        name = str(pkg.get("name") or "").strip()
+        if name:
+            names.append(name)
+    if names:
+        return any(_package_name_matches(name, needles) for name in names)
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return False
+    blob = " ".join(
+        str(adv.get(key) or "")
+        for key in ("summary", "description", "html_url", "ghsa_id")
+    ).lower()
+    return kw in blob
+
+
 def advisory_to_record(
     adv: dict[str, Any],
     *,
@@ -368,6 +433,7 @@ def crawl_ghsa(
     published_since = since_date(since_days)
     merged: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+    dropped = 0
     limiter = _GitHubRateLimiter()
 
     with http_client(timeout=45.0) as client:
@@ -393,6 +459,9 @@ def crawl_ghsa(
                         continue
                     if adv.get("withdrawn_at"):
                         continue
+                    if not advisory_matches_project(adv, packages=uniq_packages, keyword=kw):
+                        dropped += 1
+                        continue
                     rec = advisory_to_record(adv, keyword=kw or pkg, ecosystem=eco_l)
                     key = merge_key(str(rec.get("identifier") or ""))
                     if key == "UNKNOWN":
@@ -407,6 +476,7 @@ def crawl_ghsa(
         "ecosystems": [ECOSYSTEM_HINTS.get(str(e).strip().lower(), str(e).strip().lower()) for e in ecosystems],
         "packages": uniq_packages,
         "fetched": len(results),
+        "dropped_dependency": dropped,
         "errors": errors,
         "rate_limit": {
             "assumed_limit_per_hour": limiter._limit,

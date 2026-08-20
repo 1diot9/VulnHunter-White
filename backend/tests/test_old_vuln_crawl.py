@@ -7,9 +7,11 @@ from app.services.old_vuln_crawl import (
     default_product_keyword,
     infer_affected_packages,
     infer_ecosystems,
+    resolve_crawl_inputs,
     run_old_vuln_ghsa_crawl,
     save_crawl_spec,
 )
+from app.services.ghsa_service import advisory_matches_project
 from app.services.paths import ghsa_new_path, old_vulns_dir, src_dir
 from app.services import pipeline
 from app.tools.phase_recon import mark_old_vuln_search_complete, recon_old_vulns_ready
@@ -47,6 +49,117 @@ def test_infer_affected_packages_from_pom(tmp_env, project):
     assert "run.halo.app" in pkgs
     assert "run.halo.app:application" in pkgs
     assert "spring-boot-starter-parent" not in pkgs
+    assert "org.springframework.boot" not in pkgs
+    assert not any(p.lower().startswith("org.springframework") for p in pkgs)
+
+
+def test_infer_affected_packages_ignores_spring_boot_parent_group(tmp_env, project):
+    (src_dir(project) / "pom.xml").write_text(
+        """
+        <project>
+          <parent>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-parent</artifactId>
+          </parent>
+          <artifactId>demo-app</artifactId>
+        </project>
+        """,
+        encoding="utf-8",
+    )
+    pkgs = infer_affected_packages(project)
+    assert pkgs == ["demo-app"]
+
+
+def test_infer_affected_packages_keeps_declared_springframework(tmp_env, project):
+    (src_dir(project) / "pom.xml").write_text(
+        "<project><groupId>org.springframework</groupId><artifactId>spring-core</artifactId></project>",
+        encoding="utf-8",
+    )
+    pkgs = infer_affected_packages(project)
+    assert "org.springframework" in pkgs
+    assert "spring-core" in pkgs
+    assert "org.springframework:spring-core" in pkgs
+
+
+def test_infer_affected_packages_skips_dependency_groupids(tmp_env, project):
+    root = src_dir(project)
+    (root / "pom.xml").write_text(
+        """
+        <project>
+          <groupId>cn.iocoder.boot</groupId>
+          <artifactId>yudao</artifactId>
+        </project>
+        """,
+        encoding="utf-8",
+    )
+    common = root / "yudao-framework" / "yudao-common"
+    common.mkdir(parents=True)
+    (common / "pom.xml").write_text(
+        """
+        <project>
+          <parent>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-framework</artifactId>
+          </parent>
+          <artifactId>yudao-common</artifactId>
+          <dependencies>
+            <dependency>
+              <groupId>org.springframework</groupId>
+              <artifactId>spring-core</artifactId>
+            </dependency>
+          </dependencies>
+        </project>
+        """,
+        encoding="utf-8",
+    )
+    pkgs = infer_affected_packages(project)
+    assert "yudao" in pkgs
+    assert "cn.iocoder.boot" in pkgs
+    assert "yudao-common" in pkgs
+    assert "cn.iocoder.boot:yudao-common" in pkgs
+    assert "org.springframework" not in pkgs
+    assert "org.springframework:yudao-common" not in pkgs
+    assert "spring-core" not in pkgs
+
+
+def test_resolve_crawl_inputs_drops_spec_dependency_packages(tmp_env, project):
+    (src_dir(project) / "pom.xml").write_text(
+        "<project><groupId>cn.iocoder.boot</groupId><artifactId>yudao</artifactId></project>",
+        encoding="utf-8",
+    )
+    save_crawl_spec(
+        project,
+        keyword="ruoyi-vue-pro",
+        affects=["org.springframework", "org.springframework:yudao-common", "yudao-common"],
+    )
+    keyword, affects, _ecos = resolve_crawl_inputs(project)
+    assert keyword == "ruoyi-vue-pro"
+    assert "yudao" in affects
+    assert "yudao-common" in affects
+    assert "org.springframework" not in affects
+    assert "org.springframework:yudao-common" not in affects
+
+
+def test_advisory_matches_project_keeps_own_drops_spring():
+    own = {
+        "vulnerabilities": [
+            {"package": {"ecosystem": "maven", "name": "cn.iocoder.boot:yudao-common"}}
+        ]
+    }
+    spring = {
+        "summary": "Spring Framework RCE",
+        "vulnerabilities": [
+            {"package": {"ecosystem": "maven", "name": "org.springframework:spring-web"}}
+        ],
+    }
+    packages = ["yudao", "cn.iocoder.boot", "yudao-common"]
+    assert advisory_matches_project(own, packages=packages, keyword="ruoyi-vue-pro") is True
+    assert advisory_matches_project(spring, packages=packages, keyword="ruoyi-vue-pro") is False
+    assert advisory_matches_project(
+        {"summary": "RuoYi-Vue-Pro path traversal", "html_url": "https://example/ruoyi-vue-pro"},
+        packages=packages,
+        keyword="ruoyi-vue-pro",
+    ) is True
 
 
 def test_collect_skip_keys_from_old_vuln_docs(tmp_env, project):

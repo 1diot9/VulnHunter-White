@@ -66,7 +66,7 @@ pytest
 - 模型商协议由 Provider 的 `wire_api` 决定：`chat` 为 OpenAI Chat Completions（默认），`anthropic` 为 Anthropic Messages（`POST /v1/messages`，system 独立、工具为 tool_use / tool_result）。检查点内部仍保存 Chat Completions 形状的消息。
 - 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证 / 攻击链会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
 - 设置页可手动清理 X 天前的 SSE 实时日志（`live-events` / `live.events.jsonl`），实现集中在 `live_log.purge_older_than`。
-- 历史漏洞阶段只收集、不读源码。先跑 GHSA / GitHub Issues 爬虫并把结果交给 Agent 落盘（第一阶段禁止 WebSearch）；完成后再由 Agent 用 WebSearch 补漏。公开 CVE/公告标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含爬虫（GHSA、本仓库 GitHub Issues）与 WebSearch 补漏。框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。
+- 历史漏洞阶段只收集、不读源码。先跑 GHSA / GitHub Issues 爬虫并把结果交给 Agent 落盘（第一阶段禁止 WebSearch）；完成后再由 Agent 用 WebSearch 补漏。公开 CVE/公告标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含爬虫（GHSA、本仓库 GitHub Issues）与 WebSearch 补漏。只收本项目自身历史洞；依赖 / 框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。爬虫额外包只取本仓库 Maven/npm 坐标，不查 Spring 等依赖。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
 - 出站 HTTP、Chat 代理优先用设置页；未保存过时可用 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY`。不要硬编码代理地址。代理不可用时自动直连。
 - Debug MCP 放在 `tools/mcp/`，用相对仓库根目录的路径；可用 `VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON` 覆盖。

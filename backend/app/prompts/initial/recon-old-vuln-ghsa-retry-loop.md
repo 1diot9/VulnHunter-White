@@ -1,1 +1,1 @@
-上一轮因死循环中止，请新开继续历史漏洞 **WebSearch 补漏**。只收集本项目公开 CVE/公告（source=websearch，patched）；不要读源码，不要搜未修复洞。不要扫框架 CVE 清单。不要删第一轮文档。缺正文的立刻 WriteOldVuln（落盘不会结束本会话）。本轮完成再 WriteOldVuln(done=true, note=跳过说明)。不要改写 code-map/auth。
+上一轮因死循环中止，请新开继续历史漏洞 **WebSearch 补漏**。只收集本项目公开 CVE/公告（source=websearch，patched）；不要读源码，不要搜未修复洞。不要扫框架 CVE 清单，不要收录依赖/框架历史漏洞。不要删第一轮文档。缺正文的立刻 WriteOldVuln（落盘不会结束本会话）。本轮完成再 WriteOldVuln(done=true, note=跳过说明)。不要改写 code-map/auth。

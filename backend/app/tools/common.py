@@ -1121,7 +1121,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="WebSearch",
-            description="网络搜索本项目已公开的历史漏洞（CVE/公告）。仅历史漏洞第二轮（搜索补漏）使用；第一轮爬虫落盘禁止调用。本轮只收集，不要读源码；命中标 fix_status=patched。未修复洞只来自未关闭 GitHub Issues。符合口径立刻 WriteOldVuln；落盘不会结束本会话。",
+            description="网络搜索本项目已公开的历史漏洞（CVE/公告）。仅历史漏洞第二轮（搜索补漏）使用；第一轮爬虫落盘禁止调用。只搜本项目产品名，不要搜依赖/框架 CVE。本轮只收集，不要读源码；命中标 fix_status=patched。未修复洞只来自未关闭 GitHub Issues。符合口径立刻 WriteOldVuln；落盘不会结束本会话。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1136,7 +1136,7 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="SearchGHSA",
-            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞爬虫落盘轮不要用；搜索补漏轮在公开公告不足时作兜底。命中按已修复历史洞落盘（fix_status=patched），不要读源码判断是否已修。",
+            description="查询 GitHub Advisories（可按 ecosystem/package/query）。历史漏洞爬虫落盘轮不要用；搜索补漏轮在公开公告不足时作兜底。只查本项目自身坐标，不要按 Spring 等依赖 package 检索。命中按已修复历史洞落盘（fix_status=patched），不要读源码判断是否已修。",
             parameters={
                 "type": "object",
                 "properties": {

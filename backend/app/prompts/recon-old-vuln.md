@@ -20,18 +20,20 @@
 
 ## 收录与标注
 
-只收 **本项目自身**的历史漏洞（产品名、仓库名或发行版对得上）。
+只收 **本项目自身**的历史漏洞（产品名、仓库名、发行版或本仓库 Maven/npm 坐标对得上）。
 
 - `source=ghsa`：本项目自身公开公告，标 `fix_status=patched`（可省略，默认 patched）。旧版本已修复的也要落盘。
 - `source=github_issue`：未关闭 Issue，**默认未修复**，标 `fix_status=unpatched`（可省略）。尚未分配 CVE 只要机制清楚、属于本项目即可收录。
 - 未修复洞**只**来自未关闭 GitHub Issues，不要把 GHSA 命中标成 unpatched。
 - 不要读 `src/`，不要 Grep。正文抄候选摘要、影响版本、参考链接即可。
+- **不要收录依赖 / 框架 / 中间件的历史漏洞**（Spring、Tomcat、MyBatis、Fastjson、Redis、Netty 等）。即便本项目引用了这些组件，也不要建档；依赖 CVE 不在本阶段收集。
 
 ## 禁止一条一文（写进结束说明即可）
 
 以下 **不要** `WriteOldVuln` 建档，结束时用 `WriteOldVuln(done=true, note=...)` 交代：
 
-- 按框架 / BOM 扫出来的 Spring / Tomcat / 组件通告大全
+- 依赖或框架自身的 CVE / 组件通告（含爬虫误命中的 Spring 等）
+- 仅「升级依赖 / bump xxx」类 Issue
 - 安全政策讨论、撤稿、错误产品
 
 项目本身没有符合口径的历史漏洞时，立刻 `WriteOldVuln(no_findings=true)`。不要为了「爬虫有命中」而堆文档。

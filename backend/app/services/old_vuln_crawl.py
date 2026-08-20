@@ -33,6 +33,68 @@ _ECOSYSTEM_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _SKIP_DIR_NAMES = frozenset(
     {"node_modules", "target", "dist", "build", ".git", "vendor", "__pycache__", ".venv"}
 )
+# Inherited / leftover groupIds that belong to dependencies, not this product.
+# Declared module groupIds still win so mining Spring itself keeps org.springframework.
+_THIRD_PARTY_GROUP_PREFIXES = (
+    "org.springframework",
+    "org.apache",
+    "org.hibernate",
+    "org.slf4j",
+    "ch.qos.logback",
+    "org.eclipse",
+    "org.junit",
+    "org.mockito",
+    "org.projectlombok",
+    "org.ow2",
+    "org.aspectj",
+    "org.mybatis",
+    "com.baomidou",
+    "com.alibaba",
+    "com.fasterxml",
+    "com.google",
+    "com.mysql",
+    "com.zaxxer",
+    "io.netty",
+    "io.lettuce",
+    "io.micrometer",
+    "io.opentelemetry",
+    "io.projectreactor",
+    "io.swagger",
+    "io.jsonwebtoken",
+    "io.grpc",
+    "io.vertx",
+    "jakarta",
+    "javax",
+    "redis.clients",
+    "org.redisson",
+    "org.postgresql",
+    "org.mongodb",
+    "org.flywaydb",
+    "org.liquibase",
+    "org.thymeleaf",
+    "org.bouncycastle",
+    "org.jboss",
+    "org.glassfish",
+    "org.codehaus",
+    "org.yaml",
+    "com.nimbusds",
+    "com.squareup",
+    "org.seleniumhq",
+)
+_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+_XML_TAG_BLOCK_RE = {
+    tag: re.compile(rf"<{tag}\b[^>]*>.*?</{tag}>", re.I | re.S)
+    for tag in (
+        "parent",
+        "dependencyManagement",
+        "dependencies",
+        "build",
+        "profiles",
+        "reporting",
+        "pluginManagement",
+    )
+}
+_FIRST_DEP_OR_PLUGIN_RE = re.compile(r"<(dependency|plugin)\b", re.I)
 
 
 @dataclass
@@ -87,37 +149,114 @@ def infer_ecosystems(project_id: int) -> tuple[str, ...]:
     return tuple(found) if found else DEFAULT_ECOSYSTEMS
 
 
-def _packages_from_pom(text: str) -> list[str]:
-    stripped = re.sub(r"<parent>.*?</parent>", "", text, count=1, flags=re.S)
-    group = re.search(r"<groupId>([^<]+)</groupId>", stripped)
-    art = re.search(r"<artifactId>([^<]+)</artifactId>", stripped)
+def _xml_tag_value(text: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>([^<]+)</{tag}>", text, flags=re.I)
+    return m.group(1).strip() if m else ""
+
+
+def _strip_xml_blocks(text: str, *tags: str) -> str:
+    out = text
+    for tag in tags:
+        pattern = _XML_TAG_BLOCK_RE.get(tag)
+        if pattern is None:
+            pattern = re.compile(rf"<{tag}\b[^>]*>.*?</{tag}>", re.I | re.S)
+        out = pattern.sub("", out)
+    return out
+
+
+def is_third_party_maven_group(group_id: str, *, own_groups: set[str] | None = None) -> bool:
+    group = (group_id or "").strip().lower()
+    if not group:
+        return False
+    if ":" in group:
+        group = group.split(":", 1)[0]
+    owned = {g.strip().lower() for g in (own_groups or set()) if str(g).strip()}
+    if any(group == g or group.startswith(g + ".") for g in owned):
+        return False
+    return any(group == prefix or group.startswith(prefix + ".") for prefix in _THIRD_PARTY_GROUP_PREFIXES)
+
+
+def _package_group_id(pkg: str) -> str:
+    text = (pkg or "").strip().lower()
+    if not text:
+        return ""
+    if ":" in text:
+        return text.split(":", 1)[0]
+    return text if "." in text else ""
+
+
+def is_dependency_package(pkg: str, *, own_groups: set[str] | None = None) -> bool:
+    """True when a GHSA affects= value is a third-party coordinate, not this product."""
+    group = _package_group_id(pkg)
+    if not group:
+        return False
+    return is_third_party_maven_group(group, own_groups=own_groups)
+
+
+def _pom_identity(text: str) -> tuple[str, str, str]:
+    """Return (search_group, artifact_id, declared_group).
+
+    Only the module identity is used. Dependency / parent-BOM groupIds are ignored.
+    """
+    raw = _XML_COMMENT_RE.sub("", text or "")
+    parent_block = ""
+    parent_m = _XML_TAG_BLOCK_RE["parent"].search(raw)
+    if parent_m:
+        parent_block = parent_m.group(0)
+    parent_group = _xml_tag_value(parent_block, "groupId")
+    remainder = _strip_xml_blocks(
+        raw,
+        "parent",
+        "dependencyManagement",
+        "dependencies",
+        "build",
+        "profiles",
+        "reporting",
+        "pluginManagement",
+    )
+    cut = _FIRST_DEP_OR_PLUGIN_RE.search(remainder)
+    header = remainder[: cut.start()] if cut else remainder
+    declared = _xml_tag_value(header, "groupId")
+    artifact = _xml_tag_value(header, "artifactId")
+    if declared:
+        search_group = declared
+    elif parent_group and not is_third_party_maven_group(parent_group):
+        search_group = parent_group
+    else:
+        search_group = ""
+    return search_group, artifact, declared
+
+
+def _packages_from_pom(text: str) -> tuple[list[str], str]:
+    group_id, artifact, declared = _pom_identity(text)
     out: list[str] = []
-    artifact = art.group(1).strip() if art else ""
-    group_id = group.group(1).strip() if group else ""
     if artifact:
         out.append(artifact)
     if group_id:
         out.append(group_id)
         if artifact:
             out.append(f"{group_id}:{artifact}")
-    return out
+    return out, declared
 
 
 def infer_affected_packages(project_id: int) -> list[str]:
-    """Best-effort package names from pom.xml / package.json for GHSA affects=."""
+    """Best-effort *project* package names from pom.xml / package.json for GHSA affects=.
+
+    Does not include third-party dependencies (Spring, Tomcat, …).
+    """
     root = src_dir(project_id)
     if not root.exists():
         return []
     found: list[str] = []
     seen: set[str] = set()
+    own_groups: set[str] = set()
+    pending: list[str] = []
 
-    def add(raw: str) -> None:
+    def remember(raw: str) -> None:
         item = (raw or "").strip()
-        key = item.lower()
-        if not item or key in seen:
+        if not item:
             return
-        seen.add(key)
-        found.append(item)
+        pending.append(item)
 
     for dirpath, dirnames, filenames in os_walk_limited(root, max_depth=3):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
@@ -127,8 +266,11 @@ def infer_affected_packages(project_id: int) -> list[str]:
                 text = (Path(dirpath) / names["pom.xml"]).read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 text = ""
-            for pkg in _packages_from_pom(text):
-                add(pkg)
+            pkgs, declared = _packages_from_pom(text)
+            if declared:
+                own_groups.add(declared.lower())
+            for pkg in pkgs:
+                remember(pkg)
         if "package.json" in names:
             try:
                 text = (Path(dirpath) / names["package.json"]).read_text(encoding="utf-8", errors="ignore")
@@ -136,7 +278,17 @@ def infer_affected_packages(project_id: int) -> list[str]:
                 text = ""
             m = re.search(r'"name"\s*:\s*"([^"]+)"', text)
             if m:
-                add(m.group(1))
+                remember(m.group(1))
+        if len(pending) >= 24:
+            break
+    for item in pending:
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        if is_dependency_package(item, own_groups=own_groups):
+            continue
+        seen.add(key)
+        found.append(item)
         if len(found) >= 8:
             break
     return found
@@ -220,12 +372,20 @@ def collect_old_vuln_skip_keys(project_id: int) -> set[str]:
 def resolve_crawl_inputs(project_id: int) -> tuple[str, list[str], tuple[str, ...]]:
     spec = load_crawl_spec(project_id)
     keyword = _slug_keyword(str(spec.get("keyword") or "")) or default_product_keyword(project_id)
+    inferred = infer_affected_packages(project_id)
+    own_groups: set[str] = set()
+    for pkg in inferred:
+        group = _package_group_id(pkg)
+        if group:
+            own_groups.add(group)
     affects: list[str] = []
     seen: set[str] = set()
-    for raw in list(spec.get("affects") or []) + infer_affected_packages(project_id):
+    for raw in list(spec.get("affects") or []) + inferred:
         item = str(raw or "").strip()
         key = item.lower()
         if not item or key in seen:
+            continue
+        if is_dependency_package(item, own_groups=own_groups):
             continue
         seen.add(key)
         affects.append(item)
