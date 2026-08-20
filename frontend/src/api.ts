@@ -120,8 +120,34 @@ export type Vuln = {
   report_path: string | null
   verifier_status?: string | null
   verifier_verified_url?: string | null
+  verifier_ask_reason?: string | null
+  verifier_user_instruction?: string | null
+  verifier_consent?: boolean
   created_at: string
   updated_at: string
+}
+
+export type VerifierConsentItem = {
+  id: number
+  project_id: number
+  project_name: string
+  title: string
+  vuln_type: string | null
+  severity: string | null
+  severity_score: number | null
+  verifier_ask_reason: string | null
+  verifier_status: string
+  updated_at: string
+}
+
+export type VerifierConsentResult = {
+  ok: boolean
+  action?: string | null
+  vuln_id?: number | null
+  verifier_status?: string | null
+  instruction?: string | null
+  message?: string | null
+  error?: string | null
 }
 
 export type VulnDetail = Vuln & {
@@ -576,6 +602,24 @@ export const api = {
     return request<Vuln[]>(`/api/vulns${s ? `?${s}` : ''}`)
   },
   getVuln: (id: number) => request<VulnDetail>(`/api/vulns/${id}`),
+  listVerifierConsent: (projectId?: number) => {
+    const q = new URLSearchParams()
+    if (projectId != null) q.set('project_id', String(projectId))
+    const s = q.toString()
+    return request<VerifierConsentItem[]>(`/api/vulns/verifier-consent${s ? `?${s}` : ''}`)
+  },
+  verifierConsentCount: (projectId?: number) => {
+    const q = new URLSearchParams()
+    if (projectId != null) q.set('project_id', String(projectId))
+    const s = q.toString()
+    return request<{ count: number }>(`/api/vulns/verifier-consent/count${s ? `?${s}` : ''}`)
+  },
+  resolveVerifierConsent: (id: number, action: 'skip' | 'continue', instruction?: string) =>
+    request<VerifierConsentResult>(`/api/vulns/${id}/verifier-consent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, instruction: instruction || null }),
+    }),
   updateVulnTracking: (id: number, tracking_status: VulnTrackingStatus) =>
     request<Vuln>(`/api/vulns/${id}`, {
       method: 'PATCH',

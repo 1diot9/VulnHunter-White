@@ -619,6 +619,19 @@ class AgentLoop:
                     result.stop_reason = "cancelled"
                     return result
                 tr = registry.dispatch(ctx, call["name"], call["arguments"])
+                # AskUser parks without a tool result; the consent API appends it later.
+                if ctx.state.get("awaiting_user") and call["name"] == "AskUser":
+                    self._persist(messages, status="awaiting_user")
+                    live_log.system(
+                        self.project_id,
+                        f"Verifier 等待用户确认互联网复测 vuln={self.vuln_id}",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                    result.ok = True
+                    result.stop_reason = "awaiting_user"
+                    result.state = self.state
+                    return result
                 messages.append(
                     {
                         "role": "tool",

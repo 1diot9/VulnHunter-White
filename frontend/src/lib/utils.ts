@@ -85,6 +85,8 @@ export function formatVerifierStatus(value: string | null | undefined): string |
   switch (value) {
     case 'pending':
       return '互联网验证中'
+    case 'awaiting_user':
+      return '待用户确认'
     case 'verified':
       return '互联网已复现'
     case 'failed':

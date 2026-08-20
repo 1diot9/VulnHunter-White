@@ -371,6 +371,12 @@ def note_verifier_enabled(project_id: int) -> None:
         _phase_pause_event(project_id, "verifier").clear()
 
 
+def kick_verifier(project_id: int) -> None:
+    """Wake Verifier for pending work or a post-consent checkpoint (even if project completed)."""
+    cancel = _cancel_event(project_id)
+    _ensure_verifier(project_id, cancel, allow_completed=True)
+
+
 def note_attack_chain_enabled(project_id: int) -> None:
     """Enabling Attack Chain mid-run clears leftover pause and allows a fresh run."""
     from ..tools.phase_attack_chain import clear_attack_chain_done
@@ -1926,15 +1932,26 @@ def _run_reviewer_loop(project_id: int) -> None:
             _reviewer_inflight[project_id] = False
 
 
-def _ensure_verifier(project_id: int, cancel: threading.Event) -> None:
+def _ensure_verifier(
+    project_id: int,
+    cancel: threading.Event,
+    *,
+    allow_completed: bool = False,
+) -> None:
     from .verifier import is_verifier_enabled, pending_verifier_count
 
     if not is_verifier_enabled(project_id):
         return
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        if not proj or proj.status in ("completed", "cancelled", "error"):
+        if not proj:
             return
+        if proj.status in ("cancelled", "error"):
+            return
+        if proj.status == "completed" and not allow_completed:
+            # Still allow if a consented checkpoint is waiting to resume.
+            if not list_resumable_runs(project_id, "verifier"):
+                return
     if _phase_is_paused(project_id, "verifier"):
         return
     has_work = (
@@ -1950,7 +1967,7 @@ def _ensure_verifier(project_id: int, cancel: threading.Event) -> None:
             return
         vt = threading.Thread(
             target=_run_verifier_loop,
-            args=(project_id,),
+            args=(project_id, allow_completed),
             daemon=True,
             name=f"vh-verifier-{project_id}",
         )
@@ -1960,7 +1977,7 @@ def _ensure_verifier(project_id: int, cancel: threading.Event) -> None:
     vt.start()
 
 
-def _run_verifier_loop(project_id: int) -> None:
+def _run_verifier_loop(project_id: int, allow_completed: bool = False) -> None:
     from .verifier import is_verifier_enabled, pending_verifier_count
 
     cancel = _cancel_event(project_id)
@@ -1973,7 +1990,11 @@ def _run_verifier_loop(project_id: int) -> None:
             try:
                 with SessionLocal() as db:
                     proj = db.get(Project, project_id)
-                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                    if not proj or proj.status in ("cancelled", "error"):
+                        return
+                    if proj.status == "completed" and not (
+                        allow_completed or list_resumable_runs(project_id, "verifier")
+                    ):
                         return
                 pending = pending_verifier_count(project_id)
             except OperationalError as e:
@@ -3838,7 +3859,7 @@ def _run_verifier_once(project_id: int) -> None:
     from .verifier import (
         extract_fofa_query,
         format_shared_fofa_hint,
-        internet_test_block_reason_for_vuln,
+        internet_capability_skip_reason,
         load_project_fofa_cache,
         mark_internet_unsafe_skipped,
         pick_pending_verifier_vuln,
@@ -3860,7 +3881,7 @@ def _run_verifier_once(project_id: int) -> None:
                 loop = _loop_from_checkpoint(
                     cp,
                     cancel=cancel,
-                    stop_when=lambda st: bool(st.get("verifier_done")),
+                    stop_when=lambda st: bool(st.get("verifier_done") or st.get("awaiting_user")),
                     timeout_sec=settings.timeout_verifier,
                 )
                 seed_fofa_state(loop.state, project_id)
@@ -3869,6 +3890,15 @@ def _run_verifier_once(project_id: int) -> None:
                 _release_adopted(project_id, cp.phase_run_id)
             if result.stop_reason == "auth_error":
                 _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            if result.stop_reason == "awaiting_user" or (
+                result.state and result.state.get("awaiting_user")
+            ):
+                live_log.system(
+                    project_id,
+                    f"Verifier 等待用户确认 vuln={cp.vuln_id}",
+                    phase="verifier",
+                )
                 return
             _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
             live_log.system(
@@ -3884,12 +3914,13 @@ def _run_verifier_once(project_id: int) -> None:
             return
         vuln_id = vuln.id
         report_md = read_report_md(project_id, vuln_id)
-        unsafe = internet_test_block_reason_for_vuln(vuln, report_md)
-        if unsafe:
-            mark_internet_unsafe_skipped(project_id, vuln_id, unsafe)
+        # Capability gaps still auto-skip; harm types go through AskUser in-agent.
+        capability = internet_capability_skip_reason(vuln)
+        if capability:
+            mark_internet_unsafe_skipped(project_id, vuln_id, capability)
             live_log.system(
                 project_id,
-                f"漏洞 #{vuln_id} 跳过互联网复测：{unsafe}",
+                f"漏洞 #{vuln_id} 跳过互联网复测：{capability}",
                 phase="verifier",
             )
             return
@@ -3953,12 +3984,21 @@ def _run_verifier_once(project_id: int) -> None:
             pause_event=_combined_pause(project_id, "verifier"),
             timeout_sec=settings.timeout_verifier,
             context_window=_context_window(),
-            stop_when=lambda st: bool(st.get("verifier_done")),
+            stop_when=lambda st: bool(st.get("verifier_done") or st.get("awaiting_user")),
         )
         seed_fofa_state(loop.state, project_id)
         result = loop.run()
         if result.stop_reason == "auth_error":
             _pause_for_auth(project_id, result.error or "auth_error")
+            return
+        if result.stop_reason == "awaiting_user" or (
+            result.state and result.state.get("awaiting_user")
+        ):
+            live_log.system(
+                project_id,
+                f"Verifier 等待用户确认 vuln={vuln_id}",
+                phase="verifier",
+            )
             return
         _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
         live_log.system(

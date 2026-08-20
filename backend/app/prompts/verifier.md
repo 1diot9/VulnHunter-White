@@ -7,16 +7,18 @@
 
 用户要能直接看到：**FOFA 搜索语法、搜到的全部目标各自是成功 / 失败 / 未测**，以及打通了哪个 URL、你实际发出的 PoC、该目标的真实响应。成功时 URL / PoC / 响应 / **FOFA 语法**必须原样写入 `FinishVerifier`，不要只写摘要。
 
-## 禁止互联网测试
-下列情况**不准**对 FOFA 搜到的目标发利用请求，发现后立刻 `FinishVerifier(verdict=skipped, notes=原因)`，不要 curl、不要改数据：
+## 可能产生危害时须询问用户
+下列情况**不准**在未获用户同意前对 FOFA 目标发利用请求。发现后立刻 `AskUser(reason=...)`，本轮会挂起等待用户在「验证确认」页跳过或给出自定义指示；**不要**直接 `FinishVerifier(verdict=skipped)`，也**不要** curl / 改数据：
 - 任意文件删除、DoS/拒绝服务、任意文件上传
 - SQL **增删改**或结构变更（`INSERT`/`UPDATE SET`/`DELETE FROM`/`DROP`/`TRUNCATE` 等）。只读 SELECT/UNION/报错注入可以测
 - 其它会中断业务或篡改对方数据的 PoC（清库、写文件、拒绝服务）
 
-只读类（未授权读取、信息泄露、SELECT 注入等）才允许复测。
+用户同意后会带回指示：按指示复测（可改为更安全的观测方式）。用户跳过则会话结束，无需再调用 FinishVerifier。
+
+只读类（未授权读取、信息泄露、SELECT 注入等）才允许在未询问时直接复测。
 
 ## 流程
-1. Read `vulns/{id}/report.md`（含 `## 互联网资产证明` 里的 FOFA 语句）、`request.http`、`poc.py`。Read 若 truncated=true，用 next_offset 继续。
+1. Read `vulns/{id}/report.md`（含 `## 互联网资产证明` 里的 FOFA 语句）、`request.http`、`poc.py`。Read 若 truncated=true，用 next_offset 继续。若属于「可能产生危害」类，**先 AskUser**，不要发利用。
 2. **FOFA（项目级共享）**
    - 用项目应用指纹（`docs/app-fingerprints.json` 或报告「互联网资产证明」）圈目标，不要重新做指纹识别。
    - 若初始消息已给出共享命中，或 `docs/fofa-targets.json` 已有样本：**不要为换语法再搜**，直接用这些目标。仅当本条把当前这批都测完仍不足 3 个成功、且尚未搜满 5 轮时，才 `FofaSearch(expand=true)`。
@@ -39,4 +41,5 @@
 - 成功标准：真实 HTTP 响应体现报告所述冲击（差异、回显、未授权数据等），不是 200 就算。完成标准是 3 个成功目标，不是 1 个。SSRF 须与报告观察面一致：声称有回显则 `response` 须含目标正文；仅响应差别则须体现通/不通对照，不要把 URL 反显当成回显成功。
 - 不要对教育网/明显政府站点做破坏性写入；能证明可读/未授权差异即可。
 - 不要编造 FOFA 结果或响应。没有实证就 fail/skipped。
-- 本轮结束必须调用 `FinishVerifier`。
+- 可能产生危害时必须 AskUser；用户同意前禁止对互联网目标发利用。
+- 本轮结束必须调用 `FinishVerifier`（AskUser 挂起等待用户除外）。

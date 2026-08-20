@@ -295,6 +295,9 @@ class VulnOut(BaseModel):
     report_path: str | None = None
     verifier_status: str = "none"
     verifier_verified_url: str | None = None
+    verifier_ask_reason: str | None = None
+    verifier_user_instruction: str | None = None
+    verifier_consent: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -316,6 +319,34 @@ class VulnDetail(VulnOut):
     verifier_fofa_query: str | None = None
     can_dynamic_verify: bool = False
     dynamic_verify_queued: bool = False
+
+
+class VerifierConsentItem(BaseModel):
+    id: int
+    project_id: int
+    project_name: str = ""
+    title: str
+    vuln_type: str | None = None
+    severity: str | None = None
+    severity_score: int | None = None
+    verifier_ask_reason: str | None = None
+    verifier_status: str = "awaiting_user"
+    updated_at: datetime
+
+
+class VerifierConsentIn(BaseModel):
+    action: Literal["skip", "continue"]
+    instruction: str | None = None
+
+
+class VerifierConsentOut(BaseModel):
+    ok: bool
+    action: str | None = None
+    vuln_id: int | None = None
+    verifier_status: str | None = None
+    instruction: str | None = None
+    message: str | None = None
+    error: str | None = None
 
 
 class VulnTrackingIn(BaseModel):

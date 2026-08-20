@@ -155,8 +155,10 @@ def test_fofa_search_acl_and_missing_key(tmp_env, project, monkeypatch):
     names = {t["function"]["name"] for t in registry.openai_tools_for_role("verifier")}
     assert "FofaSearch" in names
     assert "FinishVerifier" in names
+    assert "AskUser" in names
     assert "ConfirmVuln" not in names
     assert "FofaSearch" not in ROLE_ACL["reviewer"]
+    assert "AskUser" in ROLE_ACL["verifier"]
 
 
 def test_confirm_frontend_queues_verifier_when_enabled(tmp_env, project):
@@ -218,7 +220,8 @@ def test_internet_test_block_reason_types_and_sql_write():
     assert not internet_test_block_reason(vuln_type="info_disclosure", poc_code="GET /api/user")
 
 
-def test_confirm_skips_destructive_internet_types(tmp_env, project):
+def test_confirm_queues_destructive_internet_types(tmp_env, project):
+    """Harm types stay pending so Verifier can AskUser; they are not auto-skipped."""
     vuln_id, conf = _submit_and_confirm(
         project,
         enable_verifier=True,
@@ -226,15 +229,14 @@ def test_confirm_skips_destructive_internet_types(tmp_env, project):
         title="任意文件删除",
         root_cause_key="file_delete:XController",
     )
-    assert conf["verifier_queued"] is False
-    assert "文件删除" in (conf.get("verifier_skip_reason") or conf.get("message") or "")
+    assert conf["verifier_queued"] is True
     with _db() as db:
         v = db.get(Vuln, vuln_id)
-        assert v.verifier_status == "skipped"
-    assert pending_verifier_count(project) == 0
+        assert v.verifier_status == "pending"
+    assert pending_verifier_count(project) == 1
 
 
-def test_confirm_skips_sql_write_but_allows_select(tmp_env, project):
+def test_confirm_queues_sql_write_and_select(tmp_env, project):
     write_id, write_conf = _submit_and_confirm(
         project,
         enable_verifier=True,
@@ -243,10 +245,9 @@ def test_confirm_skips_sql_write_but_allows_select(tmp_env, project):
         poc_code="id=1; DELETE FROM users",
         root_cause_key="sqli:write",
     )
-    assert write_conf["verifier_queued"] is False
-    assert "SQL" in (write_conf.get("verifier_skip_reason") or "")
+    assert write_conf["verifier_queued"] is True
     with _db() as db:
-        assert db.get(Vuln, write_id).verifier_status == "skipped"
+        assert db.get(Vuln, write_id).verifier_status == "pending"
 
     read_id, read_conf = _submit_and_confirm(
         project,
@@ -262,7 +263,7 @@ def test_confirm_skips_sql_write_but_allows_select(tmp_env, project):
         assert db.get(Vuln, read_id).verifier_status == "pending"
 
 
-def test_enable_later_skips_destructive_existing(tmp_env, project):
+def test_enable_later_queues_destructive_existing(tmp_env, project):
     vuln_id, _ = _submit_and_confirm(
         project,
         enable_verifier=False,
@@ -274,9 +275,175 @@ def test_enable_later_skips_destructive_existing(tmp_env, project):
         proj = db.get(Project, project)
         proj.verifier_enabled = True
         db.commit()
-    assert enqueue_confirmed_frontend(project) == 0
+    assert enqueue_confirmed_frontend(project) == 1
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "pending"
+
+
+def test_ask_user_parks_and_does_not_block_complete_gates(tmp_env, project):
+    from app.models import FileWeight, PhaseRun, SessionLocal
+    from app.services.verifier import awaiting_user_verifier_count, resolve_verifier_consent
+
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="file_delete",
+        title="任意文件删除",
+        root_cause_key="file_delete:Ask",
+    )
+    with SessionLocal() as db:
+        run = PhaseRun(
+            project_id=project,
+            phase="verifier",
+            role="verifier",
+            status="running",
+            vuln_id=vuln_id,
+        )
+        db.add(run)
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        db.add(FileWeight(project_id=project, path="a.java", weight=50, skipped=False, audited=True))
+        db.commit()
+        run_id = run.id
+
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    out = registry.dispatch(ctx, "AskUser", {"reason": "任意文件删除会破坏对方业务文件"})
+    assert out["ok"] is True
+    assert out.get("awaiting_user") is True
+    assert ctx.state.get("awaiting_user") is True
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        assert v.verifier_status == "awaiting_user"
+        assert "文件删除" in (v.verifier_ask_reason or "")
+        # Simulate AgentLoop parking the phase_run.
+        pr = db.get(PhaseRun, run_id)
+        pr.status = "awaiting_user"
+        db.commit()
+
+    assert pending_verifier_count(project) == 0
+    assert awaiting_user_verifier_count(project) == 1
+    # awaiting_user must not block project completion (pending would).
+    assert project_complete_gates(project) is True
+
+    skip = resolve_verifier_consent(vuln_id, action="skip")
+    assert skip["ok"] is True
     with _db() as db:
         assert db.get(Vuln, vuln_id).verifier_status == "skipped"
+    assert awaiting_user_verifier_count(project) == 0
+
+
+def test_ask_user_continue_with_instruction(tmp_env, project, monkeypatch):
+    import json
+    from app.agent.checkpoint import LoopCheckpoint, save_checkpoint
+    from app.models import PhaseRun, SessionLocal
+    from app.services.verifier import resolve_verifier_consent
+
+    kicked: list[int] = []
+    monkeypatch.setattr(
+        "app.services.pipeline.kick_verifier",
+        lambda pid: kicked.append(pid),
+    )
+
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="file_delete",
+        title="任意文件删除",
+        root_cause_key="file_delete:Continue",
+    )
+    with SessionLocal() as db:
+        run = PhaseRun(
+            project_id=project,
+            phase="verifier",
+            role="verifier",
+            status="awaiting_user",
+            vuln_id=vuln_id,
+        )
+        db.add(run)
+        db.commit()
+        run_id = int(run.id)
+
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    ask = registry.dispatch(ctx, "AskUser", {"reason": "删除风险"})
+    assert ask["awaiting_user"] is True
+
+    tool_call_id = "call_ask_1"
+    cp = LoopCheckpoint(
+        project_id=project,
+        phase_run_id=run_id,
+        role="verifier",
+        phase="verifier",
+        system_prompt="sys",
+        user_prompt="user",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "user"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "AskUser",
+                            "arguments": json.dumps({"reason": "删除风险"}, ensure_ascii=False),
+                        },
+                    }
+                ],
+            },
+        ],
+        state={"awaiting_user": True},
+        vuln_id=vuln_id,
+    )
+    save_checkpoint(cp, status="awaiting_user")
+
+    cont = resolve_verifier_consent(vuln_id, action="continue", instruction="只测只读探测")
+    assert cont["ok"] is True, cont
+    assert kicked == [project]
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        assert v.verifier_consent is True
+        assert v.verifier_status == "pending"
+        assert v.verifier_user_instruction == "只测只读探测"
+        pr = db.get(PhaseRun, run_id)
+        assert pr.status == "paused"
+
+    from app.agent.checkpoint import load_checkpoint
+
+    loaded = load_checkpoint(project, run_id)
+    assert loaded is not None
+    tool_msgs = [m for m in loaded.messages if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    body = json.loads(tool_msgs[0]["content"])
+    assert body["decision"] == "continue"
+    assert "只测只读探测" in body["instruction"]
+
+
+def test_finish_verifier_rejects_harm_without_consent(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="file_delete",
+        title="任意文件删除",
+        root_cause_key="file_delete:Finish",
+    )
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://hit.example/api/x",
+            "poc": "GET /delete?f=/etc/passwd HTTP/1.1\nHost: hit.example\n\n",
+            "response": "HTTP/1.1 200 OK\n\nok",
+            "fofa_query": 'title="demo"',
+            "tested_count": 3,
+            "targets": _success_targets("http://a.example", "http://b.example", "http://hit.example"),
+            "notes": "不该未同意就 success",
+        },
+    )
+    assert out["ok"] is False
+    assert "AskUser" in out["error"] or "同意" in out["error"]
 
 
 def test_finish_verifier_rejects_sql_write_success(tmp_env, project):
@@ -293,7 +460,77 @@ def test_finish_verifier_rejects_sql_write_success(tmp_env, project):
         },
     )
     assert out["ok"] is False
-    assert "SQL" in out["error"]
+    assert "SQL" in out["error"] or "AskUser" in out["error"] or "同意" in out["error"]
+
+
+def test_finish_verifier_allows_harm_after_consent(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="file_delete",
+        title="任意文件删除",
+        root_cause_key="file_delete:Ok",
+        poc_code="curl http://x/delete?f=1",
+    )
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        v.verifier_consent = True
+        db.commit()
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://hit.example/api/x",
+            "poc": "GET /delete?f=1 HTTP/1.1\nHost: hit.example\n\n",
+            "response": "HTTP/1.1 200 OK\n\ndeleted",
+            "fofa_query": 'title="demo"',
+            "tested_count": 3,
+            "targets": _success_targets("http://a.example", "http://b.example", "http://hit.example"),
+            "notes": "用户已同意，3 个目标成功",
+        },
+    )
+    assert out["ok"] is True, out
+    assert out["verifier_status"] == "verified"
+
+
+def test_finish_verifier_skipped_harm_requires_ask_first(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="dos",
+        title="DoS",
+        root_cause_key="dos:x",
+    )
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {"verdict": "skipped", "notes": "危险所以跳过"},
+    )
+    assert out["ok"] is False
+    assert "AskUser" in out["error"]
+
+
+def test_harness_still_auto_skips(tmp_env, project):
+    vuln_id, conf = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        title="仅 harness",
+        root_cause_key="info:harness",
+    )
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        v.evidence_level = "harness"
+        v.verifier_status = "none"
+        db.commit()
+    from app.services.verifier import enqueue_frontend_vuln
+
+    result = enqueue_frontend_vuln(project, vuln_id)
+    assert result["queued"] is False
+    assert result["skipped"] is True
+    assert "局部验证" in (result["reason"] or "")
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "skipped"
 
 
 def test_finish_verifier_success(tmp_env, project):
@@ -1094,3 +1331,48 @@ def test_fofa_connectivity_rejects_unknown_host(tmp_env):
     body = r.json()
     assert body["ok"] is False
     assert "不被允许" in body["error"]
+
+
+def test_verifier_consent_api_list_and_skip(tmp_env, project):
+    from app.main import app
+    from app.models import PhaseRun, SessionLocal
+
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        vuln_type="file_delete",
+        title="任意文件删除",
+        root_cause_key="file_delete:Api",
+    )
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    ask = registry.dispatch(ctx, "AskUser", {"reason": "删除会破坏业务"})
+    assert ask["awaiting_user"] is True
+    with SessionLocal() as db:
+        db.add(
+            PhaseRun(
+                project_id=project,
+                phase="verifier",
+                role="verifier",
+                status="awaiting_user",
+                vuln_id=vuln_id,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        listed = client.get("/api/vulns/verifier-consent")
+        assert listed.status_code == 200
+        rows = listed.json()
+        assert any(row["id"] == vuln_id for row in rows)
+        count = client.get("/api/vulns/verifier-consent/count")
+        assert count.status_code == 200
+        assert count.json()["count"] >= 1
+        skipped = client.post(
+            f"/api/vulns/{vuln_id}/verifier-consent",
+            json={"action": "skip"},
+        )
+        assert skipped.status_code == 200
+        assert skipped.json()["ok"] is True
+        assert skipped.json()["verifier_status"] == "skipped"
+        empty = client.get("/api/vulns/verifier-consent")
+        assert all(row["id"] != vuln_id for row in empty.json())

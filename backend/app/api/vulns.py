@@ -14,6 +14,9 @@ from sqlalchemy.orm import joinedload
 
 from ..models import SessionLocal, Vuln
 from ..schemas import (
+    VerifierConsentIn,
+    VerifierConsentItem,
+    VerifierConsentOut,
     VulnDetail,
     VulnFollowUpIn,
     VulnFollowUpThread,
@@ -30,7 +33,12 @@ from ..services.pipeline import (
 from ..services.poc_script import read_poc_code
 from ..services.report import stamp_produced_at
 from ..services import vuln_followup
-from ..services.verifier import parse_verifier_targets
+from ..services.verifier import (
+    awaiting_user_verifier_count,
+    list_awaiting_user_vulns,
+    parse_verifier_targets,
+    resolve_verifier_consent,
+)
 from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, normalize_submission_tier
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
@@ -154,6 +162,64 @@ def list_vulns(
             q = q.filter(Vuln.root_cause_key == root_cause_key)
         rows = q.order_by(Vuln.id.desc()).all()
         return [_vuln_out(r) for r in rows]
+
+
+@router.get("/verifier-consent", response_model=list[VerifierConsentItem])
+def list_verifier_consent(project_id: int | None = None) -> list[VerifierConsentItem]:
+    rows = list_awaiting_user_vulns(project_id)
+    out: list[VerifierConsentItem] = []
+    with SessionLocal() as db:
+        for v in rows:
+            # Re-attach project name; list_awaiting_user_vulns expunges rows.
+            name = ""
+            fresh = db.get(Vuln, v.id)
+            if fresh and fresh.project is not None:
+                name = fresh.project.name or ""
+            elif fresh:
+                from ..models import Project
+
+                proj = db.get(Project, fresh.project_id)
+                name = proj.name if proj else ""
+            out.append(
+                VerifierConsentItem(
+                    id=v.id,
+                    project_id=v.project_id,
+                    project_name=name,
+                    title=v.title or "",
+                    vuln_type=v.vuln_type,
+                    severity=v.severity,
+                    severity_score=_report_score(fresh) if fresh else None,
+                    verifier_ask_reason=getattr(v, "verifier_ask_reason", None),
+                    verifier_status=v.verifier_status or "awaiting_user",
+                    updated_at=v.updated_at,
+                )
+            )
+    return out
+
+
+@router.get("/verifier-consent/count")
+def verifier_consent_count(project_id: int | None = None) -> dict:
+    return {"count": awaiting_user_verifier_count(project_id)}
+
+
+@router.post("/{vuln_id}/verifier-consent", response_model=VerifierConsentOut)
+def post_verifier_consent(vuln_id: int, body: VerifierConsentIn) -> VerifierConsentOut:
+    result = resolve_verifier_consent(
+        vuln_id,
+        action=body.action,
+        instruction=body.instruction or "",
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, str(result.get("error") or "无法处理确认"))
+    return VerifierConsentOut(**{k: result.get(k) for k in (
+        "ok",
+        "action",
+        "vuln_id",
+        "verifier_status",
+        "instruction",
+        "message",
+        "error",
+    )})
 
 
 @router.get("/{vuln_id}", response_model=VulnDetail)

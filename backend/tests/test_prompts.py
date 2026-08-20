@@ -533,6 +533,8 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "5 轮" in initial
     assert "50" in initial
     assert "增删改" in text or "禁止" in text
+    assert "AskUser" in text
+    assert "AskUser" in initial
     assert "app-fingerprints" in text or "项目级" in text or "项目应用指纹" in text
 
 

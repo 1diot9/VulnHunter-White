@@ -202,6 +202,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "PowerShell",
             "TodoWrite",
             "FofaSearch",
+            "AskUser",
             "FinishVerifier",
         }
     ),

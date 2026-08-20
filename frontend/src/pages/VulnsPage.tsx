@@ -468,9 +468,17 @@ export default function VulnsPage() {
                     <span className="text-xs text-slate-400">{detail.verifier_verified_url}</span>
                   ) : null}
                 </div>
+                {detail.verifier_status === 'awaiting_user' ? (
+                  <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/90">
+                    互联网复测可能产生危害，正在等待你在「验证确认」页跳过或给出指示后继续。
+                    <Link className="ml-2 underline" to="/verifier-consent">
+                      去确认
+                    </Link>
+                  </div>
+                ) : null}
                 {detail.verifier_status === 'skipped' ? (
                   <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                    未做互联网复测。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的类型不会打互联网目标；其它原因见下方报告「互联网验证」。
+                    未做互联网复测。可能因用户选择跳过、缺少可对任意 URL 复测的 HTTP PoC，或其他原因；详见下方报告「互联网验证」。
                   </div>
                 ) : null}
                 {detail.verifier_targets && detail.verifier_targets.length > 0 ? (

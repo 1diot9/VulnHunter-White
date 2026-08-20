@@ -513,6 +513,19 @@ def _shell_handler(ctx, args: dict[str, Any], shell: str) -> dict[str, Any]:
     command = args.get("command")
     if not command:
         return call_fail("缺少 command")
+    # Verifier must AskUser + get consent before hitting internet targets when harm is possible.
+    if getattr(ctx, "role", None) == "verifier" and getattr(ctx, "vuln_id", None):
+        from ..models import SessionLocal, Vuln
+        from ..services.verifier import has_verifier_consent, internet_harm_reason_for_vuln
+
+        with SessionLocal() as db:
+            vuln = db.get(Vuln, int(ctx.vuln_id))
+            if vuln and vuln.project_id == ctx.project_id:
+                harm = internet_harm_reason_for_vuln(vuln)
+                if harm and not has_verifier_consent(vuln):
+                    return call_fail(
+                        f"可能产生危害的互联网复测须先 AskUser 并获用户同意，禁止直接执行命令。原因：{harm}"
+                    )
     try:
         block_dangerous_shell(command, ctx.project_id)
     except SandboxError as e:

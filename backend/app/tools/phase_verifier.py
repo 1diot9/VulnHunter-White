@@ -24,10 +24,12 @@ from ..services.verifier import (
     fofa_pages_left,
     fofa_search_exhausted,
     format_verifier_report,
-    internet_test_block_reason,
+    has_verifier_consent,
+    internet_harm_reason,
     load_project_fofa_cache,
     merge_fofa_samples,
     merge_verifier_targets,
+    park_verifier_ask_user,
     parse_verifier_targets,
     resolve_fofa_sample,
     save_project_fofa_cache,
@@ -257,6 +259,28 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ask_user(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    vuln_id = args.get("vuln_id") or ctx.vuln_id
+    if not vuln_id:
+        return call_fail("缺少 vuln_id")
+    reason = str(args.get("reason") or "").strip()
+    question = str(args.get("question") or "").strip()
+    out = park_verifier_ask_user(
+        ctx.project_id,
+        int(vuln_id),
+        reason=reason,
+        question=question,
+    )
+    if not out.get("ok"):
+        return call_fail(str(out.get("error") or "AskUser 失败"))
+    if out.get("already_consented"):
+        ctx.state["awaiting_user"] = False
+        return out
+    ctx.state["awaiting_user"] = True
+    ctx.state["ask_user_reason"] = reason
+    return out
+
+
 def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
@@ -267,6 +291,28 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
     verified_url = str(args.get("verified_url") or "").strip()
     poc = clip_evidence(args.get("poc"))
     response = clip_evidence(args.get("response"))
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != ctx.project_id:
+            return call_fail("漏洞不存在")
+        vtype = vuln.vuln_type or ""
+        title = vuln.title or ""
+        http_request = vuln.http_request or ""
+        stored_poc = vuln.poc_code or ""
+        expected = vuln.expected_evidence or ""
+        consented = has_verifier_consent(vuln)
+        ask_reason = str(vuln.verifier_ask_reason or "").strip()
+    harm = internet_harm_reason(
+        vuln_type=vtype,
+        title=title,
+        http_request=http_request,
+        poc_code="\n".join(p for p in (stored_poc, poc) if p),
+        expected_evidence=expected,
+    )
+    if verdict == "skipped" and harm and not consented and not ask_reason:
+        return call_fail(
+            f"可能产生危害的漏洞须先 AskUser 询问用户，不要直接 skipped。原因：{harm}"
+        )
     if verdict == "success":
         if not verified_url:
             return call_fail("success 必须提供 verified_url（实际打通的那个同款目标）")
@@ -274,22 +320,10 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return call_fail("success 必须提供 poc（对该目标实际发出的请求或脚本，原样粘贴）")
         if not response:
             return call_fail("success 必须提供 response（该目标的真实 HTTP 响应/回显，原样粘贴）")
-        with SessionLocal() as db:
-            vuln = db.get(Vuln, int(vuln_id))
-            vtype = vuln.vuln_type if vuln else ""
-            title = vuln.title if vuln else ""
-            http_request = vuln.http_request if vuln else ""
-            stored_poc = vuln.poc_code if vuln else ""
-            expected = vuln.expected_evidence if vuln else ""
-        unsafe = internet_test_block_reason(
-            vuln_type=vtype,
-            title=title or "",
-            http_request=http_request or "",
-            poc_code="\n".join(p for p in (stored_poc, poc) if p),
-            expected_evidence=expected or "",
-        )
-        if unsafe:
-            return call_fail(unsafe)
+        if harm and not consented:
+            return call_fail(
+                f"可能产生危害的复测须先 AskUser 并由用户同意。原因：{harm}"
+            )
     seed_fofa_state(ctx.state, ctx.project_id)
     cached_query, cached_sample = resolve_fofa_sample(ctx.project_id, ctx.state)
     fofa_query = str(args.get("fofa_query") or cached_query or "").strip()
@@ -438,6 +472,32 @@ def register_verifier_tools() -> None:
     )
     registry.register(
         ToolSpec(
+            name="AskUser",
+            description=(
+                "当互联网复测可能中断或篡改对方业务（任意文件删除/上传、DoS、SQL 增删改等）时，"
+                "必须先调用本工具询问用户是否继续。调用后本轮挂起，等待用户在「验证确认」页跳过或给出指示；"
+                "不要 curl、不要 FinishVerifier(skipped)。用户同意后续跑会带回指示。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "vuln_id": {"type": "integer"},
+                    "reason": {
+                        "type": "string",
+                        "description": "为何可能产生危害、会打到什么操作（必填）",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "可选：给用户的补充问题或建议的安全复测方式",
+                    },
+                },
+                "required": ["reason"],
+            },
+            handler=_ask_user,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="FinishVerifier",
             description=(
                 f"提交互联网验证结论并结束本轮。至少 {VERIFIER_SUCCESS_MIN} 个 FOFA 目标按报告复测成功才 verdict=success；"
@@ -447,7 +507,7 @@ def register_verifier_tools() -> None:
                 "success/fail 必须用 targets 列出共享 FOFA 的全部结果，并标注 success|fail|untested；"
                 f"success 时 targets 里至少 {VERIFIER_SUCCESS_MIN} 条 success，并带 verified_url、poc、response、fofa_query。"
                 "凑满成功数后其余可标 untested，不要为了填表继续打。"
-                "任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞禁止互联网复测，应 verdict=skipped。"
+                "可能产生危害的漏洞须先 AskUser；用户同意前禁止 success；不要用 skipped 代替询问。"
             ),
             parameters={
                 "type": "object",

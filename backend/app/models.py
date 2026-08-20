@@ -264,13 +264,17 @@ class Vuln(Base):
     review_timeout_streak: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    # none | pending | verified | failed | skipped — Verifier 互联网复测
+    # none | pending | awaiting_user | verified | failed | skipped — Verifier 互联网复测
     verifier_status: Mapped[str] = mapped_column(String(32), default="none")
     verifier_verified_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     verifier_poc: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_targets: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_fofa_query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AskUser 挂起时的危害说明；用户继续后的自定义指示；是否已同意打互联网目标
+    verifier_ask_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verifier_user_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verifier_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -308,7 +312,7 @@ class PhaseRun(Base):
     # recon | worker | reviewer | reviewer-lab | verifier | attack_chain | fix
     role: Mapped[str] = mapped_column(String(64), default="worker")
     status: Mapped[str] = mapped_column(String(64), default="running")
-    # running | completed | failed | cancelled | paused
+    # running | completed | failed | cancelled | paused | awaiting_user
     worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     vuln_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -448,6 +452,9 @@ def _ensure_columns() -> None:
             "verifier_response": "TEXT",
             "verifier_targets": "TEXT",
             "verifier_fofa_query": "TEXT",
+            "verifier_ask_reason": "TEXT",
+            "verifier_user_instruction": "TEXT",
+            "verifier_consent": "BOOLEAN DEFAULT 0",
         },
     }
     with engine.begin() as conn:

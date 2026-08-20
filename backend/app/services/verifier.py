@@ -14,11 +14,19 @@ from .report import upsert_report_section
 
 VERIFIER_NONE = "none"
 VERIFIER_PENDING = "pending"
+VERIFIER_AWAITING_USER = "awaiting_user"
 VERIFIER_VERIFIED = "verified"
 VERIFIER_FAILED = "failed"
 VERIFIER_SKIPPED = "skipped"
 VERIFIER_STATUSES = frozenset(
-    {VERIFIER_NONE, VERIFIER_PENDING, VERIFIER_VERIFIED, VERIFIER_FAILED, VERIFIER_SKIPPED}
+    {
+        VERIFIER_NONE,
+        VERIFIER_PENDING,
+        VERIFIER_AWAITING_USER,
+        VERIFIER_VERIFIED,
+        VERIFIER_FAILED,
+        VERIFIER_SKIPPED,
+    }
 )
 CONFIRMED_STATUSES = frozenset({"confirmed", "static_only"})
 FOFA_MAX_ATTEMPTS = 3
@@ -32,9 +40,9 @@ _HTTP_START = re.compile(r"^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\S+", re.
 _REVIEW_HEADING = "## 互联网验证"
 # Types that inherently interrupt business or rewrite files on a third-party host.
 INTERNET_UNSAFE_TYPE_REASONS: dict[str, str] = {
-    "file_delete": "任意文件删除会破坏对方业务文件，禁止互联网复测",
-    "dos": "DoS/拒绝服务会导致业务中断，禁止互联网复测",
-    "file_upload": "任意文件上传会改写对方文件，禁止互联网复测",
+    "file_delete": "任意文件删除会破坏对方业务文件，需用户确认后才能互联网复测",
+    "dos": "DoS/拒绝服务会导致业务中断，需用户确认后才能互联网复测",
+    "file_upload": "任意文件上传会改写对方文件，需用户确认后才能互联网复测",
 }
 _SQL_WRITE_RE = re.compile(
     r"(?is)("
@@ -521,6 +529,35 @@ def parse_verifier_targets(raw: Any) -> list[dict[str, str]]:
     return parse_verifier_targets(data)
 
 
+def internet_harm_reason(
+    *,
+    vuln_type: str | None = None,
+    title: str = "",
+    http_request: str = "",
+    poc_code: str = "",
+    expected_evidence: str = "",
+    report_md: str = "",
+) -> str | None:
+    """Return a reason if internet retest could interrupt business or tamper data.
+
+    Callers should AskUser (not auto-skip) unless the user already consented.
+    """
+    vtype = normalize_vuln_type(vuln_type)
+    if vtype in INTERNET_UNSAFE_TYPE_REASONS:
+        return INTERNET_UNSAFE_TYPE_REASONS[vtype]
+    blob = "\n".join(
+        str(part or "")
+        for part in (title, http_request, poc_code, expected_evidence, report_md)
+    )
+    if _SQL_WRITE_RE.search(blob):
+        return "SQL 增删改/结构变更会篡改对方业务数据，需用户确认后才能互联网复测"
+    if _FILE_DELETE_RE.search(blob):
+        return "任意文件删除会破坏对方业务文件，需用户确认后才能互联网复测"
+    if _DOS_RE.search(blob):
+        return "DoS/拒绝服务会导致业务中断，需用户确认后才能互联网复测"
+    return None
+
+
 def internet_test_block_reason(
     *,
     vuln_type: str | None = None,
@@ -530,28 +567,27 @@ def internet_test_block_reason(
     expected_evidence: str = "",
     report_md: str = "",
 ) -> str | None:
-    """Return a skip reason if internet retest could interrupt business or tamper data."""
-    vtype = normalize_vuln_type(vuln_type)
-    if vtype in INTERNET_UNSAFE_TYPE_REASONS:
-        return INTERNET_UNSAFE_TYPE_REASONS[vtype]
-    blob = "\n".join(
-        str(part or "")
-        for part in (title, http_request, poc_code, expected_evidence, report_md)
+    """Alias for harm detection (AskUser / FinishVerifier gates)."""
+    return internet_harm_reason(
+        vuln_type=vuln_type,
+        title=title,
+        http_request=http_request,
+        poc_code=poc_code,
+        expected_evidence=expected_evidence,
+        report_md=report_md,
     )
-    if _SQL_WRITE_RE.search(blob):
-        return "SQL 增删改/结构变更会篡改对方业务数据，禁止互联网复测"
-    if _FILE_DELETE_RE.search(blob):
-        return "任意文件删除会破坏对方业务文件，禁止互联网复测"
-    if _DOS_RE.search(blob):
-        return "DoS/拒绝服务会导致业务中断，禁止互联网复测"
+
+
+def internet_capability_skip_reason(vuln: Vuln) -> str | None:
+    """Capability gaps that still auto-skip (not user-consent questions)."""
+    if (vuln.evidence_level or "").strip().lower() == "harness":
+        return "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测"
     return None
 
 
-def internet_test_block_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
-    if (vuln.evidence_level or "").strip().lower() == "harness":
-        return "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测"
+def internet_harm_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
     text = report_md if report_md is not None else read_report_md(vuln.project_id, vuln.id)
-    return internet_test_block_reason(
+    return internet_harm_reason(
         vuln_type=vuln.vuln_type,
         title=vuln.title or "",
         http_request=vuln.http_request or "",
@@ -559,6 +595,18 @@ def internet_test_block_reason_for_vuln(vuln: Vuln, report_md: str | None = None
         expected_evidence=vuln.expected_evidence or "",
         report_md=text,
     )
+
+
+def internet_test_block_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
+    """Capability skip first; then harm (for AskUser / FinishVerifier)."""
+    cap = internet_capability_skip_reason(vuln)
+    if cap:
+        return cap
+    return internet_harm_reason_for_vuln(vuln, report_md)
+
+
+def has_verifier_consent(vuln: Vuln | None) -> bool:
+    return bool(vuln and getattr(vuln, "verifier_consent", False))
 
 
 def write_verifier_skip(project_id: int, vuln_id: int, reason: str) -> None:
@@ -605,8 +653,8 @@ def verifier_report_path(project_id: int, vuln_id: int):
 def enqueue_frontend_vuln(project_id: int, vuln_id: int) -> dict[str, Any]:
     """Queue one confirmed frontend vuln if Verifier is enabled.
 
-    Returns ``queued`` / ``skipped`` / ``reason``. Unsafe types are marked skipped
-    instead of pending so the agent never hits internet targets.
+    Returns ``queued`` / ``skipped`` / ``reason``. Capability gaps (e.g. harness-only)
+    are auto-skipped; harm types stay pending so Verifier can AskUser.
     """
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -626,7 +674,7 @@ def enqueue_frontend_vuln(project_id: int, vuln_id: int) -> dict[str, Any]:
                 "skipped": current == VERIFIER_SKIPPED,
                 "reason": "",
             }
-        reason = internet_test_block_reason_for_vuln(vuln)
+        reason = internet_capability_skip_reason(vuln)
         if reason:
             vuln.verifier_status = VERIFIER_SKIPPED
             db.commit()
@@ -658,7 +706,7 @@ def enqueue_confirmed_frontend(project_id: int) -> int:
             current = normalize_verifier_status(vuln.verifier_status)
             if current not in (VERIFIER_NONE, ""):
                 continue
-            reason = internet_test_block_reason_for_vuln(vuln)
+            reason = internet_capability_skip_reason(vuln)
             if reason:
                 vuln.verifier_status = VERIFIER_SKIPPED
                 skips.append((int(vuln.id), reason))
@@ -684,6 +732,70 @@ def pending_verifier_count(project_id: int) -> int:
             )
             .count()
         )
+
+
+def awaiting_user_verifier_count(project_id: int | None = None) -> int:
+    with SessionLocal() as db:
+        q = db.query(Vuln).filter(Vuln.verifier_status == VERIFIER_AWAITING_USER)
+        if project_id is not None:
+            q = q.filter(Vuln.project_id == int(project_id))
+        return q.count()
+
+
+def list_awaiting_user_vulns(project_id: int | None = None) -> list[Vuln]:
+    with SessionLocal() as db:
+        q = db.query(Vuln).filter(Vuln.verifier_status == VERIFIER_AWAITING_USER)
+        if project_id is not None:
+            q = q.filter(Vuln.project_id == int(project_id))
+        rows = q.order_by(Vuln.id.asc()).all()
+        for row in rows:
+            db.expunge(row)
+        return rows
+
+
+def park_verifier_ask_user(
+    project_id: int,
+    vuln_id: int,
+    *,
+    reason: str,
+    question: str = "",
+) -> dict[str, Any]:
+    """Mark vuln awaiting user consent; AgentLoop must omit the AskUser tool result."""
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        return {"ok": False, "error": "AskUser 必须提供 reason"}
+    question_text = str(question or "").strip()
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        if has_verifier_consent(vuln):
+            instruction = str(vuln.verifier_user_instruction or "").strip()
+            return {
+                "ok": True,
+                "already_consented": True,
+                "awaiting_user": False,
+                "instruction": instruction,
+                "message": (
+                    "用户已同意互联网复测"
+                    + (f"：{instruction}" if instruction else "，可按报告 PoC 复测。")
+                ),
+            }
+        vuln.verifier_status = VERIFIER_AWAITING_USER
+        vuln.verifier_ask_reason = reason_text
+        if question_text:
+            # Keep question with reason for the consent UI.
+            vuln.verifier_ask_reason = f"{reason_text}\n\n询问：{question_text}"
+        db.commit()
+    return {
+        "ok": True,
+        "already_consented": False,
+        "awaiting_user": True,
+        "vuln_id": int(vuln_id),
+        "reason": reason_text,
+        "question": question_text or None,
+        "message": "已挂起等待用户确认是否继续互联网复测。本轮暂停，不要继续发利用请求。",
+    }
 
 
 def pick_pending_verifier_vuln(project_id: int, prefer_id: int | None = None) -> Vuln | None:
@@ -713,3 +825,136 @@ def pick_pending_verifier_vuln(project_id: int, prefer_id: int | None = None) ->
             return None
         db.expunge(vuln)
         return vuln
+
+
+def _find_open_ask_user_call(messages: list[dict[str, Any]]) -> tuple[str | None, int | None]:
+    """Return (tool_call_id, assistant_msg_index) for the latest unanswered AskUser."""
+    answered: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        tid = str(msg.get("tool_call_id") or "")
+        if tid:
+            answered.add(tid)
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            if (fn.get("name") or "") != "AskUser":
+                continue
+            tid = str(tc.get("id") or "AskUser")
+            if tid not in answered:
+                return tid, i
+    return None, None
+
+
+def resolve_verifier_consent(
+    vuln_id: int,
+    *,
+    action: str,
+    instruction: str = "",
+) -> dict[str, Any]:
+    """Apply user skip/continue for an awaiting_user verifier vuln."""
+    from ..agent.checkpoint import (
+        load_checkpoint,
+        save_checkpoint,
+    )
+    from ..models import PhaseRun
+    from ..services.pipeline import kick_verifier
+
+    action_key = str(action or "").strip().lower()
+    if action_key not in ("skip", "continue"):
+        return {"ok": False, "error": "action 须为 skip|continue"}
+    instruction_text = str(instruction or "").strip()
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln:
+            return {"ok": False, "error": "漏洞不存在"}
+        if normalize_verifier_status(vuln.verifier_status) != VERIFIER_AWAITING_USER:
+            return {"ok": False, "error": "该漏洞当前不在待用户确认状态"}
+        project_id = int(vuln.project_id)
+        reason = str(vuln.verifier_ask_reason or "").strip() or "用户确认"
+        phase_run = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.phase == "verifier",
+                PhaseRun.vuln_id == int(vuln_id),
+                PhaseRun.status == "awaiting_user",
+            )
+            .order_by(PhaseRun.id.desc())
+            .first()
+        )
+        phase_run_id = int(phase_run.id) if phase_run else None
+
+        if action_key == "skip":
+            vuln.verifier_status = VERIFIER_SKIPPED
+            vuln.verifier_consent = False
+            vuln.verifier_user_instruction = instruction_text or None
+            db.commit()
+            skip_note = f"用户选择跳过互联网复测。{reason}"
+            if instruction_text:
+                skip_note += f"\n用户说明：{instruction_text}"
+            write_verifier_skip(project_id, int(vuln_id), skip_note)
+            if phase_run_id is not None:
+                from ..services.pipeline import _finish_phase_run
+
+                _finish_phase_run(phase_run_id, "completed")
+            return {
+                "ok": True,
+                "action": "skip",
+                "vuln_id": int(vuln_id),
+                "verifier_status": VERIFIER_SKIPPED,
+                "message": "已跳过互联网复测",
+            }
+
+        # continue
+        vuln.verifier_consent = True
+        vuln.verifier_user_instruction = instruction_text or None
+        vuln.verifier_status = VERIFIER_PENDING
+        db.commit()
+
+    if phase_run_id is None:
+        return {
+            "ok": False,
+            "error": "找不到等待中的 Verifier 会话，请稍后重试或重新开启验证",
+        }
+    cp = load_checkpoint(project_id, phase_run_id)
+    if not cp:
+        return {"ok": False, "error": "找不到 Verifier 检查点，无法续跑"}
+    tool_call_id, _ = _find_open_ask_user_call(cp.messages)
+    if not tool_call_id:
+        return {"ok": False, "error": "检查点中没有未答复的 AskUser 调用"}
+    payload = {
+        "ok": True,
+        "decision": "continue",
+        "instruction": instruction_text,
+        "message": (
+            "用户同意继续互联网复测"
+            + (f"。自定义指示：{instruction_text}" if instruction_text else "。按报告 PoC 复测。")
+        ),
+    }
+    cp.messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(payload, ensure_ascii=False),
+        }
+    )
+    cp.state["awaiting_user"] = False
+    cp.state["verifier_consent"] = True
+    if instruction_text:
+        cp.state["user_instruction"] = instruction_text
+    save_checkpoint(cp, status="paused")
+    kick_verifier(project_id)
+    return {
+        "ok": True,
+        "action": "continue",
+        "vuln_id": int(vuln_id),
+        "verifier_status": VERIFIER_PENDING,
+        "instruction": instruction_text or None,
+        "message": "已同意，Verifier 将按指示继续",
+    }
