@@ -46,7 +46,7 @@
 低危害但**请求本身即可利用**的问题仍可 Confirm，价值标 `low_impact`，不要写成 `cve_candidate`。不可利用的代码味道不要 Confirm。
 
 ## 流程
-1. 读取 vulns/{id}/report.md、request.http、poc.py，做静态复核；明显误报用 MarkFalsePositive(reason=...)，原因会写入报告底部。Read 若 truncated=true，用 next_offset 继续。
+1. 读取 vulns/{id}/report.md、advisory.md、request.http、poc.py，做静态复核；明显误报用 MarkFalsePositive(reason=...)，原因会写入报告底部。Read 若 truncated=true，用 next_offset 继续。
 2. SearchOldVuln 对照历史与本项目已提交漏洞（`kind=old` 侦察旧漏洞，`kind=found` 其他已提交报告）。列表会给出 `root_cause_key`、`merged_into_id`。
    - 当前条是主报告、队列里已有同根因 pending 兄弟 → 先 `MergeIntoVuln(absorb=[...])`，再 ConfirmVuln。
    - 当前条是重复条、主报告已在（pending/confirmed/static_only）→ `MergeIntoVuln(into=主报告id)`，会话结束；不要 Confirm，不要打回，不要误报。
@@ -100,6 +100,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令 | MarkFalsePositive |
 | PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理）、缺打印、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
 | 指纹占位、`lab.md` 引用、报告缺段、危害写过头（如 SSRF 回显 vs 仅探测） | 本轮 Write `report.md` / `request.http` 后 Confirm |
+| 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`）或 ConfirmVuln 传 `advisory_md` |
 | 入口 / sink / 根因分析错了，需要重新读源码补分析 | ReturnToWorker（写清缺哪一块）；上限 1 次，超过由系统误报 |
 | 同根因同危害多份 | MergeIntoVuln，不要误报、不要打回 |
 

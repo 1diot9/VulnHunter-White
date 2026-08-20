@@ -29,7 +29,7 @@ from ..services.asset_proof import (
 from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_harness_code, write_poc_code
-from ..services.report import upsert_report_section
+from ..services.report import upsert_report_section, write_advisory_md
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
     canonical_root_cause_key,
@@ -375,6 +375,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": str(exc)}
     note = args.get("note") or ""
     poc_code = args.get("poc_code")
+    advisory_md = args.get("advisory_md")
     harness_code = args.get("harness_code")
     harness_language = str(args.get("harness_language") or "python").strip() or "python"
     if poc_code:
@@ -472,6 +473,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if poc_code:
             vuln.poc_code = str(poc_code)
             write_poc_code(ctx.project_id, int(vuln_id), str(poc_code))
+        if advisory_md not in (None, ""):
+            write_advisory_md(vuln_dir(vuln.project_id, int(vuln_id)) / "advisory.md", str(advisory_md))
         if harness_code:
             write_harness_code(
                 ctx.project_id,
@@ -788,6 +791,13 @@ def register_reviewer_tools() -> None:
                             "可选。本轮改写后的完整 poc.py（CLI 形态，须含 --proxy；"
                             "有代理时 127.0.0.1 也须强制走代理；以及同链上的 payload 校准），"
                             "系统会回写 vulns/{id}/poc.py。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。"
+                        ),
+                    },
+                    "advisory_md": {
+                        "type": "string",
+                        "description": (
+                            "可选。英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
+                            "系统会回写 vulns/{id}/advisory.md。也可本轮 Write 该文件后 Confirm。"
                         ),
                     },
                     "harness_code": {

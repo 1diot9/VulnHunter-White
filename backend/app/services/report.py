@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 _CST = timezone(timedelta(hours=8))
 _PRODUCED_LINE_RE = re.compile(r"(?m)^\*\*产出时间\*\*[：:].+$")
@@ -258,6 +259,92 @@ def stamp_produced_at(text: str, dt: datetime | None = None) -> str:
 def write_report_md(path: Path, text: str, produced_at: datetime | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stamp_produced_at(text, produced_at), encoding="utf-8")
+
+
+def write_advisory_md(path: Path, text: str) -> None:
+    """Write the English GitHub Advisory fill-in (no 产出时间 stamp)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = (text or "").replace("\r\n", "\n").strip()
+    path.write_text((body + "\n") if body else "", encoding="utf-8")
+
+
+def default_advisory_md(args: dict[str, Any]) -> str:
+    """Skeleton GitHub Advisory fill-in from SubmitVuln fields."""
+    title = str(args.get("title") or "Untitled vulnerability").strip()
+    cwe = str(args.get("cwe") or "").strip() or "(CWE pending)"
+    file_path = str(args.get("file_path") or "").replace("\\", "/")
+    line_no = args.get("line_no")
+    loc = f"`{file_path}:{line_no}`" if file_path else "(location pending)"
+    source_sink = str(args.get("source_sink") or "").strip() or "(source → sink pending)"
+    auth = str(args.get("auth_premise") or "").strip() or "(auth pending)"
+    evidence = str(args.get("expected_evidence") or "").strip() or "(evidence pending)"
+    http_request = str(args.get("http_request") or "").strip()
+    http_block = f"```http\n{http_request}\n```" if http_request else "(HTTP request pending)"
+    return f"""# GitHub Security Advisory
+
+Copy from `### Summary` through Impact into the GitHub Advisory Description field. Leave Patched versions empty if there is no upstream fix.
+
+---
+
+## Title
+
+```
+{title}
+```
+
+---
+
+## Description
+
+Copy from the next `### Summary` through the end of Impact.
+
+### Summary
+
+{title}. Location: {loc}. Data flow: {source_sink}. Auth: {auth}.
+
+### Details
+
+Reviewer should replace this skeleton with the root cause, the intended control that failed, same-root-cause siblings, and a suggested fix. Align with `templates/vuln-advisory.md`.
+
+Expected evidence: {evidence}
+
+### PoC
+
+Requires a running instance you are authorized to test. Do not include real secrets.
+
+{http_block}
+
+```text
+python poc.py -u http://TARGET:PORT
+python poc.py -u http://TARGET:PORT --proxy http://127.0.0.1:8080
+```
+
+Do not run this against systems you do not own or have authorization to test.
+
+### Impact
+
+({cwe}) Replace this paragraph with who is affected, who can exploit it, and what it enables. Do not overclaim.
+
+---
+
+## Affected products
+
+| Field | Value |
+| --- | --- |
+| Ecosystem | |
+| Package name | |
+| Affected versions | |
+| Patched versions | (leave empty if unpatched) |
+
+---
+
+## Severity / CWE
+
+- **Severity:** (Reviewer)
+- **CVSS 3.1:**
+- **CWE:** {cwe}
+- **Related:**
+"""
 
 
 def upsert_report_section(path: Path, heading: str, body: str) -> None:

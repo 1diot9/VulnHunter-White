@@ -68,6 +68,11 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
     assert report.startswith("# custom report\n\n**产出时间**：")
     assert "## 漏洞描述" in report
     assert "## 互联网资产证明" in report
+    advisory = (vuln_dir(project, out["vuln_id"]) / "advisory.md").read_text(encoding="utf-8")
+    assert advisory.startswith("# GitHub Security Advisory")
+    assert "## Title" in advisory
+    assert "### Summary" in advisory
+    assert "**产出时间**" not in advisory
 
 
 def test_submit_vuln_writes_search_fingerprints(tmp_env, project):
@@ -143,6 +148,48 @@ def test_finish_fix_keeps_original_produced_at(tmp_env, project):
     assert "updated" in report
 
 
+def test_submit_and_confirm_write_custom_advisory(tmp_env, project):
+    payload = {
+        "title": "budget bypass",
+        "vuln_type": "idor",
+        "cwe": "CWE-863",
+        "file_path": "app/Keys.java",
+        "line_no": 12,
+        "source_sink": "update -> budget",
+        "auth_premise": "internal_user",
+        "http_request": "POST /key/update HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "200",
+        "config_premise": "default",
+        "advisory_md": "# GitHub Security Advisory\n\n## Title\n\n```\ncustom advisory title\n```\n",
+    }
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        payload,
+    )
+    assert out["ok"] is True
+    path = vuln_dir(project, out["vuln_id"]) / "advisory.md"
+    assert "custom advisory title" in path.read_text(encoding="utf-8")
+    confirmed = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=out["vuln_id"]),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "frontend",
+            "evidence_level": "static_only",
+            "impact": "sensitive_data_or_privilege",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "has cve value",
+            "advisory_md": "# GitHub Security Advisory\n\n## Title\n\n```\nreviewed title\n```\n",
+        },
+    )
+    assert confirmed["ok"] is True
+    assert "reviewed title" in path.read_text(encoding="utf-8")
+
+
 def test_upsert_report_section_replaces_same_heading(tmp_path):
     path = tmp_path / "report.md"
     path.write_text("# t\n\nbody\n", encoding="utf-8")
@@ -165,6 +212,16 @@ def test_write_report_md_creates_parent(tmp_path):
     write_report_md(path, "# t\n\nbody\n", datetime(2026, 8, 16, 1, 17, 0, tzinfo=timezone.utc))
     text = path.read_text(encoding="utf-8")
     assert "**产出时间**：2026-08-16 09:17:00" in text
+
+
+def test_write_advisory_md_no_produced_at(tmp_path):
+    from app.services.report import write_advisory_md
+
+    path = tmp_path / "advisory.md"
+    write_advisory_md(path, "# GitHub Security Advisory\n\n## Title\n")
+    text = path.read_text(encoding="utf-8")
+    assert text == "# GitHub Security Advisory\n\n## Title\n"
+    assert "**产出时间**" not in text
 
 
 def test_ensure_search_fingerprint_section_inserts_before_poc():

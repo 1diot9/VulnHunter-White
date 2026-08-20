@@ -78,7 +78,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 
 ## 流程
 1. 按角色 Read/Grep 分析注入焦点（入口沿调用链，Service/Util 回推 caller，控面看匹配与绕过）。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
-2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, poc_code, expected_evidence；并填 root_cause_key）。不要把「发现不安全 API」当成发现漏洞。
+2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, poc_code, expected_evidence；并填 root_cause_key、report_md、advisory_md）。不要把「发现不安全 API」当成发现漏洞。
 3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边 FinishFile 没有独立审计价值的文件，然后继续挖。仅当本轮注入焦点已按角色分析完后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
@@ -90,6 +90,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 - http_request 为完整 HTTP 请求包。
 - PoC 必须按静态分析证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。
 - report_md 必须为中文，结构对齐 `templates/vuln-report.md`，至少包含：`## 摘要`、`## 漏洞描述`、`## 漏洞危害`、`## 漏洞厂商全称`、`## 已知受影响产品及版本`、`## 互联网资产证明`、`## 漏洞技术细节`、`## 同根因受影响点`、`## 复现证明`、`## 修复方案`、`## 备注`。
+- `advisory_md` 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`。不要把中文报告粘进去；Description 按 GitHub 表单可直接粘贴。系统写入 `vulns/{id}/advisory.md`。
 - `## 互联网资产证明` 直接复用项目共享指纹 `docs/app-fingerprints.json`（侦察结束后系统已采集一次：源码标题/静态资源/仓库 favicon，以及互联网检索的 FOFA 语句）。不要每条漏洞重新识别，不要编造 hash；系统会在 SubmitVuln 时写入。测绘语句不允许出现「或」关系。
 - 「基础环境搭建」只引用 `docs/lab.md`，不要复述镜像、端口、凭据或启动命令；文档尚不存在时写「动态环境尚未落盘，见 `docs/lab.md`」。
 - 漏洞描述采用两段式：第一段概述厂商/单位与产品系统，第二段概述漏洞成因与后果。SQL 注入须在危害中说明是否能获取 OS-Shell。SSRF 须在危害中写明观察面：有回显 / 仅响应差别（内网端口探测）。

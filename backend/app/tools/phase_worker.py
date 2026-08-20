@@ -21,7 +21,12 @@ from ..services.affected_locations import (
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_poc_code
-from ..services.report import ensure_search_fingerprint_section, write_report_md
+from ..services.report import (
+    default_advisory_md,
+    ensure_search_fingerprint_section,
+    write_advisory_md,
+    write_report_md,
+)
 from ..vuln_types import (
     PENDING_SEVERITY,
     config_premise_label,
@@ -330,6 +335,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
         report = overlay_project_fingerprints(report, ctx.project_id)
         write_report_md(vdir / "report.md", report, vuln.created_at)
+        write_advisory_md(vdir / "advisory.md", str(args.get("advisory_md") or default_advisory_md(args)))
         (vdir / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         write_poc_code(ctx.project_id, vuln_id, str(args["poc_code"]))
         vuln.report_path = f"vulns/{vuln_id}/report.md"
@@ -580,6 +586,8 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
             ensure_project_fingerprints(ctx.project_id)
             report = overlay_project_fingerprints(report, ctx.project_id)
             write_report_md(vdir / "report.md", report, vuln.created_at)
+        if args.get("advisory_md") not in (None, ""):
+            write_advisory_md(vuln_dir(ctx.project_id, vuln.id) / "advisory.md", str(args["advisory_md"]))
         if args.get("http_request"):
             (vuln_dir(ctx.project_id, vuln.id) / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         if args.get("poc_code"):
@@ -676,6 +684,14 @@ def register_worker_tools() -> None:
                     "x_fingerprint": {"type": "string"},
                     "fingerprint_basis": {"type": "string"},
                     "report_md": {"type": "string"},
+                    "advisory_md": {
+                        "type": "string",
+                        "description": (
+                            "英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
+                            "含 Title、Description（Summary/Details/PoC/Impact）、"
+                            "Affected products、Severity/CWE。不要写中文报告。"
+                        ),
+                    },
                 },
                 "required": list(REQUIRED_SUBMIT_FIELDS),
             },
@@ -772,6 +788,12 @@ def register_worker_tools() -> None:
                 "properties": {
                     "vuln_id": {"type": "integer"},
                     "report_md": {"type": "string"},
+                    "advisory_md": {
+                        "type": "string",
+                        "description": (
+                            "可选。英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
+                        ),
+                    },
                     "title": {"type": "string"},
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},

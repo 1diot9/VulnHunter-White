@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { DownloadIcon, Loader2Icon, SearchIcon, XIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, DownloadIcon, Loader2Icon, SearchIcon, XIcon } from 'lucide-react'
 import { api, type Project, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -70,6 +70,8 @@ export default function VulnsPage() {
   const [search, setSearch] = useState('')
   const [dynamicBusy, setDynamicBusy] = useState(false)
   const [dynamicError, setDynamicError] = useState('')
+  const [reportKind, setReportKind] = useState<'report' | 'advisory'>('report')
+  const [advisoryCopied, setAdvisoryCopied] = useState(false)
 
   const projectNameById = useMemo(() => {
     const map = new Map<number, string>()
@@ -105,8 +107,12 @@ export default function VulnsPage() {
       setDetail(null)
       setDynamicError('')
       setDynamicBusy(false)
+      setReportKind('report')
+      setAdvisoryCopied(false)
       return
     }
+    setReportKind('report')
+    setAdvisoryCopied(false)
     return startVisibilityPoll(() => {
       api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
     }, 5000)
@@ -163,12 +169,24 @@ export default function VulnsPage() {
     saveBlob(await api.downloadVulns(ids), filename)
   }
 
-  async function downloadReport(id: number) {
+  async function downloadReport(id: number, kind: 'report' | 'advisory' = 'report') {
     try {
-      const { blob, filename } = await api.downloadVulnReport(id)
+      const { blob, filename } = await api.downloadVulnReport(id, kind)
       saveBlob(blob, filename)
     } catch {
       /* ignore transient */
+    }
+  }
+
+  async function copyAdvisory() {
+    const text = detail?.advisory_md
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setAdvisoryCopied(true)
+      window.setTimeout(() => setAdvisoryCopied(false), 1600)
+    } catch {
+      /* ignore */
     }
   }
 
@@ -553,11 +571,11 @@ export default function VulnsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!detail.report_md}
-                    onClick={() => downloadReport(detail.id)}
+                    disabled={reportKind === 'advisory' ? !detail.advisory_md : !detail.report_md}
+                    onClick={() => downloadReport(detail.id, reportKind)}
                   >
                     <DownloadIcon data-icon="inline-start" />
-                    下载报告
+                    {reportKind === 'advisory' ? '下载 Advisory' : '下载报告'}
                   </Button>
                   {detail.can_dynamic_verify || detail.dynamic_verify_queued ? (
                     <TooltipProvider delay={200}>
@@ -622,9 +640,46 @@ export default function VulnsPage() {
                     </div>
                   </div>
                 ) : null}
-                <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
-                  <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
-                </Suspense>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={reportKind === 'report' ? 'default' : 'outline'}
+                    onClick={() => setReportKind('report')}
+                  >
+                    中文报告
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={reportKind === 'advisory' ? 'default' : 'outline'}
+                    onClick={() => setReportKind('advisory')}
+                  >
+                    Advisory
+                  </Button>
+                  {reportKind === 'advisory' ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!detail.advisory_md}
+                      onClick={() => copyAdvisory()}
+                    >
+                      {advisoryCopied ? (
+                        <CheckIcon data-icon="inline-start" />
+                      ) : (
+                        <CopyIcon data-icon="inline-start" />
+                      )}
+                      {advisoryCopied ? '已复制' : '复制到 GitHub'}
+                    </Button>
+                  ) : null}
+                </div>
+                {reportKind === 'advisory' ? (
+                  <pre className="max-h-[min(70vh,48rem)] overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs leading-relaxed text-slate-200">
+                    {detail.advisory_md || '暂无 Advisory。Worker / Reviewer 会写入 vulns/{id}/advisory.md。'}
+                  </pre>
+                ) : (
+                  <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
+                    <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
+                  </Suspense>
+                )}
                 {detail.http_request ? (
                   <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.http_request}</pre>
                 ) : null}

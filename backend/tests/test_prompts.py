@@ -99,6 +99,7 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     )
     assert "审核漏洞 ID=5" in review
     assert "vulns/5/report.md" in review
+    assert "advisory.md" in review
     assert "环境: ok" in review
     assert "attack_surface" in review
     assert "impact" in review
@@ -240,6 +241,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "应用自身提供的配置选项" in bounty_worker
     assert "不要 docker" in bounty_worker
     assert "禁止主动搭建漏洞利用环境" not in bounty_worker
+    assert "被测应用必须是" in bounty_worker
+    assert "旧应用镜像" in bounty_worker
     full = load_prompt("modes/full.md")
     assert "全量模式" in full
     assert "low_impact" in full
@@ -436,10 +439,21 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "不要每条漏洞重新识别" in worker
     assert "docs/lab.md" in worker
     assert "不允许出现「或」" in worker
+    assert "templates/vuln-advisory.md" in worker
+    assert "advisory_md" in worker
     report = Path(__file__).resolve().parents[2] / "templates" / "vuln-report.md"
     text = report.read_text(encoding="utf-8")
     assert "SSRF 须明确：观察面" in text
     assert "仅响应差别（内网端口探测）" in text
+    advisory = Path(__file__).resolve().parents[2] / "templates" / "vuln-advisory.md"
+    advisory_text = advisory.read_text(encoding="utf-8")
+    assert "## Title" in advisory_text
+    assert "### Summary" in advisory_text
+    assert "### Details" in advisory_text
+    assert "### PoC" in advisory_text
+    assert "### Impact" in advisory_text
+    assert "## Affected products" in advisory_text
+    assert "## Severity / CWE" in advisory_text
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():
@@ -465,10 +479,13 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "${lab_image}" in text
     assert "${lab_container}" in text
     assert "${lab_label_args}" in text
+    assert "被测应用必须用最新版本" in text
+    assert "vulhub" in text
     initial = load_prompt("initial/reviewer-lab.md")
     assert "FinishLab" in initial
     assert "不要审核漏洞" in initial
     assert "${lab_image}" in initial
+    assert "被测应用必须用 src/" in initial
     docker = load_prompt("docker.md")
     assert "do not review vulnerabilities" in docker
     assert "${lab_image}" in docker
@@ -476,6 +493,8 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "${lab_compose_project}" in docker
     assert "${lab_label_args}" in docker
     assert "vulnhunter.project" in docker
+    assert "Audited app = latest" in docker
+    assert "vulhub" in docker
     rendered = pipeline._lab_system_prompt(project)
     assert f"demo-{project}:lab" in rendered
     assert f"demo-{project}" in rendered

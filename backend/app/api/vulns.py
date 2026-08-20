@@ -37,6 +37,8 @@ router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
+ALLOWED_REPORT_KINDS = frozenset({"report", "advisory"})
+REPORT_KIND_FILES = {"report": "report.md", "advisory": "advisory.md"}
 
 
 def _tracking_status_out(value: str | None) -> str:
@@ -48,33 +50,43 @@ class DownloadBody(BaseModel):
     ids: list[int]
 
 
-def _report_file(v: Vuln) -> Path:
-    if v.report_path:
+def _report_file(v: Vuln, kind: str = "report") -> Path:
+    name = REPORT_KIND_FILES.get(kind, "report.md")
+    if kind == "report" and v.report_path:
         return project_root(v.project_id) / v.report_path
-    return vuln_dir(v.project_id, v.id) / "report.md"
+    return vuln_dir(v.project_id, v.id) / name
 
 
 def _read_report_md(v: Vuln) -> str | None:
-    path = _report_file(v)
+    path = _report_file(v, "report")
     if not path.is_file():
         return None
     return stamp_produced_at(path.read_text(encoding="utf-8", errors="ignore"), v.created_at)
 
 
-def _report_download_filename(vuln_id: int, title: str | None) -> str:
+def _read_advisory_md(v: Vuln) -> str | None:
+    path = _report_file(v, "advisory")
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n").strip()
+    return (text + "\n") if text else None
+
+
+def _report_download_filename(vuln_id: int, title: str | None, kind: str = "report") -> str:
     slug = _UNSAFE_FILENAME_RE.sub("_", (title or "").strip())
     slug = re.sub(r"\s+", " ", slug).strip(" ._")
     if len(slug) > 80:
         slug = slug[:80].rstrip(" ._")
+    suffix = "-advisory" if kind == "advisory" else ""
     if slug:
-        return f"vuln-{vuln_id}-{slug}.md"
-    return f"vuln-{vuln_id}.md"
+        return f"vuln-{vuln_id}-{slug}{suffix}.md"
+    return f"vuln-{vuln_id}{suffix}.md"
 
 
 def _report_score(v: Vuln) -> int | None:
     if v.severity_score is not None:
         return int(v.severity_score)
-    path = _report_file(v)
+    path = _report_file(v, "report")
     if not path.is_file():
         return None
     match = _SCORE_RE.search(path.read_text(encoding="utf-8", errors="ignore"))
@@ -151,6 +163,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
         if not v:
             raise HTTPException(404, "漏洞不存在")
         report_md = _read_report_md(v)
+        advisory_md = _read_advisory_md(v)
         merged_from = [
             row.id
             for row in (
@@ -169,6 +182,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             poc_code=read_poc_code(v.project_id, v.id, fallback=v.poc_code),
             expected_evidence=v.expected_evidence,
             report_md=report_md,
+            advisory_md=advisory_md,
             merged_from_ids=merged_from,
             verifier_poc=getattr(v, "verifier_poc", None),
             verifier_response=getattr(v, "verifier_response", None),
@@ -180,16 +194,18 @@ def get_vuln(vuln_id: int) -> VulnDetail:
 
 
 @router.get("/{vuln_id}/download")
-def download_vuln_report(vuln_id: int) -> Response:
+def download_vuln_report(vuln_id: int, kind: str = "report") -> Response:
+    if kind not in ALLOWED_REPORT_KINDS:
+        raise HTTPException(400, "kind 须为 report|advisory")
     with SessionLocal() as db:
         v = db.get(Vuln, vuln_id)
         if not v:
             raise HTTPException(404, "漏洞不存在")
-        text = _read_report_md(v)
+        text = _read_advisory_md(v) if kind == "advisory" else _read_report_md(v)
         if text is None:
             raise HTTPException(404, "报告不存在")
-        filename = _report_download_filename(v.id, v.title)
-        ascii_name = f"vuln-{v.id}.md"
+        filename = _report_download_filename(v.id, v.title, kind)
+        ascii_name = f"vuln-{v.id}-advisory.md" if kind == "advisory" else f"vuln-{v.id}.md"
         return Response(
             content=text.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -277,9 +293,16 @@ def download_vulns(body: DownloadBody) -> StreamingResponse:
                 if not v:
                     continue
                 vdir = vuln_dir(v.project_id, v.id)
+                report = _read_report_md(v)
+                if report is not None:
+                    zf.writestr(f"vuln-{v.id}/report.md", report)
+                advisory = _read_advisory_md(v)
+                if advisory is not None:
+                    zf.writestr(f"vuln-{v.id}/advisory.md", advisory)
                 for fp in vdir.glob("*"):
-                    if fp.is_file():
-                        zf.write(fp, arcname=f"vuln-{v.id}/{fp.name}")
+                    if not fp.is_file() or fp.name in REPORT_KIND_FILES.values():
+                        continue
+                    zf.write(fp, arcname=f"vuln-{v.id}/{fp.name}")
     buf.seek(0)
     return StreamingResponse(
         buf,

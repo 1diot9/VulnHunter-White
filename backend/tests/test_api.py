@@ -574,10 +574,18 @@ def test_vulns_list_and_download(tmp_env, project):
         assert body["root_cause_key"] is None
         assert body["tracking_status"] == "none"
         assert "**产出时间**：" in (body.get("report_md") or "")
+        assert "GitHub Security Advisory" in (body.get("advisory_md") or "")
+        assert "## Title" in (body.get("advisory_md") or "")
         dl = client.post("/api/vulns/download", json={"ids": [vid]})
         assert dl.status_code == 200
         assert dl.headers["content-type"].startswith("application/zip")
         assert len(dl.content) > 20
+        import io
+        import zipfile
+
+        names = zipfile.ZipFile(io.BytesIO(dl.content)).namelist()
+        assert f"vuln-{vid}/report.md" in names
+        assert f"vuln-{vid}/advisory.md" in names
         one = client.get(f"/api/vulns/{vid}/download")
         assert one.status_code == 200
         assert one.headers["content-type"].startswith("text/markdown")
@@ -586,6 +594,11 @@ def test_vulns_list_and_download(tmp_env, project):
         assert f'filename="vuln-{vid}.md"' in disposition
         assert f"vuln-{vid}-RCE%20demo.md" in disposition
         assert "**产出时间**：" in one.text
+        advisory = client.get(f"/api/vulns/{vid}/download?kind=advisory")
+        assert advisory.status_code == 200
+        assert "GitHub Security Advisory" in advisory.text
+        assert f'filename="vuln-{vid}-advisory.md"' in advisory.headers["content-disposition"]
+        assert client.get(f"/api/vulns/{vid}/download?kind=nope").status_code == 400
         assert client.get("/api/vulns/999999/download").status_code == 404
 
 
