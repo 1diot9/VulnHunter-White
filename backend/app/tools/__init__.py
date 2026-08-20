@@ -212,6 +212,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "TodoWrite",
             "SearchOldVuln",
             "SubmitAttackChain",
+            "IndexAttackChain",
             "FinishAttackChain",
         }
     ),

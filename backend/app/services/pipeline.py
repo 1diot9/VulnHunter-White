@@ -1812,9 +1812,13 @@ def _refresh_project_after_reviewer(project_id: int) -> None:
                 .count()
                 > 0
             )
-        chain_work = bool(getattr(proj, "attack_chain_enabled", False)) and not bool(
-            getattr(proj, "attack_chain_done", False)
+        from ..tools.phase_attack_chain import (
+            attack_chain_ready,
+            reclaim_premature_attack_chain_done,
         )
+
+        reclaim_premature_attack_chain_done(project_id)
+        chain_work = attack_chain_ready(project_id)
         proj.status = "auditing"
         if chain_work or attack_chain_busy:
             proj.phase = "attack_chain"
@@ -2004,10 +2008,12 @@ def _ensure_attack_chain(project_id: int, cancel: threading.Event) -> None:
         is_attack_chain_done,
         is_attack_chain_enabled,
         mark_attack_chain_done,
+        reclaim_premature_attack_chain_done,
     )
 
     if not is_attack_chain_enabled(project_id):
         return
+    reclaim_premature_attack_chain_done(project_id)
     if is_attack_chain_done(project_id):
         return
     with SessionLocal() as db:
@@ -2016,12 +2022,11 @@ def _ensure_attack_chain(project_id: int, cancel: threading.Event) -> None:
             return
     if _phase_is_paused(project_id, "attack_chain"):
         return
-    if not attack_chain_ready(project_id) and not bool(
-        list_resumable_runs(project_id, "attack_chain")
-    ) and not _should_skip_checkpoint(project_id, "attack_chain"):
+    # force_new only skips an old checkpoint; it must not start before mining/review settle.
+    if not attack_chain_ready(project_id):
         return
     # Ready but fewer than 2 confirmed → skip without LLM.
-    if attack_chain_ready(project_id) and confirmed_vuln_count(project_id) < 2:
+    if confirmed_vuln_count(project_id) < 2:
         if not list_resumable_runs(project_id, "attack_chain"):
             mark_attack_chain_done(project_id, reason="已确认漏洞少于 2 条，跳过串联")
             return
@@ -2048,6 +2053,7 @@ def _run_attack_chain_loop(project_id: int) -> None:
         is_attack_chain_done,
         is_attack_chain_enabled,
         mark_attack_chain_done,
+        reclaim_premature_attack_chain_done,
     )
 
     cancel = _cancel_event(project_id)
@@ -2057,6 +2063,7 @@ def _run_attack_chain_loop(project_id: int) -> None:
                 break
             if not is_attack_chain_enabled(project_id):
                 break
+            reclaim_premature_attack_chain_done(project_id)
             if is_attack_chain_done(project_id):
                 break
             try:
@@ -2065,17 +2072,15 @@ def _run_attack_chain_loop(project_id: int) -> None:
                     if not proj or proj.status in ("completed", "cancelled", "error"):
                         return
                 ready = attack_chain_ready(project_id)
-                resumable = bool(list_resumable_runs(project_id, "attack_chain"))
-                force = _should_skip_checkpoint(project_id, "attack_chain")
             except OperationalError as e:
                 if _is_sqlite_locked(e):
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
-            if not ready and not resumable and not force:
+            if not ready:
                 cancel.wait(timeout=5.0)
                 continue
-            if ready and confirmed_vuln_count(project_id) < 2 and not resumable:
+            if confirmed_vuln_count(project_id) < 2 and not list_resumable_runs(project_id, "attack_chain"):
                 mark_attack_chain_done(project_id, reason="已确认漏洞少于 2 条，跳过串联")
                 break
             with _lock:
@@ -3966,6 +3971,7 @@ def _run_verifier_once(project_id: int) -> None:
 
 def _run_attack_chain_once(project_id: int) -> None:
     from ..tools.phase_attack_chain import (
+        attack_chain_prereqs,
         confirmed_vuln_count,
         is_attack_chain_done,
         mark_attack_chain_done,
@@ -3973,6 +3979,8 @@ def _run_attack_chain_once(project_id: int) -> None:
 
     cancel = _cancel_event(project_id)
     try:
+        if not attack_chain_prereqs(project_id):
+            return
         cp = _adopt_resumable(project_id, "attack_chain")
         if cp:
             with SessionLocal() as db:

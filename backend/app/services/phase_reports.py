@@ -105,6 +105,23 @@ def _heading_or_preview(text: str) -> tuple[str | None, str]:
     return heading, preview
 
 
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    try:
+        import yaml
+
+        meta = yaml.safe_load(parts[1]) or {}
+    except Exception:  # noqa: BLE001
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return meta, parts[2].lstrip("\n")
+
+
 def _read_preview_text(path: Path) -> str:
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return f.read(_PREVIEW_CHARS)
@@ -122,7 +139,13 @@ def _item(
     content: str | None = None,
 ) -> dict[str, Any]:
     text = content if content is not None else _read_preview_text(path)
-    heading, preview = _heading_or_preview(text)
+    meta, body = _split_frontmatter(text)
+    heading, preview = _heading_or_preview(body)
+    fm_title = str(meta.get("title") or "").strip()
+    if kind == "round":
+        display_title = title
+    else:
+        display_title = fm_title or heading or title
     out: dict[str, Any] = {
         "id": rel.replace("\\", "/"),
         "phase": control,
@@ -132,7 +155,7 @@ def _item(
         "kind": kind,
         "kind_label": _KIND_LABEL[kind],
         "round": round_no,
-        "title": title if kind == "round" else (heading or title),
+        "title": display_title,
         "preview": preview,
         "mtime": _iso_mtime(path),
         "size": path.stat().st_size,
@@ -225,6 +248,17 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
                 content=content,
             )
         raise FileNotFoundError(rel)
+    if rel.startswith("docs/attack-chains/"):
+        return _item(
+            rel=rel,
+            path=path,
+            control="attack_chain",
+            subphase="chain",
+            kind="doc",
+            round_no=None,
+            title="攻击链索引" if path.name == "index.md" else f"攻击链 · {path.stem}",
+            content=content,
+        )
     if rel.startswith("docs/verifier/"):
         stem = path.stem
         if not stem.isdigit():
@@ -362,7 +396,6 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
         for path in chain_dir.glob("*.md"):
             if path.name == "index.md" or not path.is_file() or path.stat().st_size <= 0:
                 continue
-            heading, _ = _heading_or_preview(path.read_text(encoding="utf-8", errors="ignore"))
             items.append(
                 _item(
                     rel=f"docs/attack-chains/{path.name}",
@@ -371,7 +404,7 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
                     subphase="chain",
                     kind="doc",
                     round_no=None,
-                    title=heading or f"攻击链 · {path.stem}",
+                    title=f"攻击链 · {path.stem}",
                 )
             )
 

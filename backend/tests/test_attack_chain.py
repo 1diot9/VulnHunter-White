@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.models import AttackChain, Project, Vuln
+from app.models import AttackChain, FileWeight, Project, Vuln
 from app.services.paths import attack_chains_dir, old_vulns_dir
 from app.services.pipeline import control_phase
 from app.tools import ROLE_ACL, registry
 from app.tools.phase_attack_chain import (
+    attack_chain_prereqs,
     attack_chain_ready,
     confirmed_vuln_count,
     is_attack_chain_done,
     mark_attack_chain_done,
+    reclaim_premature_attack_chain_done,
 )
 from app.tools.phase_worker import project_complete_gates
 
@@ -98,6 +100,7 @@ def test_attack_chain_acl():
     assert "Grep" in allowed
     assert "TodoWrite" in allowed
     assert "SubmitAttackChain" in allowed
+    assert "IndexAttackChain" in allowed
     assert "FinishAttackChain" in allowed
     assert "Write" not in allowed
     assert "Bash" not in allowed
@@ -210,12 +213,113 @@ def test_submit_attack_chain_and_finish(tmp_env, project):
         report = attack_chains_dir(project) / row.report_path.split("/")[-1]
         assert report.is_file()
         assert "打洞 A" in report.read_text(encoding="utf-8")
-        assert (attack_chains_dir(project) / "index.md").is_file()
+        index = (attack_chains_dir(project) / "index.md").read_text(encoding="utf-8")
+        assert "## 详文" in index
+        assert "A 到 B" in index
 
     done = registry.dispatch(ctx, "FinishAttackChain", {"notes": "已提交 1 条"})
     assert done["ok"] is True
     assert ctx.state.get("attack_chain_done") is True
     assert is_attack_chain_done(project) is True
+
+
+def test_detailed_chain_cap_and_index_brief(tmp_env, project):
+    vulns = [
+        _submit_and_confirm(project, title=f"洞 {i}", file_path=f"{i}.java")
+        for i in range(8)
+    ]
+    ctx = _ctx(project, "attack_chain")
+    for i in range(3):
+        ok = registry.dispatch(
+            ctx,
+            "SubmitAttackChain",
+            {
+                "title": f"详文 {i}",
+                "vuln_ids": [vulns[i * 2], vulns[i * 2 + 1]],
+                "summary": f"摘要 {i}",
+                "steps": f"## 步骤\n打 {i}\n",
+            },
+        )
+        assert ok["ok"] is True, ok
+        assert ok["kind"] == "detailed"
+    fourth = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "第4条详文",
+            "vuln_ids": [vulns[6], vulns[7]],
+            "summary": "不该写详文",
+            "steps": "## 步骤\n太多了\n",
+        },
+    )
+    assert fourth["ok"] is False
+    assert "最多 3 条" in str(fourth.get("error") or "")
+
+    brief = registry.dispatch(
+        ctx,
+        "IndexAttackChain",
+        {
+            "title": "简述链",
+            "vuln_ids": [vulns[6], vulns[7]],
+            "summary": "危害较低，匿名可读后再打低危接口",
+        },
+    )
+    assert brief["ok"] is True, brief
+    assert brief["kind"] == "brief"
+    with _db() as db:
+        row = db.get(AttackChain, brief["chain_id"])
+        assert row is not None
+        assert not row.report_path
+    chain_dir = attack_chains_dir(project)
+    md_files = [p for p in chain_dir.glob("*.md") if p.name != "index.md"]
+    assert len(md_files) == 3
+    index = (chain_dir / "index.md").read_text(encoding="utf-8")
+    assert "## 详文" in index
+    assert "## 其他简述" in index
+    assert "简述链" in index
+    assert "第4条详文" not in index
+    assert "不该写详文" not in index
+
+
+def test_finish_other_chains_go_to_index(tmp_env, project):
+    a = _submit_and_confirm(project, title="洞 A")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java")
+    c = _submit_and_confirm(project, title="洞 C", file_path="c.java")
+    d = _submit_and_confirm(project, title="洞 D", file_path="d.java")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "主链",
+            "vuln_ids": [a, b],
+            "summary": "最强",
+            "steps": "## 步骤\n1\n",
+        },
+    )
+    assert ok["ok"] is True, ok
+    done = registry.dispatch(
+        ctx,
+        "FinishAttackChain",
+        {
+            "notes": "1 详文 + 1 简述",
+            "other_chains": [
+                {
+                    "title": "次链",
+                    "vuln_ids": [c, d],
+                    "summary": "同入口但后续危害更小",
+                }
+            ],
+        },
+    )
+    assert done["ok"] is True, done
+    assert done["detailed_count"] == 1
+    assert done["brief_count"] == 1
+    index = (attack_chains_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "主链" in index
+    assert "次链" in index
+    md_files = [p for p in attack_chains_dir(project).glob("*.md") if p.name != "index.md"]
+    assert len(md_files) == 1
 
 
 def test_project_complete_gates_waits_for_attack_chain(tmp_env, project):
@@ -262,6 +366,95 @@ def test_skip_when_fewer_than_two_confirmed(tmp_env, project):
     cancel = threading.Event()
     _ensure_attack_chain(project, cancel)
     assert is_attack_chain_done(project) is True
+
+
+def _leave_mining_open(project):
+    with _db() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = True
+        proj.heuristic_lite = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.attack_chain_enabled = True
+        proj.attack_chain_done = False
+        db.add(
+            FileWeight(
+                project_id=project,
+                path="still-open.java",
+                weight=50,
+                skipped=False,
+                audited=False,
+            )
+        )
+        db.commit()
+
+
+def test_ensure_attack_chain_waits_until_mining_complete(tmp_env, project):
+    import threading
+
+    from app.services import pipeline
+
+    _submit_and_confirm(project, title="洞 A")
+    _submit_and_confirm(project, title="洞 B", file_path="b.java")
+    _leave_mining_open(project)
+    pipeline._force_new_run.add((project, "attack_chain"))
+
+    assert attack_chain_prereqs(project) is False
+    assert attack_chain_ready(project) is False
+    pipeline._ensure_attack_chain(project, threading.Event())
+    assert is_attack_chain_done(project) is False
+    t = pipeline._attack_chain_threads.get(project)
+    assert t is None or not t.is_alive()
+
+    pipeline._run_attack_chain_once(project)
+    assert is_attack_chain_done(project) is False
+
+
+def test_reclaim_premature_attack_chain_done(tmp_env, project):
+    _leave_mining_open(project)
+    mark_attack_chain_done(project, reason="误提前收工")
+    assert is_attack_chain_done(project) is True
+    assert reclaim_premature_attack_chain_done(project) is True
+    assert is_attack_chain_done(project) is False
+
+    _make_mining_done(project)
+    with _db() as db:
+        proj = db.get(Project, project)
+        proj.attack_chain_enabled = True
+        proj.attack_chain_done = True
+        db.commit()
+    assert attack_chain_prereqs(project) is True
+    assert reclaim_premature_attack_chain_done(project) is False
+    assert is_attack_chain_done(project) is True
+
+
+def test_phase_report_reads_attack_chain_doc(tmp_env, project):
+    from app.services.phase_reports import read_phase_report, reports_by_phase
+
+    a = _submit_and_confirm(project, title="洞 A")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "匿名读到后台",
+            "vuln_ids": [a, b],
+            "summary": "先读配置再打后台",
+            "steps": "## 步骤\n1. 打洞 A\n2. 用结果打洞 B\n",
+        },
+    )
+    assert ok["ok"] is True, ok
+    grouped = reports_by_phase(project)
+    chain = next(p for p in grouped["phases"] if p["phase"] == "attack_chain")
+    ids = {item["id"] for item in chain["reports"]}
+    assert ok["path"] in ids
+    assert "docs/attack-chains/index.md" in ids
+    detail = read_phase_report(project, ok["path"])
+    assert "打洞 A" in detail["content"]
+    assert detail["title"] == "匿名读到后台"
+    assert detail["phase"] == "attack_chain"
 
 
 def test_create_and_patch_attack_chain_enabled(tmp_env, monkeypatch):

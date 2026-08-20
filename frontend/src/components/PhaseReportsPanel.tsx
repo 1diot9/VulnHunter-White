@@ -77,7 +77,9 @@ export default function PhaseReportsPanel({
         ? 'recon'
         : initialPhase === 'verifier'
           ? 'verifier'
-          : 'worker',
+          : initialPhase === 'attack_chain'
+            ? 'attack_chain'
+            : 'worker',
   )
   const [sub, setSub] = useState('all')
   const [groups, setGroups] = useState<{ phase: string; label: string; count: number; reports: PhaseReport[] }[]>([])
