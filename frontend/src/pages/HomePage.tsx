@@ -1,27 +1,33 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { SearchIcon, XIcon } from 'lucide-react'
-import { api, type CustomAuditMode, type Project } from '../api'
-import { AuditModeSelect } from '../components/AuditModeSelect'
+import { PlusIcon, SearchIcon, XIcon } from 'lucide-react'
+import { api, type Project } from '../api'
+import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { GithubLink } from '../components/GithubLink'
-import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode } from '../components/DynamicVerifyToggle'
-import { ManualLabToggle } from '../components/ManualLabFields'
-import { VerifierToggle } from '../components/VerifierToggle'
-import { AttackChainToggle } from '../components/AttackChainToggle'
-import { AuditFlowPreview } from '../components/AuditFlowPreview'
-import { MiningPathSelect } from '../components/MiningPathSelect'
-import { ProjectModelSelect } from '../components/ProjectModelSelect'
+import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { githubRepoHref, githubRepoLabel } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatProjectStatus, formatTokenUsage, type AuditMode } from '../lib/utils'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatProjectStatus, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+
+function CreateProjectButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      size="lg"
+      className="h-11 shrink-0 gap-2 px-5 text-base font-semibold shadow-lg shadow-primary/25 ring-2 ring-primary/40"
+      onClick={onClick}
+    >
+      <PlusIcon className="size-5" />
+      创建项目
+    </Button>
+  )
+}
 
 function projectMatchesQuery(p: Project, query: string): boolean {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -49,185 +55,34 @@ function projectMatchesQuery(p: Project, query: string): boolean {
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
-  const [url, setUrl] = useState('')
-  const [auditMode, setAuditMode] = useState<AuditMode>('bounty')
-  const [customModes, setCustomModes] = useState<CustomAuditMode[]>([])
-  const [customModeId, setCustomModeId] = useState<number | null>(null)
-  const [manualLab, setManualLab] = useState(false)
-  const [manualLabPrompt, setManualLabPrompt] = useState('')
-  const [dynamicVerifyMode, setDynamicVerifyMode] = useState<DynamicVerifyMode>('off')
-  const [verifierEnabled, setVerifierEnabled] = useState(false)
-  const [attackChainEnabled, setAttackChainEnabled] = useState(false)
-  const [heuristicEnabled, setHeuristicEnabled] = useState(true)
-  const [heuristicLite, setHeuristicLite] = useState(false)
-  const [fastEnabled, setFastEnabled] = useState(false)
-  const [bypassEnabled, setBypassEnabled] = useState(false)
-  const [llmModel, setLlmModel] = useState('')
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
-  const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
-  const labMode = dynamicVerifyMode === 'lab'
-  const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
+  const [createOpen, setCreateOpen] = useState(false)
 
   const refresh = () => api.listProjects().then(setProjects).catch((e) => setError(String(e)))
 
   useEffect(() => startVisibilityPoll(refresh, 4000), [])
-  useEffect(() => {
-    api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
-  }, [])
 
   const filteredProjects = useMemo(
     () => projects.filter((p) => projectMatchesQuery(p, search)),
     [projects, search],
   )
 
-  async function createGithub() {
-    if (!url.trim()) return
-    if (auditMode === 'custom' && customModeId == null) {
-      setError('请先选择自定义审计模式（可在设置页创建）')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      await api.createGithub(url.trim(), '', auditMode, {
-        custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
-        manual_lab: labMode && manualLab,
-        manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
-        verifier_enabled: verifierEnabled,
-        attack_chain_enabled: attackChainEnabled,
-        dynamic_verify_enabled: dynamicVerifyEnabled,
-        dynamic_verify_mode: dynamicVerifyMode,
-        heuristic_enabled: heuristicEnabled,
-        heuristic_lite: heuristicLite,
-        fast_enabled: fastEnabled,
-        bypass_enabled: bypassEnabled,
-        llm_model: llmModel,
-      })
-      setUrl('')
-      await refresh()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onZip(file: File | null) {
-    if (!file) return
-    if (auditMode === 'custom' && customModeId == null) {
-      setError('请先选择自定义审计模式（可在设置页创建）')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      await api.uploadZip(file, '', auditMode, {
-        custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
-        manual_lab: labMode && manualLab,
-        manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
-        verifier_enabled: verifierEnabled,
-        attack_chain_enabled: attackChainEnabled,
-        dynamic_verify_enabled: dynamicVerifyEnabled,
-        dynamic_verify_mode: dynamicVerifyMode,
-        heuristic_enabled: heuristicEnabled,
-        heuristic_lite: heuristicLite,
-        fast_enabled: fastEnabled,
-        bypass_enabled: bypassEnabled,
-        llm_model: llmModel,
-      })
-      await refresh()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <div className="w-full space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">审计项目</h1>
-        <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。创建时选择赏金/全量/自定义（自定义需先在设置页配置），并可勾选启发式挖掘（可选轻量，只挖权重 100）、快速扫描与历史漏洞绕过；默认只开启发式。每个项目可单独选择模型，不选则使用设置里的全局模型。验证方式默认关闭（仅静态），可改为靶场动态或局部验证；互联网验证默认关闭。</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold">审计项目</h1>
+          <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。</p>
+        </div>
+        <CreateProjectButton onClick={() => setCreateOpen(true)} />
       </div>
 
-      <Card className="w-full">
-        <CardContent className="w-full">
-        <div className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
-            <div className="space-y-3">
-              <AuditModeSelect
-                value={auditMode}
-                customModeId={customModeId}
-                customModes={customModes}
-                customModeName={selectedCustomName}
-                onValueChange={setAuditMode}
-                onCustomModeIdChange={setCustomModeId}
-              />
-              <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
-              <MiningPathSelect
-                heuristicEnabled={heuristicEnabled}
-                heuristicLite={heuristicLite}
-                fastEnabled={fastEnabled}
-                bypassEnabled={bypassEnabled}
-                onChange={({ heuristicEnabled: nextH, heuristicLite: nextL, fastEnabled: nextF, bypassEnabled: nextB }) => {
-                  setHeuristicEnabled(nextH)
-                  setHeuristicLite(nextL)
-                  setFastEnabled(nextF)
-                  setBypassEnabled(nextB)
-                }}
-              />
-              <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />
-              {labMode ? (
-                <ManualLabToggle
-                  enabled={manualLab}
-                  prompt={manualLabPrompt}
-                  onEnabledChange={setManualLab}
-                  onPromptChange={setManualLabPrompt}
-                />
-              ) : null}
-              <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
-              <AttackChainToggle enabled={attackChainEnabled} onEnabledChange={setAttackChainEnabled} />
-            </div>
-            <AuditFlowPreview
-              className="xl:sticky xl:top-[4.25rem]"
-              auditMode={auditMode}
-              dynamicVerifyEnabled={dynamicVerifyEnabled}
-              dynamicVerifyMode={dynamicVerifyMode}
-              manualLab={manualLab}
-              verifierEnabled={verifierEnabled}
-              attackChainEnabled={attackChainEnabled}
-              heuristicEnabled={heuristicEnabled}
-              heuristicLite={heuristicLite}
-              fastEnabled={fastEnabled}
-              bypassEnabled={bypassEnabled}
-            />
-          </div>
-          <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-            <Input
-              className="w-full"
-              placeholder="https://github.com/owner/repo"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-            <Button disabled={busy} onClick={createGithub}>
-              从 GitHub 创建
-            </Button>
-            <Label className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg border border-input px-3 text-sm font-medium hover:bg-muted">
-              上传 Zip
-              <Input
-                type="file"
-                accept=".zip"
-                className="hidden"
-                onChange={(e) => onZip(e.target.files?.[0] || null)}
-              />
-            </Label>
-          </div>
-        </div>
-        {error ? <p className="mt-2 text-sm text-red-300">{error}</p> : null}
-        </CardContent>
-      </Card>
+      <CreateProjectDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={refresh}
+      />
 
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -249,6 +104,8 @@ export default function HomePage() {
           </button>
         ) : null}
       </div>
+
+      {error ? <p className="text-sm text-red-300">{error}</p> : null}
 
       <div className="flex w-full flex-col gap-3">
         {filteredProjects.map((p) => {
@@ -350,8 +207,15 @@ export default function HomePage() {
         })}
         {filteredProjects.length === 0 ? (
           <Card className="w-full">
-            <CardContent className="text-sm text-muted-foreground">
-              {search.trim() ? '无匹配项目' : '暂无项目，先导入一个 Web 源码仓。'}
+            <CardContent className="flex flex-col items-start gap-3 py-8 text-sm text-muted-foreground">
+              {search.trim() ? (
+                '无匹配项目'
+              ) : (
+                <>
+                  <p>暂无项目。点击「创建项目」导入 GitHub 仓库或源码 zip。</p>
+                  <CreateProjectButton onClick={() => setCreateOpen(true)} />
+                </>
+              )}
             </CardContent>
           </Card>
         ) : null}

@@ -1,9 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 
-export const MINING_PATH_HINT =
-  '启发式在历史漏洞收集完毕后按文件定权沿 source→sink 挖洞，覆盖缺鉴权、IDOR、业务逻辑等 SAST 看不到的问题。轻量版只把权重 100 的文件当入口。快速扫描在侦察后用 Semgrep 找 Sink，经代码筛和短 Agent 筛选后按条回推；覆盖的是命令执行、注入、反序列化等 SAST Sink。历史漏洞绕过以收集到的历史漏洞文档为输入，每轮尝试绕过一条补丁或确认未修复洞仍可打。至少开一条，默认识启发式。'
-
 type MiningPathValue = {
   heuristicEnabled: boolean
   heuristicLite: boolean
@@ -18,7 +15,6 @@ type Props = {
   bypassEnabled?: boolean
   onChange: (next: MiningPathValue) => void
   disabled?: boolean
-  showHint?: boolean
 }
 
 export function MiningPathSelect({
@@ -28,7 +24,6 @@ export function MiningPathSelect({
   bypassEnabled = false,
   onChange,
   disabled = false,
-  showHint = true,
 }: Props) {
   const setHeuristic = (next: boolean) => {
     if (!next && !fastEnabled && !bypassEnabled) return
@@ -106,9 +101,6 @@ export function MiningPathSelect({
           </span>
         </span>
       </Label>
-      {showHint ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">{MINING_PATH_HINT}</p>
-      ) : null}
     </div>
   )
 }
