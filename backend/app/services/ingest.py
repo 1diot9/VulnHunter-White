@@ -142,7 +142,7 @@ def _should_ignore_dir(name: str) -> bool:
 
 def _should_ignore_file(path: Path) -> bool:
     name = path.name.lower()
-    if name in INDEX_SKIP_NAMES:
+    if name.startswith(".") or name in INDEX_SKIP_NAMES:
         return True
     return any(name.endswith(suf) for suf in IGNORE_FILE_SUFFIXES)
 

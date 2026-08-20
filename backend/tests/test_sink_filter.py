@@ -5,6 +5,7 @@ from app.services.sink_filter import (
     CANDIDATE_LIMIT,
     FilterContext,
     merge_findings,
+    normalize_path,
     protected_from_drop,
     select_candidates,
 )
@@ -33,6 +34,12 @@ def _finding(
             "metadata": {"category": category, "confidence": confidence},
         },
     }
+
+
+def test_normalize_path_keeps_hidden_files():
+    assert normalize_path(".flattened-pom.xml") == ".flattened-pom.xml"
+    assert normalize_path("./.env.example.js") == ".env.example.js"
+    assert normalize_path("src/app/Main.java") == "app/Main.java"
 
 
 def test_language_configs_add_java_pack():

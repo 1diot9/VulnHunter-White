@@ -1629,6 +1629,65 @@ def test_mark_weight_accepts_workspace_src_prefix(tmp_env, project):
     assert out["updated"][0]["path"] == "app/Main.java"
 
 
+def test_normalize_weight_path_keeps_hidden_files():
+    from app.tools.phase_recon import normalize_weight_path
+
+    assert normalize_weight_path(".flattened-pom.xml") == ".flattened-pom.xml"
+    assert normalize_weight_path("./.flattened-pom.xml") == ".flattened-pom.xml"
+    assert normalize_weight_path("./src/main/java/Foo.java") == "src/main/java/Foo.java"
+    assert normalize_weight_path("src/app/Main.java") == "src/app/Main.java"
+
+
+def test_mark_skip_hidden_flattened_pom(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    hidden = ".flattened-pom.xml"
+    with Session() as db:
+        db.add(
+            models.FileWeight(
+                project_id=project,
+                path=hidden,
+                weight=None,
+                skipped=False,
+                audited=False,
+                has_source=False,
+            )
+        )
+        db.commit()
+
+    out = registry.dispatch(_ctx(project, "recon_mark"), "MarkSkip", {"path": hidden})
+    assert out["ok"] is True
+    assert out["skipped"] == [hidden]
+    assert paths_fully_marked(project, [hidden]) is True
+
+
+def test_skip_non_source_weight_rows_unblocks_hidden_files(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked, skip_non_source_weight_rows
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    hidden = ".flattened-pom.xml"
+    with Session() as db:
+        db.add(
+            models.FileWeight(
+                project_id=project,
+                path=hidden,
+                weight=None,
+                skipped=False,
+                audited=False,
+                has_source=False,
+            )
+        )
+        db.commit()
+
+    assert paths_fully_marked(project, [hidden]) is False
+    assert skip_non_source_weight_rows(project) == 1
+    assert paths_fully_marked(project, [hidden]) is True
+    assert skip_non_source_weight_rows(project) == 0
+
+
 def test_mark_weight_reports_unmatched_paths(tmp_env, project):
     build_file_index(project)
     out = registry.dispatch(

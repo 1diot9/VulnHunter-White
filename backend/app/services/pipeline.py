@@ -83,6 +83,7 @@ from ..tools.phase_recon import (
     clear_old_vuln_completion,
     paths_fully_marked,
     pick_unmarked_batch,
+    skip_non_source_weight_rows,
     recon_gates_met,
     recon_gates_status,
     recon_map_ready,
@@ -2755,12 +2756,29 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
     while not cancel.is_set():
         if not _wait_if_paused(project_id, _loop_cancel(project_id, "recon"), "recon"):
             return
+        skipped_hidden = skip_non_source_weight_rows(project_id)
+        if skipped_hidden:
+            live_log.system(
+                project_id,
+                f"侦察盖章：已自动跳过 {skipped_hidden} 个隐藏/生成文件",
+                phase="recon-mark",
+                role="recon_mark",
+            )
         if recon_gates_met(project_id):
             return
         cp = _adopt_resumable(project_id, "recon-mark")
         if cp:
             try:
                 paths = [str(p) for p in (cp.state.get("mark_paths") or []) if p]
+                if paths and paths_fully_marked(project_id, paths):
+                    _finish_phase_run(cp.phase_run_id, "completed")
+                    live_log.system(
+                        project_id,
+                        f"侦察盖章轮完成：{len(paths)} 个文件",
+                        phase="recon-mark",
+                        role="recon_mark",
+                    )
+                    continue
                 loop = _loop_from_checkpoint(
                     cp,
                     cancel=cancel,

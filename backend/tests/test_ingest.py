@@ -45,6 +45,7 @@ def test_expand_file_index_appends_templates_without_wiping(tmp_env, project):
     (src / "app" / "job.ftl").write_text("<#-- view -->\n", encoding="utf-8")
     (src / "app" / "mapper.xml").write_text("<mapper/>\n", encoding="utf-8")
     (src / "app" / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+    (src / ".flattened-pom.xml").write_text("<project/>\n", encoding="utf-8")
     (src / "tests" / "job.ftl").write_text("<#-- test -->\n", encoding="utf-8")
     n = build_file_index(project)
     with Session() as db:
@@ -66,6 +67,7 @@ def test_expand_file_index_appends_templates_without_wiping(tmp_env, project):
     assert "app/mapper.xml" in paths
     assert "tests/job.ftl" in paths
     assert "app/pom.xml" not in paths
+    assert ".flattened-pom.xml" not in paths
 
     with Session() as db:
         rows = {r.path.replace("\\", "/"): r for r in db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all()}

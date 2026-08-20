@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from app.agent.watchdog import (
+    FAILED_TOOL_NUDGE,
     IDENTICAL_ABORT_NUDGE,
     IDENTICAL_REDIRECT_NUDGE,
     IDENTICAL_TOOL_NUDGE,
     MAX_IDENTICAL_THRESHOLD_HITS,
     NO_TOOL_NUDGE,
+    RECON_MARK_NO_TOOL_NUDGE,
     RECON_OLD_VULN_PERSIST_NUDGE,
     RECON_PERSIST_INTERVAL,
     WORKER_FINISH_INTERVAL,
@@ -33,6 +35,45 @@ def test_tool_call_resets_no_tool_counter():
     w.note_no_tools()
     assert w.observe_tools([{"name": "Read", "arguments": {"path": "a.java"}}]) is None
     assert w.consecutive_no_tool_turns == 0
+
+
+def test_failed_tool_followup_is_not_no_tool():
+    w = AgentWatchdog()
+    w.observe_tools([{"name": "MarkSkip", "arguments": {"path": ".flattened-pom.xml"}}])
+    w.note_tool_results(failed=True)
+    assert w.consecutive_no_tool_turns == 0
+    assert w.pending_tool_failure is True
+    msg, kind = w.nudge_for_text_turn()
+    assert kind == "failed_tool"
+    assert msg == FAILED_TOOL_NUDGE
+    assert "不等于没调用工具" in msg
+    assert "没有调用任何工具" not in msg
+    assert w.consecutive_no_tool_turns == 0
+    assert w.pending_tool_failure is False
+    assert "不视为未调用工具" in w.text_turn_log(kind)
+    msg2, kind2 = w.nudge_for_text_turn()
+    assert kind2 == "no_tools"
+    assert msg2 == NO_TOOL_NUDGE
+    assert w.consecutive_no_tool_turns == 1
+
+
+def test_successful_tool_does_not_defer_no_tool_nudge():
+    w = AgentWatchdog()
+    w.observe_tools([{"name": "Read", "arguments": {"path": "a.java"}}])
+    w.note_tool_results(failed=False)
+    msg, kind = w.nudge_for_text_turn()
+    assert kind == "no_tools"
+    assert msg == NO_TOOL_NUDGE
+
+
+def test_pending_tool_failure_restored_from_snapshot():
+    w = AgentWatchdog()
+    w.note_tool_results(failed=True)
+    restored = AgentWatchdog.restore(w.snapshot())
+    assert restored.pending_tool_failure is True
+    msg, kind = restored.nudge_for_text_turn()
+    assert kind == "failed_tool"
+    assert msg == FAILED_TOOL_NUDGE
 
 
 def test_repeated_identical_tool_calls():
@@ -181,11 +222,18 @@ def test_reviewer_lab_no_tool_nudge():
 
     w = AgentWatchdog(phase="reviewer-lab")
     assert w.note_no_tools() == LAB_NO_TOOL_NUDGE
+    assert "被测应用" in LAB_NO_TOOL_NUDGE
+    assert "旧版应用镜像" in LAB_NO_TOOL_NUDGE
     w2 = AgentWatchdog(phase="reviewer")
     assert "ConfirmVuln" in w2.note_no_tools()
     w3 = AgentWatchdog(phase="verifier")
     assert "FofaSearch" in w3.note_no_tools()
     assert "FinishVerifier" in w3.note_no_tools()
+    w4 = AgentWatchdog(phase="recon-mark")
+    assert w4.note_no_tools() == RECON_MARK_NO_TOOL_NUDGE
+    assert "MarkSource" in RECON_MARK_NO_TOOL_NUDGE
+    assert "MarkSkip" in RECON_MARK_NO_TOOL_NUDGE
+    assert AgentWatchdog(phase="recon_mark").note_no_tools() == RECON_MARK_NO_TOOL_NUDGE
 
 
 def test_fix_and_reviewer_have_no_finish_nudge():

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 
 from ..models import FileWeight, Project, SessionLocal, Source
-from ..services.ingest import EXTRA_SOURCE_EXTS, expand_file_index
+from ..services.ingest import EXTRA_SOURCE_EXTS, INDEX_SKIP_NAMES, expand_file_index
 from ..services.old_vuln_crawl import save_crawl_spec
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
@@ -217,8 +217,15 @@ def recon_subphases(project_id: int, unmarked: int | None = None) -> list[dict[s
 
 
 def normalize_weight_path(path: str) -> str:
-    """Slash-normalize a file-index path. Do not strip src/ — Maven paths start with src/main."""
-    return str(path or "").replace("\\", "/").lstrip("./")
+    """Slash-normalize a file-index path. Do not strip src/ — Maven paths start with src/main.
+
+    Only drop ``./`` prefixes and leading slashes. ``str.lstrip("./")`` would also
+    strip a leading dot from hidden names like ``.flattened-pom.xml``.
+    """
+    p = str(path or "").replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.lstrip("/")
 
 
 def weight_path_candidates(path: str) -> list[str]:
@@ -273,6 +280,35 @@ def _score_unmarked_path(path: str) -> tuple[int, str]:
         if kw in pl:
             boost -= 10
     return (boost, path)
+
+
+def _weight_basename(path: str) -> str:
+    return PurePosixPath(str(path or "").replace("\\", "/")).name
+
+
+def skip_non_source_weight_rows(project_id: int) -> int:
+    """Skip hidden/generated index rows so they cannot stall recon marking."""
+    n = 0
+    with SessionLocal() as db:
+        rows = (
+            db.query(FileWeight)
+            .filter(
+                FileWeight.project_id == project_id,
+                FileWeight.skipped.is_(False),
+                FileWeight.weight.is_(None),
+            )
+            .all()
+        )
+        for row in rows:
+            name = _weight_basename(row.path).lower()
+            if not name.startswith(".") and name not in INDEX_SKIP_NAMES:
+                continue
+            row.skipped = True
+            row.weight = 0
+            n += 1
+        if n:
+            db.commit()
+    return n
 
 
 def pick_unmarked_batch(project_id: int, limit: int) -> list[str]:

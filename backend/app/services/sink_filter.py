@@ -93,7 +93,10 @@ class FilterContext:
 
 
 def normalize_path(path: str) -> str:
-    p = str(path or "").replace("\\", "/").lstrip("./")
+    p = str(path or "").replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
     if p.startswith("src/"):
         p = p[4:]
     return p

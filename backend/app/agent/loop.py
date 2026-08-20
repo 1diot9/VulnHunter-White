@@ -489,10 +489,10 @@ class AgentLoop:
                     result.ok = True
                     result.stop_reason = "stop_when"
                     return result
-                nudge = self.watchdog.note_no_tools()
+                nudge, kind = self.watchdog.nudge_for_text_turn()
                 live_log.system(
                     self.project_id,
-                    f"看门狗：本轮无工具调用（连续 {self.watchdog.consecutive_no_tool_turns} 次），已提醒模型改用工具",
+                    self.watchdog.text_turn_log(kind),
                     phase=self.phase,
                     role=self.role,
                 )
@@ -509,6 +509,7 @@ class AgentLoop:
                 continue
 
             parsed_calls = []
+            parse_failed = False
             for tc in tool_calls:
                 fn = tc.get("function") or {}
                 name = fn.get("name") or ""
@@ -516,6 +517,7 @@ class AgentLoop:
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
                 except json.JSONDecodeError:
+                    parse_failed = True
                     args = {}
                     tool_result = {"ok": False, "error": "tool arguments JSON 无效"}
                     live_log.cmd(
@@ -597,11 +599,13 @@ class AgentLoop:
                         role=self.role,
                     )
                     redirect = f"{redirect}\n\n{persist_nudge}"
+                self.watchdog.note_tool_results(failed=True)
                 messages.append({"role": "user", "content": redirect})
                 self._persist(messages)
                 continue
 
             # Dispatch: parallel-safe first batch then serial
+            any_failed = parse_failed
             ctx = ToolContext(
                 project_id=self.project_id,
                 role=self.role,
@@ -632,6 +636,8 @@ class AgentLoop:
                     result.stop_reason = "awaiting_user"
                     result.state = self.state
                     return result
+                if isinstance(tr, dict) and tr.get("ok") is False:
+                    any_failed = True
                 messages.append(
                     {
                         "role": "tool",
@@ -640,6 +646,7 @@ class AgentLoop:
                     }
                 )
             self._persist(messages)
+            self.watchdog.note_tool_results(failed=any_failed)
 
             if self.stop_when and self.stop_when(self.state):
                 result.ok = True

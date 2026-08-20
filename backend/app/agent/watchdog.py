@@ -1,9 +1,10 @@
 """Watchdog: require tool calls; redirect identical-tool streaks; abort after repeats.
 
 Phase timeout is the wall-clock bound. Recon / worker / reviewer all share
-AgentLoop, so this applies to every phase. A text-only turn yields no new
-code or environment info — nudge the model to call tools instead of
-killing the run after N rounds.
+AgentLoop, so this applies to every phase. A text-only turn with no tool_calls yields no new code or environment
+info — nudge the model to call tools instead of killing the run after N
+rounds. A tool call that returned an error still counts as a tool call;
+the follow-up reminder must not say the model called nothing.
 
 Identical tool+args streaks are intercepted once at the consecutive-call
 threshold: the loop returns an error, injects a redirect, then clears the
@@ -26,7 +27,8 @@ from typing import Any
 
 LAB_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。本轮是独立的 Docker 靶场搭建，请立刻 Read/Glob 找 Dockerfile/compose，"
-    "用 shell 构建并启动（自建镜像与 Web 容器必须使用提示词中的 lab_image / lab_container，命名含项目名与项目ID，并加 vulnhunter=1 标签），"
+    "用 shell 构建并启动（自建镜像与 Web 容器必须使用提示词中的 lab_image / lab_container，命名含项目名与项目ID，并加 vulnhunter=1 标签；"
+    "被测应用从 src/ 当前代码构建，不要换成旧版应用镜像或旧 git tag），"
     "Write env/env.json；完成后 FinishLab。"
     "无法搭建则 FinishLab(skipped=true, reason=...)。不要审核漏洞。"
 )
@@ -71,6 +73,20 @@ BYPASS_NO_TOOL_NUDGE = (
 TRIAGE_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。本批只做 keep / drop / defer，禁止读代码。"
     "请立刻对每条 Sink 给出 decision，然后 FinishSinkTriage(decisions=[...])。"
+)
+
+RECON_MARK_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本轮只给用户消息里列出的路径盖章。"
+    "请立刻对本批未标记文件调用 MarkSource / MarkWeight / MarkSkip；"
+    "同类文件用一次 paths=[...] 批量提交。"
+    "索引找不到的路径不要反复重试，继续处理其余文件；全部可处理路径标完后系统会自动结束。"
+    "不要读全文，不要 Grep/Glob/Write，不要调用 FinishFile / ConfirmVuln 等其他阶段工具。"
+)
+
+FAILED_TOOL_NUDGE = (
+    "上一轮已经调用了工具，只是执行失败（见工具返回的 error / unmatched）。失败不等于没调用工具。"
+    "请根据错误修改参数、换工具或处理其余未完成项，不要原样重试失败调用，也不要用纯文字空转。"
+    "索引找不到的路径跳过即可。若本阶段门闩已满足，系统会自动结束。"
 )
 
 IDENTICAL_TOOL_NUDGE = (
@@ -172,6 +188,7 @@ class AgentWatchdog:
     turn_count: int = 0
     idle_turns: int = 0
     consecutive_no_tool_turns: int = 0
+    pending_tool_failure: bool = False
     identical_threshold_hits: int = 0
     recent_tool_keys: list[str] = field(default_factory=list)
     reason: str | None = None
@@ -231,7 +248,7 @@ class AgentWatchdog:
         return f"看门狗：连续 {n} 轮未落盘，已提醒"
 
     def note_no_tools(self) -> str:
-        """Record a text-only turn and return the reminder to inject."""
+        """Record a genuine no-tool-call turn and return the reminder to inject."""
         self.consecutive_no_tool_turns += 1
         if self.phase in ("reviewer-lab", "reviewer_lab"):
             return LAB_NO_TOOL_NUDGE
@@ -245,7 +262,31 @@ class AgentWatchdog:
             return BYPASS_NO_TOOL_NUDGE
         if self.phase in ("sink-triage", "sink_triage"):
             return TRIAGE_NO_TOOL_NUDGE
+        if self.phase in ("recon-mark", "recon_mark"):
+            return RECON_MARK_NO_TOOL_NUDGE
         return NO_TOOL_NUDGE
+
+    def note_tool_results(self, *, failed: bool) -> None:
+        """Record that the model issued tool calls; failures still count as calls."""
+        self.consecutive_no_tool_turns = 0
+        self.pending_tool_failure = bool(failed)
+
+    def nudge_for_text_turn(self) -> tuple[str, str]:
+        """Return (nudge, kind) for a text-only assistant turn.
+
+        kind is ``failed_tool`` when the previous turn already called tools
+        that failed; otherwise ``no_tools``.
+        """
+        if self.pending_tool_failure:
+            self.pending_tool_failure = False
+            return FAILED_TOOL_NUDGE, "failed_tool"
+        return self.note_no_tools(), "no_tools"
+
+    def text_turn_log(self, kind: str) -> str:
+        if kind == "failed_tool":
+            return "看门狗：上一轮工具调用失败，已提醒根据错误继续（不视为未调用工具）"
+        n = self.consecutive_no_tool_turns
+        return f"看门狗：本轮无工具调用（连续 {n} 次），已提醒模型改用工具"
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -253,6 +294,7 @@ class AgentWatchdog:
             "turn_count": self.turn_count,
             "idle_turns": self.idle_turns,
             "consecutive_no_tool_turns": self.consecutive_no_tool_turns,
+            "pending_tool_failure": self.pending_tool_failure,
             "recent_tool_keys": list(self.recent_tool_keys),
             "reason": self.reason,
             "max_same_tool_calls": self.max_same_tool_calls,
@@ -276,6 +318,7 @@ class AgentWatchdog:
             turn_count=int(data.get("turn_count") or 0),
             idle_turns=int(data.get("idle_turns") or 0),
             consecutive_no_tool_turns=int(data.get("consecutive_no_tool_turns") or 0),
+            pending_tool_failure=bool(data.get("pending_tool_failure")),
             identical_threshold_hits=int(data.get("identical_threshold_hits") or 0),
             recent_tool_keys=list(data.get("recent_tool_keys") or []),
             reason=data.get("reason"),

@@ -22,7 +22,10 @@ OPEN_STATUSES = ("candidate", "queued", "claimed")
 
 
 def _norm(path: str) -> str:
-    return str(path or "").replace("\\", "/").lstrip("./")
+    p = str(path or "").replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.lstrip("/")
 
 
 def filter_context(project_id: int, *, bounty: bool) -> FilterContext:
