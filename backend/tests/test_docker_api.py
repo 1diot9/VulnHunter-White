@@ -135,8 +135,10 @@ class _FakeImage:
 class _FakeContainers:
     def __init__(self, items: list[_FakeContainer]):
         self.items = items
+        self.list_calls: list[bool] = []
 
     def list(self, all=True):  # noqa: A002, ARG002
+        self.list_calls.append(bool(all))
         if all:
             return list(self.items)
         return [c for c in self.items if c.status == "running"]
@@ -289,3 +291,27 @@ def test_stop_batch_skips_foreign_container(tmp_env, project, monkeypatch):
         by_id = {row["id"]: row for row in resp.json()["results"]}
         assert by_id[ours.id]["error"] is None
         assert by_id[foreign.id]["status"] == "skipped"
+
+
+def test_list_images_scans_containers_once(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        row = db.get(Project, project)
+        row.name = "halo"
+        db.commit()
+
+    lab = _FakeContainer(
+        id="a" * 64,
+        name=f"halo-{project}",
+        image=f"halo-{project}:lab",
+        tags=[f"halo-{project}:lab"],
+        image_id="sha256:labimg",
+    )
+    client = _FakeClient(
+        [lab],
+        [_FakeImage(id="sha256:labimg", tags=[f"halo-{project}:lab"], labels={"vulnhunter": "1"})],
+    )
+    _install_fake(monkeypatch, client)
+    docker_service.list_images()
+    assert client.containers.list_calls == [True]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -307,9 +308,13 @@ def _image_id(container: Container) -> str:
 class DockerService:
     def __init__(self) -> None:
         self._client: docker.DockerClient | None = None
+        # docker-py + Windows named pipes are not safe for overlapping list() calls;
+        # concurrent all=true / all=false listings can return each other's results.
+        self._lock = threading.RLock()
 
     def reset(self) -> None:
-        self._client = None
+        with self._lock:
+            self._client = None
 
     @property
     def client(self) -> docker.DockerClient:
@@ -318,12 +323,13 @@ class DockerService:
         return self._client
 
     def ping(self) -> bool:
-        try:
-            self.client.ping()
-            return True
-        except Exception:  # noqa: BLE001
-            self._client = None
-            return False
+        with self._lock:
+            try:
+                self.client.ping()
+                return True
+            except Exception:  # noqa: BLE001
+                self._client = None
+                return False
 
     def _require_client(self) -> docker.DockerClient:
         if not self.ping():
@@ -331,12 +337,13 @@ class DockerService:
         return self.client
 
     def get_container(self, container_id: str) -> Container | None:
-        try:
-            return self.client.containers.get(container_id)
-        except NotFound:
-            return None
-        except DockerException:
-            return None
+        with self._lock:
+            try:
+                return self.client.containers.get(container_id)
+            except NotFound:
+                return None
+            except DockerException:
+                return None
 
     def _describe_container(self, container: Container, refs: list[ProjectRef]) -> dict[str, Any] | None:
         labels = dict(container.labels or {})
@@ -376,13 +383,14 @@ class DockerService:
         running_only: bool = False,
     ) -> list[dict[str, Any]]:
         refs = refs if refs is not None else collect_project_refs()
-        client = self._require_client()
-        containers = client.containers.list(all=not running_only)
-        out: list[dict[str, Any]] = []
-        for container in containers:
-            item = self._describe_container(container, refs)
-            if item is not None:
-                out.append(item)
+        with self._lock:
+            client = self._require_client()
+            containers = client.containers.list(all=not running_only)
+            out: list[dict[str, Any]] = []
+            for container in containers:
+                item = self._describe_container(container, refs)
+                if item is not None:
+                    out.append(item)
         out.sort(key=lambda row: (row.get("project_id") or 10**9, row.get("name") or "", row.get("id") or ""))
         return out
 
@@ -394,18 +402,20 @@ class DockerService:
         return self._describe_container(container, refs)
 
     def start(self, container_id: str) -> str:
-        container = self.client.containers.get(container_id)
-        if container.status != "running":
-            container.start()
-        container.reload()
-        return container.status
+        with self._lock:
+            container = self.client.containers.get(container_id)
+            if container.status != "running":
+                container.start()
+            container.reload()
+            return container.status
 
     def stop(self, container_id: str) -> str:
-        container = self.client.containers.get(container_id)
-        if container.status == "running":
-            container.stop(timeout=10)
-        container.reload()
-        return container.status
+        with self._lock:
+            container = self.client.containers.get(container_id)
+            if container.status == "running":
+                container.stop(timeout=10)
+            container.reload()
+            return container.status
 
     def remove(self, container_id: str, *, force: bool = True) -> None:
         container = self.get_container(container_id)
@@ -458,27 +468,21 @@ class DockerService:
                 errors.append({"id": item.get("id") or "", "name": item.get("name") or "", "error": str(exc)})
         return {"removed_count": len(removed), "removed": removed, "errors": errors}
 
-    def _owned_image_ids(self, refs: list[ProjectRef]) -> set[str]:
-        ids: set[str] = set()
+    def _owned_and_referenced_image_ids(self, refs: list[ProjectRef]) -> tuple[set[str], set[str]]:
+        owned: set[str] = set()
+        referenced: set[str] = set()
         try:
             containers = self.client.containers.list(all=True)
         except DockerException:
-            return ids
+            return owned, referenced
         for container in containers:
-            if self._describe_container(container, refs) is None:
+            image_id = _image_id(container)
+            if not image_id:
                 continue
-            image_id = _image_id(container)
-            if image_id:
-                ids.add(image_id)
-        return ids
-
-    def _all_referenced_image_ids(self) -> set[str]:
-        referenced: set[str] = set()
-        for container in self.client.containers.list(all=True):
-            image_id = _image_id(container)
-            if image_id:
-                referenced.add(image_id)
-        return referenced
+            referenced.add(image_id)
+            if self._describe_container(container, refs) is not None:
+                owned.add(image_id)
+        return owned, referenced
 
     def _describe_image(
         self,
@@ -522,14 +526,14 @@ class DockerService:
 
     def list_images(self, refs: list[ProjectRef] | None = None) -> list[dict[str, Any]]:
         refs = refs if refs is not None else collect_project_refs()
-        client = self._require_client()
-        owned_ids = self._owned_image_ids(refs)
-        referenced = self._all_referenced_image_ids()
-        out: list[dict[str, Any]] = []
-        for image in client.images.list(all=True):
-            item = self._describe_image(image, refs, owned_ids, referenced)
-            if item is not None:
-                out.append(item)
+        with self._lock:
+            client = self._require_client()
+            owned_ids, referenced = self._owned_and_referenced_image_ids(refs)
+            out: list[dict[str, Any]] = []
+            for image in client.images.list(all=True):
+                item = self._describe_image(image, refs, owned_ids, referenced)
+                if item is not None:
+                    out.append(item)
         out.sort(key=lambda row: (row.get("kind") or "", row.get("label") or "", row.get("id") or ""))
         return out
 
@@ -547,15 +551,15 @@ class DockerService:
 
     def owned_image(self, image_id: str, refs: list[ProjectRef] | None = None) -> dict[str, Any] | None:
         refs = refs if refs is not None else collect_project_refs()
-        try:
-            image = self.client.images.get(image_id)
-        except NotFound:
-            return None
-        except DockerException:
-            return None
-        owned_ids = self._owned_image_ids(refs)
-        referenced = self._all_referenced_image_ids()
-        return self._describe_image(image, refs, owned_ids, referenced)
+        with self._lock:
+            try:
+                image = self.client.images.get(image_id)
+            except NotFound:
+                return None
+            except DockerException:
+                return None
+            owned_ids, referenced = self._owned_and_referenced_image_ids(refs)
+            return self._describe_image(image, refs, owned_ids, referenced)
 
     def remove_images(self, image_ids: list[str], refs: list[ProjectRef] | None = None) -> list[dict[str, Any]]:
         refs = refs if refs is not None else collect_project_refs()

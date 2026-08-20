@@ -19,7 +19,7 @@ export default function AppLayout() {
   useEffect(
     () =>
       startVisibilityPoll(() => {
-        api
+        return api
           .verifierConsentCount()
           .then((r) => setConsentCount(Number(r.count) || 0))
           .catch(() => {})

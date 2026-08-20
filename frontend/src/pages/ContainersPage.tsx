@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, Square, Trash2 } from 'lucide-react'
 import {
@@ -42,6 +42,17 @@ function summarizeBatchErrors(
   return `部分失败：${failed.map((r) => `${r.id.slice(0, slice)} (${r.error})`).join('；')}`
 }
 
+function usageFromImages(images: DockerImage[]): DockerImageUsage {
+  const total_bytes = images.reduce((sum, img) => sum + (img.size_bytes || 0), 0)
+  return {
+    image_count: images.length,
+    dangling_count: images.filter((img) => img.dangling).length,
+    total_bytes,
+    total_mb: Math.round((total_bytes / (1024 * 1024)) * 100) / 100,
+    total_gb: Math.round((total_bytes / 1024 ** 3) * 100) / 100,
+  }
+}
+
 export default function ContainersPage() {
   const [containers, setContainers] = useState<DockerContainer[]>([])
   const [images, setImages] = useState<DockerImage[]>([])
@@ -52,34 +63,46 @@ export default function ContainersPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pruneResult, setPruneResult] = useState<DockerImagePruneResult | null>(null)
+  const refreshGen = useRef(0)
 
-  const refresh = async () => {
-    const [list, imageList, imageUsage] = await Promise.all([
-      api.listContainers(runningOnly),
-      api.listDockerImages(),
-      api.getDockerImageUsage(),
-    ])
-    setContainers(list)
-    setImages(imageList)
-    setUsage(imageUsage)
-    setSelectedContainers((prev) => {
-      const ids = new Set(list.map((c) => c.id))
-      return new Set([...prev].filter((id) => ids.has(id)))
-    })
-    setSelectedImages((prev) => {
-      const ids = new Set(imageList.map((img) => img.id))
-      return new Set([...prev].filter((id) => ids.has(id)))
-    })
-    setError(null)
-  }
+  const refresh = useCallback(async () => {
+    const gen = ++refreshGen.current
+    try {
+      const list = await api.listContainers(runningOnly)
+      if (gen !== refreshGen.current) return
+      setContainers(list)
+      setSelectedContainers((prev) => {
+        const ids = new Set(list.map((c) => c.id))
+        return new Set([...prev].filter((id) => ids.has(id)))
+      })
+    } catch (err) {
+      if (gen !== refreshGen.current) return
+      setError(String(err))
+      return
+    }
+    try {
+      const imageList = await api.listDockerImages()
+      if (gen !== refreshGen.current) return
+      setImages(imageList)
+      setUsage(usageFromImages(imageList))
+      setSelectedImages((prev) => {
+        const ids = new Set(imageList.map((img) => img.id))
+        return new Set([...prev].filter((id) => ids.has(id)))
+      })
+      setError(null)
+    } catch (err) {
+      if (gen !== refreshGen.current) return
+      setError(String(err))
+    }
+  }, [runningOnly])
 
-  useEffect(
-    () =>
-      startVisibilityPoll(() => {
-        refresh().catch((e) => setError(String(e)))
-      }, 5000),
-    [runningOnly],
-  )
+  useEffect(() => {
+    const stop = startVisibilityPoll(() => refresh(), 5000)
+    return () => {
+      refreshGen.current += 1
+      stop()
+    }
+  }, [refresh])
 
   const runningCount = useMemo(
     () => containers.filter((c) => c.status === 'running').length,
