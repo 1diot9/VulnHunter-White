@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from app.services.asset_proof import (
+    _body_markers,
     collect_lab_fingerprints,
     collect_source_fingerprints,
     ensure_project_fingerprints,
     fofa_icon_hash,
+    fofa_rewrite_candidates,
+    fofa_search_variants,
     load_project_fingerprints,
     maybe_enrich_asset_proof,
     murmurhash3_32,
@@ -47,9 +50,22 @@ def test_suggest_queries_skips_generic_title():
     fofa, x = suggest_queries(title="登录", body_markers=["Copyright 2020 XX科技"], icon_hash="-123")
     assert "登录" not in fofa
     assert 'body="Copyright 2020 XX科技"' in fofa
-    assert 'icon_hash="-123"' in fofa
     assert "||" not in fofa
     assert 'body="Copyright 2020 XX科技"' in x
+
+
+def test_suggest_queries_keeps_title_and_body_without_hash():
+    fofa, x = suggest_queries(
+        title="XXOA办公系统",
+        body_markers=["xxoa-login-wrap"],
+        static_paths=["/static/xxoa-app.css"],
+        icon_hash="-123",
+    )
+    assert 'title="XXOA办公系统"' in fofa
+    assert 'body="xxoa-login-wrap"' in fofa
+    assert "icon_hash" not in fofa
+    assert fofa.count("&&") == 1
+    assert 'body="xxoa-login-wrap"' in x
 
 
 def test_collect_lab_fingerprints_from_env(tmp_env, project, monkeypatch):
@@ -76,10 +92,14 @@ def test_collect_lab_fingerprints_from_env(tmp_env, project, monkeypatch):
     assert out["title"] == "XXOA办公系统"
     assert out["header"] == "XXOA-Gateway"
     assert out["icon_hash"] == fofa_icon_hash(favicon)
+    assert "xxoa-app.css" in " ".join(out.get("static_paths") or []) or "Copyright" in " ".join(
+        out.get("body_markers") or []
+    )
     assert 'title="XXOA办公系统"' in out["fofa"]
-    assert "icon_hash=" in out["fofa"]
+    assert "body=" in out["fofa"]
+    assert "icon_hash=" not in out["fofa"]
     assert "||" not in out["fofa"]
-    assert 'title="XXOA办公系统"' in out["x"]
+    assert 'title="XXOA办公系统"' in out["x"] or "body=" in out["x"]
 
 
 def test_collect_lab_fingerprints_without_target(tmp_env, project):
@@ -122,8 +142,9 @@ def test_collect_tool_apply_writes_report(tmp_env, project, monkeypatch):
     assert out["ok"] is True, out
     assert out["applied"] is True
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
-    assert 'title="DemoCMS"' in report
-    assert "待根据应用标题" not in report.split("## 互联网资产证明", 1)[1].split("## 漏洞技术细节", 1)[0]
+    section = report.split("## 互联网资产证明", 1)[1].split("## 漏洞技术细节", 1)[0]
+    assert "title=" in section or "body=" in section
+    assert "待根据应用标题" not in section
 
 
 def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
@@ -164,9 +185,9 @@ def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
     )
     assert conf["ok"] is True
     assert conf["asset_proof_updated"] is True
-    assert 'title="Acme OA"' in conf["fofa_fingerprint"]
+    assert "title=" in conf["fofa_fingerprint"] or "body=" in conf["fofa_fingerprint"]
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
-    assert 'title="Acme OA"' in report
+    assert "title=" in report or "body=" in report
     assert "## 审核标注" in report
     assert report.index("## 互联网资产证明") < report.index("## 审核标注")
 
@@ -288,7 +309,8 @@ def test_collect_source_fingerprints_from_templates(tmp_env, project):
     assert out["title"] == "XXOA办公系统"
     assert out["icon_hash"] == fofa_icon_hash(favicon)
     assert 'title="XXOA办公系统"' in out["fofa"]
-    assert "icon_hash=" in out["fofa"]
+    assert "body=" in out["fofa"]
+    assert "icon_hash=" not in out["fofa"]
 
 
 def test_ensure_project_fingerprints_runs_once(tmp_env, project, monkeypatch):
@@ -316,7 +338,7 @@ def test_ensure_project_fingerprints_runs_once(tmp_env, project, monkeypatch):
     second = ensure_project_fingerprints(project)
     assert first["collected"] is True
     assert first["fofa"] == second["fofa"]
-    assert 'title="DemoCMS"' in first["fofa"]
+    assert 'title="DemoCMS"' in first["fofa"] or "body=" in first["fofa"]
     assert hits["n"] == 1
     cached = load_project_fingerprints(project)
     assert cached is not None
@@ -372,3 +394,68 @@ def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
     report = (vuln_dir(project, second["vuln_id"]) / "report.md").read_text(encoding="utf-8")
     assert 'title="SharedApp"' in report
     assert "待根据应用标题" not in report.split("## 互联网资产证明", 1)[1].split("##", 1)[0]
+
+
+def test_body_markers_extract_default_page_html_ids():
+    html = (
+        '<html><head><title>XXOA</title></head>'
+        '<body><div id="xxoa-login-wrap" class="container login-form">'
+        '<!-- webpack bundle --><script src="/static/xxoa-login.js"></script>'
+        "</div></body></html>"
+    )
+    markers = _body_markers(html, "XXOA")
+    assert "xxoa-login-wrap" in markers
+    assert "container" not in markers
+    assert "login-form" not in markers
+    assert not any("webpack" in m.lower() for m in markers)
+
+
+def test_collect_source_prefers_login_page_over_widget(tmp_env, project):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    (src / "templates").mkdir(parents=True, exist_ok=True)
+    (src / "templates" / "login.html").write_text(
+        '<html><body><div id="xxoa-login-wrap">'
+        '<script src="/static/xxoa-login.js"></script></div></body></html>',
+        encoding="utf-8",
+    )
+    (src / "components").mkdir(parents=True, exist_ok=True)
+    (src / "components" / "Widget.vue").write_text(
+        '<template><div id="random-widget-xyz">inner</div></template>',
+        encoding="utf-8",
+    )
+    out = collect_source_fingerprints(project)
+    assert out["ok"] is True, out
+    assert "xxoa-login-wrap" in out["fofa"] or "xxoa-login.js" in out["fofa"]
+    assert "random-widget-xyz" not in out["fofa"]
+    assert "body=" in out["fofa"]
+
+
+def test_fofa_search_variants_are_title_and_body():
+    variants = fofa_search_variants(
+        {
+            "title": "XXOA办公系统",
+            "body_markers": ["xxoa-login-wrap"],
+            "static_paths": ["/static/xxoa-app.css"],
+            "fofa": 'title="XXOA办公系统" && body="xxoa-login-wrap"',
+        }
+    )
+    assert variants[0] == 'title="XXOA办公系统"'
+    assert variants[1] == 'body="xxoa-login-wrap"'
+
+
+def test_fofa_rewrite_switches_family_instead_of_deepening():
+    payload = {
+        "title": "XXOA办公系统",
+        "body_markers": ["xxoa-login-wrap"],
+        "static_paths": ["/static/xxoa-app.css"],
+        "fofa": 'title="XXOA办公系统" && body="xxoa-login-wrap"',
+    }
+    after_title = fofa_rewrite_candidates(payload, attempted=['title="XXOA办公系统"'])
+    assert after_title == ['body="xxoa-login-wrap"']
+    after_both = fofa_rewrite_candidates(
+        payload,
+        attempted=['title="XXOA办公系统"', 'body="xxoa-login-wrap"'],
+    )
+    assert after_both == []

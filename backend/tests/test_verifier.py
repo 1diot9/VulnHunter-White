@@ -821,6 +821,9 @@ def test_fofa_search_empty_allows_rewrite(tmp_env, project, monkeypatch):
     assert first["ok"] is True
     assert first["returned"] == 0
     assert first.get("cached") is False
+    assert "body" in (first.get("guidance") or "")
+    assert "title/app" in (first.get("guidance") or "") or "另一类" in (first.get("guidance") or "")
+    assert "同一方向" in (first.get("guidance") or "")
     cache = load_project_fofa_cache(project)
     assert cache is not None
     assert not cache.get("sample")

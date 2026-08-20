@@ -109,3 +109,28 @@ def test_web_search_missing_query():
     out = fs.web_search_results("  ")
     assert out["ok"] is False
     assert "query" in (out.get("error") or "")
+
+
+def test_pick_clauses_keeps_title_and_body():
+    picked = fs._pick_clauses(
+        [
+            'title="XXOA"',
+            'app="XXOA"',
+            'product="XXOA"',
+            'body="xxoa-login-wrap"',
+            'icon_hash="-123"',
+        ]
+    )
+    assert picked == ['title="XXOA"', 'body="xxoa-login-wrap"']
+
+
+def test_pick_clauses_skips_duplicate_app_when_no_body():
+    picked = fs._pick_clauses(
+        [
+            'title="XXOA办公系统"',
+            'app="XXOA办公系统"',
+            'icon_hash="-123"',
+        ]
+    )
+    assert picked[0] == 'title="XXOA办公系统"'
+    assert 'app="XXOA办公系统"' not in picked

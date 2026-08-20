@@ -3950,7 +3950,7 @@ def _run_verifier_once(project_id: int) -> None:
                 phase="verifier",
             )
             return
-        from .asset_proof import ensure_project_fingerprints, load_project_fingerprints
+        from .asset_proof import ensure_project_fingerprints, fofa_search_variants, load_project_fingerprints
         from .report import is_placeholder_query
 
         ensure_project_fingerprints(project_id)
@@ -3958,14 +3958,21 @@ def _run_verifier_once(project_id: int) -> None:
         fofa_cache = load_project_fofa_cache(project_id)
         report_query = extract_fofa_query(report_md)
         cached_query = str((fofa_cache or {}).get("query") or "").strip()
+        search_variants = fofa_search_variants(app_fp)
         if fofa_cache and fofa_cache.get("sample") and cached_query:
             fofa_query = cached_query
+        elif search_variants:
+            fofa_query = search_variants[0]
         elif not is_placeholder_query(app_fp.get("fofa")):
             fofa_query = str(app_fp.get("fofa") or "").strip()
         elif not is_placeholder_query(report_query):
             fofa_query = report_query
         else:
             fofa_query = "（项目指纹与报告均无可用 FOFA 语句：Read docs/app-fingerprints.json 与报告后改写再搜）"
+        if search_variants:
+            fofa_alts = "；".join(f"`{item}`" for item in search_variants)
+        else:
+            fofa_alts = "（无独立备选；0 条时换另一类语法，title/app 与 body 各试一条）"
         payload = {
             "title": vuln.title,
             "type": vuln.vuln_type,
@@ -3991,6 +3998,7 @@ def _run_verifier_once(project_id: int) -> None:
             vuln_id=vuln_id,
             payload=json_dumps(payload),
             fofa_query=fofa_query,
+            fofa_alts=fofa_alts,
             fofa_shared=format_shared_fofa_hint(fofa_cache),
             **_audit_mode_vars(project_id),
         )

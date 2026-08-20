@@ -531,6 +531,7 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "FofaSearch" in initial
     assert "FinishVerifier" in initial
     assert "${fofa_query}" in initial
+    assert "${fofa_alts}" in initial
     assert "${fofa_shared}" in initial
     assert "poc=" in initial
     assert "response=" in initial
@@ -546,6 +547,8 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "AskUser" in text
     assert "AskUser" in initial
     assert "app-fingerprints" in text or "项目级" in text or "项目应用指纹" in text
+    assert "body=" in text or "body=\"" in text
+    assert "各试一条" in text or "另一类" in text
 
 
 def test_old_vuln_prompt_persist_is_not_completion():

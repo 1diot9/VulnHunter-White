@@ -7,6 +7,7 @@ from typing import Any
 from ..models import SessionLocal, Vuln
 from ..services.fofa import FOFA_DEFAULT_SIZE, FOFA_MAX_PAGES, FOFA_MAX_TARGETS, search as fofa_search
 from ..services.paths import vuln_dir
+from ..services.asset_proof import format_fofa_rewrite_hint, load_project_fingerprints
 from ..services.report import upsert_report_section
 from ..services.verifier import (
     FOFA_MAX_ATTEMPTS,
@@ -197,8 +198,8 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if query and query in attempted_queries:
         left = max(0, FOFA_MAX_ATTEMPTS - int((cache or {}).get("attempts") or 0))
         return call_fail(
-            "该 FOFA 语法已经搜过且无命中。请改写（去掉 icon_hash/漏洞路径，改用产品名/title/稳定静态路径）后再搜；"
-            f"还剩 {left} 次。圈不到则 FinishVerifier(verdict=no_targets)。"
+            "该 FOFA 语法已经搜过且无命中。"
+            f"{format_fofa_rewrite_hint(load_project_fingerprints(ctx.project_id), attempted=attempted_queries, left=left)}"
         )
     out = fofa_search(query, size=FOFA_DEFAULT_SIZE, page=1)
     if not out.get("ok"):
@@ -246,7 +247,8 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
         left = max(0, FOFA_MAX_ATTEMPTS - int(saved.get("attempts") or 0))
         extra = (
             "本次 0 条命中，未冻结共享缓存。"
-            f"请用项目应用指纹改写语法再 FofaSearch（还剩 {left} 次：去掉过窄的 icon_hash/路径，改用 title/app/product）。"
+            f"请改写语法再 FofaSearch。"
+            f"{format_fofa_rewrite_hint(load_project_fingerprints(ctx.project_id), attempted=saved.get('attempt_queries') or attempted_queries, left=left)}"
             "仍无样本则 FinishVerifier(verdict=no_targets)。"
         )
     guidance = str(out.get("guidance") or "").strip()
@@ -438,6 +440,7 @@ def register_verifier_tools() -> None:
                 "只读 FOFA 测绘：用 FOFA 语法圈定同款前台系统，返回命中总量与样本"
                 f"（host/ip/port/title/domain/org）。每批 {FOFA_DEFAULT_SIZE} 条。"
                 "优先用 docs/app-fingerprints.json 的项目共享指纹。"
+                "title/app 与默认页 body 特征各试一条，有命中就停，不要在同一方向反复改写。"
                 f"有命中后写入共享缓存给全部漏洞复用；0 条可改写语法再搜，最多 {FOFA_MAX_ATTEMPTS} 次。"
                 "若本项目已有命中，默认立即返回缓存、不再请求 FOFA。"
                 f"当前这批测完仍不足 {VERIFIER_SUCCESS_MIN} 个成功时，传 expand=true 按同一语法翻页补搜 "
@@ -448,7 +451,7 @@ def register_verifier_tools() -> None:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": 'FOFA 语法，如 title="XX系统" && body="稳定特征"',
+                        "description": 'FOFA 语法。title/app 与 body 特征各试一条，有命中即可',
                     },
                     "size": {
                         "type": "integer",

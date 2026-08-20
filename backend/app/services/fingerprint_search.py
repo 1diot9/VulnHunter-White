@@ -329,19 +329,21 @@ def web_search_results(query: str) -> dict[str, Any]:
 
 
 def _pick_clauses(clauses: list[str]) -> list[str]:
-    """Keep 2-3 stable fields; no OR. Prefer title/app/product + icon_hash + body."""
+    """Keep one title-family clause and one body clause; do not stack title&&app&&product."""
     by_field: dict[str, str] = {}
     for clause in clauses:
         field = clause.split("=", 1)[0].strip().lower()
         if field not in by_field:
             by_field[field] = clause
     ordered: list[str] = []
-    for field in ("title", "app", "product", "icon_hash", "body", "header", "fid"):
-        if field in by_field and by_field[field] not in ordered:
-            ordered.append(by_field[field])
-        if len(ordered) >= 3:
-            break
-    return ordered
+    title_clause = by_field.get("title") or by_field.get("app") or by_field.get("product")
+    if title_clause:
+        ordered.append(title_clause)
+    if by_field.get("body") and by_field["body"] not in ordered:
+        ordered.append(by_field["body"])
+    elif by_field.get("icon_hash") and by_field["icon_hash"] not in ordered:
+        ordered.append(by_field["icon_hash"])
+    return ordered[:2]
 
 
 def _join_query(parts: list[str]) -> str:
@@ -374,7 +376,7 @@ def search_app_fingerprints(query: str) -> dict[str, Any]:
         return {"ok": False, "error": "缺少可用的产品/厂商关键词", "query": product}
     searches = [
         f'{product} FOFA',
-        f'{product} icon_hash',
+        f'{product} body= 指纹',
         f'{product} title= 指纹',
     ]
     hits: list[dict[str, str]] = []
@@ -408,7 +410,8 @@ def search_app_fingerprints(query: str) -> dict[str, Any]:
         "note": "；".join(n for n in notes if n),
         "guidance": (
             "用检索到的稳定测绘语句补全报告「互联网资产证明」。"
-            "不要把漏洞路径当唯一指纹，不要编造 hash；语法禁止「或」/||。"
+            "title/app 与默认页 HTML 的 body 特征各是一条可用检索，有命中即可；"
+            "不要叠 title&&app&&icon_hash；不要把漏洞路径当唯一指纹，不要编造 hash；语法禁止「或」/||。"
             "可将 fofa / x 传入 ConfirmVuln 或 apply=true 写回报告。"
         ),
     }

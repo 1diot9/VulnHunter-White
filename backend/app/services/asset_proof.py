@@ -50,6 +50,37 @@ _STATIC_PATH_RE = re.compile(
     r"""(?:src|href)\s*=\s*['"]([^'"]+\.(?:css|js)(?:\?[^'"]*)?)['"]""",
     re.IGNORECASE,
 )
+_ID_ATTR_RE = re.compile(r"""\bid\s*=\s*['"]([^'"]{4,64})['"]""", re.IGNORECASE)
+_CLASS_ATTR_RE = re.compile(r"""\bclass\s*=\s*['"]([^'"]{4,80})['"]""", re.IGNORECASE)
+_DATA_APP_RE = re.compile(
+    r"""\bdata-(?:app|product|system|name)\s*=\s*['"]([^'"]{3,60})['"]""",
+    re.IGNORECASE,
+)
+_HTML_COMMENT_RE = re.compile(r"<!--(?!-?>)(.{4,80}?)-->", re.DOTALL)
+_POWERED_RE = re.compile(
+    r"(?:powered\s*by|技术支持|技术提供|由.{0,12}提供技术支持)\s*[:：]?\s*([^\n<]{2,60})",
+    re.IGNORECASE,
+)
+_H1_RE = re.compile(r"<h[12]\b[^>]*>\s*([^<]{4,60})\s*</h[12]>", re.IGNORECASE)
+_TEMPLATE_NOISE_RE = re.compile(r"\$\{|\{\{|<%|%>|@\{")
+_SKIP_COMMENT_RE = re.compile(
+    r"\[if\b|endif|webpack|vite|sourceMappingURL|\bbegin\b|\bend\b|\btodo\b",
+    re.IGNORECASE,
+)
+_DEFAULT_PAGE_STEMS = frozenset(
+    {
+        "index",
+        "login",
+        "signin",
+        "sign-in",
+        "sign_in",
+        "default",
+        "home",
+        "main",
+        "welcome",
+        "portal",
+    }
+)
 _GENERIC_TITLES = frozenset(
     {
         "login",
@@ -97,6 +128,117 @@ _GENERIC_ASSETS = (
     "layui",
     "font-awesome",
     "normalize",
+)
+_GENERIC_STATIC_NAMES = frozenset(
+    {
+        "main.css",
+        "main.js",
+        "app.css",
+        "app.js",
+        "index.css",
+        "index.js",
+        "style.css",
+        "styles.css",
+        "vendor.js",
+        "vendor.css",
+        "chunk.js",
+        "bundle.js",
+        "polyfill.js",
+        "runtime.js",
+        "common.js",
+        "common.css",
+    }
+)
+_GENERIC_DOM_TOKENS = frozenset(
+    {
+        "app",
+        "root",
+        "container",
+        "wrapper",
+        "header",
+        "footer",
+        "navbar",
+        "nav",
+        "sidebar",
+        "content",
+        "main",
+        "login",
+        "password",
+        "username",
+        "user",
+        "form",
+        "button",
+        "submit",
+        "logo",
+        "banner",
+        "modal",
+        "dialog",
+        "panel",
+        "card",
+        "page",
+        "body",
+        "html",
+        "clearfix",
+        "row",
+        "col",
+        "box",
+        "wrap",
+        "inner",
+        "outer",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "active",
+        "hidden",
+        "show",
+        "hide",
+        "open",
+        "close",
+        "login-form",
+        "login-box",
+        "login-container",
+        "form-control",
+        "form-group",
+        "btn-primary",
+        "btn-default",
+        "btn-block",
+    }
+)
+_GENERIC_DOM_PARTS = frozenset(
+    {
+        "btn",
+        "ui",
+        "box",
+        "wrap",
+        "inner",
+        "outer",
+        "col",
+        "row",
+        "el",
+        "ant",
+        "ivu",
+        "layui",
+        "van",
+        "form",
+        "input",
+        "icon",
+        "item",
+        "list",
+        "nav",
+        "bar",
+        "btn",
+        "primary",
+        "default",
+        "success",
+        "danger",
+        "warning",
+        "info",
+        "lg",
+        "sm",
+        "xs",
+        "md",
+    }
 )
 _IMAGE_MAGIC = (
     b"\x00\x00\x01\x00",  # ICO
@@ -289,6 +431,54 @@ def _is_generic_asset(path: str) -> bool:
     return any(token in lowered for token in _GENERIC_ASSETS)
 
 
+def _is_default_page(path: Path) -> bool:
+    return path.stem.lower() in _DEFAULT_PAGE_STEMS
+
+
+def _is_generic_static_path(path: str) -> bool:
+    token = (path or "").split("?", 1)[0]
+    if not token or _is_generic_asset(token):
+        return True
+    name = token.rsplit("/", 1)[-1].lower()
+    return name in _GENERIC_STATIC_NAMES
+
+
+def _is_generic_marker(value: str) -> bool:
+    folded = re.sub(r"\s+", " ", value or "").strip().lower()
+    if len(folded) < 5:
+        return True
+    if folded in _GENERIC_TITLES or folded in _GENERIC_DOM_TOKENS:
+        return True
+    if _TEMPLATE_NOISE_RE.search(value or ""):
+        return True
+    if re.fullmatch(r"(?:copyright|&copy;|©|版权所有)\s*[:：]?\s*\d{2,4}", folded):
+        return True
+    return False
+
+
+def _is_generic_dom_token(token: str) -> bool:
+    raw = (token or "").strip()
+    if _is_generic_marker(raw):
+        return True
+    folded = re.sub(r"[\s_]+", "-", raw).lower()
+    parts = [p for p in folded.split("-") if p]
+    if not parts:
+        return True
+    if all(p in _GENERIC_DOM_TOKENS or p in _GENERIC_DOM_PARTS or p.isdigit() for p in parts):
+        return True
+    return False
+
+
+def _distinctive_class_token(raw: str) -> str:
+    best = ""
+    for token in re.split(r"\s+", (raw or "").strip()):
+        if _is_generic_dom_token(token):
+            continue
+        if len(token) > len(best):
+            best = token
+    return best
+
+
 def _looks_like_image(content: bytes, content_type: str = "") -> bool:
     if not content or len(content) < 16:
         return False
@@ -326,37 +516,65 @@ def _cookie_names(headers: dict[str, str]) -> list[str]:
 
 
 def _body_markers(html: str, title: str) -> list[str]:
+    """Distinctive default-page HTML snippets for FOFA body= search."""
     markers: list[str] = []
-    for match in _COPYRIGHT_RE.finditer(html):
-        value = _clean_text(match.group(0), limit=60)
-        if value and value not in markers:
-            markers.append(value)
-    generator = ""
-    for tag in _GENERATOR_RE.findall(html):
+
+    def add(value: str, *, limit: int = 60) -> None:
+        text = _clean_text(value, limit=limit)
+        if not text or text == title or text in markers or _is_generic_marker(text):
+            return
+        markers.append(text)
+
+    for raw in _ID_ATTR_RE.findall(html or ""):
+        if not _is_generic_dom_token(raw):
+            add(raw)
+        if len(markers) >= 4:
+            return markers[:4]
+    for raw in _CLASS_ATTR_RE.findall(html or ""):
+        token = _distinctive_class_token(raw)
+        if token:
+            add(token)
+        if len(markers) >= 4:
+            return markers[:4]
+    for raw in _DATA_APP_RE.findall(html or ""):
+        add(raw)
+        if len(markers) >= 4:
+            return markers[:4]
+    for raw in _HTML_COMMENT_RE.findall(html or ""):
+        snippet = _clean_text(raw, limit=60)
+        if snippet and not _SKIP_COMMENT_RE.search(snippet):
+            add(snippet)
+        if len(markers) >= 4:
+            return markers[:4]
+    for match in _POWERED_RE.finditer(html or ""):
+        add(match.group(0))
+    for match in _COPYRIGHT_RE.finditer(html or ""):
+        add(match.group(0))
+    for tag in _GENERATOR_RE.findall(html or ""):
         content = _META_CONTENT_RE.search(tag)
         if content:
-            generator = _clean_text(content.group(1), limit=60)
+            add(content.group(1), limit=60)
             break
-    if generator:
-        markers.append(generator)
-    if title and not _is_generic_title(title):
-        snippet = _clean_text(title, limit=40)
-        if snippet and snippet not in markers:
-            markers.append(snippet)
-    return markers[:3]
+    for heading in _H1_RE.findall(html or ""):
+        if heading and not _is_generic_title(heading):
+            add(heading, limit=40)
+            break
+    return markers[:4]
 
 
 def _static_paths(html: str) -> list[str]:
     paths: list[str] = []
+    generic: list[str] = []
     for raw in _STATIC_PATH_RE.findall(html or ""):
         path = raw.split("?", 1)[0]
-        if _is_generic_asset(path):
+        if not path or _is_generic_asset(path):
             continue
-        if path not in paths:
-            paths.append(path)
+        bucket = generic if _is_generic_static_path(path) else paths
+        if path not in bucket:
+            bucket.append(path)
         if len(paths) >= 3:
             break
-    return paths
+    return (paths or generic)[:3]
 
 
 def _icon_urls(base_url: str, html: str) -> list[str]:
@@ -373,14 +591,33 @@ def _icon_urls(base_url: str, html: str) -> list[str]:
     return unique
 
 
-def _join_query(parts: list[str]) -> str:
+def _join_query(parts: list[str], *, limit: int = 2) -> str:
     seen: list[str] = []
     for part in parts:
         if part and part not in seen:
             seen.append(part)
-        if len(seen) >= 3:
+        if len(seen) >= limit:
             break
     return " && ".join(seen)
+
+
+def _best_body_clause(
+    title: str,
+    body_markers: list[str] | None,
+    static_paths: list[str] | None,
+) -> str:
+    for marker in body_markers or []:
+        if marker and marker != title and not _is_generic_marker(marker):
+            return f'body="{_quote(marker)}"'
+    for path in static_paths or []:
+        token = path.split("?")[0]
+        if token and not _is_generic_static_path(token):
+            return f'body="{_quote(token)}"'
+    for path in static_paths or []:
+        token = path.split("?")[0]
+        if token and not _is_generic_asset(token):
+            return f'body="{_quote(token)}"'
+    return ""
 
 
 def suggest_queries(
@@ -391,32 +628,135 @@ def suggest_queries(
     header: str = "",
     icon_hash: str = "",
 ) -> tuple[str, str]:
+    """Build FOFA / X queries. Keep title and body as complementary clauses, max 2."""
+    title_clause = ""
+    quoted_title = ""
+    if title and not _is_generic_title(title):
+        quoted_title = _quote(title)
+        title_clause = f'title="{quoted_title}"'
+    body_clause = _best_body_clause(title, body_markers, static_paths)
     fofa_parts: list[str] = []
     x_parts: list[str] = []
+    if title_clause:
+        fofa_parts.append(title_clause)
+        x_parts.append(title_clause)
+    if body_clause:
+        fofa_parts.append(body_clause)
+        x_parts.append(body_clause)
+    else:
+        if quoted_title:
+            x_parts.append(f'app="{quoted_title}"')
+        if icon_hash:
+            fofa_parts.append(f'icon_hash="{_quote(icon_hash)}"')
+            x_parts.append(f'icon_hash="{_quote(icon_hash)}"')
+        if header:
+            fofa_parts.append(f'header="{_quote(header)}"')
+    return _join_query(fofa_parts, limit=2), _join_query(x_parts, limit=2)
+
+
+_TITLE_FAMILY_FIELDS = frozenset({"title", "app", "product", "icon_hash"})
+
+
+def fofa_query_family(query: str) -> str:
+    """Classify a FOFA query as title-family, body-family, mixed, or other."""
+    fields = {key.lower() for key, _ in _CLAUSE_FIELD_RE.findall(query or "")}
+    has_body = "body" in fields
+    has_title = bool(fields & _TITLE_FAMILY_FIELDS)
+    if has_body and has_title:
+        return "mixed"
+    if has_body:
+        return "body"
+    if has_title:
+        return "title"
+    return "other"
+
+
+def _normalize_query_text(query: str) -> str:
+    return re.sub(r"\s+", " ", query or "").strip()
+
+
+def fofa_search_variants(payload: dict[str, Any] | None) -> list[str]:
+    """One title/app query and one body query. Search them separately, do not AND together."""
+    data = payload or {}
+    parsed = _clauses_to_parts(str(data.get("fofa") or ""))
+    title = str(data.get("title") or parsed.get("title") or "").strip()
+    markers = list(data.get("body_markers") or []) + list(parsed.get("body_markers") or [])
+    paths = list(data.get("static_paths") or []) + list(parsed.get("static_paths") or [])
+    icon_hash = str(data.get("icon_hash") or parsed.get("icon_hash") or "").strip()
+    stored = [str(item or "").strip() for item in (data.get("fofa_queries") or []) if str(item or "").strip()]
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(query: str) -> None:
+        text = _normalize_query_text(query)
+        key = text.lower()
+        if not text or key in seen or fofa_query_family(text) == "mixed":
+            return
+        seen.add(key)
+        out.append(text)
+
+    for item in stored:
+        add(item)
     if title and not _is_generic_title(title):
-        quoted = _quote(title)
-        fofa_parts.append(f'title="{quoted}"')
-        x_parts.append(f'title="{quoted}"')
-        x_parts.append(f'app="{quoted}"')
-    if icon_hash:
-        fofa_parts.append(f'icon_hash="{_quote(icon_hash)}"')
-        x_parts.append(f'icon_hash="{_quote(icon_hash)}"')
-    for marker in body_markers or []:
-        if marker and marker != title:
-            quoted = _quote(marker)
-            fofa_parts.append(f'body="{quoted}"')
-            x_parts.append(f'body="{quoted}"')
-            break
-    for path in static_paths or []:
-        token = path.split("?")[0]
-        if token:
-            quoted = _quote(token)
-            fofa_parts.append(f'body="{quoted}"')
-            x_parts.append(f'body="{quoted}"')
-            break
-    if header:
-        fofa_parts.append(f'header="{_quote(header)}"')
-    return _join_query(fofa_parts), _join_query(x_parts)
+        add(f'title="{_quote(title)}"')
+    body_clause = _best_body_clause(title, markers, paths)
+    if body_clause:
+        add(body_clause)
+    elif icon_hash:
+        add(f'icon_hash="{_quote(icon_hash)}"')
+    return out[:2]
+
+
+def fofa_rewrite_candidates(
+    payload: dict[str, Any] | None,
+    *,
+    attempted: list[str] | None = None,
+) -> list[str]:
+    """Switch to the other query family after a miss; do not deepen the same direction."""
+    tried_raw = [_normalize_query_text(item) for item in (attempted or []) if item]
+    tried_keys = {item.lower() for item in tried_raw}
+    tried_families = {
+        fam
+        for fam in (fofa_query_family(item) for item in tried_raw)
+        if fam in {"title", "body"}
+    }
+    last_family = fofa_query_family(tried_raw[-1]) if tried_raw else ""
+    variants = fofa_search_variants(payload)
+    preferred: list[str] = []
+    fallback: list[str] = []
+    for query in variants:
+        family = fofa_query_family(query)
+        if query.lower() in tried_keys or family in tried_families:
+            continue
+        if last_family in {"title", "mixed"} and family == "body":
+            preferred.append(query)
+        elif last_family == "body" and family == "title":
+            preferred.append(query)
+        else:
+            fallback.append(query)
+    return (preferred or fallback)[:1]
+
+
+def format_fofa_rewrite_hint(
+    payload: dict[str, Any] | None = None,
+    *,
+    attempted: list[str] | None = None,
+    left: int | None = None,
+) -> str:
+    parts = [
+        "换另一类语法再试：title/app 与默认页 body 特征各一条即可，有命中就停；"
+        "不要在同一方向反复改写。目标是圈到同款资产，不坚持某种写法。禁止 ||。"
+    ]
+    if left is not None:
+        parts.append(f"还剩 {int(left)} 次。")
+    cands = fofa_rewrite_candidates(payload, attempted=attempted)
+    if cands:
+        parts.append("下一试：" + cands[0])
+    elif fofa_search_variants(payload):
+        parts.append("两类都已试过仍无样本，FinishVerifier(verdict=no_targets)。")
+    else:
+        parts.append("没有备选语句时改一条更宽的单字段再试；仍无则 no_targets。")
+    return "".join(parts)
 
 
 def _fingerprint_lock(project_id: int) -> threading.Lock:
@@ -448,9 +788,21 @@ def load_project_fingerprints(project_id: int) -> dict[str, Any] | None:
 def save_project_fingerprints(project_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     fofa = " ".join(str(payload.get("fofa") or "").split()).strip()
     x_query = " ".join(str(payload.get("x") or "").split()).strip()
+    queries = [str(item or "").strip() for item in (payload.get("fofa_queries") or []) if str(item or "").strip()]
+    if not queries:
+        queries = fofa_search_variants(
+            {
+                "fofa": fofa,
+                "title": payload.get("title"),
+                "icon_hash": payload.get("icon_hash"),
+                "body_markers": payload.get("body_markers"),
+                "static_paths": payload.get("static_paths"),
+            }
+        )
     data = {
         "fofa": fofa,
         "x": x_query,
+        "fofa_queries": queries[:2],
         "origin": str(payload.get("origin") or "").strip(),
         "product": str(payload.get("product") or "").strip(),
         "title": str(payload.get("title") or "").strip(),
@@ -593,14 +945,17 @@ def _merge_fingerprint_payloads(*items: dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_source_fingerprints(project_id: int) -> dict[str, Any]:
-    """Extract title / copyright / static paths / repo favicon hash from src/ (no HTTP)."""
+    """Extract title / default-page HTML snippets / static paths / repo favicon from src/ (no HTTP)."""
     root = src_dir(project_id)
-    titles: list[str] = []
-    markers: list[str] = []
-    static_paths: list[str] = []
+    default_titles: list[str] = []
+    other_titles: list[str] = []
+    default_markers: list[str] = []
+    other_markers: list[str] = []
+    default_paths: list[str] = []
+    other_paths: list[str] = []
     icon_hash = ""
     icon_rel = ""
-    html_seen = 0
+    html_files: list[Path] = []
     if root.is_dir():
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [name for name in dirnames if name not in IGNORE_DIR_NAMES]
@@ -619,26 +974,35 @@ def collect_source_fingerprints(project_id: int) -> dict[str, Any]:
                             icon_rel = str(full.relative_to(root)).replace("\\", "/")
                         except ValueError:
                             icon_rel = name
-                if suffix not in _HTML_SUFFIXES:
-                    continue
-                html_seen += 1
-                if html_seen > _MAX_SOURCE_FILES:
-                    continue
-                try:
-                    raw = full.read_bytes()[:_MAX_SOURCE_BYTES]
-                except OSError:
-                    continue
-                html = _decode_html(raw)
-                match = _TITLE_RE.search(html)
-                title = _clean_text(match.group(1) if match else "", limit=80)
-                if title and not _is_generic_title(title):
-                    titles.append(title)
-                for marker in _body_markers(html, title):
-                    if marker not in markers:
-                        markers.append(marker)
-                for path in _static_paths(html):
-                    if path not in static_paths:
-                        static_paths.append(path)
+                if suffix in _HTML_SUFFIXES:
+                    html_files.append(full)
+    html_files.sort(key=lambda p: (0 if _is_default_page(p) else 1, str(p).lower()))
+    html_seen = 0
+    for full in html_files:
+        html_seen += 1
+        if html_seen > _MAX_SOURCE_FILES:
+            break
+        try:
+            raw = full.read_bytes()[:_MAX_SOURCE_BYTES]
+        except OSError:
+            continue
+        html = _decode_html(raw)
+        match = _TITLE_RE.search(html)
+        page_title = _clean_text(match.group(1) if match else "", limit=80)
+        default = _is_default_page(full)
+        if page_title and not _is_generic_title(page_title):
+            (default_titles if default else other_titles).append(page_title)
+        marker_dest = default_markers if default else other_markers
+        path_dest = default_paths if default else other_paths
+        for marker in _body_markers(html, page_title):
+            if marker not in marker_dest:
+                marker_dest.append(marker)
+        for path in _static_paths(html):
+            if path not in path_dest:
+                path_dest.append(path)
+    titles = default_titles or other_titles
+    markers = default_markers or other_markers
+    static_paths = default_paths or other_paths
     title = ""
     if titles:
         counted = Counter(titles)
@@ -659,7 +1023,7 @@ def collect_source_fingerprints(project_id: int) -> dict[str, Any]:
         "static_paths": static_paths[:4],
         "fofa": fofa,
         "x": x_query,
-        "files_scanned": html_seen,
+        "files_scanned": min(html_seen, _MAX_SOURCE_FILES),
         "guidance": "源码指纹已采集；写入项目共享 docs/app-fingerprints.json 后，各漏洞报告直接复用。",
     }
 
@@ -804,6 +1168,7 @@ def collect_lab_fingerprints(
         "x": x_query,
         "guidance": (
             "已采集运行环境指纹。这是项目级应用指纹，写入 docs/app-fingerprints.json 后所有漏洞复用；"
+            "title/app 与默认页 body 特征是互补检索，有命中即可；不要叠 title&&app&&icon_hash。"
             "不要把漏洞路径、PoC 参数或一次性业务数据当作唯一指纹。"
         ),
     }

@@ -148,7 +148,7 @@ def search(
             "ok": False,
             "error": "query 不能为空",
             "error_class": "call",
-            "guidance": '传 FOFA 语法，如 title="XX系统" && body="特征"。',
+            "guidance": '传 FOFA 语法。title/app 与 body="页面特征" 各试一条，有命中即可。',
         }
     api_key = (key if key is not None else resolve_fofa_key()).strip()
     if not api_key:

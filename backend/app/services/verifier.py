@@ -497,7 +497,8 @@ def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
     left = max(0, FOFA_MAX_ATTEMPTS - attempts)
     return (
         "本项目尚无共享 FOFA 命中。请用项目应用指纹（docs/app-fingerprints.json / 报告内语句）FofaSearch；"
-        f"0 条或占位语句时可改写语法再搜，最多共 {FOFA_MAX_ATTEMPTS} 次（还剩 {left} 次）。"
+        f"0 条或占位语句时可改写语法再搜（title/app 与默认页 body 特征各试一条，有命中就停，不要在同一方向反复改），"
+        f"最多共 {FOFA_MAX_ATTEMPTS} 次（还剩 {left} 次）。"
         "有样本后写入 docs/fofa-targets.json，后续漏洞直接复用。"
         f"首批默认 {FOFA_DEFAULT_SIZE} 个，凑满 {VERIFIER_SUCCESS_MIN} 个成功即结束；"
         f"不足则保留成功的，FofaSearch(expand=true) 再搜下一轮"
