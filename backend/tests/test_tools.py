@@ -249,6 +249,34 @@ def test_submit_vuln_rejects_hardcoded_http_poc(tmp_env, project):
     )
     assert out["ok"] is False
     assert "-u/--url" in out["error"]
+    assert "--proxy" in out["error"]
+
+
+def test_submit_vuln_rejects_http_poc_without_proxy(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "RCE",
+            "vuln_type": "rce",
+            "cwe": "CWE-78",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> exec",
+            "auth_premise": "未授权",
+            "http_request": "GET /x HTTP/1.1\nHost: x\n",
+            "poc_code": (
+                "import argparse, urllib.request\n"
+                "p=argparse.ArgumentParser()\n"
+                "p.add_argument('-u','--url',required=True)\n"
+                "print(urllib.request.urlopen(p.parse_args().url).read())\n"
+            ),
+            "expected_evidence": "id",
+            "config_premise": "default",
+        },
+    )
+    assert out["ok"] is False
+    assert "--proxy" in out["error"]
 
 
 def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):

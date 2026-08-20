@@ -152,7 +152,7 @@ Chat Completions 默认直连；需要时代理走设置页「Chat 代理」，�
 
 提交一律走 `SubmitVuln`（按角色写入 `mining_path`）。必填：title、vuln_type、cwe、file_path、line_no、source_sink、auth_premise、config_premise、http_request、poc_code、expected_evidence。`config_premise` 为 `default`（默认配置）或 `specific`（特定配置；不含官方已警示的风险开关）。严重度入库为 `pending`，由 Reviewer 校准。同一根因同一危害只交一份：填 `root_cause_key`（`类型:稳定锚点`）；已有 pending 同根因用 `AppendAffectedLocations`，不要再 Submit。
 
-`poc.py` 必须 CLI 参数化：`-u/--url` 为目标 origin；RCE 另支持 `-c/--cmd` 并打印回显。细则见 `backend/app/prompts/poc.md`。报告对齐 `templates/vuln-report.md`。
+`poc.py` 必须 CLI 参数化：`-u/--url` 为目标 origin；`--proxy` 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；有代理时访问 `127.0.0.1`/`localhost` 也必须强制走代理（覆盖 `proxy_bypass`）。RCE 另支持 `-c/--cmd` 并打印回显。细则见 `backend/app/prompts/poc.md`。报告对齐 `templates/vuln-report.md`。
 
 #### 启发式扫描
 
@@ -241,7 +241,7 @@ Recon 完成后：
 
 审核阶梯：
 
-1. **先跑当前 HTTP PoC**：`python vulns/{id}/poc.py -u <target_url>`，结合 docker exec / 日志**观察**冲击。写死地址只改 CLI 形态；同链 payload 不对由 Reviewer 改，不算分析债务。
+1. **先跑当前 HTTP PoC**：`python vulns/{id}/poc.py -u <target_url>`（需要抓包时加 `--proxy`），结合 docker exec / 日志**观察**冲击。写死地址或缺 `--proxy` 只改 CLI 形态；同链 payload 不对由 Reviewer 改，不算分析债务。
 2. **debug MCP 仅当** PoC 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试时才用。不要一上来挂 MCP，禁止往靶场种 payload 制造利用条件。
 3. 复现成功：`evidence_level=dynamic`（HTTP PoC）或 `mcp`（用了 debug MCP）。
 

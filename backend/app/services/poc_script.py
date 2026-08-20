@@ -8,24 +8,43 @@ from pathlib import Path
 from .paths import vuln_dir
 
 _URL_FLAG_RE = re.compile(r"""(?:--url\b|["']-u["'])""")
+_PROXY_FLAG_RE = re.compile(r"""(?:--proxy\b)""")
+_FORCE_LOCAL_PROXY_RE = re.compile(
+    r"proxy_bypass|should_bypass_proxies|never_bypass|trust_env",
+    re.I,
+)
 _HTTP_HINT_RE = re.compile(
     r"requests\.|httpx\.|urllib|aiohttp|http\.client",
     re.I,
 )
 
 POC_CLI_ERROR = (
-    "poc_code 必须用 argparse 接收目标（-u/--url），不要写死地址；"
+    "poc_code 必须用 argparse 接收目标（-u/--url）和 HTTP 代理（--proxy，空则直连），"
+    "不要写死地址或代理；有 --proxy 时 127.0.0.1/localhost 也必须强制走代理"
+    "（覆盖 urllib.request.proxy_bypass，勿让本机地址旁路）；"
     "RCE 另须支持 -c/--cmd，有回显须打印命令输出。"
 )
 
 
+def _has_url_flag(text: str) -> bool:
+    lower = text.lower()
+    return bool(_URL_FLAG_RE.search(text) or ("add_argument" in lower and "url" in lower))
+
+
+def _has_proxy_flag(text: str) -> bool:
+    return bool(_PROXY_FLAG_RE.search(text))
+
+
 def poc_cli_block_reason(poc_code: str | None) -> str | None:
-    """Reject HTTP-looking PoCs that hardcode the target instead of taking -u/--url."""
+    """Reject HTTP-looking PoCs that omit -u/--url, --proxy, or localhost force-proxy."""
     text = poc_code or ""
     if not text.strip() or not _HTTP_HINT_RE.search(text):
         return None
-    lower = text.lower()
-    if _URL_FLAG_RE.search(text) or ("add_argument" in lower and "url" in lower):
+    if (
+        _has_url_flag(text)
+        and _has_proxy_flag(text)
+        and _FORCE_LOCAL_PROXY_RE.search(text)
+    ):
         return None
     return POC_CLI_ERROR
 

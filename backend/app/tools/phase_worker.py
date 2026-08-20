@@ -432,7 +432,7 @@ summary: {args.get('source_sink', '')[:200]}
 {args.get('source_sink')}
 
 ### 完整 PoC 描述
-可运行脚本见同目录 `poc.py`（`python poc.py -u <目标>`；RCE 加 `-c/--cmd`）。
+可运行脚本见同目录 `poc.py`（`python poc.py -u <目标>`；`--proxy` 设 HTTP 代理，空则直连；RCE 加 `-c/--cmd`）。
 
 ```http
 {args.get('http_request')}
@@ -646,7 +646,9 @@ def register_worker_tools() -> None:
                         "type": "string",
                         "description": (
                             "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
-                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                            "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
+                            "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
+                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
                         ),
                     },
@@ -785,7 +787,9 @@ def register_worker_tools() -> None:
                         "type": "string",
                         "description": (
                             "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
-                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址。"
+                            "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
+                            "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
+                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
                         ),
                     },

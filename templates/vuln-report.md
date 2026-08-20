@@ -56,7 +56,7 @@ summary: "{{summary}}"
 -
 
 ### 完整 PoC 描述
-（文字 + 请求包，请勿只放截图。可运行脚本见同目录 `poc.py`，须支持对任意目标复测：`python poc.py -u <目标>`；RCE 另支持 `-c/--cmd` 并打印回显。）
+（文字 + 请求包，请勿只放截图。可运行脚本见同目录 `poc.py`，须支持对任意目标复测：`python poc.py -u <目标>`；须支持 `--proxy` 设 HTTP 代理（空则直连）；RCE 另支持 `-c/--cmd` 并打印回显。）
 
 ```http
 
@@ -85,6 +85,7 @@ summary: "{{summary}}"
 ### 漏洞触发操作
 ```text
 python poc.py -u http://目标:端口
+python poc.py -u http://目标:端口 --proxy http://127.0.0.1:8080
 python poc.py -u http://目标:端口 -c "id"
 ```
 

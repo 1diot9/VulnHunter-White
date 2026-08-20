@@ -192,6 +192,7 @@ def test_worker_prompt_requires_default_exploitability():
     assert "默认密码" in worker
     assert "弱口令" in worker
     assert "-u/--url" in worker
+    assert "--proxy" in worker
     assert "-c/--cmd" in worker
     assert "回显" in worker
     assert "SSRF 必须标明观察面" in worker
@@ -203,6 +204,9 @@ def test_worker_prompt_requires_default_exploitability():
 def test_poc_prompt_requires_cli_parameters():
     poc = load_prompt("poc.md")
     assert "-u/--url" in poc
+    assert "--proxy" in poc
+    assert "强制走代理" in poc
+    assert "proxy_bypass" in poc
     assert "-c/--cmd" in poc
     assert "argparse" in poc
     assert "命令输出" in poc
@@ -214,10 +218,12 @@ def test_poc_prompt_requires_cli_parameters():
     assert "-c/--cmd" in reviewer
     fast = load_prompt("fast_worker.md")
     assert "-c/--cmd" in fast
+    assert "--proxy" in fast
     bypass = load_prompt("bypass_worker.md")
     assert "-c/--cmd" in bypass
+    assert "--proxy" in bypass
     assert "-c/--cmd" in load_prompt("initial/worker.md")
-    assert "-c/--cmd" in load_prompt("initial/fix.md")
+    assert "CLI 形态" in load_prompt("initial/fix.md")
     assert "poc.py -u" in load_prompt("verifier.md")
 
 
@@ -245,6 +251,7 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "赏金模式" in overlay
     assert "什么算漏洞" in overlay
     assert "-u/--url" in overlay
+    assert "--proxy" in overlay
     assert "-c/--cmd" in overlay
     with SessionLocal() as db:
         p = db.get(Project, project)

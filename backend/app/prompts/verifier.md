@@ -21,7 +21,7 @@
    - 用项目应用指纹（`docs/app-fingerprints.json` 或报告「互联网资产证明」）圈目标，不要重新做指纹识别。
    - 若初始消息已给出共享命中，或 `docs/fofa-targets.json` 已有样本：**不要为换语法再搜**，直接用这些目标。仅当本条把当前这批都测完仍不足 3 个成功、且尚未搜满 5 轮时，才 `FofaSearch(expand=true)`。
    - 尚无命中时 `FofaSearch`。0 条或语句是占位时，改写语法再搜（丢掉 icon_hash/漏洞路径，改用 title/app/product/稳定静态路径），**最多 3 次**；禁止 `||`。有样本后冻结语法。每批 size=10。
-3. 从样本里挑 **不同于本仓库靶场** 的 host，优先 `python vulns/{id}/poc.py -u <该目标>`（RCE 可加 `-c/--cmd`），或按报告用 curl。不要改脚本里的默认利用链，不要扫端口、不要打无关站。
+3. 从样本里挑 **不同于本仓库靶场** 的 host，优先 `python vulns/{id}/poc.py -u <该目标>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），或按报告用 curl。不要改脚本里的默认利用链，不要扫端口、不要打无关站。
 4. **累计 3 个目标出现与报告一致的有害证据** → 立刻 `FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., targets=[...], fofa_query=..., tested_count=..., notes=...)`。
    - `verified_url`：其中一条实际打通的 URL（含协议/端口/路径）。
    - `poc`：对该目标**实际发出**的请求或脚本（把 host 换成该目标后的 curl / HTTP / python，原样粘贴）。

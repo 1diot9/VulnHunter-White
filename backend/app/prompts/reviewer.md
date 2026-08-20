@@ -56,7 +56,7 @@
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
 3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。有服务端机密危害的源码硬编码密钥不是这条否决；前端传输混淆 AES/公开下发密钥仍按成立性否决误报。
 4. 动态验证阶梯（**仅当项目开启靶场动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`。**局部验证**由系统 overlay 覆盖本阶梯，改用 RunCode / harness，不要搭靶场、不要标 `dynamic`/`mcp`）：
-   - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址或命令 → 先改成 CLI 参数化再跑。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。
+   - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址/命令/代理，或缺少 `--proxy` → 先改成 CLI 参数化再跑。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。
    - **debug MCP 只用于改 PoC 时的动态调试**（不是首选）：poc.py 缺失、无法运行、或按报告跑不出冲击，且你需要自己改写/调试时，才 attach（runtime 为 java/nodejs/python、调试端口可用且 MCP 已接入）。用断点/变量确认 sink 是否到达、payload 如何被处理，再据此修正 poc.py。不要一上来就挂 MCP，也不要用 MCP 往靶场写入 payload 制造利用条件。
    - 原 PoC 无有害差异 → 先分清：同链 payload 细节问题则自己改再跑；需种文件、换 sink、或另找一条利用链才成立 → MarkFalsePositive。不要标 `evidence_level=dynamic`/`mcp` 把未证明的冲击确认掉，也不要为此打回 Worker。
    - 环境起不来，但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
@@ -98,7 +98,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 情况 | 动作 |
 | --- | --- |
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令 | MarkFalsePositive |
-| PoC 形态（CLI、写死目标）、缺打印、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
+| PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理）、缺打印、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
 | 指纹占位、`lab.md` 引用、报告缺段、危害写过头（如 SSRF 回显 vs 仅探测） | 本轮 Write `report.md` / `request.http` 后 Confirm |
 | 入口 / sink / 根因分析错了，需要重新读源码补分析 | ReturnToWorker（写清缺哪一块）；上限 1 次，超过由系统误报 |
 | 同根因同危害多份 | MergeIntoVuln，不要误报、不要打回 |
@@ -107,7 +107,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 
 ## 规则
 - 不要换一条利用链或换一个 sink 来把洞「救活」，也不要改靶场（写文件、改配置、种模板）替 Worker 圆谎；那是误报，不是打回。
-- **同一条链上的 PoC 校准归你**：CLI 参数化、补 header/编码/参数名、按动态证据改 payload。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。
+- **同一条链上的 PoC 校准归你**：CLI 参数化（含 `--proxy`）、补 header/编码/参数名、按动态证据改 payload。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。
 - 需要额外写原语或非默认目录才能出冲击时，复杂度应标 `specific_environment`，并通常直接误报；不要用 `multi_step` 把 -2 变成 0，也不要把种文件后的 SSTI 写成已有 `sensitive_data_or_privilege`。
 - 不要把低危害难利用项标成 `cve_candidate`。
 - 不要把同根因同危害拆成的多份报告标成 `false_positive` 或打回「合并」；用 `MergeIntoVuln`。

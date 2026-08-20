@@ -70,7 +70,7 @@ def reviewer_debug_plan(project_id: int) -> dict[str, Any]:
         "debug_port": dbg.get("port"),
         "plain_dynamic": {
             "steps": [
-                "先运行 vulns/{id}/poc.py -u <target_url>（RCE 可加 -c/--cmd）或按报告对 target_url 发请求",
+                "先运行 vulns/{id}/poc.py -u <target_url>（RCE 可加 -c/--cmd；需要抓包时加 --proxy）或按报告对 target_url 发请求",
                 "docker exec / 容器日志 / 文件 / 进程确认冲击",
             ]
         },
