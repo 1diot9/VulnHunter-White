@@ -55,6 +55,7 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
         "report_md": "# custom report\n\n## 漏洞描述\nhello\n",
     }
     out = registry.dispatch(
@@ -81,6 +82,7 @@ def test_submit_vuln_writes_search_fingerprints(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
         "fofa_fingerprint": 'title="Demo App" && body="/static/demo.css"',
         "x_fingerprint": 'app="Demo App" && title="Demo App"',
         "fingerprint_basis": "- 标题：Demo App\n- 静态资源：/static/demo.css",
@@ -114,6 +116,7 @@ def test_finish_fix_keeps_original_produced_at(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),

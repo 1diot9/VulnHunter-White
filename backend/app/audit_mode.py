@@ -140,6 +140,8 @@ def initial_hint(mode: str, *, custom_name: str | None = None) -> str:
             "存储型 XSS 与有服务端机密危害的源码硬编码密钥可以提交；"
             "配置文件/.env/compose 里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。"
             "利用必须在默认配置或应用自身配置选项下成立。"
+            "提交时标明 config_premise=default（默认配置）或 specific（特定配置）；"
+            "官方已警示的风险配置不算特定配置，仅在此类开关下才成立的不要提交。"
             "禁止为了让洞成立而种文件、改非应用配置、组合第二个独立漏洞。"
             "若项目开启靶场动态验证，Reviewer 会在独立环境轮搭建/复用 Docker 靶场（env/、docs/lab.md）；"
             "局部验证则不搭靶场，由 Reviewer 用沙箱 harness 复现。未开启时只做静态审核。"

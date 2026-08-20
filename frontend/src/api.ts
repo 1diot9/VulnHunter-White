@@ -110,6 +110,8 @@ export type Vuln = {
   submission_reason: string | null
   /** heuristic | fast | bypass — which mining path submitted this vuln */
   mining_path?: string | null
+  /** default | specific — default config vs specific app config */
+  config_premise?: string | null
   root_cause_key: string | null
   merged_into_id: number | null
   review_rounds: number

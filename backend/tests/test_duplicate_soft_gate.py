@@ -27,6 +27,7 @@ def _payload(**extra):
         "line_no": 16,
         "source_sink": "EncryptedString.key -> AesEncryptUtil",
         "auth_premise": "未授权",
+        "config_premise": "default",
         "http_request": "GET /sys/getEncryptedString HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "key leaked",

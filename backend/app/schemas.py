@@ -290,6 +290,8 @@ class VulnOut(BaseModel):
     review_rounds: int = 0
     return_reason: str | None = None
     intended_behavior: bool = False
+    # default | specific
+    config_premise: str | None = None
     report_path: str | None = None
     verifier_status: str = "none"
     verifier_verified_url: str | None = None

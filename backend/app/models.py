@@ -234,6 +234,8 @@ class Vuln(Base):
     line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_sink: Mapped[str | None] = mapped_column(Text, nullable=True)
     auth_premise: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # default | specific — 默认配置 / 特定配置（官方已警示的风险配置不算 specific）
+    config_premise: Mapped[str | None] = mapped_column(String(32), nullable=True)
     http_request: Mapped[str | None] = mapped_column(Text, nullable=True)
     poc_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -435,6 +437,7 @@ def _ensure_columns() -> None:
             "submission_tier": "VARCHAR(64)",
             "submission_reason": "TEXT",
             "mining_path": "VARCHAR(32)",
+            "config_premise": "VARCHAR(32)",
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",
             "review_timeout_streak": "INTEGER DEFAULT 0",

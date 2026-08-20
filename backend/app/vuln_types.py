@@ -72,6 +72,34 @@ SUBMISSION_TIERS: dict[str, str] = {
 ALLOWED_SUBMISSION_TIERS = frozenset(SUBMISSION_TIERS)
 LEGACY_LOW_IMPACT_TIERS = frozenset({"low_impact", "hardening", "advisory_only"})
 
+CONFIG_PREMISE_DEFAULT = "default"
+CONFIG_PREMISE_SPECIFIC = "specific"
+CONFIG_PREMISE_LABELS: dict[str, str] = {
+    CONFIG_PREMISE_DEFAULT: "默认配置",
+    CONFIG_PREMISE_SPECIFIC: "特定配置",
+}
+ALLOWED_CONFIG_PREMISES = frozenset(CONFIG_PREMISE_LABELS)
+
+_CONFIG_PREMISE_ALIASES: dict[str, str] = {
+    "default": CONFIG_PREMISE_DEFAULT,
+    "default_config": CONFIG_PREMISE_DEFAULT,
+    "defaults": CONFIG_PREMISE_DEFAULT,
+    "out_of_box": CONFIG_PREMISE_DEFAULT,
+    "stock": CONFIG_PREMISE_DEFAULT,
+    "默认": CONFIG_PREMISE_DEFAULT,
+    "默认配置": CONFIG_PREMISE_DEFAULT,
+    "开箱": CONFIG_PREMISE_DEFAULT,
+    "出厂": CONFIG_PREMISE_DEFAULT,
+    "specific": CONFIG_PREMISE_SPECIFIC,
+    "specific_config": CONFIG_PREMISE_SPECIFIC,
+    "custom_config": CONFIG_PREMISE_SPECIFIC,
+    "non_default": CONFIG_PREMISE_SPECIFIC,
+    "特定": CONFIG_PREMISE_SPECIFIC,
+    "特定配置": CONFIG_PREMISE_SPECIFIC,
+    "非默认": CONFIG_PREMISE_SPECIFIC,
+    "自定义配置": CONFIG_PREMISE_SPECIFIC,
+}
+
 _SUBMISSION_TIER_ALIASES: dict[str, str] = {
     "cve_candidate": "cve_candidate",
     "cve": "cve_candidate",
@@ -393,6 +421,17 @@ def _normalize_review_factor(raw: Any, aliases: dict[str, str], field_name: str)
         allowed = "|".join(sorted(set(aliases.values())))
         raise ValueError(f"{field_name} 无效，可选: {allowed}")
     return normalized
+
+
+def normalize_config_premise(raw: Any) -> str:
+    return _normalize_review_factor(raw, _CONFIG_PREMISE_ALIASES, "config_premise")
+
+
+def config_premise_label(raw: Any) -> str | None:
+    try:
+        return CONFIG_PREMISE_LABELS[normalize_config_premise(raw)]
+    except ValueError:
+        return None
 
 
 def reachability_from_review_context(attack_surface: str, required_account: str | None) -> str:

@@ -150,7 +150,7 @@ Chat Completions 默认直连；需要时代理走设置页「Chat 代理」，�
 
 ### 2. 漏洞挖掘
 
-提交一律走 `SubmitVuln`（按角色写入 `mining_path`）。必填：title、vuln_type、cwe、file_path、line_no、source_sink、auth_premise、http_request、poc_code、expected_evidence。严重度入库为 `pending`，由 Reviewer 校准。同一根因同一危害只交一份：填 `root_cause_key`（`类型:稳定锚点`）；已有 pending 同根因用 `AppendAffectedLocations`，不要再 Submit。
+提交一律走 `SubmitVuln`（按角色写入 `mining_path`）。必填：title、vuln_type、cwe、file_path、line_no、source_sink、auth_premise、config_premise、http_request、poc_code、expected_evidence。`config_premise` 为 `default`（默认配置）或 `specific`（特定配置；不含官方已警示的风险开关）。严重度入库为 `pending`，由 Reviewer 校准。同一根因同一危害只交一份：填 `root_cause_key`（`类型:稳定锚点`）；已有 pending 同根因用 `AppendAffectedLocations`，不要再 Submit。
 
 `poc.py` 必须 CLI 参数化：`-u/--url` 为目标 origin；RCE 另支持 `-c/--cmd` 并打印回显。细则见 `backend/app/prompts/poc.md`。报告对齐 `templates/vuln-report.md`。
 
@@ -214,7 +214,7 @@ Recon 完成后：
 1. 读 `vulns/{id}/report.md`、`request.http`、`poc.py`，静态复核。明显误报 → `MarkFalsePositive`。PoC/报告包装本轮自己改，不要打回。
 2. `SearchOldVuln kind=found` 查重。同根因同危害用 `MergeIntoVuln` 并入主报告，不要打回/误报/改已确认报告。危害或鉴权不同的相关变体才标 `duplicate_grouped` 并原样复用 `root_cause_key`。
 3. 按验证方式取证（见下）。
-4. `ConfirmVuln` 必须标：`attack_surface`（前台/后台）、后台再标 `required_account`（user/admin）、`impact` / `exploit_complexity` / `defense_status`、`submission_tier` / `submission_reason`。`ConfirmVuln`、`MarkFalsePositive` 或 `ReturnToWorker` 后本会话结束。
+4. `ConfirmVuln` 必须标：`attack_surface`（前台/后台）、后台再标 `required_account`（user/admin）、`impact` / `exploit_complexity` / `defense_status`、`submission_tier` / `submission_reason`。核对并可纠正 `config_premise`。`ConfirmVuln`、`MarkFalsePositive` 或 `ReturnToWorker` 后本会话结束。
 
 打回仅用于入口/sink/根因分析债务。上限 `max_review_rejects=1`。超过直接误报。
 
@@ -346,7 +346,7 @@ FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
 
 ### 成立性闸门（所有模式）
 
-source→sink 可达只是候选。必须在**默认配置**或**只修改应用自身提供的配置选项**下，攻击者只凭自身权限与用户可控输入就能打出可观察有害冲击。禁止为了让洞成立而种文件、改非应用配置、组合第二个独立漏洞。已知且允许的业务能力对照 `docs/auth.md`；若仍提交须 `intended_behavior=true`。
+source→sink 可达只是候选。必须在**默认配置**或**只修改应用自身提供的配置选项**下，攻击者只凭自身权限与用户可控输入就能打出可观察有害冲击。`SubmitVuln` 必填 `config_premise`：`default`（默认配置）或 `specific`（须改应用自身配置）。**特定配置不包括**官方文档已明确警示会导致安全风险的配置；仅在此类开关下才成立的不要提交。禁止为了让洞成立而种文件、改非应用配置、组合第二个独立漏洞。已知且允许的业务能力对照 `docs/auth.md`；若仍提交须 `intended_behavior=true`。
 
 ### 赏金模式范围
 

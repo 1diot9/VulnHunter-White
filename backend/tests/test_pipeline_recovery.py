@@ -191,6 +191,7 @@ def test_mining_and_project_complete_gates(tmp_env, project):
             "http_request": "GET /\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "e",
+            "config_premise": "default",
         },
     )
     assert out["ok"] is False

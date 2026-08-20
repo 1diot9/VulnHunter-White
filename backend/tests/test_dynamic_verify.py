@@ -80,6 +80,7 @@ def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
             "http_request": "GET /",
             "poc_code": "print(1)\n",
             "expected_evidence": "x",
+            "config_premise": "default",
         },
     )
     from app.models import SessionLocal
@@ -168,6 +169,7 @@ def test_confirm_harness_when_mode_harness(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -215,6 +217,7 @@ def test_confirm_coerces_dynamic_in_harness_mode(tmp_env, project):
             "http_request": "GET /",
             "poc_code": "print(1)\n",
             "expected_evidence": "x",
+            "config_premise": "default",
         },
     )
     conf = registry.dispatch(

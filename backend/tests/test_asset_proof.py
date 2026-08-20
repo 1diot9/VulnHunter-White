@@ -104,6 +104,7 @@ def test_collect_tool_apply_writes_report(tmp_env, project, monkeypatch):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = submitted["vuln_id"]
@@ -141,6 +142,7 @@ def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = submitted["vuln_id"]
@@ -181,6 +183,7 @@ def test_confirm_uses_explicit_fingerprints(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = submitted["vuln_id"]
@@ -215,6 +218,7 @@ def test_confirm_rejects_or_fingerprint(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     submitted = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = submitted["vuln_id"]
@@ -249,6 +253,7 @@ def test_maybe_enrich_skips_when_queries_already_good(tmp_env, project, monkeypa
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
         "fofa_fingerprint": 'title="Kept" && body="stable"',
         "x_fingerprint": 'app="Kept" && title="Kept"',
     }
@@ -337,6 +342,7 @@ def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
             "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
             "poc_code": "print('poc')\n",
             "expected_evidence": "error based",
+            "config_premise": "default",
             "fofa_fingerprint": 'title="SharedApp" && body="/static/app.css"',
             "x_fingerprint": 'app="SharedApp" && title="SharedApp"',
         },
@@ -359,6 +365,7 @@ def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
             "http_request": "GET /item?id=1 HTTP/1.1\nHost: x\n",
             "poc_code": "print('poc')\n",
             "expected_evidence": "other user data",
+            "config_premise": "default",
         },
     )
     assert second["ok"] is True

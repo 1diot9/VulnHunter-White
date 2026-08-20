@@ -107,6 +107,7 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "submission_tier" in review
     assert "submission_reason" in review
     assert "root_cause_key" in review
+    assert "config_premise" in review
     assert "CVE" in review
     assert "互联网资产证明" in review
     assert "docs/lab.md" in review
@@ -123,6 +124,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "submission_tier" in text
     assert "submission_reason" in text
     assert "root_cause_key" in text
+    assert "config_premise" in text
     assert "MergeIntoVuln" in text
     assert "原样复用" in text
     assert "不要另写新键" in text or "禁止另写新键" in text or "禁止另造" in text
@@ -177,7 +179,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
 def test_worker_prompt_requires_default_exploitability():
     worker = load_prompt("worker.md")
     assert "什么算漏洞" in worker
-    assert "默认/官方部署" in worker
+    assert "默认配置" in worker
     assert "不要按漏洞类型填写或推断严重度" in worker
     assert "发现漏洞立即 SubmitVuln" not in worker
     assert "仅当满足上方提交闸门时 SubmitVuln" in worker
@@ -185,6 +187,8 @@ def test_worker_prompt_requires_default_exploitability():
     assert "AppendAffectedLocations" in worker
     assert "同根因受影响点" in worker
     assert "root_cause_key" in worker
+    assert "config_premise" in worker
+    assert "特定配置" in worker
     assert "默认密码" in worker
     assert "弱口令" in worker
     assert "-u/--url" in worker

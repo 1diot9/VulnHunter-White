@@ -43,6 +43,7 @@ def _submit_and_confirm(project, *, title="洞 A", file_path="a.java", root_caus
         "http_request": "GET /api/x",
         "poc_code": "print('poc')",
         "expected_evidence": "200",
+        "config_premise": "default",
         "root_cause_key": root_cause_key or f"unauthorized_access:{file_path}:{title}",
     }
     payload.update(extra)
@@ -129,6 +130,7 @@ def test_search_old_vuln_attack_chain_filters_old_and_pending(tmp_env, project):
             "http_request": "GET /",
             "poc_code": "print(1)",
             "expected_evidence": "x",
+            "config_premise": "default",
         },
     )
     assert pending["ok"] is True

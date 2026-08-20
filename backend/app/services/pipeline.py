@@ -3769,6 +3769,7 @@ def _run_reviewer_once(project_id: int) -> None:
                 "intended_behavior": vuln.intended_behavior,
                 "report_path": vuln.report_path,
                 "auth_premise": vuln.auth_premise,
+                "config_premise": vuln.config_premise,
                 "source_sink": vuln.source_sink,
             }
 
@@ -4044,6 +4045,7 @@ def _run_attack_chain_once(project_id: int) -> None:
                     "attack_surface": v.attack_surface,
                     "required_account": v.required_account,
                     "auth_premise": (v.auth_premise or "")[:200],
+                    "config_premise": v.config_premise,
                     "file_path": v.file_path,
                     "cwe": v.cwe,
                     "severity": v.severity,

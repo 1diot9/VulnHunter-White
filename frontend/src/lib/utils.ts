@@ -70,6 +70,17 @@ export function formatMiningPath(value: string | null | undefined): string | nul
   }
 }
 
+export function formatConfigPremise(value: string | null | undefined): string | null {
+  switch ((value || '').trim().toLowerCase()) {
+    case 'default':
+      return '默认配置'
+    case 'specific':
+      return '特定配置'
+    default:
+      return null
+  }
+}
+
 export function formatVerifierStatus(value: string | null | undefined): string | null {
   switch (value) {
     case 'pending':
@@ -104,7 +115,7 @@ export const AUDIT_MODE_OPTIONS = [
     label: '赏金模式',
     short: '只报默认可利用的高危害漏洞',
     hint:
-      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。利用须在默认配置或应用自身配置下成立。',
+      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。利用须在默认配置或应用自身配置下成立；提交时标明默认配置或特定配置，官方已警示的风险开关不算特定配置。',
   },
   {
     value: 'full' as const,
@@ -153,7 +164,7 @@ export const BOUNTY_SCOPE_ROWS = [
 ] as const
 
 export const BOUNTY_SCOPE_PREMISE =
-  '利用须在默认配置，或只改应用自身配置选项下成立。禁止种文件、改非应用配置、组合第二个独立漏洞。全量模式额外收录上表「不收录」中仍能打出差异的项，由 Reviewer 标为低危害难利用。'
+  '利用须在默认配置，或只改应用自身配置选项下成立。提交时标明默认配置或特定配置；官方已警示的风险开关不算特定配置。禁止种文件、改非应用配置、组合第二个独立漏洞。全量模式额外收录上表「不收录」中仍能打出差异的项，由 Reviewer 标为低危害难利用。'
 
 export function formatAuditMode(
   value: string | null | undefined,

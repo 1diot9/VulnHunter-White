@@ -11,7 +11,7 @@ FinishBypass 即本轮结束。未调用 FinishBypass 则本轮作废，该条�
 1. 用 Grep/Read 定位文档描述的 sink、补丁、过滤函数或同类接口。找不到对应代码 → `FinishBypass(verdict=unreachable)`。文档过短、无法落到具体代码 → `incomplete`。
 2. **已修复（patched）**：不要把原洞原样再报一遍。看补丁是否完整——黑名单/关键字过滤、半截规范化、只修了代表点、同类方法未修、编码/大小写/参数别名可绕。能打出可观察危害才 SubmitVuln，然后 `FinishBypass(verdict=bypass_submitted, vuln_id=...)`。补丁完整、无变体 → `still_patched`。
 3. **未修复（unpatched）**：在当前源码确认默认部署下仍可利用。能打出危害则 SubmitVuln 再 `bypass_submitted`；已变成预期业务能力 → `intended`。
-4. 提交闸门与启发式 Worker 相同：默认可利用、不要组合第二个独立漏洞、不要为了让洞成立而种文件。同一根因只交一份（`root_cause_key` + SearchOldVuln `kind=found`）。`kind=old` 的 `unpatched` 用于去重，不要把已修复的 `patched` 条目当新发现。SSRF 必须标明观察面（有回显读目标正文，或仅响应差别探测内网端口），不要把端口探测写成已获取云元数据凭据。PoC 必须 CLI 参数化（`-u/--url`，RCE 加 `-c/--cmd` 并打印回显），细则见 PoC 专章。
+4. 提交闸门与启发式 Worker 相同：默认可利用、不要组合第二个独立漏洞、不要为了让洞成立而种文件。SubmitVuln 必填 `config_premise`（`default` / `specific`）；特定配置不含官方已警示的风险开关。同一根因只交一份（`root_cause_key` + SearchOldVuln `kind=found`）。`kind=old` 的 `unpatched` 用于去重，不要把已修复的 `patched` 条目当新发现。SSRF 必须标明观察面（有回显读目标正文，或仅响应差别探测内网端口），不要把端口探测写成已获取云元数据凭据。PoC 必须 CLI 参数化（`-u/--url`，RCE 加 `-c/--cmd` 并打印回显），细则见 PoC 专章。
 
 source→sink 可达只是候选，不是漏洞。
 

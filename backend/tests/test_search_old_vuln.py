@@ -17,6 +17,7 @@ def _submit(project_id: int, title: str = "SQLI in login", ctx: ToolContext | No
         "line_no": 1,
         "source_sink": "login -> query",
         "auth_premise": "未授权",
+        "config_premise": "default",
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",

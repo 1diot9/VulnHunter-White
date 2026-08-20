@@ -771,6 +771,7 @@ def _public_doc(entry: dict[str, Any]) -> dict[str, Any]:
             "submission_tier",
             "root_cause_key",
             "merged_into_id",
+            "config_premise",
         ):
             if key in entry:
                 out[key] = entry[key]
@@ -816,6 +817,7 @@ def _search_blob(entry: dict[str, Any]) -> str:
         str(entry.get("merged_into_id") or ""),
         entry.get("merged_note") or "",
         entry.get("auth_premise") or "",
+        entry.get("config_premise") or "",
         entry.get("attack_surface") or "",
         entry.get("required_account") or "",
         entry.get("source_sink") or "",
@@ -909,6 +911,7 @@ def _found_vuln_entries(ctx) -> list[dict[str, Any]]:
                 "submission_tier": vuln.submission_tier,
                 "root_cause_key": vuln.root_cause_key,
                 "merged_into_id": vuln.merged_into_id,
+                "config_premise": vuln.config_premise,
             }
             if attack_chain_mode:
                 entry["auth_premise"] = vuln.auth_premise or ""

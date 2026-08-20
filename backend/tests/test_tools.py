@@ -131,6 +131,104 @@ def test_submit_vuln_requires_fields(tmp_env, project):
     assert "缺少必填" in out["error"]
 
 
+def test_submit_vuln_requires_config_premise(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "RCE",
+            "vuln_type": "rce",
+            "cwe": "CWE-78",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> exec",
+            "auth_premise": "未授权",
+            "http_request": "GET /x HTTP/1.1\nHost: x\n",
+            "poc_code": (
+                "import argparse\n"
+                "p=argparse.ArgumentParser()\n"
+                "p.add_argument('-u','--url',required=True)\n"
+                "print(p.parse_args())\n"
+            ),
+            "expected_evidence": "id",
+        },
+    )
+    assert out["ok"] is False
+    assert "config_premise" in out["error"]
+
+
+def test_submit_vuln_stores_config_premise(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "RCE",
+            "vuln_type": "rce",
+            "cwe": "CWE-78",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "q -> exec",
+            "auth_premise": "未授权",
+            "config_premise": "特定配置",
+            "http_request": "GET /x HTTP/1.1\nHost: x\n",
+            "poc_code": (
+                "import argparse\n"
+                "p=argparse.ArgumentParser()\n"
+                "p.add_argument('-u','--url',required=True)\n"
+                "print(p.parse_args())\n"
+            ),
+            "expected_evidence": "id",
+        },
+    )
+    assert out["ok"] is True
+    assert out["config_premise"] == "specific"
+    with Session() as db:
+        vuln = db.get(models.Vuln, out["vuln_id"])
+        assert vuln.config_premise == "specific"
+    report = (vuln_dir(project, out["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert "特定配置" in report
+
+
+def test_confirm_vuln_can_override_config_premise(tmp_env, project):
+    payload = {
+        "title": "RCE in ping",
+        "vuln_type": "rce",
+        "cwe": "CWE-78",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "ping -> exec",
+        "auth_premise": "未授权",
+        "config_premise": "default",
+        "http_request": "GET /ping?cmd=id HTTP/1.1\nHost: x\n",
+        "poc_code": "print('poc')\n",
+        "expected_evidence": "uid=",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    assert out["ok"] is True
+    vuln_id = out["vuln_id"]
+    confirmed = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=vuln_id),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "attack_surface": "frontend",
+            "evidence_level": "static_only",
+            "config_premise": "specific",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert confirmed["ok"] is True
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        vuln = db.get(models.Vuln, vuln_id)
+        assert vuln.config_premise == "specific"
+    report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert "配置前提：特定配置" in report
+
+
 def test_submit_vuln_rejects_hardcoded_http_poc(tmp_env, project):
     out = registry.dispatch(
         _ctx(project, "worker"),
@@ -146,6 +244,7 @@ def test_submit_vuln_rejects_hardcoded_http_poc(tmp_env, project):
             "http_request": "GET /x HTTP/1.1\nHost: x\n",
             "poc_code": "import requests\nprint(requests.get('http://127.0.0.1:18080/x').text)\n",
             "expected_evidence": "id",
+            "config_premise": "default",
         },
     )
     assert out["ok"] is False
@@ -167,6 +266,7 @@ def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):
         "http_request": "GET /ping?cmd=id HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "uid=",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     assert out["ok"] is True
@@ -211,6 +311,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
         "intended_behavior": False,
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
@@ -292,6 +393,7 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
                 "print(p.parse_args())\n"
             ),
             "expected_evidence": "ok",
+            "config_premise": "default",
         }
 
     models = tmp_env["models"]
@@ -345,6 +447,7 @@ def test_confirm_requires_attack_surface(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -373,6 +476,7 @@ def test_confirm_requires_severity_factors(tmp_env, project):
         "http_request": "GET /fetch?url=http://127.0.0.1 HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "internal response",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -397,6 +501,7 @@ def test_confirm_requires_submission_tier(tmp_env, project):
         "http_request": "GET /fetch?url=http://127.0.0.1 HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "internal response",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -427,6 +532,7 @@ def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     conf = registry.dispatch(
@@ -461,6 +567,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "reflected origin",
+        "config_premise": "default",
     }
     out = registry.dispatch(worker, "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -604,6 +711,7 @@ def test_confirm_defaults_static_only_when_dynamic_off(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -640,6 +748,7 @@ def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -672,6 +781,7 @@ def test_collect_lab_fingerprints_allows_static_only(tmp_env, project, monkeypat
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -720,6 +830,7 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
             "http_request": "GET /?q=<script> HTTP/1.1\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "script echoed",
+            "config_premise": "default",
         },
     )
     assert xss["ok"] is False
@@ -736,6 +847,7 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "reflected origin",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     assert out["ok"] is True
@@ -772,6 +884,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "http_request": "POST /comment HTTP/1.1\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "script persists",
+            "config_premise": "default",
         },
     )
     assert stored["ok"] is True
@@ -808,6 +921,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "http_request": "GET / HTTP/1.1\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "forged token accepted",
+            "config_premise": "default",
         },
     )
     assert secret["ok"] is True
@@ -826,6 +940,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "http_request": "GET / HTTP/1.1\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "default password",
+            "config_premise": "default",
         },
     )
     assert config_secret["ok"] is False
@@ -849,6 +964,7 @@ def test_full_mode_allows_xss_submit(tmp_env, project):
             "http_request": "GET /?q=<script> HTTP/1.1\n",
             "poc_code": "print(1)\n",
             "expected_evidence": "script echoed",
+            "config_premise": "default",
         },
     )
     assert out["ok"] is True
@@ -867,6 +983,7 @@ def test_confirm_backend_requires_account(tmp_env, project):
         "http_request": "GET /admin HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -921,6 +1038,7 @@ def test_confirm_backend_user_account(tmp_env, project):
         "http_request": "GET /user/1 HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "other user data",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -955,6 +1073,7 @@ def test_confirm_frontend_ignores_account(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
@@ -990,6 +1109,7 @@ def test_mark_false_positive(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
         "intended_behavior": True,
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
@@ -1018,6 +1138,7 @@ def test_return_to_worker_false_positive_compat(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
         "intended_behavior": False,
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
@@ -1042,6 +1163,7 @@ def test_return_to_worker_keeps_report_when_not_fp(tmp_env, project):
         "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "error based",
+        "config_premise": "default",
         "intended_behavior": False,
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
@@ -1070,6 +1192,7 @@ def test_return_to_worker_max_rejects_appends_reason(tmp_env, project):
         "http_request": "GET / HTTP/1.1\n",
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
+        "config_premise": "default",
         "intended_behavior": False,
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)

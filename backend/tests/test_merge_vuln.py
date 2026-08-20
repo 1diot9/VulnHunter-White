@@ -43,6 +43,7 @@ def _submit_payload(**extra):
         "line_no": 10,
         "source_sink": "update -> mapper",
         "auth_premise": "普通用户",
+        "config_premise": "default",
         "http_request": "POST /api/comment/update HTTP/1.1\nHost: x\n",
         "poc_code": "print('poc')\n",
         "expected_evidence": "cross-user write",

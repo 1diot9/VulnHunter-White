@@ -22,7 +22,14 @@ from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import ensure_search_fingerprint_section, write_report_md
-from ..vuln_types import PENDING_SEVERITY, normalize_root_cause_key, normalize_vuln_type, refine_vuln_type
+from ..vuln_types import (
+    PENDING_SEVERITY,
+    config_premise_label,
+    normalize_config_premise,
+    normalize_root_cause_key,
+    normalize_vuln_type,
+    refine_vuln_type,
+)
 from . import ToolSpec, registry
 
 
@@ -34,6 +41,7 @@ REQUIRED_SUBMIT_FIELDS = (
     "line_no",
     "source_sink",
     "auth_premise",
+    "config_premise",
     "http_request",
     "poc_code",
     "expected_evidence",
@@ -239,6 +247,10 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     )
     intended = bool(args.get("intended_behavior") or False)
     try:
+        config_premise = normalize_config_premise(args.get("config_premise"))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
         line_no = int(args.get("line_no"))
     except (TypeError, ValueError):
         return {"ok": False, "error": "line_no 必须是整数"}
@@ -278,6 +290,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             line_no=line_no,
             source_sink=str(args["source_sink"]),
             auth_premise=str(args["auth_premise"]),
+            config_premise=config_premise,
             http_request=str(args["http_request"]),
             poc_code=str(args["poc_code"]),
             expected_evidence=str(args["expected_evidence"]),
@@ -334,6 +347,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         out["root_cause_key"] = root_key
     if mining_path:
         out["mining_path"] = mining_path
+    out["config_premise"] = config_premise
     return out
 
 
@@ -393,6 +407,7 @@ summary: {args.get('source_sink', '')[:200]}
 - 严重度：待 Reviewer 按利用上下文校准（不按类型映射）
 - CWE：{args.get('cwe')}
 - 位置：{args.get('file_path')}:{args.get('line_no')}
+- 配置前提：{config_premise_label(args.get('config_premise')) or args.get('config_premise')}
 
 ## 漏洞描述
 第一段：待根据厂商与产品资料补全系统介绍。
@@ -424,6 +439,7 @@ summary: {args.get('source_sink', '')[:200]}
 ```
 
 ### 触发条件
+配置前提：{config_premise_label(args.get('config_premise')) or args.get('config_premise')}
 {args.get('auth_premise')}
 
 ## 同根因受影响点
@@ -542,6 +558,11 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
         ):
             if args.get(key) is not None:
                 setattr(vuln, key, args[key])
+        if args.get("config_premise") not in (None, ""):
+            try:
+                vuln.config_premise = normalize_config_premise(args.get("config_premise"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
         if args.get("line_no") is not None:
             vuln.line_no = int(args["line_no"])
         if args.get("file_path"):
@@ -580,7 +601,8 @@ def register_worker_tools() -> None:
             name="SubmitVuln",
             description=(
                 "提交待审核漏洞（必填字段齐全才入库）。"
-                "仅当默认/官方部署下，攻击者只凭自身权限与用户可控输入"
+                "仅当默认配置或只改应用自身配置（config_premise=default|specific）下，"
+                "攻击者只凭自身权限与用户可控输入"
                 "（HTTP / WebSocket / RPC / MQ / 回调等）就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
                 "或只是配置/文档/compose/.env 里用户可改的默认密码弱口令的不要提交。"
@@ -593,6 +615,9 @@ def register_worker_tools() -> None:
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次调用会提醒复查；"
                 "确认仍要单独交时，再次调用并传 confirm_not_duplicate=true（仅本会话提醒过一次后才接受）。"
                 "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
+                "必填 config_premise=default|specific（默认配置/特定配置）。"
+                "特定配置指须改应用自身配置才成立，且该配置不是官方已明确警示会导致安全风险的选项；"
+                "仅在官方已警示的不安全开关下才成立的不要提交。"
                 "SSRF 须在 expected_evidence 与报告危害中标明观察面："
                 "有回显（响应含目标正文）或仅响应差别（内网端口探测）；"
                 "不要把端口探测写成已获取云元数据凭据。"
@@ -607,6 +632,15 @@ def register_worker_tools() -> None:
                     "line_no": {"type": "integer"},
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},
+                    "config_premise": {
+                        "type": "string",
+                        "description": (
+                            "必填。default=默认配置即可利用；specific=须改应用自身配置才可利用。"
+                            "也可写中文：默认配置 / 特定配置。"
+                            "官方文档已明确警示「开启后有安全风险」的配置不算特定配置；"
+                            "仅在此类开关下才成立的不要提交。"
+                        ),
+                    },
                     "http_request": {"type": "string"},
                     "poc_code": {
                         "type": "string",
@@ -739,6 +773,13 @@ def register_worker_tools() -> None:
                     "title": {"type": "string"},
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},
+                    "config_premise": {
+                        "type": "string",
+                        "description": (
+                            "可选。纠正配置前提：default=默认配置；specific=特定配置。"
+                            "官方已警示的风险配置不算特定配置。"
+                        ),
+                    },
                     "http_request": {"type": "string"},
                     "poc_code": {
                         "type": "string",

@@ -11,6 +11,7 @@ import {
   formatAttackSurface,
   formatDateTime,
   formatEvidenceLevel,
+  formatConfigPremise,
   formatMiningPath,
   formatSeverity,
   formatSeverityScore,
@@ -36,6 +37,7 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const tier = formatSubmissionTier(v.submission_tier)
   const verifier = formatVerifierStatus(v.verifier_status)
   const miningPath = formatMiningPath(v.mining_path)
+  const configPremise = formatConfigPremise(v.config_premise)
   return (
     <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', nested && 'mt-0.5 gap-1')}>
       {nested ? (
@@ -60,6 +62,11 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       {miningPath ? (
         <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
           {miningPath}
+        </Badge>
+      ) : null}
+      {configPremise ? (
+        <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
+          {configPremise}
         </Badge>
       ) : null}
       {v.tracking_status === 'submitted' || v.tracking_status === 'ignored' ? (

@@ -542,6 +542,7 @@ def test_vulns_list_and_download(tmp_env, project):
         "http_request": "POST /x HTTP/1.1\n",
         "poc_code": "print('x')\n",
         "expected_evidence": "shell",
+        "config_premise": "default",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),
@@ -557,12 +558,14 @@ def test_vulns_list_and_download(tmp_env, project):
         hit = next(v for v in lst.json() if v["id"] == vid)
         assert hit["project_name"] == "demo"
         assert hit["mining_path"] == "heuristic"
+        assert hit["config_premise"] == "default"
         detail = client.get(f"/api/vulns/{vid}")
         assert detail.status_code == 200
         body = detail.json()
         assert body["title"] == "RCE demo"
         assert body["project_name"] == "demo"
         assert body["mining_path"] == "heuristic"
+        assert body["config_premise"] == "default"
         assert body["created_at"]
         assert body["attack_surface"] is None
         assert body["required_account"] is None

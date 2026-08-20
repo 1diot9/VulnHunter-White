@@ -45,13 +45,14 @@
 ## 什么算漏洞（提交闸门）
 source→sink 可达只是候选，**不是**漏洞。必须同时满足才 SubmitVuln：
 1. 用户可控输入能到达真实执行的 sink。
-2. **默认/官方部署**下，攻击者只凭题目允许的权限和用户可控输入（HTTP / WebSocket / RPC / MQ / 回调等），就能打出**可观察的有害冲击**（与正常请求可区分：读到不该读的数据、写/删成功、命令执行、未授权操作等）。
+2. 攻击者只凭题目允许的权限和用户可控输入（HTTP / WebSocket / RPC / MQ / 回调等），就能打出**可观察的有害冲击**（与正常请求可区分：读到不该读的数据、写/删成功、命令执行、未授权操作等）。提交时必填 `config_premise`：`default`（**默认配置**即可利用）或 `specific`（须改应用自身提供的配置选项才可利用）。**特定配置不包括**官方文档已明确警示「开启后可能导致安全风险」的选项；仅在这类已警示开关下才成立的不要提交。
 3. 不依赖第二个独立漏洞、不依赖审核员/攻击者先往服务器写 payload 文件、不依赖非默认目录布局（例如目标路径下碰巧存在 `templates/*.html`）。
 若项目开启靶场动态验证，Docker 靶场由 Reviewer 在独立环境轮搭建（`docs/lab.md`）；开启局部验证时不搭靶场。未开启时 Reviewer 只做静态审核。不要把「禁止制造利用条件」理解成不要 docker。Worker 不负责搭环境。
 
 以下**不要提交**：
 - 仅不安全拼接/`Path.resolve`/`../` 逃逸，但 sink 只解析固定子目录+固定后缀，默认请求只有 404 或与正常页相同。
 - 完整利用还需要文件写入、主题上传、或非默认 `workDir`。
+- 仅在官方文档已明确警示会导致安全风险的配置开关下才成立（不算 `specific`，不要提交）。
 - 项目配置、示例、compose、`.env`、文档或首次安装向导里的**默认账号/默认密码/弱口令**（含 `admin/admin`、文档演示凭据、本审计 lab 写入的账号）。这是部署约定，不是代码漏洞。例外：当作**服务端机密**的源码硬编码密钥**可以提交**（JWT/HMAC 签名密钥、接口签名 secret、私钥、第三方 API Key、保护库内/备份等本不该公开的服务端加解密密钥，写死在 `.java`/`.go`/`.py` 等程序文件中）。不要提交：`application.yml`、`.env`、compose 等用户可改配置里的口令；仅用于前端传输混淆的 AES/DES（密钥在前端 JS，或故意公开接口下发）；危害只是解开前端本就会解的字段或已拦截登录包的「硬编码密钥」。
 - 已知且允许的业务能力（见 docs/auth.md）——若仍提交，必须 `intended_behavior=true`。
 - 不要按漏洞类型填写或推断严重度；入库为 `pending`，由 Reviewer 按利用上下文校准。
@@ -77,7 +78,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 
 ## 流程
 1. 按角色 Read/Grep 分析注入焦点（入口沿调用链，Service/Util 回推 caller，控面看匹配与绕过）。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
-2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, http_request, poc_code, expected_evidence；并填 root_cause_key）。不要把「发现不安全 API」当成发现漏洞。
+2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, poc_code, expected_evidence；并填 root_cause_key）。不要把「发现不安全 API」当成发现漏洞。
 3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边 FinishFile 没有独立审计价值的文件，然后继续挖。仅当本轮注入焦点已按角色分析完后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。

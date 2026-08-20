@@ -68,6 +68,7 @@ def _submit_and_confirm(
         "http_request": http_request,
         "poc_code": poc_code,
         "expected_evidence": expected_evidence,
+        "config_premise": "default",
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     assert out["ok"] is True, out

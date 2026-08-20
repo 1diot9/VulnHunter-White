@@ -41,6 +41,8 @@ from ..vuln_types import (
     SeverityCalibration,
     SubmissionTierDecision,
     calibrate_review_severity,
+    config_premise_label,
+    normalize_config_premise,
     normalize_root_cause_key,
     normalize_submission_decision,
 )
@@ -103,10 +105,14 @@ def _review_label_body(
     account: str | None,
     calibration: SeverityCalibration,
     submission: SubmissionTierDecision,
+    config_premise: str | None = None,
 ) -> str:
     lines = [f"- 攻击面：{_SURFACE_LABELS[surface]}"]
     if surface == "backend" and account:
         lines.append(f"- 所需账号：{_ACCOUNT_LABELS[account]}")
+    premise_label = config_premise_label(config_premise)
+    if premise_label:
+        lines.append(f"- 配置前提：{premise_label}")
     lines.extend(
         [
             f"- 严重度：{calibration.severity_label}（{calibration.severity}）",
@@ -361,6 +367,12 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    config_premise = None
+    if args.get("config_premise") not in (None, ""):
+        try:
+            config_premise = normalize_config_premise(args.get("config_premise"))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
     note = args.get("note") or ""
     poc_code = args.get("poc_code")
     harness_code = args.get("harness_code")
@@ -454,6 +466,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.submission_tier = submission.tier
         vuln.submission_reason = submission.reason
         vuln.root_cause_key = submission.root_cause_key
+        if config_premise:
+            vuln.config_premise = config_premise
         stamp_root_cause_on_parent(db, vuln)
         if poc_code:
             vuln.poc_code = str(poc_code)
@@ -470,7 +484,13 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         upsert_report_section(
             vuln_dir(vuln.project_id, int(vuln_id)) / "report.md",
             _REVIEW_HEADING,
-            _review_label_body(surface, account, calibration, submission),
+            _review_label_body(
+                surface,
+                account,
+                calibration,
+                submission,
+                config_premise=vuln.config_premise,
+            ),
         )
         db.commit()
         status = vuln.status
@@ -653,6 +673,8 @@ def register_reviewer_tools() -> None:
                 "局部验证打通时标 harness，不要标 dynamic。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
+                "核对 Worker 的 config_premise；错误则 Confirm 时传入纠正。"
+                "specific 不含官方已明确警示会导致安全风险的配置；仅在此类开关下才成立则误报。"
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
                 "duplicate_grouped 仅留给危害/鉴权不同但仍相关的变体，且必须原样复用 root_cause_key。"
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次 Confirm 会提醒复查合并；"
@@ -684,6 +706,14 @@ def register_reviewer_tools() -> None:
                     "required_account": {
                         "type": "string",
                         "description": "后台必填。user=普通权限账号，admin=管理员账号。也可写中文：普通权限 / 管理员",
+                    },
+                    "config_premise": {
+                        "type": "string",
+                        "description": (
+                            "可选。纠正配置前提：default=默认配置即可利用；"
+                            "specific=须改应用自身配置才可利用。也可写中文。"
+                            "官方已警示的风险配置不算 specific；仅在此类开关下才成立应误报。"
+                        ),
                     },
                     "impact": {
                         "type": "string",

@@ -4,6 +4,7 @@ from app.vuln_types import (
     PENDING_SEVERITY,
     calibrate_review_severity,
     infer_vuln_type_from_text,
+    normalize_config_premise,
     normalize_submission_decision,
     normalize_vuln_type,
     resolve_vuln_type,
@@ -49,6 +50,23 @@ def test_resolve_prefers_explicit_type():
 
 def test_pending_severity_constant():
     assert PENDING_SEVERITY == "pending"
+
+
+def test_normalize_config_premise():
+    assert normalize_config_premise("default") == "default"
+    assert normalize_config_premise("默认配置") == "default"
+    assert normalize_config_premise("specific") == "specific"
+    assert normalize_config_premise("特定配置") == "specific"
+    try:
+        normalize_config_premise("")
+        raise AssertionError("expected empty config_premise to fail")
+    except ValueError as exc:
+        assert "config_premise" in str(exc)
+    try:
+        normalize_config_premise("specific_environment")
+        raise AssertionError("expected specific_environment to fail")
+    except ValueError as exc:
+        assert "config_premise" in str(exc)
 
 
 def test_review_severity_calibration_can_upgrade_without_type_mapping():

@@ -13,13 +13,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Input } from '@/components/ui/input'
+import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
 import {
   formatAttackSurface,
   formatDateTime,
   formatEvidenceLevel,
+  formatConfigPremise,
   formatMiningPath,
   formatSeverity,
   formatSeverityScore,
@@ -131,10 +134,26 @@ export default function VulnsPage() {
   const detailTracking = formatTrackingStatus(detail?.tracking_status)
   const detailVerifier = formatVerifierStatus(detail?.verifier_status)
   const detailMiningPath = formatMiningPath(detail?.mining_path)
+  const detailConfigPremise = formatConfigPremise(detail?.config_premise)
   const detailProject =
     detail?.project_name ||
     (detail ? projectNameById.get(detail.project_id) : undefined) ||
     (detail ? `项目 ${detail.project_id}` : '')
+  const detailVerifyProject = detail ? projects.find((p) => p.id === detail.project_id) : undefined
+  const detailVerifyMode = normalizeDynamicVerifyMode(
+    detailVerifyProject?.dynamic_verify_mode,
+    detailVerifyProject?.dynamic_verify_enabled,
+  )
+  const dynamicVerifyKind =
+    detailVerifyMode === 'harness'
+      ? '局部验证'
+      : detailVerifyMode === 'lab'
+        ? '靶场动态验证'
+        : '靶场动态或局部验证'
+  const dynamicVerifyHint =
+    detail?.dynamic_verify_queued || dynamicBusy
+      ? `已接续原审核轮次，正在静态结论上追加${dynamicVerifyKind}，不是互联网验证。`
+      : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
   const projectFilterLabel = projectId == null ? '全部项目' : projectNameById.get(projectId) || `项目 ${projectId}`
   const surfaceFilterLabel =
     surfaceFilter === 'frontend' ? '前台漏洞' : surfaceFilter === 'backend' ? '后台漏洞' : '全部前后台'
@@ -404,6 +423,7 @@ export default function VulnsPage() {
                   <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
                   <Badge variant="info">{detail.status}</Badge>
                   {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
+                  {detailConfigPremise ? <Badge variant="outline">{detailConfigPremise}</Badge> : null}
                   {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (
                     <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
                   ) : null}
@@ -540,17 +560,26 @@ export default function VulnsPage() {
                     下载报告
                   </Button>
                   {detail.can_dynamic_verify || detail.dynamic_verify_queued ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={dynamicBusy || Boolean(detail.dynamic_verify_queued)}
-                      onClick={() => startDynamicVerify()}
-                    >
-                      {dynamicBusy || detail.dynamic_verify_queued ? (
-                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                      ) : null}
-                      {detail.dynamic_verify_queued || dynamicBusy ? '追加验证中…' : '追加验证'}
-                    </Button>
+                    <TooltipProvider delay={200}>
+                      <Tooltip>
+                        <TooltipTrigger render={<span className="inline-flex" />}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={dynamicBusy || Boolean(detail.dynamic_verify_queued)}
+                            onClick={() => startDynamicVerify()}
+                          >
+                            {dynamicBusy || detail.dynamic_verify_queued ? (
+                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                            ) : null}
+                            {detail.dynamic_verify_queued || dynamicBusy ? '追加验证中…' : '追加验证'}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-left leading-relaxed whitespace-normal">
+                          {dynamicVerifyHint}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   ) : null}
                 </div>
                 {dynamicError ? (
