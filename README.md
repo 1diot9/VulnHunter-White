@@ -95,7 +95,7 @@ npm install
 cd ..
 ```
 
-国内网络慢时，`start.cmd` / `start.sh` 使用 `https://registry.npmmirror.com`。手动安装也可：
+国内网络慢时，`start.cmd` / `start.sh` 的后端依赖默认使用 `https://pypi.tuna.tsinghua.edu.cn/simple`（可用 `VULNHUNTER_PIP_INDEX_URL` 覆盖；失败会回退默认源），前端依赖默认使用 `https://registry.npmmirror.com`。手动安装也可：
 
 ```bat
 cd frontend

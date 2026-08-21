@@ -27,7 +27,16 @@ echo [VulnHunter] starting...
 if not exist "%ROOT%backend\.venv\Scripts\python.exe" (
   echo [VulnHunter] creating backend venv...
   python -m venv "%ROOT%backend\.venv"
-  call "%ROOT%backend\.venv\Scripts\pip.exe" install -r "%ROOT%backend\requirements.txt"
+)
+
+if not exist "%ROOT%backend\.venv\Scripts\uvicorn.exe" (
+  echo [VulnHunter] installing backend deps...
+  if not defined VULNHUNTER_PIP_INDEX_URL set "VULNHUNTER_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
+  call "%ROOT%backend\.venv\Scripts\pip.exe" install -r "%ROOT%backend\requirements.txt" -i "%VULNHUNTER_PIP_INDEX_URL%"
+  if errorlevel 1 (
+    echo [VulnHunter] pip install failed with %VULNHUNTER_PIP_INDEX_URL%, retrying with the default index...
+    call "%ROOT%backend\.venv\Scripts\pip.exe" install -r "%ROOT%backend\requirements.txt"
+  )
 )
 
 if not exist "%ROOT%frontend\node_modules" (

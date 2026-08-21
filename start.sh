@@ -66,6 +66,14 @@ port_listening() {
 
 echo "[VulnHunter] starting..."
 
+install_backend_deps() {
+  PIP_INDEX_URL="${VULNHUNTER_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+  if ! "$ROOT/backend/.venv/bin/pip" install -r "$ROOT/backend/requirements.txt" -i "$PIP_INDEX_URL"; then
+    echo "[VulnHunter] pip install failed with $PIP_INDEX_URL, retrying with the default index..."
+    "$ROOT/backend/.venv/bin/pip" install -r "$ROOT/backend/requirements.txt"
+  fi
+}
+
 if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
   echo "[VulnHunter] creating backend venv..."
   PY=
@@ -78,7 +86,11 @@ if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
     exit 1
   fi
   "$PY" -m venv "$ROOT/backend/.venv"
-  "$ROOT/backend/.venv/bin/pip" install -r "$ROOT/backend/requirements.txt"
+fi
+
+if [ ! -x "$ROOT/backend/.venv/bin/uvicorn" ]; then
+  echo "[VulnHunter] installing backend deps..."
+  install_backend_deps
 fi
 
 if [ ! -d "$ROOT/frontend/node_modules" ]; then
