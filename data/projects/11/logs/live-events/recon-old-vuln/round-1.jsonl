@@ -1,0 +1,2 @@
+{"kind": "system", "text": "启动 GHSA / GitHub Issues 爬虫收集（关键词 memoboard；无 GitHub 仓库，跳过 Issues；生态 pip）", "source": "crawler", "phase": "recon-old-vuln", "role": "recon_old_vuln", "ts": "15:08:36", "session": 1, "seq": 79}
+{"kind": "system", "text": "GHSA / Issues 爬虫完成：GHSA 拉取 0 条、Issues 拉取 0 条，去重后新候选 0 条（GHSA 0 / Issues 0）", "source": "crawler", "phase": "recon-old-vuln", "role": "recon_old_vuln", "ts": "15:08:39", "session": 1, "seq": 80}

@@ -1,0 +1,32 @@
+[
+  {
+    "content": "Submit SQLi vulnerability (MB-01): GET /api/users?name= → run_user_lookup string-concatenated SQL, unauthenticated, dumps passwords",
+    "id": "1",
+    "status": "completed"
+  },
+  {
+    "content": "Submit RCE vulnerability (MB-02): GET /api/tools/ping?host= → ping_host → subprocess.getoutput, admin session, command injection",
+    "id": "2",
+    "status": "completed"
+  },
+  {
+    "content": "Submit Stored XSS vulnerability (MB-03): POST /api/notes body → GET /notes renders with | safe",
+    "id": "3",
+    "status": "completed"
+  },
+  {
+    "content": "Submit IDOR vulnerability (MB-04): GET /api/notes/<id> no ownership check, any user reads any note",
+    "id": "4",
+    "status": "completed"
+  },
+  {
+    "content": "FinishFile non-focus files (engine.py, store.py, templates, smoke.py, __init__.py)",
+    "id": "5",
+    "status": "completed"
+  },
+  {
+    "content": "FinishFile focus file app.py and FinishRound",
+    "id": "6",
+    "status": "in_progress"
+  }
+]

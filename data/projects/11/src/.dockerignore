@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+data/*.db
+showcase
+INTENDED_VULNS.md
+README.md
+SECURITY.md
+CHANGELOG.md
+LICENSE
+.github

@@ -1,0 +1,35 @@
+{
+  "accepted": true,
+  "keyword": "memoboard",
+  "vulnerabilities": [],
+  "meta": {
+    "since": "2023-08-21",
+    "since_days": 1095,
+    "ecosystems": [
+      "pip"
+    ],
+    "packages": [
+      "memoboard"
+    ],
+    "fetched": 0,
+    "errors": [],
+    "rate_limit": {
+      "assumed_limit_per_hour": 60,
+      "min_interval_sec": 60.0,
+      "authenticated": false
+    },
+    "skipped": 0,
+    "new": 0,
+    "ghsa_fetched": 0,
+    "ghsa_new": 0,
+    "issues": {
+      "repo": "",
+      "fetched": 0,
+      "errors": [],
+      "skipped": "无 GitHub 仓库"
+    },
+    "issues_fetched": 0,
+    "issues_new": 0,
+    "repo": ""
+  }
+}

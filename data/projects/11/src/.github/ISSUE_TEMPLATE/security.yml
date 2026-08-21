@@ -1,0 +1,11 @@
+name: Security Issue
+description: Report a security problem in MemoBoard (used by the historical-vuln crawler).
+labels: ["security", "vulnerability"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is the bug, which path, and is it still unpatched?
+    validations:
+      required: true

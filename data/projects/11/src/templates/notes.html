@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>MemoBoard notes</title>
+    <style>
+      body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; }
+      article { border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>公开备忘录</h1>
+    <p>所有登录用户与访客看到同一份列表。</p>
+    {% for n in notes %}
+    <article>
+      <h2>{{ n.title }}</h2>
+      <p class="meta">#{{ n.id }} · {{ n.author }}</p>
+      <div class="body">{{ n.body | safe }}</div>
+    </article>
+    {% endfor %}
+  </body>
+</html>

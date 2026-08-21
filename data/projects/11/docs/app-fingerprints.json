@@ -1,0 +1,15 @@
+{
+  "fofa": "title=\"MemoBoard notes\" && icon_hash=\"-151231234\" && body=\"MemoBoard\"",
+  "x": "title=\"MemoBoard notes\" && app=\"MemoBoard notes\" && icon_hash=\"-151231234\"",
+  "origin": "source+web",
+  "product": "memoboard",
+  "title": "MemoBoard notes",
+  "icon_hash": "-151231234",
+  "body_markers": [
+    "MemoBoard",
+    "MemoBoard notes"
+  ],
+  "static_paths": [],
+  "collected": true,
+  "updated_at": "2026-08-20T07:10:21Z"
+}

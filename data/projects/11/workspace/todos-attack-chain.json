@@ -1,0 +1,27 @@
+[
+  {
+    "content": "查看4条已确认漏洞全文，确认鉴权前提与利用细节",
+    "id": "1",
+    "status": "completed"
+  },
+  {
+    "content": "核对源码：SQLi泄露的admin凭据能否满足RCE接口的admin鉴权",
+    "id": "2",
+    "status": "completed"
+  },
+  {
+    "content": "核对源码：存储型XSS能否用于盗取admin会话以打通RCE",
+    "id": "3",
+    "status": "completed"
+  },
+  {
+    "content": "核对源码：IDOR读取的备忘录是否含可进一步利用的凭据",
+    "id": "4",
+    "status": "completed"
+  },
+  {
+    "content": "排序候选链，Top 1写详文，XSS→RCE写索引",
+    "id": "5",
+    "status": "completed"
+  }
+]

@@ -1,0 +1,12 @@
+{"kind": "system", "text": "开始导入源码", "source": "system", "phase": null, "ts": "15:06:58", "seq": 0}
+{"kind": "system", "text": "权重建库完成，共 5 个源码文件", "source": "system", "phase": null, "ts": "15:06:58", "seq": 1}
+{"kind": "system", "text": "调度器启动", "source": "system", "phase": null, "ts": "15:06:58", "seq": 2}
+{"kind": "system", "text": "拉起 Recon 线程", "source": "system", "phase": null, "ts": "15:06:58", "seq": 3}
+{"kind": "system", "text": "启动 Worker worker-1-d3fb27", "source": "system", "phase": null, "ts": "15:09:49", "seq": 118}
+{"kind": "system", "text": "侦察门闩已满足，系统标记 recon_done", "source": "system", "phase": null, "ts": "15:10:02", "seq": 137}
+{"kind": "system", "text": "已写入项目应用指纹（source+web），后续漏洞复用", "source": "system", "phase": null, "ts": "15:10:21", "seq": 163}
+{"kind": "system", "text": "Recon 完成", "source": "system", "phase": null, "ts": "15:10:21", "seq": 164}
+{"kind": "system", "text": "拉起 Reviewer 线程", "source": "system", "phase": null, "ts": "15:15:12", "seq": 187}
+{"kind": "system", "text": "拉起攻击链串联线程", "source": "system", "phase": null, "ts": "15:47:34", "seq": 579}
+{"kind": "system", "text": "项目审计完成（状态门闩满足）", "source": "system", "phase": null, "ts": "15:49:41", "seq": 622}
+{"kind": "system", "text": "调度器退出", "source": "system", "phase": null, "ts": "15:49:41", "seq": 623}

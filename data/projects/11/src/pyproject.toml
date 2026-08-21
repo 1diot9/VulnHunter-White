@@ -1,0 +1,9 @@
+[project]
+name = "memoboard"
+version = "0.5.0"
+description = "Intentionally vulnerable Flask intranet memo board for VulnHunter pipeline demos."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "flask==3.0.3",
+]

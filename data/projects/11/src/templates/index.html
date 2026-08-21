@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>MemoBoard</title>
+    <style>
+      body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; color: #1a1a1a; }
+      a { color: #0b57d0; }
+      code { background: #f3f3f3; padding: 0.1rem 0.3rem; }
+    </style>
+  </head>
+  <body>
+    <h1>MemoBoard</h1>
+    <p>内部备忘录看板。公开看板见 <a href="/notes">/notes</a>。</p>
+    <p>登录：<code>POST /api/login</code>。运维 ping（仅 admin 会话）：<code>GET /api/tools/ping</code>。</p>
+    <p>健康检查：<code>GET /healthz</code></p>
+    <ul>
+      {% for n in notes %}
+      <li>#{{ n.id }} {{ n.title }} — {{ n.author }}</li>
+      {% endfor %}
+    </ul>
+  </body>
+</html>

