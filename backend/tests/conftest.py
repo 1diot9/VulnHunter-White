@@ -61,6 +61,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.tools.phase_attack_chain as phase_attack_chain
     import app.tools.phase_worker as phase_worker
     import app.services.sink_queue as sink_queue
+    import app.services.demo_seed as demo_seed
     import app.services.bypass_queue as bypass_queue
 
     for mod in (
@@ -87,6 +88,7 @@ def tmp_env(tmp_path, monkeypatch):
         pipeline,
         sink_queue,
         bypass_queue,
+        demo_seed,
         agent_loop,
         agent_checkpoint,
         api_projects,

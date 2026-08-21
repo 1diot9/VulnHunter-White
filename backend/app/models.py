@@ -601,3 +601,14 @@ def init_db() -> None:
         if db.query(AppSettings).first() is None:
             db.add(AppSettings())
             db.commit()
+    # Showcase project rows for the bundled data/projects/11 workspace.
+    # Imported after schema + settings so a fresh clone can list the demo in the UI.
+    try:
+        from .services.demo_seed import seed_bundled_demo_project
+
+        seed_bundled_demo_project()
+    except Exception:
+        # Never block startup on a bad/missing showcase bundle.
+        import logging
+
+        logging.getLogger("vulnhunter.demo_seed").exception("demo seed failed")

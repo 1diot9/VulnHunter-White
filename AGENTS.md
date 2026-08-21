@@ -9,7 +9,7 @@ VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zi
 - 后端：`backend/app`，FastAPI + SQLAlchemy + SQLite，负责项目导入、阶段调度、Agent 循环、工具注册、报告与漏洞数据。
 - 前端：`frontend`，Vite + React + TypeScript + Tailwind，用于审计项目、实时日志、阶段报告、漏洞列表和设置页。
 - 模板：`templates`，阶段报告和提示词相关模板。漏洞中文报告对齐 `templates/vuln-report.md`，英文 GitHub Advisory 填表稿对齐 `templates/vuln-advisory.md`（写入 `vulns/{id}/advisory.md`）。
-- 运行态数据：`data/projects/{id}`、`data/logs`、`data/app.db`。除非任务明确要求，不要手工改运行态数据或提交生成文件。
+- 运行态数据：`data/projects/{id}`、`data/logs`、`data/app.db`。除非任务明确要求，不要手工改运行态数据或提交生成文件。例外：仓库自带展示案例 `data/projects/11`（MemoBoard / `vulnhunter-python-lab`）及其 `showcase/db-seed.json`；`init_db()` 会幂等导入对应 DB 行，可用 `VULNHUNTER_DEMO_SEED=0` 关闭。不要提交整份 `data/app.db`。
 
 ## 常用命令
 
@@ -99,7 +99,7 @@ pytest
 
 ## 工作边界
 
-- 不要提交 `frontend/dist`、`frontend/node_modules`、`backend/.venv`、`.pytest_cache`、`data/logs`、`data/projects`、`data/app.db` 等生成/运行态文件，除非用户明确要求。
+- 不要提交 `frontend/dist`、`frontend/node_modules`、`backend/.venv`、`.pytest_cache`、`data/logs`、其他 `data/projects`、`data/app.db` 等生成/运行态文件，除非用户明确要求。展示案例 `data/projects/11` 已由 `.gitignore` 例外放行。
 - 不要随意清空或重建 `data/`，其中可能包含用户审计项目和日志。
 - 需要启动服务前先确认是否已有后端 8000 或前端 5173 进程在运行，避免重复启动。
 - 若改动 Agent 提示词、阶段流程或漏洞判定逻辑，要保持已有中文术语一致：Recon、Worker、Reviewer、Verifier、Fix、历史漏洞、历史漏洞绕过、漏洞产出、审计项目、赏金模式、全量模式、自定义模式、启发式挖掘、快速扫描、攻击链、攻击链串联。

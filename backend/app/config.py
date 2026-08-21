@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     cli_tools_poll_sec: int = 15
     timeout_cli_index: int = 900
 
+    # Import bundled MemoBoard showcase (data/projects/11 + showcase/db-seed.json) on startup.
+    # Set VULNHUNTER_DEMO_SEED=0 to disable.
+    demo_seed: bool = True
+
     # Debug MCP directories (relative to repo root; env can override)
     mcp_java: str = "tools/mcp/java-debug"
     mcp_node: str = "tools/mcp/node-debug"
