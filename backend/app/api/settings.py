@@ -29,6 +29,7 @@ from ..services.llm_probe import list_models, test_connectivity
 from ..services.llm_settings import (
     load_providers_raw,
     merge_providers_update,
+    normalize_llm_base_url,
     settings_out_from_row,
 )
 
@@ -74,7 +75,7 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
         if body.default_model is not None:
             row.default_model = body.default_model
         if body.default_base_url is not None:
-            row.default_base_url = body.default_base_url
+            row.default_base_url = normalize_llm_base_url(body.default_base_url)
         if body.default_api_key is not None:
             row.default_api_key = body.default_api_key
         if body.context_window is not None:

@@ -16,6 +16,126 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
+const domesticEndpointHints = [
+  {
+    name: '智谱 BigModel',
+    endpoint: 'https://open.bigmodel.cn/api/paas/v4',
+    models: 'glm-5.3, glm-4-plus, glm-4-air',
+    note: 'GLM Coding Plan 使用 https://open.bigmodel.cn/api/coding/paas/v4',
+  },
+  {
+    name: 'DeepSeek',
+    endpoint: 'https://api.deepseek.com',
+    models: 'deepseek-chat, deepseek-reasoner',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '阿里云百炼 DashScope',
+    endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: 'qwen-plus, qwen-max, qwen-turbo',
+    note: '使用 OpenAI 兼容模式',
+  },
+  {
+    name: '月之暗面 Kimi',
+    endpoint: 'https://api.moonshot.cn/v1',
+    models: 'moonshot-v1-8k, moonshot-v1-32k, kimi-k2-0711-preview',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '火山方舟 Doubao',
+    endpoint: 'https://ark.cn-beijing.volces.com/api/v3',
+    models: 'doubao-seed-1-6, doubao-1-5-pro-32k',
+    note: '模型名通常填方舟模型或推理接入点 ID',
+  },
+  {
+    name: '腾讯混元',
+    endpoint: 'https://api.hunyuan.cloud.tencent.com/v1',
+    models: 'hunyuan-turbos-latest, hunyuan-lite',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: 'MiniMax',
+    endpoint: 'https://api.minimax.chat/v1',
+    models: 'abab6.5s-chat, MiniMax-Text-01',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '百川智能',
+    endpoint: 'https://api.baichuan-ai.com/v1',
+    models: 'Baichuan4, Baichuan3-Turbo',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '零一万物',
+    endpoint: 'https://api.lingyiwanwu.com/v1',
+    models: 'yi-lightning, yi-large',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '阶跃星辰 StepFun',
+    endpoint: 'https://api.stepfun.com/v1',
+    models: 'step-2-16k, step-1-8k',
+    note: '官方 OpenAI 兼容接口',
+  },
+  {
+    name: '讯飞星火',
+    endpoint: 'https://spark-api-open.xf-yun.com/v1',
+    models: 'generalv3.5, 4.0Ultra',
+    note: 'OpenAI 兼容入口，具体模型名以控制台为准',
+  },
+  {
+    name: '硅基流动 SiliconFlow',
+    endpoint: 'https://api.siliconflow.cn/v1',
+    models: 'Qwen/Qwen2.5-72B-Instruct, deepseek-ai/DeepSeek-V3',
+    note: '聚合平台，模型名通常带组织前缀',
+  },
+  {
+    name: '魔搭 ModelScope',
+    endpoint: 'https://api-inference.modelscope.cn/v1',
+    models: 'Qwen/Qwen2.5-72B-Instruct',
+    note: '模型名以 ModelScope 控制台/API 文档为准',
+  },
+]
+
+const anthropicEndpointHints = [
+  {
+    name: 'Anthropic 官方 Claude',
+    endpoint: 'https://api.anthropic.com/v1',
+    models: 'claude-sonnet-4-5, claude-opus-4-1',
+    note: '官方 Anthropic Messages 接口',
+  },
+  {
+    name: '智谱 BigModel Anthropic',
+    endpoint: 'https://open.bigmodel.cn/api/anthropic/v1',
+    models: 'glm-5.1, glm-4.5, glm-4.5-air',
+    note: '本项目会追加 /messages；如官方文档写 /api/anthropic，这里保留 /v1。',
+  },
+  {
+    name: 'Kimi Anthropic',
+    endpoint: 'https://api.moonshot.cn/anthropic/v1',
+    models: 'kimi-k2-0711-preview, kimi-latest',
+    note: '本项目会追加 /messages；Claude Code 文档中的 /anthropic 在这里写成 /anthropic/v1。',
+  },
+  {
+    name: 'Kimi Coding Plan',
+    endpoint: 'https://api.kimi.com/coding/v1',
+    models: 'kimi-k2-0711-preview',
+    note: '订阅制 Coding Key 与通用平台 Key 可能不通用，请按 Kimi 控制台说明选择。',
+  },
+  {
+    name: '阿里云百炼 DashScope',
+    endpoint: 'https://dashscope.aliyuncs.com/apps/anthropic/v1',
+    models: 'qwen-max, qwen-plus, qwen-coder-plus',
+    note: '本项目会追加 /messages；如使用业务空间专属域名，将主机替换为 {WorkspaceId}.cn-beijing.maas.aliyuncs.com。',
+  },
+  {
+    name: 'OpenModel 聚合',
+    endpoint: 'https://api.openmodel.ai/v1',
+    models: 'kimi-k2.5, qwen3-max, deepseek-v4-flash, MiniMax-M2.5',
+    note: '聚合平台，模型名以平台文档和账号权限为准。',
+  },
+]
+
 export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
@@ -48,6 +168,7 @@ export default function SettingsPage() {
   const [logPurging, setLogPurging] = useState(false)
   const [logMsg, setLogMsg] = useState('')
   const [logOk, setLogOk] = useState<boolean | null>(null)
+  const [endpointHelpOpen, setEndpointHelpOpen] = useState(false)
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -269,6 +390,14 @@ export default function SettingsPage() {
 
   if (!s) return <div className="text-slate-400">加载中…</div>
 
+  const endpointHints = wireApi === 'anthropic' ? anthropicEndpointHints : domesticEndpointHints
+  const endpointHelpTitle =
+    wireApi === 'anthropic' ? '常见 Anthropic Messages 端点' : '常见国产模型通用端点'
+  const endpointHelpDescription =
+    wireApi === 'anthropic'
+      ? '这些地址填在 API Base URL；本项目会在地址后追加 /messages。默认模型填写对应模型名或平台接入点 ID。'
+      : '这些地址填在 API Base URL；默认模型填写对应模型名或控制台里的接入点 ID。各厂商可能调整模型名，最终以官方控制台为准。'
+
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-2xl font-semibold">设置</h1>
@@ -299,12 +428,23 @@ export default function SettingsPage() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label>API Base URL</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label>API Base URL</Label>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setEndpointHelpOpen(true)}>
+              {wireApi === 'anthropic' ? 'Anthropic 端点' : '国产模型端点'}
+            </Button>
+          </div>
           <Input
             value={defaultBaseUrl}
             onChange={(e) => setDefaultBaseUrl(e.target.value)}
             placeholder={wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'}
           />
+          {wireApi === 'chat' ? (
+            <div className="text-xs text-slate-500">
+              智谱 BigModel 通用端点填 https://open.bigmodel.cn/api/paas/v4；GLM Coding Plan 填
+              https://open.bigmodel.cn/api/coding/paas/v4，不要填 /api/v1。
+            </div>
+          ) : null}
         </div>
         <div className="space-y-1.5">
           <Label>
@@ -564,6 +704,39 @@ export default function SettingsPage() {
               {logPurging ? '清理中…' : '确认清理'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={endpointHelpOpen} onOpenChange={setEndpointHelpOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{endpointHelpTitle}</DialogTitle>
+            <DialogDescription>{endpointHelpDescription}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+            {endpointHints.map((item) => (
+              <div key={item.name} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="font-medium text-slate-100">{item.name}</div>
+                    <div className="mt-1 break-all font-mono text-xs text-sky-300">{item.endpoint}</div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setDefaultBaseUrl(item.endpoint)
+                      setEndpointHelpOpen(false)
+                    }}
+                  >
+                    填入
+                  </Button>
+                </div>
+                <div className="mt-2 text-xs text-slate-400">模型示例：{item.models}</div>
+                <div className="mt-1 text-xs text-slate-500">{item.note}</div>
+              </div>
+            ))}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

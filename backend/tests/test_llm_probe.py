@@ -44,6 +44,26 @@ def test_list_models_success(tmp_env, monkeypatch):
     assert seen["auth"] == "Bearer sk-live"
 
 
+def test_list_models_normalizes_bigmodel_legacy_v1(tmp_env, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": [{"id": "glm-5.3"}]})
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/models",
+            json={"base_url": "https://open.bigmodel.cn/api/v1", "api_key": "sk-live"},
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert seen["url"] == "https://open.bigmodel.cn/api/paas/v4/models"
+
+
 def test_list_models_uses_saved_key(tmp_env, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("authorization") == "Bearer sk-saved"

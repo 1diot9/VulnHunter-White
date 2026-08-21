@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from ..models import AppSettings, Project, SessionLocal
 from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, SettingsOut
@@ -23,6 +24,17 @@ def normalize_wire_api(value: str | None) -> str:
     wire = (value or "chat").strip().lower()
     wire = _WIRE_ALIASES.get(wire, wire)
     return wire if wire in _WIRE else "chat"
+
+
+def normalize_llm_base_url(value: str | None) -> str:
+    url = (value or "").strip().rstrip("/")
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    if parsed.netloc.lower() == "open.bigmodel.cn" and parsed.path.rstrip("/") == "/api/v1":
+        parsed = parsed._replace(path="/api/paas/v4")
+        return urlunsplit(parsed).rstrip("/")
+    return url
 
 
 @dataclass(frozen=True)
@@ -69,7 +81,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
             LlmProviderOut(
                 id=pid,
                 name=str(p.get("name") or pid).strip() or pid,
-                base_url=str(p.get("base_url") or "").strip(),
+                base_url=normalize_llm_base_url(str(p.get("base_url") or "")),
                 wire_api=wire,
                 env_key=str(p.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY",
                 api_key_set=bool(str(p.get("api_key") or "").strip()),
@@ -116,7 +128,7 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         fofa_key_set=bool((getattr(row, "fofa_key", None) or "").strip()),
         fofa_base_url=(getattr(row, "fofa_base_url", None) or "").strip() or "https://fofa.info",
         default_model=(row.default_model or "").strip(),
-        default_base_url=(row.default_base_url or "").strip(),
+        default_base_url=normalize_llm_base_url(row.default_base_url),
         default_api_key_set=bool((row.default_api_key or "").strip()),
         context_window=int(row.context_window or 128000),
         http_proxy=_proxy_for_api(row, "http_proxy", "https_proxy", "http_proxy"),
@@ -156,7 +168,7 @@ def merge_providers_update(
             {
                 "id": pid,
                 "name": (item.name or "").strip() or pid,
-                "base_url": (item.base_url or "").strip(),
+                "base_url": normalize_llm_base_url(item.base_url),
                 "wire_api": wire,
                 "env_key": (item.env_key or "").strip()
                 or ("ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"),
@@ -211,7 +223,7 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
                 break
 
     if provider:
-        base_url = str(provider.get("base_url") or "").strip()
+        base_url = normalize_llm_base_url(str(provider.get("base_url") or ""))
         api_key = str(provider.get("api_key") or "").strip()
         env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip()
         if not api_key:
@@ -231,11 +243,11 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         )
 
     # Fallback defaults
-    base_url = ((row.default_base_url if row else "") or "").strip() or "https://api.openai.com/v1"
+    base_url = normalize_llm_base_url((row.default_base_url if row else "") or "") or "https://api.openai.com/v1"
     api_key = ((row.default_api_key if row else "") or "").strip() or (os.environ.get("OPENAI_API_KEY") or "")
     model = model or ((row.default_model if row else "") or "").strip() or "gpt-4o"
     return ResolvedLlm(
-        base_url=base_url.rstrip("/"),
+        base_url=base_url,
         wire_api="chat",
         model=model,
         api_key=api_key,
@@ -262,7 +274,7 @@ def resolve_probe_target(
 ) -> tuple[str, str, str, str]:
     """Resolve Base URL / API key / model / wire_api from form overrides, then saved settings."""
     row = get_settings_row()
-    saved_url = (row.default_base_url or "").strip()
+    saved_url = normalize_llm_base_url(row.default_base_url)
     saved_key = (row.default_api_key or "").strip()
     saved_model = (row.default_model or "").strip()
     saved_wire = "chat"
@@ -270,7 +282,7 @@ def resolve_probe_target(
     if provider:
         saved_wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
         if not saved_url:
-            saved_url = str(provider.get("base_url") or "").strip()
+            saved_url = normalize_llm_base_url(str(provider.get("base_url") or ""))
         if not saved_key:
             saved_key = str(provider.get("api_key") or "").strip()
             if not saved_key:
@@ -279,12 +291,12 @@ def resolve_probe_target(
 
     wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
     default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
-    url = (base_url or "").strip() or saved_url or default_url
+    url = normalize_llm_base_url(base_url) or saved_url or default_url
     key = (api_key or "").strip() or saved_key or (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not key and wire == "anthropic":
         key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     mdl = (model or "").strip() or saved_model
-    return url.rstrip("/"), key, mdl, wire
+    return url, key, mdl, wire
 
 
 def get_settings_row() -> AppSettings:
