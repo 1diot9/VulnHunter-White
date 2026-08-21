@@ -770,7 +770,8 @@ class NewFeaturesIntegrationTest {
 
     private static Process startDebuggee(int port) throws IOException {
         String javaHome = System.getProperty("java.home");
-        Path javaBin = Path.of(javaHome, "bin", "java.exe");
+        String javaExecutable = System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java";
+        Path javaBin = Path.of(javaHome, "bin", javaExecutable);
         String classPath = System.getProperty("java.class.path");
         ProcessBuilder builder = new ProcessBuilder(
                 javaBin.toString(),
