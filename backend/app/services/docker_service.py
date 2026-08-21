@@ -549,6 +549,59 @@ class DockerService:
             "total_gb": round(total_bytes / (1024**3), 2),
         }
 
+    def prune_build_cache(
+        self,
+        *,
+        all_unused: bool = False,
+        keep_storage_mb: int | None = None,
+    ) -> dict[str, Any]:
+        """Prune Docker BuildKit cache without touching images, containers, or volumes."""
+        if not self.ping():
+            return {
+                "skipped": True,
+                "reason": "docker unavailable",
+                "all_unused": bool(all_unused),
+                "freed_bytes": 0,
+                "freed_mb": 0.0,
+                "errors": ["docker unavailable"],
+            }
+        with self._lock:
+            api = getattr(self.client, "api", None)
+            prune_builds = getattr(api, "prune_builds", None)
+            if not callable(prune_builds):
+                return {
+                    "skipped": True,
+                    "reason": "docker build cache prune unsupported",
+                    "all_unused": bool(all_unused),
+                    "freed_bytes": 0,
+                    "freed_mb": 0.0,
+                    "errors": ["docker build cache prune unsupported"],
+                }
+            kwargs: dict[str, Any] = {"all": bool(all_unused)}
+            if keep_storage_mb and keep_storage_mb > 0:
+                kwargs["keep_storage"] = int(keep_storage_mb) * 1024 * 1024
+            try:
+                raw = prune_builds(**kwargs) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Docker build cache prune failed: %s", exc)
+                return {
+                    "skipped": False,
+                    "reason": "docker build cache prune failed",
+                    "all_unused": bool(all_unused),
+                    "freed_bytes": 0,
+                    "freed_mb": 0.0,
+                    "errors": [str(exc)],
+                }
+            freed = int(raw.get("SpaceReclaimed") or raw.get("space_reclaimed") or 0)
+            return {
+                "skipped": False,
+                "reason": None,
+                "all_unused": bool(all_unused),
+                "freed_bytes": freed,
+                "freed_mb": round(freed / (1024 * 1024), 2),
+                "errors": [],
+            }
+
     def owned_image(self, image_id: str, refs: list[ProjectRef] | None = None) -> dict[str, Any] | None:
         refs = refs if refs is not None else collect_project_refs()
         with self._lock:

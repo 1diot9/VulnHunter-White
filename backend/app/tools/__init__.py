@@ -20,7 +20,7 @@ from ..services.live_log import live_log
 ToolHandler = Callable[["ToolContext", dict[str, Any]], dict[str, Any]]
 
 # Tools that may run in parallel within one assistant turn
-PARALLEL_SAFE = frozenset({"Read", "Grep", "Glob", "SearchOldVuln", "WebSearch"})
+PARALLEL_SAFE = frozenset({"Read", "Grep", "Glob", "SearchOldVuln", "SearchTools", "WebSearch"})
 
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 # Hidden and rejected when a pending vuln has hit consecutive reviewer timeouts.
@@ -156,6 +156,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "PowerShell",
             "TodoWrite",
             "SearchOldVuln",
+            "SearchTools",
             "SearchGHSA",
             "ConfirmVuln",
             "CollectLabFingerprints",
@@ -217,6 +218,16 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishAttackChain",
         }
     ),
+    "cli_indexer": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "Bash",
+            "PowerShell",
+            "FinishIndex",
+        }
+    ),
 }
 
 
@@ -229,6 +240,9 @@ class ToolContext:
     worker_id: str | None = None
     vuln_id: int | None = None
     file_path: str | None = None
+    workspace_root: str | None = None
+    silent: bool = False
+    log_path: str | None = None
     cancel_requested: Callable[[], bool] = field(default=lambda: False)
     state: dict[str, Any] = field(default_factory=dict)
 
@@ -344,8 +358,16 @@ class ToolRegistry:
             )
         return out
 
+    def _event_log(self, ctx: ToolContext):
+        if getattr(ctx, "silent", False) and getattr(ctx, "log_path", None):
+            from ..services.cli_tool_index import file_event_log
+
+            return file_event_log(Path(str(ctx.log_path)))
+        return live_log
+
     def dispatch(self, ctx: ToolContext, name: str, arguments: dict[str, Any] | str) -> dict[str, Any]:
         allowed = tools_allowed_for_role(ctx.role)
+        events = self._event_log(ctx)
         if name not in allowed:
             if name in SHELL_TOOLS:
                 result = {
@@ -359,7 +381,7 @@ class ToolRegistry:
                     "error": f"角色 {ctx.role} 无权调用工具 {name}",
                     "error_class": "call",
                 }
-            live_log.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
+            events.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
             return result
         if ctx.role == "reviewer" and name in _STATIC_FORCED_BLOCKED_TOOLS:
             from ..dynamic_verify import vuln_forces_static_review
@@ -373,7 +395,7 @@ class ToolRegistry:
                     ),
                     "error_class": "call",
                 }
-                live_log.tool(
+                events.tool(
                     ctx.project_id,
                     name,
                     arguments if isinstance(arguments, dict) else {},
@@ -385,22 +407,22 @@ class ToolRegistry:
         spec = self._tools.get(name)
         if not spec:
             result = {"ok": False, "error": f"未知工具: {name}", "error_class": "call"}
-            live_log.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
+            events.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
             return result
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments) if arguments.strip() else {}
             except json.JSONDecodeError as e:
                 result = {"ok": False, "error": f"参数 JSON 无效: {e}", "error_class": "call"}
-                live_log.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
+                events.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
                 return result
         if not isinstance(arguments, dict):
             result = {"ok": False, "error": "参数必须是对象", "error_class": "call"}
-            live_log.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
+            events.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
             return result
 
         if name in ("Bash", "PowerShell"):
-            live_log.tool(ctx.project_id, name, arguments, None, phase=ctx.phase, role=ctx.role, started=True)
+            events.tool(ctx.project_id, name, arguments, None, phase=ctx.phase, role=ctx.role, started=True)
 
         started = time.time()
         try:
@@ -422,7 +444,7 @@ class ToolRegistry:
         duration_ms = (time.time() - started) * 1000
         if not result.get("ok") and result.get("error_class") == "local":
             self._log_local_exec_error(ctx, name, arguments, result, duration_ms)
-            live_log.tool_exec_error(
+            events.tool_exec_error(
                 ctx.project_id,
                 name,
                 arguments,
@@ -433,7 +455,7 @@ class ToolRegistry:
                 phase_run_id=ctx.phase_run_id,
             )
         self._log(ctx, name, arguments, result, duration_ms)
-        live_log.tool(
+        events.tool(
             ctx.project_id,
             name,
             arguments,
@@ -451,6 +473,8 @@ class ToolRegistry:
         result: dict[str, Any],
         duration_ms: float,
     ) -> None:
+        if getattr(ctx, "silent", False) or not ctx.project_id:
+            return
         try:
             from ..services.paths import tool_exec_errors_path
 
@@ -480,6 +504,8 @@ class ToolRegistry:
         result: dict[str, Any],
         duration_ms: float,
     ) -> None:
+        if getattr(ctx, "silent", False) or not ctx.project_id:
+            return
         try:
             error_class = result.get("error_class")
             if result.get("ok"):
@@ -517,6 +543,7 @@ def register_all_tools() -> None:
     from . import phase_fast  # noqa: F401
     from . import phase_bypass  # noqa: F401
     from . import phase_reviewer  # noqa: F401
+    from . import phase_cli_index  # noqa: F401
     from . import phase_verifier  # noqa: F401
     from . import phase_attack_chain  # noqa: F401
     from . import run_code  # noqa: F401

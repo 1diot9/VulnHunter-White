@@ -83,6 +83,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.http_proxy = (body.http_proxy or "").strip()
         if body.chat_proxy is not None:
             row.chat_proxy = (body.chat_proxy or "").strip()
+        if body.cli_tools_dir is not None:
+            row.cli_tools_dir = (body.cli_tools_dir or "").strip() or None
         db.commit()
         db.refresh(row)
         out = settings_out_from_row(row)

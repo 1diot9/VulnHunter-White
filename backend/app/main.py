@@ -33,6 +33,9 @@ def on_startup() -> None:
     from .services.pipeline import recover_inflight_projects
 
     recover_inflight_projects()
+    from .services.cli_tool_index import start_cli_tool_scanner
+
+    start_cli_tool_scanner()
 
 
 @app.get("/api/health")

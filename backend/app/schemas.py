@@ -43,6 +43,7 @@ class SettingsOut(BaseModel):
     context_window: int = 128000
     http_proxy: str = ""
     chat_proxy: str = ""
+    cli_tools_dir: str = "tools/cli"
 
 
 class SettingsUpdate(BaseModel):
@@ -58,6 +59,7 @@ class SettingsUpdate(BaseModel):
     context_window: int | None = None
     http_proxy: str | None = None
     chat_proxy: str | None = None
+    cli_tools_dir: str | None = None
 
 
 class LlmProbeIn(BaseModel):
@@ -132,12 +134,22 @@ class LiveLogPurgeOut(BaseModel):
 
 
 MANUAL_LAB_PROMPT_MAX = 20000
+WORKER_HINT_MAX = 20000
 
 
 def normalize_manual_lab_prompt(raw: Any) -> str:
     text = str(raw or "").strip()
     if len(text) > MANUAL_LAB_PROMPT_MAX:
         raise ValueError(f"人工靶场说明过长，最多 {MANUAL_LAB_PROMPT_MAX} 字")
+    return text
+
+
+def normalize_worker_hint(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if "\x00" in text:
+        raise ValueError("挖掘提示必须是文本，不能包含空字节")
+    if len(text) > WORKER_HINT_MAX:
+        raise ValueError(f"挖掘提示过长，最多 {WORKER_HINT_MAX} 字")
     return text
 
 
@@ -182,6 +194,7 @@ class ProjectCreate(BaseModel):
     fast_enabled: bool = False
     bypass_enabled: bool = False
     llm_model: str = Field(default="", max_length=256)
+    worker_hint: str = Field(default="", max_length=WORKER_HINT_MAX)
 
 
 class ProjectUpdate(BaseModel):
@@ -198,6 +211,7 @@ class ProjectUpdate(BaseModel):
     fast_enabled: bool | None = None
     bypass_enabled: bool | None = None
     llm_model: str | None = Field(default=None, max_length=256)
+    worker_hint: str | None = Field(default=None, max_length=WORKER_HINT_MAX)
 
 
 class WeightExtOut(BaseModel):
@@ -233,6 +247,7 @@ class ProjectOut(BaseModel):
     bypass_enabled: bool = False
     bypass_queue_frozen: bool = False
     llm_model: str = ""
+    worker_hint: str = ""
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -470,6 +485,11 @@ class PhaseReportGroup(BaseModel):
 class PhaseReportList(BaseModel):
     phases: list[PhaseReportGroup] = Field(default_factory=list)
     count: int = 0
+    selected_count: int = 0
+    limit: int | None = None
+    offset: int = 0
+    phase: str = ""
+    subphase: str = ""
 
 
 class PhaseReportDetail(PhaseReportItem):

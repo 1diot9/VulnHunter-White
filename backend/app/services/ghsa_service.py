@@ -43,10 +43,13 @@ ECOSYSTEM_HINTS = {
 
 
 def _token() -> str:
-    with SessionLocal() as db:
-        row = db.query(AppSettings).first()
-        if row and (row.github_pat or "").strip():
-            return row.github_pat.strip()
+    try:
+        with SessionLocal() as db:
+            row = db.query(AppSettings).first()
+            if row and (row.github_pat or "").strip():
+                return row.github_pat.strip()
+    except Exception:  # noqa: BLE001
+        pass
     return (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
 
 
@@ -79,11 +82,17 @@ class _GitHubRateLimiter:
     def __init__(self, *, window_seconds: float = 3600.0) -> None:
         limit = _default_primary_limit()
         self._window = float(window_seconds) if window_seconds > 0 else 3600.0
+        self._pace_regular = self._window <= 120.0
         self._limit = limit
         self._remaining: int | None = None
         self._reset_epoch: float | None = None
-        self._min_interval = self._window / max(1, limit)
+        self._min_interval = self._regular_interval()
         self._next_allowed_at = 0.0
+
+    def _regular_interval(self) -> float:
+        if not self._pace_regular:
+            return 0.0
+        return self._window / max(1, self._limit)
 
     def wait_before_request(self) -> None:
         now = time.monotonic()
@@ -98,7 +107,7 @@ class _GitHubRateLimiter:
         reset_raw = headers.get("x-ratelimit-reset")
         if limit_raw and limit_raw.isdigit():
             self._limit = max(1, int(limit_raw))
-            self._min_interval = self._window / self._limit
+            self._min_interval = self._regular_interval()
         if remaining_raw is not None and remaining_raw.isdigit():
             self._remaining = int(remaining_raw)
         if reset_raw and reset_raw.isdigit():
@@ -113,7 +122,7 @@ class _GitHubRateLimiter:
             secs_left = max(0.0, self._reset_epoch - time.time())
             if self._remaining == 0:
                 interval = max(interval, secs_left + 0.5)
-            elif secs_left > 0:
+            elif self._pace_regular and secs_left > 0:
                 interval = max(interval, secs_left / max(self._remaining, 1))
         self._next_allowed_at = time.monotonic() + interval
 

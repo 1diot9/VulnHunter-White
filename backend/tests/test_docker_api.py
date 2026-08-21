@@ -173,10 +173,20 @@ class _FakeImages:
         self.items = [i for i in self.items if i.id != image_id]
 
 
+class _FakeApi:
+    def __init__(self):
+        self.prune_builds_calls: list[dict] = []
+
+    def prune_builds(self, **kwargs):
+        self.prune_builds_calls.append(kwargs)
+        return {"SpaceReclaimed": 5 * 1024 * 1024}
+
+
 class _FakeClient:
     def __init__(self, containers: list[_FakeContainer], images: list[_FakeImage]):
         self.containers = _FakeContainers(containers)
         self.images = _FakeImages(images)
+        self.api = _FakeApi()
 
     def ping(self):
         return True
@@ -270,6 +280,18 @@ def test_docker_unavailable_returns_503(tmp_env, monkeypatch):
     with TestClient(app) as client:
         assert client.get("/api/docker/containers").status_code == 503
         assert client.get("/api/docker/images").status_code == 503
+
+
+def test_prune_build_cache_uses_buildkit_only(tmp_env, monkeypatch):
+    fake = _FakeClient([], [])
+    _install_fake(monkeypatch, fake)
+
+    result = docker_service.prune_build_cache(all_unused=False, keep_storage_mb=20)
+
+    assert result["skipped"] is False
+    assert result["freed_bytes"] == 5 * 1024 * 1024
+    assert fake.api.prune_builds_calls == [{"all": False, "keep_storage": 20 * 1024 * 1024}]
+    assert fake.images.removed == []
 
 
 def test_stop_batch_skips_foreign_container(tmp_env, project, monkeypatch):

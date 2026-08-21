@@ -4,6 +4,7 @@
 
 源码已导入 `src/`。在项目 `env/` 下搭建 Web 靶场（规范见后文 docker 说明）：
 - 优先复用 `src/` 里已有的 Dockerfile / compose / 官方镜像
+- **被测应用必须用最新版本**：靶场里跑的 Web 应用从当前导入的 `src/` 构建（本次审计快照），不要换成旧发行版、旧 git tag、Docker Hub 上的旧应用镜像、vulhub/历史靶场镜像，以便更容易打出已知洞。compose 若写的是旧版应用镜像，改为用 `src/` 构建。mysql/redis 等**依赖**镜像按项目需要选择即可，本条不要求它们 latest。
 - 自建镜像必须打成 `${lab_image}`；mysql/redis 等官方镜像保持原名，不要改成 vulnhunter-*
 - 对外 Web 容器名必须是 `${lab_container}`；依赖容器 `${lab_container}-<role>`（如 `-db`、`-mysql`）
 - compose 项目名必须是 `${lab_compose_project}`（文件里写 `name:`，或 `docker compose -p`），不要用目录名 `env`

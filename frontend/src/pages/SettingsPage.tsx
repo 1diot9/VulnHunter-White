@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [contextWindow, setContextWindow] = useState(128000)
   const [httpProxy, setHttpProxy] = useState('')
   const [chatProxy, setChatProxy] = useState('')
+  const [cliToolsDir, setCliToolsDir] = useState('tools/cli')
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -60,6 +61,7 @@ export default function SettingsPage() {
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
       setHttpProxy(x.http_proxy || '')
       setChatProxy(x.chat_proxy || '')
+      setCliToolsDir(x.cli_tools_dir || 'tools/cli')
     })
   }, [])
 
@@ -202,6 +204,7 @@ export default function SettingsPage() {
         context_window: contextWindow,
         http_proxy: httpProxy.trim(),
         chat_proxy: chatProxy.trim(),
+        cli_tools_dir: cliToolsDir.trim() || 'tools/cli',
       }
       if (defaultApiKey.trim()) body.default_api_key = defaultApiKey.trim()
       if (githubPat.trim()) body.github_pat = githubPat.trim()
@@ -477,6 +480,17 @@ export default function SettingsPage() {
             placeholder="留空则 Chat Completions 直连"
           />
           <div className="text-xs text-slate-500">代理不可用时自动直连，不必先清空。</div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>CLI 工具目录</Label>
+          <Input
+            value={cliToolsDir}
+            onChange={(e) => setCliToolsDir(e.target.value)}
+            placeholder="tools/cli"
+          />
+          <div className="text-xs text-slate-500">
+            Reviewer 用 SearchTools 搜索这里已索引的 CLI。每个子目录是一个工具。相对路径相对仓库根目录。后台轮询扫描，静默 Agent（最多 30 轮）生成描述；日志写在该子目录的 agent.log.jsonl。
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={save}>保存</Button>

@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     round_report_inject_max_chars: int = 8 * 1024
     temperature: float = 0.2
 
+    # User CLI tools for Reviewer SearchTools (one subdirectory = one tool).
+    cli_tools_dir: str = "tools/cli"
+    cli_tools_poll_sec: int = 15
+    timeout_cli_index: int = 900
+
     # Debug MCP directories (relative to repo root; env can override)
     mcp_java: str = "tools/mcp/java-debug"
     mcp_node: str = "tools/mcp/node-debug"
@@ -88,6 +93,12 @@ class Settings(BaseSettings):
     sandbox_image: str = "vulnhunter/sandbox:latest"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
+
+    # Docker build cache hygiene. The automatic path only prunes dangling BuildKit
+    # cache after Agent-issued build commands; images, containers, and volumes are untouched.
+    docker_auto_prune_build_cache: bool = True
+    docker_auto_prune_build_cache_all: bool = False
+    docker_auto_prune_build_cache_keep_storage_mb: int = 0
 
 
 settings = Settings()

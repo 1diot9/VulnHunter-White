@@ -42,6 +42,7 @@ INITIAL_DOCS = (
     "fast_worker.md",
     "bypass_worker.md",
     "sink_triage.md",
+    "cli_indexer.md",
 )
 
 
@@ -127,6 +128,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "root_cause_key" in text
     assert "config_premise" in text
     assert "MergeIntoVuln" in text
+    assert "SearchTools" in text
     assert "原样复用" in text
     assert "不要另写新键" in text or "禁止另写新键" in text or "禁止另造" in text
     assert "cve_candidate" in text
@@ -154,6 +156,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "仅响应差别" in text
     assert "limited_info" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
+    assert "SearchTools" in load_prompt("reviewer.md")
+    assert "SearchTools" in load_prompt("initial/reviewer.md")
     followup = load_prompt("initial/reviewer-dynamic-followup.md")
     assert "追加动态验证" in followup
     assert "evidence_level=dynamic" in followup
@@ -357,6 +361,7 @@ def test_worker_prompts_inject_recon_and_round_history():
     assert "docs/code-map.md" in worker
     assert "docs/auth.md" in worker
     assert "最近最多 10 轮挖掘摘要" in worker
+    assert "人工挖掘提示" in worker
     assert "不要重新梳理项目结构" in worker
     assert "不要重复分析项目结构" in initial
     assert "不要重复尝试摘要中已走过的路径" in initial
@@ -408,6 +413,7 @@ def test_fast_worker_and_sink_triage_prompts():
     assert "FinishFile" in worker
     assert "不要 FinishFile / FinishRound" in worker
     assert "FinishSink" in initial
+    assert "人工挖掘提示" in worker
     assert "FinishSinkTriage" in triage
     assert "禁止读源码" in triage
     assert "FinishSinkTriage" in triage_initial
@@ -418,6 +424,7 @@ def test_bypass_worker_prompts():
     worker = load_prompt("bypass_worker.md")
     initial = load_prompt("initial/bypass_worker.md")
     assert "FinishBypass" in worker
+    assert "人工挖掘提示" in worker
     assert "不要 FinishFile / FinishRound / FinishSink" in worker
     assert "patched" in worker
     assert "unpatched" in worker

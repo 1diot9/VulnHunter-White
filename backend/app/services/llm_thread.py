@@ -36,7 +36,7 @@ def _log_system(
     role: str,
     text: str,
 ) -> None:
-    if project_id is None:
+    if not project_id:
         return
     try:
         from .live_log import live_log

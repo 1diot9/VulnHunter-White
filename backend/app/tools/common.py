@@ -24,13 +24,19 @@ from ..services.ingest import IGNORE_DIR_NAMES
 from ..services.lab import write_lab_doc_if_ready
 from ..services.paths import env_dir, old_vulns_dir, project_root, src_dir, vuln_dir
 from . import ToolSpec, registry
-from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell, is_src_path
+from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell, ctx_workspace_root, is_src_path
 
 _SHELL_TIMEOUT_DEFAULT = 120
 _SHELL_TIMEOUT_MAX = 180
 _SHELL_OUTPUT_MAX_BYTES = 256 * 1024
 _SHELL_STDOUT_KEEP = 8000
 _SHELL_STDERR_KEEP = 4000
+_DOCKER_BUILD_RE = re.compile(
+    r"(?is)(?:^|[;&|()\s])docker\s+(?:image\s+)?build\b|"
+    r"(?:^|[;&|()\s])docker\s+buildx\s+build\b|"
+    r"(?:^|[;&|()\s])docker(?:-compose|\s+compose)\b[^\n;&|]*\bbuild\b|"
+    r"(?:^|[;&|()\s])docker(?:-compose|\s+compose)\b[^\n;&|]*\bup\b[^\n;&|]*--build\b"
+)
 _PS_UTF8_PREFIX = (
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
     "$OutputEncoding = [Console]::OutputEncoding; "
@@ -183,6 +189,41 @@ def _is_old_vuln_collect_role(ctx) -> bool:
     return role.endswith("old-vuln") or role.endswith("old-vuln-ghsa") or phase.endswith("old-vuln") or phase.endswith("old-vuln-ghsa")
 
 
+def _workspace_root(ctx) -> Path | None:
+    return ctx_workspace_root(ctx)
+
+
+def _readable(ctx, rel: str) -> Path:
+    return assert_readable(ctx.project_id, rel, workspace_root=_workspace_root(ctx))
+
+
+def _writable(ctx, rel: str) -> Path:
+    return assert_writable(ctx.project_id, rel, workspace_root=_workspace_root(ctx))
+
+
+def _display_rel(ctx, path: Path) -> str:
+    ws = _workspace_root(ctx)
+    root = ws if ws is not None else project_root(ctx.project_id)
+    try:
+        return str(path.relative_to(root)).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def _search_root(ctx, root_rel: str | None) -> Path:
+    ws = _workspace_root(ctx)
+    rel = (root_rel or "").strip() or ("." if ws is not None else "src")
+    if ws is not None:
+        if rel in (".", "", "src") or rel.startswith("src"):
+            return ws
+        root = _readable(ctx, rel)
+        return root.parent if root.is_file() else root
+    if rel == "src" or rel.startswith("src"):
+        return src_dir(ctx.project_id)
+    root = assert_readable(ctx.project_id, rel)
+    return root.parent if root.is_file() else root
+
+
 def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     paths = args.get("paths") or args.get("path")
     if isinstance(paths, str):
@@ -198,7 +239,7 @@ def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     local_errors = 0
     for p in paths:
         try:
-            target = assert_readable(ctx.project_id, p)
+            target = _readable(ctx, p)
             if _is_old_vuln_collect_role(ctx) and is_src_path(ctx.project_id, target):
                 results.append({"path": p, "error": "历史漏洞阶段只收集，禁止读源码"})
                 local_errors += 1
@@ -247,7 +288,7 @@ def _write_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if content is None:
         return call_fail("缺少 content")
     try:
-        target = assert_writable(ctx.project_id, path)
+        target = _writable(ctx, path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(content), encoding="utf-8")
         out = {"ok": True, "path": path, "bytes": len(str(content).encode("utf-8"))}
@@ -311,14 +352,9 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 
 def _glob_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     pattern = args.get("pattern") or "**/*"
-    root_rel = args.get("root") or "src"
+    root_rel = args.get("root")
     try:
-        if root_rel == "src" or root_rel.startswith("src"):
-            root = src_dir(ctx.project_id)
-        else:
-            root = assert_readable(ctx.project_id, root_rel)
-            if root.is_file():
-                root = root.parent
+        root = _search_root(ctx, root_rel)
     except SandboxError as e:
         return local_fail(str(e))
     pat = str(pattern).replace("\\", "/")
@@ -342,14 +378,10 @@ def _glob_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         elif not fnmatch.fnmatch(p.name, pat):
             continue
         try:
-            assert_readable(ctx.project_id, str(p))
+            _readable(ctx, str(p))
         except SandboxError:
             continue
-        try:
-            rel = str(p.relative_to(project_root(ctx.project_id))).replace("\\", "/")
-        except ValueError:
-            rel = str(p)
-        matches.append(rel)
+        matches.append(_display_rel(ctx, p))
         if len(matches) >= int(args.get("limit") or 200):
             break
     return {"ok": True, "matches": matches, "count": len(matches)}
@@ -359,7 +391,7 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     pattern = args.get("pattern")
     if not pattern:
         return call_fail("缺少 pattern")
-    root_rel = args.get("root") or "src"
+    root_rel = args.get("root")
     glob_pat = args.get("glob") or "*"
     case_insensitive = bool(args.get("i") or args.get("ignore_case"))
     try:
@@ -368,7 +400,7 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     except re.error as e:
         return call_fail(f"正则无效: {e}")
     try:
-        root = src_dir(ctx.project_id) if root_rel.startswith("src") else assert_readable(ctx.project_id, root_rel)
+        root = _search_root(ctx, root_rel)
         files = list(_iter_files(root, glob_pat))
     except SandboxError as e:
         return local_fail(str(e))
@@ -376,7 +408,7 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     hits = []
     for fp in files:
         try:
-            assert_readable(ctx.project_id, str(fp))
+            _readable(ctx, str(fp))
         except SandboxError:
             continue
         try:
@@ -385,11 +417,7 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if rx.search(line):
-                try:
-                    rel = str(fp.relative_to(project_root(ctx.project_id))).replace("\\", "/")
-                except ValueError:
-                    rel = str(fp)
-                hits.append({"path": rel, "line": i, "text": line[:500]})
+                hits.append({"path": _display_rel(ctx, fp), "line": i, "text": line[:500]})
                 if len(hits) >= int(args.get("limit") or 100):
                     return {"ok": True, "hits": hits, "truncated": True}
     return {"ok": True, "hits": hits, "truncated": False}
@@ -419,6 +447,23 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
             proc.kill()
         except OSError:
             pass
+
+
+def _is_docker_build_command(command: str) -> bool:
+    """Best-effort detection for Agent-issued Docker build commands."""
+    return bool(_DOCKER_BUILD_RE.search(command or ""))
+
+
+def _auto_prune_docker_build_cache(command: str) -> dict[str, Any] | None:
+    """Prune dangling BuildKit cache after builds without changing command success."""
+    if not settings.docker_auto_prune_build_cache or not _is_docker_build_command(command):
+        return None
+    from ..services.docker_service import docker_service
+
+    return docker_service.prune_build_cache(
+        all_unused=bool(settings.docker_auto_prune_build_cache_all),
+        keep_storage_mb=int(settings.docker_auto_prune_build_cache_keep_storage_mb or 0),
+    )
 
 
 def _run_shell_limited(
@@ -527,10 +572,10 @@ def _shell_handler(ctx, args: dict[str, Any], shell: str) -> dict[str, Any]:
                         f"可能产生危害的互联网复测须先 AskUser 并获用户同意，禁止直接执行命令。原因：{harm}"
                     )
     try:
-        block_dangerous_shell(command, ctx.project_id)
+        block_dangerous_shell(command, ctx.project_id, workspace_root=_workspace_root(ctx))
     except SandboxError as e:
         return local_fail(str(e))
-    cwd = project_root(ctx.project_id)
+    cwd = _workspace_root(ctx) or project_root(ctx.project_id)
     try:
         timeout = int(args.get("timeout") or _SHELL_TIMEOUT_DEFAULT)
     except (TypeError, ValueError):
@@ -558,17 +603,24 @@ def _shell_handler(ctx, args: dict[str, Any], shell: str) -> dict[str, Any]:
     out = (stdout or "")[-_SHELL_STDOUT_KEEP:]
     err = (stderr or "")[-_SHELL_STDERR_KEEP:]
     if abort == "timeout":
-        return local_fail(f"命令超时 ({timeout}s)", exit_code=-1, stdout=out, stderr=err)
+        prune = _auto_prune_docker_build_cache(command)
+        extra = {"docker_build_cache_prune": prune} if prune is not None else {}
+        return local_fail(f"命令超时 ({timeout}s)", exit_code=-1, stdout=out, stderr=err, **extra)
     if abort == "cancelled":
         return local_fail("命令已取消", exit_code=-1, stdout=out, stderr=err)
     if abort == "output_limit":
+        prune = _auto_prune_docker_build_cache(command)
+        extra = {"docker_build_cache_prune": prune} if prune is not None else {}
         return local_fail(
             f"输出超过 {_SHELL_OUTPUT_MAX_BYTES} 字节，已终止。请缩小范围，避开 node_modules/target 等目录",
             exit_code=-1,
             stdout=out,
             stderr=err,
             truncated=True,
+            **extra,
         )
+    prune = _auto_prune_docker_build_cache(command)
+    extra = {"docker_build_cache_prune": prune} if prune is not None else {}
     if rc == 0:
         return {
             "ok": True,
@@ -576,12 +628,14 @@ def _shell_handler(ctx, args: dict[str, Any], shell: str) -> dict[str, Any]:
             "stdout": out,
             "stderr": err,
             "error": None,
+            **extra,
         }
     return local_fail(
         err or f"exit {rc}",
         exit_code=rc,
         stdout=out,
         stderr=err,
+        **extra,
     )
 
 
@@ -593,6 +647,26 @@ def _todo_slug(value: str | None, fallback: str) -> str:
     raw = (value or "").strip() or fallback
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
     return (slug[:80] or fallback)
+
+
+def load_todos(ctx) -> list[Any] | None:
+    """Current TodoList: in-memory state first, else the per-agent workspace file."""
+    state = getattr(ctx, "state", None)
+    if isinstance(state, dict) and "todos" in state:
+        todos = state.get("todos")
+        return todos if isinstance(todos, list) and todos else None
+    rel = todo_relpath(ctx)
+    try:
+        path = assert_writable(int(getattr(ctx, "project_id", 0) or 0), rel)
+    except (OSError, TypeError, ValueError, SandboxError):
+        return None
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, list) and data else None
 
 
 def todo_relpath(ctx) -> str:

@@ -18,6 +18,7 @@ def test_health_and_settings(tmp_env):
         assert body["llm_thread_limit"] == 6
         assert body["http_proxy"] == ""
         assert body["chat_proxy"] == ""
+        assert "cli_tools_dir" in body
 
         upd = client.put(
             "/api/settings",
@@ -177,6 +178,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["verifier_enabled"] is False
         assert created.json()["dynamic_verify_enabled"] is False
         assert created.json()["llm_model"] == ""
+        assert created.json()["worker_hint"] == ""
         full = client.post(
             "/api/projects",
             json={
@@ -416,6 +418,61 @@ def test_create_zip_llm_model(tmp_env, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["llm_model"] == "zip-model"
+
+
+def test_project_worker_hint_create_patch_and_clear(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.projects.start_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/hint",
+                "worker_hint": "  重点看导出接口  ",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["worker_hint"] == "重点看导出接口"
+        pid = created.json()["id"]
+        with SessionLocal() as db:
+            p = db.get(Project, pid)
+            assert p.status != "paused"
+        updated = client.patch(
+            f"/api/projects/{pid}",
+            json={"worker_hint": "忽略演示账号\n鉴权以 JWT 为准"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["worker_hint"] == "忽略演示账号\n鉴权以 JWT 为准"
+        cleared = client.patch(f"/api/projects/{pid}", json={"worker_hint": "  "})
+        assert cleared.status_code == 200
+        assert cleared.json()["worker_hint"] == ""
+        too_long = client.patch(f"/api/projects/{pid}", json={"worker_hint": "x" * 20001})
+        assert too_long.status_code == 422
+
+
+def test_create_zip_worker_hint(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"worker_hint": "  zip 提示  "},
+        )
+        assert created.status_code == 200
+        assert created.json()["worker_hint"] == "zip 提示"
 
 
 def test_project_file_progress_counts(tmp_env, project):
@@ -1162,3 +1219,41 @@ def test_project_phase_reports(tmp_env, project):
             params={"path": "workspace/rounds/round-99.md"},
         )
         assert absent.status_code == 404
+
+
+def test_project_phase_reports_are_paged(tmp_env, project):
+    import os
+
+    from app.main import app
+    from app.services.paths import workspace_dir
+
+    rounds = workspace_dir(project) / "rounds"
+    rounds.mkdir(parents=True, exist_ok=True)
+    base_ts = 1_700_000_000
+    for n in range(1, 14):
+        path = rounds / f"round-{n}.md"
+        path.write_text(f"## 第{n}轮审计报告\n\n审计了第 {n} 个目标。\n", encoding="utf-8")
+        os.utime(path, (base_ts + n, base_ts + n))
+
+    with TestClient(app) as client:
+        body = client.get(
+            f"/api/projects/{project}/reports",
+            params={"phase": "worker", "subphase": "mine"},
+        ).json()
+        worker = next(p for p in body["phases"] if p["phase"] == "worker")
+        assert body["count"] == 13
+        assert body["selected_count"] == 13
+        assert worker["count"] == 13
+        assert [item["round"] for item in worker["reports"]] == list(range(13, 3, -1))
+        assert all(not p["reports"] for p in body["phases"] if p["phase"] != "worker")
+
+        older = client.get(
+            f"/api/projects/{project}/reports",
+            params={"phase": "worker", "subphase": "mine", "offset": 10, "limit": 10},
+        ).json()
+        older_worker = next(p for p in older["phases"] if p["phase"] == "worker")
+        assert older["selected_count"] == 13
+        assert [item["round"] for item in older_worker["reports"]] == [3, 2, 1]
+
+        bad = client.get(f"/api/projects/{project}/reports", params={"phase": "unknown"})
+        assert bad.status_code == 400

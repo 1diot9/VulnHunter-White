@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, type PhaseReport, type PhaseReportDetail } from '../api'
+import { api, type PhaseReport, type PhaseReportDetail, type PhaseReportList } from '../api'
 import { formatDateTime } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
@@ -52,6 +52,17 @@ const KIND_VARIANT: Record<string, 'info' | 'success' | 'warning' | 'outline'> =
   summary: 'outline',
   rescue: 'warning',
 }
+const PAGE_SIZE = 10
+
+const EMPTY_REPORT_LIST: PhaseReportList = {
+  phases: [],
+  count: 0,
+  selected_count: 0,
+  limit: PAGE_SIZE,
+  offset: 0,
+  phase: '',
+  subphase: '',
+}
 
 function roundHint(r: { kind: string; round: number | null }): string {
   if (r.round == null) return ''
@@ -82,11 +93,13 @@ export default function PhaseReportsPanel({
             : 'worker',
   )
   const [sub, setSub] = useState('all')
-  const [groups, setGroups] = useState<{ phase: string; label: string; count: number; reports: PhaseReport[] }[]>([])
+  const [reportList, setReportList] = useState<PhaseReportList>(EMPTY_REPORT_LIST)
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<PhaseReportDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const groups = reportList.phases
   const all = useMemo(() => reportsOf(groups, phase), [groups, phase])
   const filtered = useMemo(
     () => (sub === 'all' ? all : all.filter((r) => r.subphase === sub)),
@@ -98,13 +111,21 @@ export default function PhaseReportsPanel({
   }, [phase])
 
   useEffect(() => {
+    setVisibleLimit(PAGE_SIZE)
+    setSelectedId(null)
+    setDetail(null)
+    setError(null)
+  }, [projectId, phase, sub])
+
+  useEffect(() => {
     let alive = true
+    const subphase = sub === 'all' ? undefined : sub
     const load = () => {
-      api
-        .listPhaseReports(projectId)
+      return api
+        .listPhaseReports(projectId, { phase, subphase, limit: visibleLimit, offset: 0 })
         .then((d) => {
           if (!alive) return
-          setGroups(d.phases)
+          setReportList(d)
         })
         .catch(() => undefined)
     }
@@ -113,7 +134,7 @@ export default function PhaseReportsPanel({
       alive = false
       stop()
     }
-  }, [projectId])
+  }, [projectId, phase, sub, visibleLimit])
 
   // Keep selection only if still in the filtered list; do not auto-fetch first report.
   useEffect(() => {
@@ -152,6 +173,10 @@ export default function PhaseReportsPanel({
 
   const counts = Object.fromEntries(groups.map((g) => [g.phase, g.count]))
   const subTabs = SUB_TABS[phase]
+  const activeListMatches =
+    reportList.phase === phase && reportList.subphase === (sub === 'all' ? '' : sub)
+  const selectedTotal = activeListMatches ? reportList.selected_count : filtered.length
+  const canLoadMore = filtered.length < selectedTotal
 
   return (
     <div className="space-y-3">
@@ -198,7 +223,25 @@ export default function PhaseReportsPanel({
               </div>
             </Button>
           ))}
-          {filtered.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无该阶段报告</div> : null}
+          {filtered.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无该筛选报告</div> : null}
+          {selectedTotal > 0 ? (
+            <div className="space-y-2 p-3 text-center text-xs text-muted-foreground">
+              <div>
+                已显示最近 {filtered.length} / 共 {selectedTotal} 份报告
+              </div>
+              {canLoadMore ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setVisibleLimit((n) => n + PAGE_SIZE)}
+                >
+                  加载更早 10 份
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </Card>
         <Card className="min-w-0 max-h-[calc(100vh-16rem)] overflow-auto">
           <CardContent className="p-5">

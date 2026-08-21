@@ -19,6 +19,7 @@ from ..dynamic_verify import (
     static_after_review_timeouts,
 )
 from ..models import Project, SessionLocal, Vuln
+from ..services.cli_tool_index import search_cli_tools
 from ..services.affected_locations import (
     append_affected_locations,
     location_from_vuln,
@@ -696,7 +697,47 @@ def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _search_tools(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or args.get("search_term") or args.get("q") or "").strip()
+    tools = search_cli_tools(query)
+    return {
+        "ok": True,
+        "query": query,
+        "count": len(tools),
+        "tools": tools,
+        "hint": (
+            "空 query 列出全部已索引工具。"
+            "path 是入口绝对路径，dir 是工具目录；用 Bash/PowerShell 按绝对路径执行。"
+            if tools
+            else "没有匹配的已索引工具。用户须在设置页 CLI 工具目录下按「一目录一工具」放置，并等待后台索引完成。"
+        ),
+    }
+
+
 def register_reviewer_tools() -> None:
+    registry.register(
+        ToolSpec(
+            name="SearchTools",
+            description=(
+                "搜索后台已索引的用户 CLI 工具（设置页目录，默认 tools/cli；一目录一工具）。"
+                "返回 name、dir（工具目录）、path（入口绝对路径）、entry（相对入口）、description。"
+                "空 query 列出全部已索引项。找到后用 Bash/PowerShell 按 path 绝对路径执行；"
+                "不要用本工具代替确认/误报。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "关键词，匹配名称与描述；空则列出全部已索引工具",
+                    },
+                    "search_term": {"type": "string"},
+                },
+            },
+            handler=_search_tools,
+            parallel_safe=True,
+        )
+    )
     registry.register(
         ToolSpec(
             name="ConfirmVuln",

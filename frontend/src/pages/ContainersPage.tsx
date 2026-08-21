@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { RefreshCw, Square, Trash2 } from 'lucide-react'
+import { Loader2Icon, RefreshCw, Square, Trash2 } from 'lucide-react'
 import {
   api,
   type DockerContainer,
@@ -53,6 +53,22 @@ function usageFromImages(images: DockerImage[]): DockerImageUsage {
   }
 }
 
+function TableLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center gap-3" role="status" aria-live="polite" aria-busy="true">
+      <div className="flex items-center gap-2 text-sm">
+        <Loader2Icon className="size-4 animate-spin" aria-hidden />
+        {label}
+      </div>
+      <div className="w-56 space-y-2">
+        <div className="h-2.5 w-[88%] animate-pulse rounded bg-muted" />
+        <div className="h-2.5 w-[64%] animate-pulse rounded bg-muted" />
+        <div className="h-2.5 w-[76%] animate-pulse rounded bg-muted" />
+      </div>
+    </div>
+  )
+}
+
 export default function ContainersPage() {
   const [containers, setContainers] = useState<DockerContainer[]>([])
   const [images, setImages] = useState<DockerImage[]>([])
@@ -63,6 +79,8 @@ export default function ContainersPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pruneResult, setPruneResult] = useState<DockerImagePruneResult | null>(null)
+  const [containersReady, setContainersReady] = useState(false)
+  const [imagesReady, setImagesReady] = useState(false)
   const refreshGen = useRef(0)
 
   const refresh = useCallback(async () => {
@@ -71,12 +89,15 @@ export default function ContainersPage() {
       const list = await api.listContainers(runningOnly)
       if (gen !== refreshGen.current) return
       setContainers(list)
+      setContainersReady(true)
       setSelectedContainers((prev) => {
         const ids = new Set(list.map((c) => c.id))
         return new Set([...prev].filter((id) => ids.has(id)))
       })
     } catch (err) {
       if (gen !== refreshGen.current) return
+      setContainersReady(true)
+      setImagesReady(true)
       setError(String(err))
       return
     }
@@ -85,6 +106,7 @@ export default function ContainersPage() {
       if (gen !== refreshGen.current) return
       setImages(imageList)
       setUsage(usageFromImages(imageList))
+      setImagesReady(true)
       setSelectedImages((prev) => {
         const ids = new Set(imageList.map((img) => img.id))
         return new Set([...prev].filter((id) => ids.has(id)))
@@ -92,11 +114,13 @@ export default function ContainersPage() {
       setError(null)
     } catch (err) {
       if (gen !== refreshGen.current) return
+      setImagesReady(true)
       setError(String(err))
     }
   }, [runningOnly])
 
   useEffect(() => {
+    setContainersReady(false)
     const stop = startVisibilityPoll(() => refresh(), 5000)
     return () => {
       refreshGen.current += 1
@@ -281,10 +305,12 @@ export default function ContainersPage() {
           <h1 className="text-2xl font-bold tracking-tight">容器与镜像</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             本平台搭建的靶场容器、局部验证沙箱，以及对应镜像（含拉取的官方依赖）
-            {runningOnly
-              ? ` · 运行中 ${runningCount}`
-              : ` · 共 ${containers.length}，运行中 ${runningCount}`}
-            {usage
+            {containersReady
+              ? runningOnly
+                ? ` · 运行中 ${runningCount}`
+                : ` · 共 ${containers.length}，运行中 ${runningCount}`
+              : ' · 加载中…'}
+            {imagesReady && usage
               ? ` · 镜像 ${usage.image_count} 个 / ${usage.total_gb} GB（悬空 ${usage.dangling_count}）`
               : ''}
           </p>
@@ -304,7 +330,7 @@ export default function ContainersPage() {
               refresh().catch((e) => setError(String(e)))
             }}
           >
-            <RefreshCw className="size-3.5" />
+            <RefreshCw className={`size-3.5 ${containersReady ? '' : 'animate-spin'}`} />
             刷新
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void pruneImages()}>
@@ -375,14 +401,21 @@ export default function ContainersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {containers.length === 0 && (
+              {!containersReady ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                    <TableLoading label="加载容器…" />
+                  </TableCell>
+                </TableRow>
+              ) : containers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
                     {runningOnly ? '当前没有运行中的 VulnHunter 容器' : '未发现本平台容器'}
                   </TableCell>
                 </TableRow>
-              )}
-              {containers.map((c) => {
+              ) : null}
+              {containersReady &&
+                containers.map((c) => {
                 const portsText = c.ports.join(', ')
                 return (
                   <TableRow key={c.id}>
@@ -475,14 +508,20 @@ export default function ContainersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {images.length === 0 && (
+              {!imagesReady ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
+                    <TableLoading label="加载镜像…" />
+                  </TableCell>
+                </TableRow>
+              ) : images.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
                     未发现本平台相关镜像
                   </TableCell>
                 </TableRow>
-              )}
-              {images.map((img) => (
+              ) : (
+                images.map((img) => (
                 <TableRow key={img.id}>
                   <TableCell className="pl-4">
                     <Checkbox
@@ -523,7 +562,8 @@ export default function ContainersPage() {
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))}
+              ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

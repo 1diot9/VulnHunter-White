@@ -121,6 +121,7 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         context_window=int(row.context_window or 128000),
         http_proxy=_proxy_for_api(row, "http_proxy", "https_proxy", "http_proxy"),
         chat_proxy=_proxy_for_api(row, "chat_proxy", "chat_proxy"),
+        cli_tools_dir=(getattr(row, "cli_tools_dir", None) or "").strip() or "tools/cli",
     )
 
 
@@ -175,6 +176,8 @@ def llm_role_for_agent(role: str) -> LlmRole:
     r = (role or "").strip().replace("-", "_")
     if r in _RECON_AGENT_ROLES:
         return "recon"
+    if r in ("cli_indexer", "cli-indexer"):
+        return "reviewer"
     if r == "reviewer" or r.startswith("reviewer_"):
         return "reviewer"
     if r == "verifier":

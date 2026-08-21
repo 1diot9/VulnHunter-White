@@ -18,6 +18,9 @@ def tmp_env(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.PROJECTS_DIR", projects)
     monkeypatch.setattr("app.config.DATA_DIR", data)
     monkeypatch.setattr("app.services.paths.PROJECTS_DIR", projects)
+    cli_tools = tmp_path / "cli-tools"
+    cli_tools.mkdir()
+    monkeypatch.setattr("app.config.settings.cli_tools_dir", str(cli_tools))
 
     import app.models as models
 
@@ -104,6 +107,10 @@ def tmp_env(tmp_path, monkeypatch):
         if db.query(models.AppSettings).first() is None:
             db.add(models.AppSettings())
             db.commit()
+        row = db.query(models.AppSettings).first()
+        if row is not None:
+            row.cli_tools_dir = str(cli_tools)
+            db.commit()
 
     from app.tools import register_all_tools
 
@@ -117,6 +124,7 @@ def tmp_env(tmp_path, monkeypatch):
     yield {
         "db_path": db_path,
         "projects": projects,
+        "cli_tools": cli_tools,
         "Session": Session,
         "models": models,
         "engine": engine,

@@ -8,8 +8,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
-from app.agent.compression import estimate_tokens, needs_compress
+from app.agent.compression import (
+    attach_todo_list,
+    estimate_tokens,
+    format_todo_list_block,
+    needs_compress,
+)
 from app.agent.loop import (
+    AgentLoop,
     _content_text,
     _is_rate_limit_response,
     _looks_like_rate_limit,
@@ -80,6 +86,98 @@ def test_needs_compress_includes_tools(monkeypatch):
     msgs = [{"role": "user", "content": "hi"}]
     tools = [{"function": {"name": "X", "description": "y" * 4000}}]
     assert needs_compress(msgs, context_window=1000, tools=tools) is True
+
+
+def test_format_todo_list_block():
+    assert format_todo_list_block(None) == ""
+    assert format_todo_list_block([]) == ""
+    block = format_todo_list_block(
+        [
+            {"id": "1", "content": "回推 sink", "status": "in_progress"},
+            {"id": "2", "content": "写 poc 草案", "status": "pending"},
+        ]
+    )
+    assert block.startswith("## TodoList")
+    assert "- [in_progress] 1: 回推 sink" in block
+    assert "- [pending] 2: 写 poc 草案" in block
+
+
+def test_attach_todo_list_appends_once():
+    todos = [{"id": "1", "content": "追 source", "status": "pending"}]
+    once = attach_todo_list("已完成入口分析", todos)
+    assert "已完成入口分析" in once
+    assert "## TodoList" in once
+    assert "追 source" in once
+    twice = attach_todo_list(once, todos)
+    assert twice.count("## TodoList") == 1
+
+
+def test_compress_appends_todolist(tmp_env, project):
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    loop.state["todos"] = [
+        {"id": "1", "content": "回推 sink", "status": "in_progress"},
+        {"id": "2", "content": "写 poc 草案", "status": "pending"},
+    ]
+    out = loop._compress(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "working"},
+        ],
+        force_summary="已看完入口",
+    )
+    user = out[1]["content"]
+    assert "已看完入口" in user
+    assert "## TodoList" in user
+    assert "回推 sink" in user
+    assert "写 poc 草案" in user
+
+
+def test_compress_skips_empty_todolist(tmp_env, project):
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    out = loop._compress(
+        [{"role": "user", "content": "task"}],
+        force_summary="已看完入口",
+    )
+    assert "TodoList" not in out[1]["content"]
+
+
+def test_compress_reads_todolist_from_workspace_file(tmp_env, project):
+    from app.tools import ToolContext, registry
+
+    ctx = ToolContext(project_id=project, role="worker", phase="worker", worker_id="w1")
+    registry.dispatch(
+        ctx,
+        "TodoWrite",
+        {"todos": [{"id": "9", "content": "文件中的待办", "status": "pending"}]},
+    )
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    out = loop._compress(
+        [{"role": "user", "content": "task"}],
+        force_summary="压缩摘要",
+    )
+    assert "文件中的待办" in out[1]["content"]
 
 
 def test_chat_http_timeout_scales_and_caps(monkeypatch):

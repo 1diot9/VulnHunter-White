@@ -25,10 +25,10 @@ def test_default_primary_limit_follows_token(monkeypatch, tmp_env) -> None:
     assert _default_primary_limit() == _RATE_LIMIT_AUTH
 
 
-def test_limiter_paces_at_max_steady_rate(monkeypatch, tmp_env) -> None:
+def test_rest_limiter_allows_burst_until_quota_empty(monkeypatch, tmp_env) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
     limiter = _GitHubRateLimiter()
-    assert abs(limiter._min_interval - 3600.0 / _RATE_LIMIT_AUTH) < 1e-9
+    assert limiter._min_interval == 0.0
 
     resp = MagicMock()
     resp.headers = {
@@ -37,12 +37,12 @@ def test_limiter_paces_at_max_steady_rate(monkeypatch, tmp_env) -> None:
         "x-ratelimit-reset": str(int(time.time()) + 3600),
     }
     limiter.observe(resp)
-    assert abs(limiter._min_interval - 3600.0 / 5000) < 1e-9
+    assert limiter._min_interval == 0.0
 
     t0 = time.monotonic()
     limiter.wait_before_request()
     elapsed = time.monotonic() - t0
-    assert elapsed >= limiter._min_interval * 0.9
+    assert elapsed < 0.05
 
 
 def test_is_rate_limited_variants() -> None:

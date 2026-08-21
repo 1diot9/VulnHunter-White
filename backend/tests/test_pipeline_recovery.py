@@ -495,6 +495,47 @@ def test_prompt_with_summary_injects_prior_only_for_worker_files(tmp_env, projec
     assert "审核正文" in reviewer
 
 
+def test_prompt_with_summary_injects_worker_hint(tmp_env, project):
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.worker_hint = "  重点看后台导出；忽略演示账号  "
+        db.commit()
+
+    worker = pipeline._prompt_with_summary("worker", project, "本轮任务正文", for_file=True)
+    assert "项目人工提示" in worker
+    assert "重点看后台导出；忽略演示账号" in worker
+    assert worker.index("本轮任务正文") < worker.index("项目人工提示")
+
+    fast = pipeline._prompt_with_summary("fast-worker", project, "Sink 正文")
+    assert "重点看后台导出；忽略演示账号" in fast
+    bypass = pipeline._prompt_with_summary("bypass-worker", project, "绕过正文")
+    assert "重点看后台导出；忽略演示账号" in bypass
+
+    reviewer = pipeline._prompt_with_summary("reviewer", project, "审核正文")
+    assert "项目人工提示" not in reviewer
+    assert "重点看后台导出" not in reviewer
+    fix = pipeline._prompt_with_summary("fix", project, "修复正文")
+    assert "项目人工提示" not in fix
+    triage = pipeline._prompt_with_summary("sink-triage", project, "筛选正文")
+    assert "项目人工提示" not in triage
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.worker_hint = "price = ${project_id} 不要改焦点"
+        db.commit()
+    dollar = pipeline._prompt_with_summary("worker", project, "本轮任务正文")
+    assert "price = ${project_id} 不要改焦点" in dollar
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.worker_hint = ""
+        db.commit()
+    empty = pipeline._prompt_with_summary("worker", project, "本轮任务正文", for_file=True)
+    assert "项目人工提示" not in empty
+
+
 def test_worker_prior_block_truncates_oversized_docs(tmp_env, project, monkeypatch):
     from app.agent.compression import inject_worker_prior_block
     from app.config import settings

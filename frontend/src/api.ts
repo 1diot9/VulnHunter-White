@@ -31,6 +31,7 @@ export type Project = {
   bypass_enabled: boolean
   bypass_queue_frozen: boolean
   llm_model: string
+  worker_hint: string
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -263,6 +264,11 @@ export type PhaseReportGroup = {
 export type PhaseReportList = {
   phases: PhaseReportGroup[]
   count: number
+  selected_count: number
+  limit: number | null
+  offset: number
+  phase: string
+  subphase: string
 }
 
 export type PhaseReportDetail = PhaseReport & {
@@ -289,6 +295,7 @@ export type Settings = {
   context_window: number
   http_proxy: string
   chat_proxy: string
+  cli_tools_dir: string
 }
 
 export type LlmProbeBody = {
@@ -456,6 +463,7 @@ export const api = {
       fast_enabled?: boolean
       bypass_enabled?: boolean
       llm_model?: string
+      worker_hint?: string
     } = {},
   ) =>
     request<Project>('/api/projects', {
@@ -478,6 +486,7 @@ export const api = {
         fast_enabled: Boolean(opts.fast_enabled),
         bypass_enabled: Boolean(opts.bypass_enabled),
         llm_model: (opts.llm_model || '').trim(),
+        worker_hint: opts.worker_hint || '',
       }),
     }),
   uploadZip: async (
@@ -497,6 +506,7 @@ export const api = {
       fast_enabled?: boolean
       bypass_enabled?: boolean
       llm_model?: string
+      worker_hint?: string
     } = {},
   ) => {
     const fd = new FormData()
@@ -520,6 +530,7 @@ export const api = {
     fd.append('fast_enabled', opts.fast_enabled ? 'true' : 'false')
     fd.append('bypass_enabled', opts.bypass_enabled ? 'true' : 'false')
     fd.append('llm_model', (opts.llm_model || '').trim())
+    fd.append('worker_hint', opts.worker_hint || '')
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
   updateProject: (
@@ -538,6 +549,7 @@ export const api = {
       fast_enabled?: boolean
       bypass_enabled?: boolean
       llm_model?: string
+      worker_hint?: string
     },
   ) =>
     request<Project>(`/api/projects/${id}`, {
@@ -580,7 +592,18 @@ export const api = {
     const s = q.toString()
     return request<EventsChunk>(`/api/projects/${id}/events${s ? `?${s}` : ''}`)
   },
-  listPhaseReports: (id: number) => request<PhaseReportList>(`/api/projects/${id}/reports`),
+  listPhaseReports: (
+    id: number,
+    query: { phase?: string; subphase?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const q = new URLSearchParams()
+    if (query.phase) q.set('phase', query.phase)
+    if (query.subphase) q.set('subphase', query.subphase)
+    if (query.limit != null) q.set('limit', String(query.limit))
+    if (query.offset != null) q.set('offset', String(query.offset))
+    const s = q.toString()
+    return request<PhaseReportList>(`/api/projects/${id}/reports${s ? `?${s}` : ''}`)
+  },
   getPhaseReport: (id: number, path: string) =>
     request<PhaseReportDetail>(`/api/projects/${id}/reports/file?path=${encodeURIComponent(path)}`),
   listVulns: (

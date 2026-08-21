@@ -336,6 +336,43 @@ def inject_worker_prior_block(project_id: int) -> str:
     return "\n".join(parts).strip() + "\n\n"
 
 
+_TODO_SUMMARY_MAX_CHARS = 4000
+
+
+def format_todo_list_block(todos: list[Any] | None) -> str:
+    """Canonical TodoList markdown for compression / conclude summaries."""
+    if not isinstance(todos, list) or not todos:
+        return ""
+    lines = ["## TodoList"]
+    for item in todos:
+        if isinstance(item, dict):
+            status = str(item.get("status") or "pending").strip() or "pending"
+            content = str(item.get("content") or "").strip()
+            tid = str(item.get("id") or "").strip()
+            label = f"{tid}: {content}" if tid and content else (tid or content or "(空)")
+            lines.append(f"- [{status}] {label}")
+        else:
+            text = str(item).strip() or "(空)"
+            lines.append(f"- {text}")
+    block = "\n".join(lines)
+    if len(block) > _TODO_SUMMARY_MAX_CHARS:
+        return block[:_TODO_SUMMARY_MAX_CHARS] + f"\n...[truncated {len(block) - _TODO_SUMMARY_MAX_CHARS} chars]"
+    return block
+
+
+def attach_todo_list(summary: str | None, todos: list[Any] | None) -> str:
+    """Append the current TodoList so compression cannot drop it."""
+    block = format_todo_list_block(todos)
+    text = (summary or "").rstrip()
+    if not block:
+        return text
+    if block in text:
+        return text
+    if not text:
+        return block
+    return f"{text}\n\n{block}"
+
+
 def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:
     if not summary or not summary.strip():
         return ""

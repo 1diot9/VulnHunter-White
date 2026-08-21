@@ -6,6 +6,7 @@ import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { AttackChainToggle } from './AttackChainToggle'
+import { WorkerHintFields } from './WorkerHintFields'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -37,6 +38,7 @@ export function ProjectSettingsButton({
   const [fastEnabled, setFastEnabled] = useState(project.fast_enabled === true)
   const [bypassEnabled, setBypassEnabled] = useState(project.bypass_enabled === true)
   const [llmModel, setLlmModel] = useState(project.llm_model || '')
+  const [workerHint, setWorkerHint] = useState(project.worker_hint || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -51,6 +53,7 @@ export function ProjectSettingsButton({
     setFastEnabled(project.fast_enabled === true)
     setBypassEnabled(project.bypass_enabled === true)
     setLlmModel(project.llm_model || '')
+    setWorkerHint(project.worker_hint || '')
     setError('')
   }, [
     open,
@@ -63,6 +66,7 @@ export function ProjectSettingsButton({
     project.fast_enabled,
     project.bypass_enabled,
     project.llm_model,
+    project.worker_hint,
   ])
 
   const close = () => {
@@ -84,6 +88,7 @@ export function ProjectSettingsButton({
         dynamic_verify_enabled: dynamicVerifyMode !== 'off',
         dynamic_verify_mode: dynamicVerifyMode,
         llm_model: llmModel.trim(),
+        worker_hint: workerHint.trim(),
         ...(canEditPaths
           ? { heuristic_enabled: heuristicEnabled, heuristic_lite: heuristicLite, fast_enabled: fastEnabled, bypass_enabled: bypassEnabled }
           : {}),
@@ -113,11 +118,12 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、验证方式与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型对下一轮 Agent 生效。
+              审计运行中也可修改模型、挖掘提示、验证方式与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与挖掘提示对下一轮 Agent 生效。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
+            <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={saving} />
             <MiningPathSelect
               heuristicEnabled={heuristicEnabled}
               heuristicLite={heuristicLite}

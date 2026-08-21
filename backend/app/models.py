@@ -46,6 +46,7 @@ class AppSettings(Base):
     context_window: Mapped[int] = mapped_column(Integer, default=128000)
     http_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     chat_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    cli_tools_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
@@ -108,6 +109,8 @@ class Project(Base):
     bypass_queue_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
     # 项目级模型；空则使用设置页全局 default_model
     llm_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # 挖掘 Worker 额外人工提示：注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息
+    worker_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -407,6 +410,7 @@ def _ensure_columns() -> None:
             "fofa_base_url": "VARCHAR(1024)",
             "http_proxy": "VARCHAR(1024)",
             "chat_proxy": "VARCHAR(1024)",
+            "cli_tools_dir": "VARCHAR(1024)",
         },
         "file_weights": {
             "claimed_at": "DATETIME",
@@ -433,6 +437,7 @@ def _ensure_columns() -> None:
             "bypass_enabled": "BOOLEAN DEFAULT 0",
             "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
             "llm_model": "VARCHAR(256)",
+            "worker_hint": "TEXT",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

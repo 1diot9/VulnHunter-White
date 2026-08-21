@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from ..config import settings
@@ -16,6 +17,7 @@ from ..services.llm_gate import llm_gate, llm_slot
 from ..services.llm_thread import llm_thread_slot
 from ..services.llm_settings import ResolvedLlm, llm_role_for_agent, resolve_llm
 from ..tools import ToolContext, registry
+from ..tools.common import load_todos
 from .checkpoint import LoopCheckpoint, save_checkpoint
 from .anthropic_compat import (
     anthropic_headers,
@@ -31,8 +33,10 @@ from .chat_stream import (
     consume_chat_stream,
 )
 from .compression import (
+    attach_todo_list,
     build_compressed_messages,
     estimate_tokens,
+    format_todo_list_block,
     needs_compress,
     write_summary,
 )
@@ -191,6 +195,11 @@ class AgentLoop:
         messages: list[dict[str, Any]] | None = None,
         resumed: bool = False,
         file_path: str | None = None,
+        silent: bool = False,
+        log_path: Path | str | None = None,
+        workspace_root: Path | str | None = None,
+        max_turns: int | None = None,
+        summary_dir: Path | str | None = None,
     ) -> None:
         self.project_id = project_id
         self.role = role
@@ -201,12 +210,17 @@ class AgentLoop:
         self.worker_id = worker_id
         self.vuln_id = vuln_id
         self.file_path = file_path
+        self.silent = bool(silent)
+        self.log_path = Path(log_path) if log_path else None
+        self.workspace_root = str(workspace_root) if workspace_root else None
+        self.max_turns = int(max_turns) if max_turns else None
+        self.summary_dir = Path(summary_dir) if summary_dir else None
         self.cancel_event = cancel_event or threading.Event()
         self.pause_event = pause_event
         self.timeout_sec = timeout_sec or settings.timeout_worker_round
         self.context_window = context_window or settings.default_context_window
         self.stop_when = stop_when
-        self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id)
+        self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id or None)
         self.state: dict[str, Any] = {}
         self.watchdog = AgentWatchdog(phase=phase)
         self._last_prompt_tokens = 0
@@ -215,6 +229,12 @@ class AgentLoop:
         self._announce_next_chat = bool(resumed)
         self._rate_limit_retries = 0
         self._transient_retries = 0
+        if self.silent and self.log_path:
+            from ..services.cli_tool_index import file_event_log
+
+            self._live = file_event_log(self.log_path)
+        else:
+            self._live = live_log
 
     @classmethod
     def from_checkpoint(
@@ -379,7 +399,7 @@ class AgentLoop:
                 tools=tools,
                 last_prompt_tokens=self._last_prompt_tokens,
             ):
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     (
                         f"上下文压缩：估计 {est} token / 窗口 {self.context_window}"
@@ -396,7 +416,7 @@ class AgentLoop:
             except AuthError as e:
                 result.error = str(e)
                 result.stop_reason = "auth_error"
-                live_log.error(self.project_id, str(e), phase=self.phase)
+                self._live.error(self.project_id, str(e), phase=self.phase)
                 self._persist(messages, status="paused")
                 return result
             except RateLimitError as e:
@@ -409,7 +429,7 @@ class AgentLoop:
                     return result
                 self._rate_limit_retries += 1
                 sleep_sec = e.retry_after or settings.rate_limit_sleep_sec
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     f"检测到 API 429，休眠 {sleep_sec}s 后继续（{self._rate_limit_retries}/{settings.rate_limit_max_retries}）",
                     phase=self.phase,
@@ -422,11 +442,11 @@ class AgentLoop:
                 if self._transient_retries >= settings.request_backoff_retries:
                     result.error = str(e)
                     result.stop_reason = "transient_error"
-                    live_log.error(self.project_id, str(e), phase=self.phase)
+                    self._live.error(self.project_id, str(e), phase=self.phase)
                     self._rescue_conclude(messages)
                     return result
                 self._transient_retries += 1
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     (
                         f"模型请求中断，保留上下文继续"
@@ -444,7 +464,7 @@ class AgentLoop:
             self._transient_retries = 0
             self._accumulate_tokens(result, usage)
             self._last_prompt_tokens = usage.get("prompt_tokens", 0)
-            live_log.tokens(
+            self._live.tokens(
                 self.project_id,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
@@ -456,7 +476,7 @@ class AgentLoop:
 
             choice = (resp.get("choices") or [None])[0]
             if not choice:
-                live_log.system(self.project_id, "空 choices，重试一次", phase=self.phase)
+                self._live.system(self.project_id, "空 choices，重试一次", phase=self.phase)
                 messages.append({"role": "user", "content": "上一轮模型返回空 choices，请继续任务。"})
                 self._persist(messages)
                 continue
@@ -467,11 +487,11 @@ class AgentLoop:
             tool_calls = message.get("tool_calls") or []
             tool_names = _tool_call_names(tool_calls)
             if reasoning:
-                live_log.reasoning(self.project_id, reasoning, phase=self.phase, role=self.role)
+                self._live.reasoning(self.project_id, reasoning, phase=self.phase, role=self.role)
             if content:
-                live_log.agent(self.project_id, content, phase=self.phase, role=self.role)
+                self._live.agent(self.project_id, content, phase=self.phase, role=self.role)
             elif tool_names:
-                live_log.agent(
+                self._live.agent(
                     self.project_id,
                     "调用工具: " + ", ".join(tool_names),
                     phase=self.phase,
@@ -490,7 +510,7 @@ class AgentLoop:
                     result.stop_reason = "stop_when"
                     return result
                 nudge, kind = self.watchdog.nudge_for_text_turn()
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     self.watchdog.text_turn_log(kind),
                     phase=self.phase,
@@ -498,7 +518,7 @@ class AgentLoop:
                 )
                 if persist_nudge:
                     nudge = f"{nudge}\n\n{persist_nudge}"
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         self.watchdog.persist_nudge_log(),
                         phase=self.phase,
@@ -520,7 +540,7 @@ class AgentLoop:
                     parse_failed = True
                     args = {}
                     tool_result = {"ok": False, "error": "tool arguments JSON 无效"}
-                    live_log.cmd(
+                    self._live.cmd(
                         self.project_id,
                         f"{name} {raw_args}",
                         output="tool arguments JSON 无效",
@@ -549,7 +569,7 @@ class AgentLoop:
                 hit = self.watchdog.identical_threshold_hits
                 max_hits = self.watchdog.max_identical_threshold_hits
                 aborting = self.watchdog.identical_loop_exhausted()
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     (
                         f"看门狗终止：{loop_reason}，本轮已 {hit} 次触达阈值，结束本轮"
@@ -564,7 +584,7 @@ class AgentLoop:
                 )
                 tool_result = {"ok": False, "error": err_text}
                 for call in parsed_calls:
-                    live_log.cmd(
+                    self._live.cmd(
                         self.project_id,
                         f"{call['name']} {json.dumps(call.get('arguments') or {}, ensure_ascii=False)}",
                         output=err_text,
@@ -592,7 +612,7 @@ class AgentLoop:
                     return result
                 redirect = identical_redirect_nudge(tool_name, hit, max_hits)
                 if persist_nudge:
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         self.watchdog.persist_nudge_log(),
                         phase=self.phase,
@@ -614,6 +634,9 @@ class AgentLoop:
                 worker_id=self.worker_id,
                 vuln_id=self.vuln_id,
                 file_path=self.file_path,
+                workspace_root=self.workspace_root,
+                silent=self.silent,
+                log_path=str(self.log_path) if self.log_path else None,
                 cancel_requested=self._cancelled,
                 state=self.state,
             )
@@ -626,7 +649,7 @@ class AgentLoop:
                 # AskUser parks without a tool result; the consent API appends it later.
                 if ctx.state.get("awaiting_user") and call["name"] == "AskUser":
                     self._persist(messages, status="awaiting_user")
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"Verifier 等待用户确认互联网复测 vuln={self.vuln_id}",
                         phase=self.phase,
@@ -660,7 +683,7 @@ class AgentLoop:
                 return result
 
             # Terminal tool flags
-            if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished") or self.state.get("round_finished"):
+            if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished") or self.state.get("round_finished") or self.state.get("index_done"):
                 # round_finished alone shouldn't end entire worker process — scheduler decides
                 if self.state.get("round_finished") and self.phase == "worker":
                     result.ok = True
@@ -669,13 +692,13 @@ class AgentLoop:
                     result.summary_path = path
                     result.round_summary = summary
                     return result
-                if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished"):
+                if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished") or self.state.get("index_done"):
                     result.ok = True
                     result.stop_reason = "phase_tool_finished"
                     return result
 
             if persist_nudge:
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     self.watchdog.persist_nudge_log(),
                     phase=self.phase,
@@ -683,6 +706,34 @@ class AgentLoop:
                 )
                 messages.append({"role": "user", "content": persist_nudge})
                 self._persist(messages)
+
+            if self.max_turns:
+                self.state["index_rounds"] = self.watchdog.turn_count
+                left = self.max_turns - self.watchdog.turn_count
+                if self.watchdog.turn_count >= self.max_turns:
+                    if self.stop_when and self.stop_when(self.state):
+                        result.ok = True
+                        result.stop_reason = "stop_when"
+                        result.state = self.state
+                        return result
+                    result.ok = False
+                    result.stop_reason = "max_turns"
+                    result.error = f"超过 {self.max_turns} 轮仍未完成"
+                    result.state = self.state
+                    self._rescue_conclude(messages)
+                    conclude = (self.summary_dir / "conclude.md") if self.summary_dir else None
+                    if conclude and conclude.is_file():
+                        result.summary_path = str(conclude)
+                        result.round_summary = conclude.read_text(encoding="utf-8", errors="replace")
+                    return result
+                if left in (5, 1):
+                    warn = (
+                        f"还剩 {left} 轮，请立刻 FinishIndex(description=..., entry=...)。"
+                        "超时将 conclude 并落盘失败原因。"
+                    )
+                    self._live.system(self.project_id, warn, phase=self.phase, role=self.role)
+                    messages.append({"role": "user", "content": warn})
+                    self._persist(messages)
 
     def _chat(
         self,
@@ -727,14 +778,14 @@ class AgentLoop:
                 timeout = chat_http_timeout(remaining, est_tokens)
                 cooldown = llm_gate.cooldown_remaining()
                 if cooldown > 0:
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"全局 429 冷却中，约 {cooldown:.0f}s 后请求模型",
                         phase=self.phase,
                         role=self.role,
                     )
                 if attempt > 0:
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"正在重新请求模型（{attempt + 1}/{settings.request_backoff_retries}）",
                         phase=self.phase,
@@ -742,7 +793,7 @@ class AgentLoop:
                     )
                     self._announce_next_chat = False
                 if self._announce_next_chat:
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"正在请求模型（流式，估计 {est_tokens} token，读超时 {timeout.read:.0f}s）",
                         phase=self.phase,
@@ -766,7 +817,7 @@ class AgentLoop:
                             retry_after = float(ra)
                         except ValueError:
                             retry_after = None
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"LLM HTTP {status} 限流：{(err_text or '')[:240]}",
                         phase=self.phase,
@@ -778,7 +829,7 @@ class AgentLoop:
                     raise TransientError(f"HTTP {status}: {(err_text or '')[:300]}")
                 if status == 400 and body.get("stream_options"):
                     body = {k: v for k, v in body.items() if k != "stream_options"}
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"HTTP 400，去掉 stream_options 后重试：{(err_text or '')[:180]}",
                         phase=self.phase,
@@ -810,7 +861,7 @@ class AgentLoop:
             except ChatStreamProviderError as e:
                 text = str(e)
                 if _looks_like_rate_limit(text):
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"LLM 流式限流：{text[:240]}",
                         phase=self.phase,
@@ -820,7 +871,7 @@ class AgentLoop:
                     raise RateLimitError("429 rate limited") from e
                 last_err = e
                 backoff = 1 * (4 ** attempt)
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
                     phase=self.phase,
@@ -830,7 +881,7 @@ class AgentLoop:
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 backoff = 1 * (4 ** attempt)
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
                     phase=self.phase,
@@ -859,14 +910,14 @@ class AgentLoop:
             while not stop_hb.is_set():
                 elapsed = int(time.time() - started)
                 if first_payload.is_set():
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"仍在接收流式响应（已 {elapsed}s）",
                         phase=self.phase,
                         role=self.role,
                     )
                 else:
-                    live_log.system(
+                    self._live.system(
                         self.project_id,
                         f"仍在等待模型响应（已 {elapsed}s，估计 {est_tokens} token）",
                         phase=self.phase,
@@ -879,7 +930,7 @@ class AgentLoop:
             first_payload.set()
             elapsed = time.time() - started
             if elapsed >= CHAT_WAIT_LOG_AFTER:
-                live_log.system(
+                self._live.system(
                     self.project_id,
                     f"已开始接收流式响应（已 {int(elapsed)}s）",
                     phase=self.phase,
@@ -914,6 +965,8 @@ class AgentLoop:
         result.tokens_output += usage.get("completion_tokens", 0)
         result.tokens_cached += usage.get("cached_tokens", 0)
         result.tokens_total = result.tokens_input + result.tokens_output
+        if self.silent or not self.project_id:
+            return
         try:
             with SessionLocal() as db:
                 db.add(
@@ -939,23 +992,45 @@ class AgentLoop:
         except Exception:  # noqa: BLE001
             pass
 
+    def _store_summary(self, name: str, summary: str) -> str:
+        if self.summary_dir is not None:
+            self.summary_dir.mkdir(parents=True, exist_ok=True)
+            filename = "conclude.md" if "rescue" in name or name == "conclude" else f"{name}.md"
+            path = self.summary_dir / filename
+            path.write_text(summary or "", encoding="utf-8")
+            return str(path)
+        return write_summary(self.project_id, name, summary)
+
+    def _attach_current_todos(self, summary: str) -> str:
+        return attach_todo_list(summary, load_todos(self))
+
     def _compress(self, messages: list[dict[str, Any]], force_summary: str | None = None) -> list[dict[str, Any]]:
         # Ask model briefly, or synthesize
-        summary = force_summary or self._request_summary(messages)
-        path = write_summary(self.project_id, self.phase, summary)
-        live_log.system(self.project_id, f"总结已落盘: {path}", phase=self.phase)
+        summary = self._attach_current_todos(force_summary or self._request_summary(messages))
+        path = self._store_summary("compress" if self.silent else self.phase, summary)
+        self._live.system(self.project_id, f"总结已落盘: {path}", phase=self.phase)
         bootstrap = self.user_prompt[:4000]
         return build_compressed_messages(self.system_prompt, summary, bootstrap, messages)
 
     def _request_summary(self, messages: list[dict[str, Any]], *, rescue: bool = False) -> str:
+        todo_block = format_todo_list_block(load_todos(self))
         try:
+            dumped = json.dumps(messages[-100:], ensure_ascii=False)[:12000]
+            user_content = f"请总结以下对话（截断后）：\n{dumped}"
+            if todo_block:
+                user_content += (
+                    "\n\n当前 Agent 的 TodoList 如下，必须写入摘要并保留全部条目与状态：\n"
+                    f"{todo_block}"
+                )
             prompt_msgs = [
-                {"role": "system", "content": "你是上下文压缩助手。用中文输出结构化摘要，保留关键路径、已完成工作、未完成待办、当前焦点。"},
                 {
-                    "role": "user",
-                    "content": "请总结以下对话（截断后）：\n"
-                    + json.dumps(messages[-100:], ensure_ascii=False)[:12000],
+                    "role": "system",
+                    "content": (
+                        "你是上下文压缩助手。用中文输出结构化摘要，保留关键路径、已完成工作、未完成待办、当前焦点。"
+                        "若提供了 TodoList，必须把全部条目与状态写入摘要，不要省略。"
+                    ),
                 },
+                {"role": "user", "content": user_content},
             ]
             timeout_budget = float(
                 settings.timeout_conclude_rescue if rescue else settings.timeout_conclude
@@ -978,7 +1053,7 @@ class AgentLoop:
                 payload = {"model": self.llm.model, "messages": prompt_msgs, "temperature": 0.2}
             with llm_slot(self.cancel_event) as got_slot:
                 if not got_slot:
-                    return "（自动摘要取消）"
+                    return self._attach_current_todos("（自动摘要取消）")
                 with chat_http_client(timeout=chat_http_timeout(timeout_budget, 4000)) as client:
                     r = client.post(url, headers=headers, json=payload)
                     r.raise_for_status()
@@ -987,31 +1062,37 @@ class AgentLoop:
                 isinstance(data, dict) and data.get("type") == "message"
             ):
                 data = anthropic_message_to_openai(data if isinstance(data, dict) else {})
-            return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "（空摘要）"
+            summary = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "（空摘要）"
+            return self._attach_current_todos(summary)
         except Exception as e:  # noqa: BLE001
-            return f"（自动摘要失败: {e}）\n最近消息数: {len(messages)}，估算 token: {estimate_tokens(messages)}"
+            return self._attach_current_todos(
+                f"（自动摘要失败: {e}）\n最近消息数: {len(messages)}，估算 token: {estimate_tokens(messages)}"
+            )
 
     def _conclude_round(self, messages: list[dict[str, Any]]) -> tuple[str | None, str | None]:
         """Compress finished worker round for next-round handoff."""
         try:
             summary = self._request_summary(messages)
-            path = write_summary(self.project_id, "worker-round", summary)
-            live_log.system(self.project_id, f"本轮结束，上下文已压缩落盘: {path}", phase=self.phase)
+            path = self._store_summary("conclude" if self.silent else "worker-round", summary)
+            self._live.system(self.project_id, f"本轮结束，上下文已压缩落盘: {path}", phase=self.phase)
             return path, summary
         except Exception as e:  # noqa: BLE001
-            live_log.error(self.project_id, f"轮次压缩失败: {e}", phase=self.phase)
+            self._live.error(self.project_id, f"轮次压缩失败: {e}", phase=self.phase)
             return None, None
 
     def _rescue_conclude(self, messages: list[dict[str, Any]]) -> None:
         try:
             summary = self._request_summary(messages, rescue=True)
-            write_summary(self.project_id, f"{self.phase}-rescue", summary)
-            live_log.system(self.project_id, "失败后已执行 conclude 抢救落盘", phase=self.phase)
+            self._store_summary("conclude" if self.silent else f"{self.phase}-rescue", summary)
+            self._live.system(self.project_id, "失败后已执行 conclude 抢救落盘", phase=self.phase)
         except Exception as e:  # noqa: BLE001
-            live_log.error(self.project_id, f"conclude 抢救失败: {e}", phase=self.phase)
+            self._live.error(self.project_id, f"conclude 抢救失败: {e}", phase=self.phase)
             try:
                 fallback = json.dumps(messages[-50:], ensure_ascii=False)[:8000]
-                write_summary(self.project_id, f"{self.phase}-rescue", f"（抢救摘要失败，截断消息）\n{fallback}")
+                self._store_summary(
+                    "conclude" if self.silent else f"{self.phase}-rescue",
+                    self._attach_current_todos(f"（抢救摘要失败，截断消息）\n{fallback}"),
+                )
             except Exception:  # noqa: BLE001
                 pass
 

@@ -23,12 +23,43 @@ class SandboxError(Exception):
 
 def resolve_under(root: Path, rel: str) -> Path:
     rel = (rel or "").replace("\\", "/").lstrip("/")
+    if rel in ("", "."):
+        return root.resolve()
     if ".." in Path(rel).parts:
         raise SandboxError("路径不允许包含 ..")
     target = (root / rel).resolve()
     root_resolved = root.resolve()
-    if not str(target).startswith(str(root_resolved)):
-        raise SandboxError(f"路径越界: {rel}")
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as e:
+        raise SandboxError(f"路径越界: {rel}") from e
+    return target
+
+
+def ctx_workspace_root(ctx) -> Path | None:
+    raw = getattr(ctx, "workspace_root", None)
+    if not raw:
+        return None
+    return Path(str(raw)).resolve()
+
+
+def assert_under_root(root: Path, rel_or_abs: str) -> Path:
+    root_resolved = Path(root).resolve()
+    text = (rel_or_abs or "").strip()
+    if text in ("", ".", "./"):
+        return root_resolved
+    p = Path(text)
+    if p.is_absolute():
+        target = p.resolve()
+    else:
+        rel = text.replace("\\", "/").lstrip("/")
+        if ".." in Path(rel).parts:
+            raise SandboxError("路径不允许包含 ..")
+        target = (root_resolved / rel).resolve()
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as e:
+        raise SandboxError(f"路径越界: {rel_or_abs}") from e
     return target
 
 
@@ -50,8 +81,10 @@ def is_old_vulns_path(project_id: int, path: Path) -> bool:
         return False
 
 
-def assert_readable(project_id: int, rel_or_abs: str) -> Path:
+def assert_readable(project_id: int, rel_or_abs: str, *, workspace_root: Path | None = None) -> Path:
     """Resolve readable path under project; block old-vulns."""
+    if workspace_root is not None:
+        return assert_under_root(workspace_root, rel_or_abs)
     root = project_root(project_id).resolve()
     p = Path(rel_or_abs)
     if p.is_absolute():
@@ -83,8 +116,10 @@ def assert_readable(project_id: int, rel_or_abs: str) -> Path:
     return target
 
 
-def assert_writable(project_id: int, rel: str) -> Path:
+def assert_writable(project_id: int, rel: str, *, workspace_root: Path | None = None) -> Path:
     """Write only under workspace / docs (not old-vulns) / vulns."""
+    if workspace_root is not None:
+        return assert_under_root(workspace_root, rel)
     rel = (rel or "").replace("\\", "/").lstrip("/")
     if rel.startswith("workspace/"):
         return resolve_under(workspace_dir(project_id), rel[10:])
@@ -170,7 +205,7 @@ def unbounded_listing_reason(command: str) -> str | None:
     return None
 
 
-def block_dangerous_shell(command: str, project_id: int) -> None:
+def block_dangerous_shell(command: str, project_id: int, *, workspace_root: Path | None = None) -> None:
     lowered = (command or "").lower()
     banned = (
         "rm -rf /",
@@ -188,6 +223,15 @@ def block_dangerous_shell(command: str, project_id: int) -> None:
     reason = unbounded_listing_reason(command)
     if reason:
         raise SandboxError(f"{_UNBOUNDED_LISTING_HINT} 命中: {reason}")
+    if workspace_root is not None:
+        root = str(Path(workspace_root).resolve()).lower().replace("\\", "/")
+        if ("rm " in lowered or "del " in lowered or "remove-item" in lowered) and root in lowered.replace(
+            "\\", "/"
+        ):
+            raise SandboxError("不允许删除正在索引的工具目录")
+        return
+    if not project_id:
+        return
     # Block deleting project src or product root
     root = str(project_root(project_id).resolve()).lower().replace("\\", "/")
     src = str(src_dir(project_id).resolve()).lower().replace("\\", "/")

@@ -286,8 +286,10 @@ def reset_runtime_state() -> None:
         _fast_prepare_threads.clear()
         _fast_last_dir.clear()
         _map_refresh_pending.clear()
+    from .cli_tool_index import stop_cli_tool_scanner
     from .llm_thread import llm_thread_limiter
 
+    stop_cli_tool_scanner()
     llm_thread_limiter.reset()
 
 
@@ -1401,6 +1403,7 @@ def _audit_mode_vars(project_id: int) -> dict[str, str]:
 _POC_PROMPT_PHASES = frozenset(
     {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
 )
+_WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
 
 
 def _phase_system_prompt(
@@ -1504,6 +1507,20 @@ def _note_reviewer_round_end(project_id: int, vuln_id: int | None, result: Any) 
         )
 
 
+def _worker_hint_block(project_id: int) -> str:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        text = str(getattr(proj, "worker_hint", None) or "").strip() if proj else ""
+    if not text:
+        return ""
+    return (
+        "## 项目人工提示（每轮都会注入）\n"
+        "以下为用户为本项目挖掘 Worker 配置的额外提示。请在本轮分析中参考；"
+        "不要因此改去挖未注入的焦点，也不要偏离本轮文件 / Sink / 历史漏洞。\n\n"
+        f"{text}\n\n"
+    )
+
+
 def _initial_prompt(name: str, **kwargs: object) -> str:
     """Render a user-message document from prompts/initial/ and inject it as-is."""
     kwargs.setdefault("audit_mode", "bounty")
@@ -1523,6 +1540,10 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
         prior = inject_worker_prior_block(project_id)
         if prior:
             text = f"{prior}{text}"
+    if phase in _WORKER_HINT_PHASES:
+        hint = _worker_hint_block(project_id)
+        if hint:
+            text = f"{text.rstrip()}\n\n{hint}"
     return text
 
 

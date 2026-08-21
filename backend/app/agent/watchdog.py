@@ -166,6 +166,17 @@ TRIAGE_FINISH_NUDGE = (
     "请立刻对本批每条给出 keep / drop / defer，然后 FinishSinkTriage。不要读代码。"
 )
 
+CLI_INDEXER_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。请立刻 Glob/Read 本目录或用 Shell 跑 --help，"
+    "然后 FinishIndex(description=..., entry=相对路径)。不要改工具文件，不要空转。"
+)
+
+CLI_INDEXER_FINISH_NUDGE = (
+    "看门狗提醒：CLI 索引已连续 {n} 轮未 FinishIndex。"
+    "请立刻根据已读文件和 --help 调用 FinishIndex(description=..., entry=...)。"
+    "无法判断入口也要选最像的文件并写明不确定性。超时将 conclude 落盘失败原因。"
+)
+
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon-old-vuln": frozenset({"WriteOldVuln"}),
@@ -175,6 +186,7 @@ PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "fast-worker": frozenset({"FinishSink"}),
     "bypass-worker": frozenset({"FinishBypass"}),
     "sink-triage": frozenset({"FinishSinkTriage"}),
+    "cli-indexer": frozenset({"FinishIndex"}),
 }
 
 
@@ -194,6 +206,8 @@ class AgentWatchdog:
     reason: str | None = None
 
     def _persist_interval(self) -> int:
+        if self.phase == "cli-indexer":
+            return 8
         if self.phase in ("worker", "fast-worker", "bypass-worker", "sink-triage"):
             return self.worker_finish_interval
         if self.phase in RECON_PERSIST_PHASES:
@@ -221,6 +235,8 @@ class AgentWatchdog:
                 return BYPASS_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "sink-triage":
                 return TRIAGE_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase == "cli-indexer":
+                return CLI_INDEXER_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln-ghsa":
@@ -239,6 +255,8 @@ class AgentWatchdog:
             return f"看门狗：历史漏洞绕过连续 {n} 轮未 FinishBypass，已提醒立刻结束本条"
         if self.phase == "sink-triage":
             return f"看门狗：Sink 筛选连续 {n} 轮未 FinishSinkTriage，已提醒立刻提交决策"
+        if self.phase == "cli-indexer":
+            return f"看门狗：CLI 索引连续 {n} 轮未 FinishIndex，已提醒立刻落盘描述"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-old-vuln-ghsa":
@@ -262,6 +280,8 @@ class AgentWatchdog:
             return BYPASS_NO_TOOL_NUDGE
         if self.phase in ("sink-triage", "sink_triage"):
             return TRIAGE_NO_TOOL_NUDGE
+        if self.phase in ("cli-indexer", "cli_indexer"):
+            return CLI_INDEXER_NO_TOOL_NUDGE
         if self.phase in ("recon-mark", "recon_mark"):
             return RECON_MARK_NO_TOOL_NUDGE
         return NO_TOOL_NUDGE

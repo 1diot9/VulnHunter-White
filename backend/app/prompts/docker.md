@@ -61,6 +61,7 @@ Do not use the `env` directory as the compose project name, random tags, `<none>
 Record the **Web** image/container in `image` / `container_name`. Sidecars belong in compose, not as a second env.json.
 
 ## Rules
+- **Audited app = latest (required):** The Web app in this lab must be the current ingested tree in `src/`. Build from `src/`; do not swap in an older product release, old git tag, Docker Hub app image, or vulhub/historical target just to make a known CVE easier. If compose pins an old **application** image, build from `src/` instead. Sidecar images (mysql, redis, …) follow the project; this rule is not about those.
 - Bind debug ports to 127.0.0.1; keep business ports separate.
 - Set `"accepted": true` only when the container is running and lab_state matches need.
 - Keep `docs/lab.md` concise but complete enough to reproduce/reuse the lab: target URL, image/container, ports, credentials created for the lab, startup command, and notes.

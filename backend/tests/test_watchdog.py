@@ -315,3 +315,16 @@ def test_bypass_finish_nudge_and_no_tool():
     assert "FinishBypass" in w.persist_nudge_log()
     assert w.note_turn(["FinishBypass"]) is None
     assert w.idle_turns == 0
+
+
+def test_cli_indexer_watchdog_nudges():
+    from app.agent.watchdog import CLI_INDEXER_FINISH_NUDGE, CLI_INDEXER_NO_TOOL_NUDGE
+
+    w = AgentWatchdog(phase="cli-indexer")
+    assert w.note_no_tools() == CLI_INDEXER_NO_TOOL_NUDGE
+    for _ in range(7):
+        assert w.note_turn(["Read"]) is None
+    msg = w.note_turn(["Grep"])
+    assert msg == CLI_INDEXER_FINISH_NUDGE.format(n=8)
+    assert w.note_turn(["FinishIndex"]) is None
+    assert w.idle_turns == 0

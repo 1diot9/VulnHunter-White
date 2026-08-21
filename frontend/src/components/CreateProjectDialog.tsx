@@ -8,6 +8,7 @@ import { ManualLabToggle } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
 import { VerifierToggle } from './VerifierToggle'
+import { WorkerHintFields } from './WorkerHintFields'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -41,6 +42,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
   const [fastEnabled, setFastEnabled] = useState(false)
   const [bypassEnabled, setBypassEnabled] = useState(false)
   const [llmModel, setLlmModel] = useState('')
+  const [workerHint, setWorkerHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
@@ -72,6 +74,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
       fast_enabled: fastEnabled,
       bypass_enabled: bypassEnabled,
       llm_model: llmModel,
+      worker_hint: workerHint,
     }
   }
 
@@ -129,7 +132,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择赏金/全量/自定义模式、挖掘路径、验证方式与项目模型。
+            导入 GitHub 仓库或源码 zip。可选择赏金/全量/自定义模式、挖掘路径、验证方式、项目模型与挖掘 Worker 提示。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -144,6 +147,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
                 onCustomModeIdChange={setCustomModeId}
               />
               <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
+              <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={busy} />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
                 heuristicLite={heuristicLite}

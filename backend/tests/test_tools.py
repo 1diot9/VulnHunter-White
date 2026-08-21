@@ -7,7 +7,7 @@ import time
 from app.services.ingest import build_file_index
 from app.services.paths import docs_dir, old_vulns_dir, src_dir, vuln_dir, workspace_dir
 from app.tools import ROLE_ACL, SHELL_TOOLS, ToolContext, ToolSpec, native_shell_tool, registry
-from app.tools.common import todo_relpath
+from app.tools.common import load_todos, todo_relpath
 
 
 def _ctx(project_id: int, role: str, **kwargs) -> ToolContext:
@@ -1310,6 +1310,9 @@ def test_todo_write_isolated_by_phase(tmp_env, project):
     assert fix_todos[0]["content"] == "fix"
     assert not (ws / "todos.json").exists()
     assert todo_relpath(recon) != todo_relpath(worker_a)
+    assert load_todos(worker_a)[0]["content"] == "worker-a"
+    file_only = ToolContext(project_id=project, role="worker", phase="worker", worker_id="worker-1-abc")
+    assert load_todos(file_only)[0]["content"] == "worker-a"
 
 
 def test_openai_tools_for_role_contains_expected(tmp_env, project):
@@ -1373,6 +1376,7 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "FinishBypass" not in ROLE_ACL["worker"]
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
+    assert "SearchTools" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
     assert "MarkFalsePositive" in reviewer_names
     assert "ReturnToWorker" in reviewer_names
@@ -1497,6 +1501,34 @@ def test_shell_timeout_kills_process(tmp_env, project):
     assert out["ok"] is False
     assert "超时" in (out.get("error") or "")
     assert time.time() - started < 15
+
+
+def test_shell_auto_prunes_docker_build_cache(tmp_env, project, monkeypatch):
+    import app.tools.common as common
+    from app.services.docker_service import docker_service
+
+    tool = native_shell_tool()
+    monkeypatch.setattr(common, "_run_shell_limited", lambda *args, **kwargs: (0, "built", "", None))
+    monkeypatch.setattr(common.settings, "docker_auto_prune_build_cache", True)
+    monkeypatch.setattr(common.settings, "docker_auto_prune_build_cache_all", False)
+    monkeypatch.setattr(common.settings, "docker_auto_prune_build_cache_keep_storage_mb", 0)
+    calls = []
+
+    def fake_prune_build_cache(*, all_unused=False, keep_storage_mb=None):
+        calls.append({"all_unused": all_unused, "keep_storage_mb": keep_storage_mb})
+        return {"skipped": False, "freed_bytes": 123, "freed_mb": 0.0, "errors": []}
+
+    monkeypatch.setattr(docker_service, "prune_build_cache", fake_prune_build_cache)
+
+    out = registry.dispatch(_ctx(project, "recon"), tool, {"command": "docker build -t demo ."})
+    assert out["ok"] is True
+    assert out["docker_build_cache_prune"]["freed_bytes"] == 123
+    assert calls == [{"all_unused": False, "keep_storage_mb": 0}]
+
+    normal = registry.dispatch(_ctx(project, "recon"), tool, {"command": "echo no docker"})
+    assert normal["ok"] is True
+    assert "docker_build_cache_prune" not in normal
+    assert calls == [{"all_unused": False, "keep_storage_mb": 0}]
 
 
 def test_shell_dispatch_hard_timeout_returns_if_handler_hangs(monkeypatch, tmp_env, project):

@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 
@@ -52,6 +52,7 @@ from ..schemas import (
     ProjectOut,
     ProjectUpdate,
     normalize_manual_lab_prompt,
+    normalize_worker_hint,
 )
 from ..services.ingest import indexed_weight_exts
 from ..services.lab import lab_setup_finished, sync_manual_lab_notes
@@ -268,6 +269,7 @@ def _project_out(
         bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
         bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
         llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
+        worker_hint=(getattr(p, "worker_hint", None) or "").strip(),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -327,6 +329,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
     try:
         audit_mode = parse_audit_mode(body.audit_mode)
         manual_lab_prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
+        worker_hint = normalize_worker_hint(body.worker_hint)
         heuristic_enabled, fast_enabled, bypass_enabled = parse_mining_paths(
             heuristic_enabled=body.heuristic_enabled,
             fast_enabled=body.fast_enabled,
@@ -366,6 +369,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             fast_enabled=fast_enabled,
             bypass_enabled=bypass_enabled,
             llm_model=normalize_project_llm_model(body.llm_model),
+            worker_hint=worker_hint or None,
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -401,11 +405,13 @@ async def create_project_zip(
     fast_enabled: str = Form("false"),
     bypass_enabled: str = Form("false"),
     llm_model: str = Form(""),
+    worker_hint: str = Form(""),
 ) -> ProjectOut:
     raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
     try:
         mode = parse_audit_mode(audit_mode)
         prompt = normalize_manual_lab_prompt(manual_lab_prompt)
+        hint = normalize_worker_hint(worker_hint)
         heuristic_on, fast_on, bypass_on = parse_mining_paths(
             heuristic_enabled=heuristic_enabled,
             fast_enabled=fast_enabled,
@@ -449,6 +455,7 @@ async def create_project_zip(
             fast_enabled=fast_on,
             bypass_enabled=bypass_on,
             llm_model=normalize_project_llm_model(llm_model),
+            worker_hint=hint or None,
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -485,15 +492,19 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.fast_enabled is None
         and body.bypass_enabled is None
         and body.llm_model is None
+        and body.worker_hint is None
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
     prompt = None
+    hint = None
     try:
         if body.audit_mode is not None:
             mode = parse_audit_mode(body.audit_mode)
         if body.manual_lab_prompt is not None:
             prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
+        if body.worker_hint is not None:
+            hint = normalize_worker_hint(body.worker_hint)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     paths_changed = False
@@ -515,6 +526,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_fast = bool(getattr(p, "fast_enabled", False))
         old_bypass = bool(getattr(p, "bypass_enabled", False))
         old_llm_model = normalize_project_llm_model(getattr(p, "llm_model", None))
+        old_worker_hint = (getattr(p, "worker_hint", None) or "").strip()
         if (
             body.heuristic_enabled is not None
             or body.fast_enabled is not None
@@ -596,6 +608,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                     p.manual_lab = False
         if body.llm_model is not None:
             p.llm_model = normalize_project_llm_model(body.llm_model)
+        if hint is not None:
+            p.worker_hint = hint or None
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
@@ -663,6 +677,11 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                     )
                 else:
                     live_log.system(project_id, "项目模型已改回全局默认，下一轮 Agent 生效")
+        if hint is not None and (hint or "") != old_worker_hint:
+            if hint:
+                live_log.system(project_id, "挖掘 Worker 提示已更新，下一轮挖掘生效")
+            else:
+                live_log.system(project_id, "挖掘 Worker 提示已清空，下一轮挖掘不再注入")
     if audit_mode_changed:
         note_audit_mode_changed(project_id, new_mode_for_note, custom_name=custom_name_for_note)
     if paths_changed:
@@ -875,11 +894,22 @@ def list_phases(project_id: int) -> list[PhaseRunOut]:
 
 
 @router.get("/{project_id}/reports", response_model=PhaseReportList)
-def list_project_reports(project_id: int) -> PhaseReportList:
+def list_project_reports(
+    project_id: int,
+    phase: str | None = None,
+    subphase: str | None = None,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> PhaseReportList:
     with SessionLocal() as db:
         if not db.get(Project, project_id):
             raise HTTPException(404, "项目不存在")
-    return PhaseReportList.model_validate(reports_by_phase(project_id))
+    try:
+        return PhaseReportList.model_validate(
+            reports_by_phase(project_id, phase=phase, subphase=subphase, limit=limit, offset=offset)
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.get("/{project_id}/reports/file", response_model=PhaseReportDetail)

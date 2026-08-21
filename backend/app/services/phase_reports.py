@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,19 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
 )
 _DOC_BY_REL = {rel: (control, subphase, title) for rel, control, subphase, title in _DOC_SPECS}
 _PREVIEW_CHARS = 8192
+_CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
+
+
+@dataclass(frozen=True)
+class _ReportCandidate:
+    rel: str
+    path: Path
+    control: str
+    subphase: str
+    kind: str
+    round_no: int | None
+    title: str
+    sort_mtime: float
 
 
 def _shows_summary_in_phase_reports(control: str) -> bool:
@@ -163,6 +177,48 @@ def _item(
     if content is not None:
         out["content"] = text
     return out
+
+
+def _candidate(
+    *,
+    rel: str,
+    path: Path,
+    control: str,
+    subphase: str,
+    kind: str,
+    round_no: int | None,
+    title: str,
+) -> _ReportCandidate | None:
+    if not path.is_file():
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if stat.st_size <= 0:
+        return None
+    return _ReportCandidate(
+        rel=rel,
+        path=path,
+        control=control,
+        subphase=subphase,
+        kind=kind,
+        round_no=round_no,
+        title=title,
+        sort_mtime=stat.st_mtime,
+    )
+
+
+def _candidate_item(c: _ReportCandidate) -> dict[str, Any]:
+    return _item(
+        rel=c.rel,
+        path=c.path,
+        control=c.control,
+        subphase=c.subphase,
+        kind=c.kind,
+        round_no=c.round_no,
+        title=c.title,
+    )
 
 
 def _safe_rel(rel: str) -> str:
@@ -304,115 +360,114 @@ def _summary_title(phase: str, kind: str | None, n: int) -> str:
     return f"{sub}压缩摘要 · 第 {n} 次"
 
 
-def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+def _collect_phase_report_candidates(project_id: int) -> list[_ReportCandidate]:
+    items: list[_ReportCandidate] = []
     root = project_root(project_id)
 
     for rel, control, subphase, title in _DOC_SPECS:
         path = root / rel
-        if path.is_file() and path.stat().st_size > 0:
-            items.append(
-                _item(
-                    rel=rel,
-                    path=path,
-                    control=control,
-                    subphase=subphase,
-                    kind="doc",
-                    round_no=None,
-                    title=title,
-                )
-            )
+        item = _candidate(
+            rel=rel,
+            path=path,
+            control=control,
+            subphase=subphase,
+            kind="doc",
+            round_no=None,
+            title=title,
+        )
+        if item is not None:
+            items.append(item)
 
     rounds = workspace_dir(project_id) / "rounds"
     if rounds.is_dir():
         for path in rounds.glob("round-*.md"):
             m = _ROUND_NAME.match(path.name)
-            if not m or not path.is_file() or path.stat().st_size <= 0:
+            if not m:
                 continue
             n = int(m.group("n"))
-            items.append(
-                _item(
-                    rel=f"workspace/rounds/{path.name}",
-                    path=path,
-                    control="worker",
-                    subphase="mine",
-                    kind="round",
-                    round_no=n,
-                    title=_ROUND_TITLE,
-                )
+            item = _candidate(
+                rel=f"workspace/rounds/{path.name}",
+                path=path,
+                control="worker",
+                subphase="mine",
+                kind="round",
+                round_no=n,
+                title=_ROUND_TITLE,
             )
+            if item is not None:
+                items.append(item)
         for path in rounds.glob("fast-round-*.md"):
             m = _FAST_ROUND_NAME.match(path.name)
-            if not m or not path.is_file() or path.stat().st_size <= 0:
+            if not m:
                 continue
             n = int(m.group("n"))
-            items.append(
-                _item(
-                    rel=f"workspace/rounds/{path.name}",
-                    path=path,
-                    control="worker",
-                    subphase="fast",
-                    kind="round",
-                    round_no=n,
-                    title=_FAST_ROUND_TITLE,
-                )
+            item = _candidate(
+                rel=f"workspace/rounds/{path.name}",
+                path=path,
+                control="worker",
+                subphase="fast",
+                kind="round",
+                round_no=n,
+                title=_FAST_ROUND_TITLE,
             )
+            if item is not None:
+                items.append(item)
         for path in rounds.glob("bypass-round-*.md"):
             m = _BYPASS_ROUND_NAME.match(path.name)
-            if not m or not path.is_file() or path.stat().st_size <= 0:
+            if not m:
                 continue
             n = int(m.group("n"))
-            items.append(
-                _item(
-                    rel=f"workspace/rounds/{path.name}",
-                    path=path,
-                    control="worker",
-                    subphase="bypass",
-                    kind="round",
-                    round_no=n,
-                    title=_BYPASS_ROUND_TITLE,
-                )
+            item = _candidate(
+                rel=f"workspace/rounds/{path.name}",
+                path=path,
+                control="worker",
+                subphase="bypass",
+                kind="round",
+                round_no=n,
+                title=_BYPASS_ROUND_TITLE,
             )
+            if item is not None:
+                items.append(item)
 
     verifier_dir = root / "docs" / "verifier"
     if verifier_dir.is_dir():
         for path in verifier_dir.glob("*.md"):
-            if not path.stem.isdigit() or not path.is_file() or path.stat().st_size <= 0:
+            if not path.stem.isdigit():
                 continue
-            items.append(
-                _item(
-                    rel=f"docs/verifier/{path.name}",
-                    path=path,
-                    control="verifier",
-                    subphase="verify",
-                    kind="doc",
-                    round_no=None,
-                    title=f"互联网验证 · 漏洞 #{int(path.stem)}",
-                )
+            item = _candidate(
+                rel=f"docs/verifier/{path.name}",
+                path=path,
+                control="verifier",
+                subphase="verify",
+                kind="doc",
+                round_no=None,
+                title=f"互联网验证 · 漏洞 #{int(path.stem)}",
             )
+            if item is not None:
+                items.append(item)
 
     chain_dir = root / "docs" / "attack-chains"
     if chain_dir.is_dir():
         for path in chain_dir.glob("*.md"):
-            if path.name == "index.md" or not path.is_file() or path.stat().st_size <= 0:
+            if path.name == "index.md":
                 continue
-            items.append(
-                _item(
-                    rel=f"docs/attack-chains/{path.name}",
-                    path=path,
-                    control="attack_chain",
-                    subphase="chain",
-                    kind="doc",
-                    round_no=None,
-                    title=f"攻击链 · {path.stem}",
-                )
+            item = _candidate(
+                rel=f"docs/attack-chains/{path.name}",
+                path=path,
+                control="attack_chain",
+                subphase="chain",
+                kind="doc",
+                round_no=None,
+                title=f"攻击链 · {path.stem}",
             )
+            if item is not None:
+                items.append(item)
 
     d = summaries_dir(project_id)
     if d.is_dir():
         for path in d.glob("*.md"):
             m = _SUMMARY_NAME.match(path.name)
-            if not m or not path.is_file() or path.stat().st_size <= 0:
+            if not m:
                 continue
             phase = m.group("phase")
             kind_raw = m.group("kind")
@@ -421,43 +476,92 @@ def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
             control, _, subphase = _PHASE_META[phase]
             if not _shows_summary_in_phase_reports(control):
                 continue
-            items.append(
-                _item(
-                    rel=f"docs/summaries/{path.name}",
-                    path=path,
-                    control=control,
-                    subphase=subphase,
-                    kind=kind,
-                    round_no=n,
-                    title=_summary_title(phase, kind_raw, n),
-                )
+            item = _candidate(
+                rel=f"docs/summaries/{path.name}",
+                path=path,
+                control=control,
+                subphase=subphase,
+                kind=kind,
+                round_no=n,
+                title=_summary_title(phase, kind_raw, n),
             )
+            if item is not None:
+                items.append(item)
 
-    items.sort(key=lambda x: (x["mtime"], x["id"]), reverse=True)
+    items.sort(key=lambda x: (x.sort_mtime, x.rel), reverse=True)
     return items
 
 
-def reports_by_phase(project_id: int) -> dict[str, Any]:
-    items = list_phase_reports(project_id)
-    grouped: dict[str, list[dict[str, Any]]] = {
-        "recon": [],
-        "worker": [],
-        "reviewer": [],
-        "verifier": [],
-        "attack_chain": [],
-    }
-    for item in items:
-        grouped.setdefault(item["phase"], []).append(item)
+def list_phase_reports(project_id: int) -> list[dict[str, Any]]:
+    return [_candidate_item(c) for c in _collect_phase_report_candidates(project_id)]
+
+
+def reports_by_phase(
+    project_id: int,
+    *,
+    phase: str | None = None,
+    subphase: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> dict[str, Any]:
+    selected_phase = (phase or "").strip()
+    if selected_phase == "all":
+        selected_phase = ""
+    if selected_phase and selected_phase not in _CONTROL_LABEL:
+        raise ValueError("未知阶段")
+    selected_subphase = (subphase or "").strip()
+    if selected_subphase == "all":
+        selected_subphase = ""
+    if selected_subphase and selected_subphase not in _SUB_LABEL:
+        raise ValueError("未知子阶段")
+
+    candidates = _collect_phase_report_candidates(project_id)
+    grouped: dict[str, list[_ReportCandidate]] = {key: [] for key in _CONTROL_PHASES}
+    for item in candidates:
+        grouped.setdefault(item.control, []).append(item)
+
+    offset = max(0, offset)
+    if limit is not None:
+        limit = max(0, limit)
+
+    reports_by_control: dict[str, list[dict[str, Any]]] = {key: [] for key in _CONTROL_PHASES}
+    if selected_phase:
+        selected = grouped[selected_phase]
+        if selected_subphase:
+            selected = [item for item in selected if item.subphase == selected_subphase]
+        selected_count = len(selected)
+        page = selected[offset : offset + limit] if limit is not None else selected[offset:]
+        reports_by_control[selected_phase] = [_candidate_item(item) for item in page]
+    else:
+        selected = candidates
+        if selected_subphase:
+            selected = [item for item in selected if item.subphase == selected_subphase]
+        selected_count = len(selected)
+        for key in _CONTROL_PHASES:
+            page_source = grouped[key]
+            if selected_subphase:
+                page_source = [item for item in page_source if item.subphase == selected_subphase]
+            page = page_source[offset : offset + limit] if limit is not None else page_source[offset:]
+            reports_by_control[key] = [_candidate_item(item) for item in page]
+
     phases = [
         {
             "phase": key,
             "label": _CONTROL_LABEL[key],
             "count": len(grouped[key]),
-            "reports": grouped[key],
+            "reports": reports_by_control[key],
         }
-        for key in ("recon", "worker", "reviewer", "verifier", "attack_chain")
+        for key in _CONTROL_PHASES
     ]
-    return {"phases": phases, "count": len(items)}
+    return {
+        "phases": phases,
+        "count": len(candidates),
+        "selected_count": selected_count,
+        "limit": limit,
+        "offset": offset,
+        "phase": selected_phase,
+        "subphase": selected_subphase,
+    }
 
 
 def read_phase_report(project_id: int, rel: str) -> dict[str, Any]:
