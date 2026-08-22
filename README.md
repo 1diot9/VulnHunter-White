@@ -87,7 +87,7 @@ VulnHunter-White的特点是，支持三种挖掘模式，通过docker动态验�
 | 操作系统 | Windows 10 / 11，或 Linux / macOS | Windows：`start.cmd`。Linux/macOS：`sh start.sh`（POSIX `sh`，不依赖 bash） |
 | Python | **3.11+**（推荐 **3.12** 64-bit） | Windows 需能执行 `python`（勾选 PATH，带 `venv`）。Unix 优先 `python3`。Debian/Ubuntu 另装 `python3-venv` |
 | Node.js | **20 LTS**（最低 18） | 需能执行 `node`、`npm`；前端 Vite 6 需要较新 Node |
-| Git | 2.x | 从 GitHub 导入仓库时 `git clone --depth 1`；只上传 zip 也可不装，但建议装上 |
+| Git | 2.x | 从 GitHub 导入仓库时 `git clone --depth 1`（Windows 会带 `core.longpaths`，避免 XWiki 等深层路径 `Filename too long`）；只上传 zip 也可不装，但建议装上 |
 | 空闲端口 | **16780**、**15173** | 后端 API / 前端开发服务器；被占用时用 `--backend-port` / `--frontend-port` 换端口，或先 `stop.cmd` / `sh stop.sh` |
 | LLM 接口 | 兼容 OpenAI Chat Completions 或 Anthropic Messages | 启动后在设置页填 Base URL、API Key、模型；没有模型无法跑 Agent |
 
@@ -353,7 +353,7 @@ npm run dev
 | `error: backend/frontend port … is still in use` | 目标端口被其他程序占用。换端口：`start.cmd --backend-port N --frontend-port N` |
 | `warn: ports not ready` | 看 `data/logs/`；常见是旧进程没退干净，先 `stop.cmd` / `sh stop.sh` |
 | 页面能开但接口全失败 | 后端没起来，或前端端口与 Vite 代理用的 `VULNHUNTER_PORT` 不一致 |
-| GitHub 导入失败 | 确认 `git` 在 PATH；私有仓填 PAT；公司代理填设置页 HTTP 代理 |
+| GitHub 导入失败 | 确认 `git` 在 PATH；私有仓填 PAT；公司代理填设置页 HTTP 代理。若报 `Filename too long`，更新后重试即可（clone 已开 `core.longpaths`） |
 | 靶场 / 容器页提示 docker unavailable | 打开 Docker Desktop 或启动 docker 服务，等引擎就绪后再试 `docker ps` |
 | 局部验证说镜像不存在 | 重新执行 `scripts\build-sandbox.cmd` 或 `sh scripts/build-sandbox.sh` |
 | 快速扫描报未找到 semgrep | 安装本机 semgrep，或保证 Docker 可用并允许拉镜像 |

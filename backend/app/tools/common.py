@@ -22,7 +22,15 @@ from ..services.github_issues import search_github_issues
 from ..services.http_client import http_client
 from ..services.ingest import IGNORE_DIR_NAMES
 from ..services.lab import write_lab_doc_if_ready
-from ..services.paths import env_dir, old_vulns_dir, project_root, src_dir, vuln_dir
+from ..services.paths import (
+    env_dir,
+    old_vulns_dir,
+    project_root,
+    src_dir,
+    strip_windows_long_path,
+    vuln_dir,
+    windows_long_path,
+)
 from . import ToolSpec, registry
 from .sandbox import SandboxError, assert_readable, assert_writable, block_dangerous_shell, ctx_workspace_root, is_src_path
 
@@ -244,15 +252,16 @@ def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 results.append({"path": p, "error": "历史漏洞阶段只收集，禁止读源码"})
                 local_errors += 1
                 continue
-            if not target.exists():
+            io_target = windows_long_path(target)
+            if not io_target.exists():
                 results.append({"path": p, "error": "文件不存在"})
                 local_errors += 1
                 continue
-            if target.is_dir():
+            if io_target.is_dir():
                 results.append({"path": p, "error": "是目录，请用 Glob"})
                 continue
-            size = target.stat().st_size
-            text = target.read_text(encoding="utf-8", errors="replace")
+            size = io_target.stat().st_size
+            text = io_target.read_text(encoding="utf-8", errors="replace")
             window = read_text_window(text, offset=offset, limit=limit, max_bytes=max_bytes)
             # Paging fields before content so callers see next_offset/hint without scanning the body.
             ordered: dict[str, Any] = {
@@ -314,17 +323,18 @@ def _ignored_dir(name: str) -> bool:
 
 def _iter_files(root: Path, name_glob: str = "*"):
     """Walk files under root, pruning node_modules/target and other ignore dirs."""
-    if root.is_file():
-        if fnmatch.fnmatch(root.name, name_glob):
-            yield root
+    io_root = windows_long_path(root)
+    if io_root.is_file():
+        if fnmatch.fnmatch(io_root.name, name_glob):
+            yield strip_windows_long_path(io_root)
         return
-    if not root.exists():
+    if not io_root.exists():
         return
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(io_root):
         dirnames[:] = [d for d in dirnames if not _ignored_dir(d)]
         for fn in filenames:
             if fnmatch.fnmatch(fn, name_glob):
-                yield Path(dirpath) / fn
+                yield strip_windows_long_path(Path(dirpath) / fn)
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
@@ -412,7 +422,7 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         except SandboxError:
             continue
         try:
-            text = fp.read_text(encoding="utf-8", errors="ignore")
+            text = windows_long_path(fp).read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
         for i, line in enumerate(text.splitlines(), 1):

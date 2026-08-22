@@ -13,6 +13,7 @@ from ..services.paths import (
     project_root,
     src_dir,
     vulns_dir,
+    windows_long_path,
     workspace_dir,
 )
 
@@ -107,7 +108,7 @@ def assert_readable(project_id: int, rel_or_abs: str, *, workspace_root: Path | 
         else:
             # default: relative to src
             candidate = src_dir(project_id) / rel
-            if candidate.exists():
+            if windows_long_path(candidate).exists():
                 target = candidate.resolve()
             else:
                 target = resolve_under(root, rel)

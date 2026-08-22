@@ -11,7 +11,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..models import FileWeight, Project, SessionLocal
-from .paths import ensure_project_dirs, force_rmtree, project_root, src_dir
+from .paths import (
+    ensure_project_dirs,
+    force_rmtree,
+    project_root,
+    src_dir,
+    strip_windows_long_path,
+    windows_long_path,
+)
 
 SOURCE_EXTS = frozenset(
     {
@@ -226,10 +233,11 @@ def _collect(src_root: Path, exts: frozenset[str] | None = None) -> list[Path]:
 
     allowed = SOURCE_EXTS if exts is None else frozenset(exts)
     results: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(src_root):
+    walk_root = windows_long_path(src_root)
+    for dirpath, dirnames, filenames in os.walk(walk_root):
         dirnames[:] = [d for d in dirnames if not _should_ignore_dir(d)]
         for fn in filenames:
-            p = Path(dirpath) / fn
+            p = strip_windows_long_path(Path(dirpath) / fn)
             if _should_ignore_file(p):
                 continue
             if p.suffix.lower() not in allowed:
@@ -293,8 +301,21 @@ def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
         )
     if not clone_url.endswith(".git") and "github.com" in clone_url:
         clone_url = clone_url.rstrip("/") + ".git"
+    # git -c 让本次 clone 的 checkout 绕过 Windows MAX_PATH；clone -c 写入新仓
+    # 本地配置，后续 git 操作同样生效。XWiki 等深层树否则会 Filename too long。
     proc = subprocess.run(
-        ["git", "clone", "--depth", "1", clone_url, str(dest)],
+        [
+            "git",
+            "-c",
+            "core.longpaths=true",
+            "clone",
+            "-c",
+            "core.longpaths=true",
+            "--depth",
+            "1",
+            clone_url,
+            str(dest),
+        ],
         capture_output=True,
         text=True,
         timeout=600,
@@ -309,7 +330,7 @@ def extract_zip(project_id: int, zip_path: Path) -> Path:
     force_rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(dest)
+        zf.extractall(windows_long_path(dest))
     # If zip has a single top-level dir, flatten
     children = [c for c in dest.iterdir() if not c.name.startswith(".")]
     if len(children) == 1 and children[0].is_dir():

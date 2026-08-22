@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import pytest
+
 from app.services.ingest import (
     build_file_index,
     detect_identity,
@@ -111,7 +116,15 @@ def test_clone_github_replaces_nonempty_src(tmp_env, project, monkeypatch):
 
     def fake_run(cmd, **kwargs):
         target = Path(cmd[-1])
-        assert cmd[:3] == ["git", "clone", "--depth"]
+        assert cmd[:6] == [
+            "git",
+            "-c",
+            "core.longpaths=true",
+            "clone",
+            "-c",
+            "core.longpaths=true",
+        ]
+        assert "--depth" in cmd
         assert not target.exists()
         target.mkdir(parents=True, exist_ok=True)
         (target / "README.md").write_text("ok\n", encoding="utf-8")
@@ -127,3 +140,38 @@ def test_clone_github_replaces_nonempty_src(tmp_env, project, monkeypatch):
     out = clone_github(project, "https://github.com/halo-dev/halo")
     assert out == dest
     assert (out / "README.md").read_text(encoding="utf-8") == "ok\n"
+
+
+def test_windows_long_path_prefix():
+    from app.services.paths import strip_windows_long_path, windows_long_path
+
+    p = Path("C:/tmp/repo") if os.name == "nt" else Path("/tmp/repo")
+    out = windows_long_path(p)
+    if os.name != "nt":
+        assert out == p
+        return
+    text = str(out)
+    assert text.startswith("\\\\?\\")
+    stripped = strip_windows_long_path(out)
+    assert stripped == Path(os.path.abspath(p))
+    assert strip_windows_long_path(out) == strip_windows_long_path(windows_long_path(out))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MAX_PATH is a Windows limitation")
+def test_collect_and_rmtree_long_paths(tmp_env, project):
+    from app.services.ingest import _collect
+    from app.services.paths import force_rmtree, src_dir, windows_long_path
+
+    src = src_dir(project)
+    rel_parts = ["deep"] + ["n" * 12] * 18
+    dest_dir = src.joinpath(*rel_parts)
+    long_dir = windows_long_path(dest_dir)
+    long_dir.mkdir(parents=True, exist_ok=True)
+    (long_dir / "DeepMain.java").write_text("class DeepMain {}\n", encoding="utf-8")
+    files = _collect(src)
+    rels = {str(p.relative_to(src)).replace("\\", "/") for p in files}
+    expected = "/".join(rel_parts + ["DeepMain.java"])
+    assert expected in rels
+
+    force_rmtree(src / "deep")
+    assert not windows_long_path(src / "deep").exists()

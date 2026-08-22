@@ -9,6 +9,34 @@ from pathlib import Path
 from ..config import PROJECTS_DIR
 
 
+def windows_long_path(path: Path | str) -> Path:
+    """Return a Path that bypasses Windows MAX_PATH via the ``\\\\?\\`` prefix.
+
+    No-op on POSIX. Already-prefixed paths are returned unchanged. UNC paths
+    become ``\\\\?\\UNC\\server\\share\\...``. Git for Windows can checkout
+    trees longer than 260 characters when ``core.longpaths`` is on; Python I/O
+    still needs this prefix unless the OS long-path policy is enabled.
+    """
+    if os.name != "nt":
+        return Path(path)
+    raw = os.path.normpath(os.path.abspath(os.fspath(path)))
+    if raw.startswith("\\\\?\\"):
+        return Path(raw)
+    if raw.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + raw[2:])
+    return Path("\\\\?\\" + raw)
+
+
+def strip_windows_long_path(path: Path | str) -> Path:
+    """Remove a ``\\\\?\\`` / ``\\\\?\\UNC\\`` prefix so relative_to() still works."""
+    raw = os.fspath(path)
+    if raw.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + raw[8:])
+    if raw.startswith("\\\\?\\"):
+        return Path(raw[4:])
+    return Path(path)
+
+
 def force_rmtree(path: Path, attempts: int = 8) -> None:
     """Remove a directory tree, including Windows read-only .git files."""
 
@@ -19,7 +47,7 @@ def force_rmtree(path: Path, attempts: int = 8) -> None:
         except OSError:
             pass
 
-    target = Path(path)
+    target = windows_long_path(path)
     if not target.exists():
         return
     for i in range(attempts):
