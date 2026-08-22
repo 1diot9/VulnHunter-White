@@ -37,9 +37,58 @@ def test_health_and_settings(tmp_env):
         assert llm_thread_limiter.current_limit() == 8
         assert upd.json()["http_proxy"] == "http://127.0.0.1:19999"
         assert upd.json()["chat_proxy"] == "http://127.0.0.1:19998"
+        usage = client.get("/api/settings/llm-threads")
+        assert usage.status_code == 200
+        assert usage.json()["limit"] == 8
+        assert usage.json()["used"] == 0
+        assert usage.json()["waiting"] == 0
         cleared = client.put("/api/settings", json={"http_proxy": "", "chat_proxy": ""})
         assert cleared.json()["http_proxy"] == ""
         assert cleared.json()["chat_proxy"] == ""
+
+
+def test_llm_thread_usage_api(tmp_env):
+    import threading
+    import time
+
+    from app.main import app
+    from app.services.llm_thread import llm_thread_limiter
+
+    llm_thread_limiter.reset()
+    cancel = threading.Event()
+    t: threading.Thread | None = None
+    try:
+        llm_thread_limiter.set_limit_override(1)
+        assert llm_thread_limiter.acquire() is True
+
+        queued = threading.Event()
+
+        def waiter() -> None:
+            queued.set()
+            llm_thread_limiter.acquire(cancel)
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        assert queued.wait(timeout=3)
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if llm_thread_limiter.snapshot()[2] >= 1:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("waiter did not queue")
+
+        with TestClient(app) as client:
+            body = client.get("/api/settings/llm-threads").json()
+            assert body["used"] == 1
+            assert body["limit"] == 1
+            assert body["waiting"] >= 1
+    finally:
+        cancel.set()
+        if t is not None:
+            t.join(timeout=3)
+        llm_thread_limiter.release()
+        llm_thread_limiter.reset()
 
 
 def test_purge_live_logs_api(tmp_env, project):

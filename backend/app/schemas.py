@@ -46,6 +46,12 @@ class SettingsOut(BaseModel):
     cli_tools_dir: str = "tools/cli"
 
 
+class LlmThreadUsageOut(BaseModel):
+    used: int = 0
+    limit: int = 6
+    waiting: int = 0
+
+
 class SettingsUpdate(BaseModel):
     llm_providers: list[LlmProviderIn] | None = None
     llm_roles: dict[str, LlmRoleAssignment] | None = None

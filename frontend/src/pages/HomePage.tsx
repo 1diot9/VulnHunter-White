@@ -8,6 +8,7 @@ import { GithubLink } from '../components/GithubLink'
 import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
+import LlmThreadUsageBar from '../components/LlmThreadUsageBar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -75,7 +76,10 @@ export default function HomePage() {
           <h1 className="text-2xl font-semibold">审计项目</h1>
           <p className="mt-1 text-sm text-slate-400">导入 GitHub 仓库或源码 zip，启动白盒审计。</p>
         </div>
-        <CreateProjectButton onClick={() => setCreateOpen(true)} />
+        <div className="flex flex-wrap items-center gap-3">
+          <LlmThreadUsageBar />
+          <CreateProjectButton onClick={() => setCreateOpen(true)} />
+        </div>
       </div>
 
       <CreateProjectDialog

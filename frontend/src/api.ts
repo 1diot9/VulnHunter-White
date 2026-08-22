@@ -298,6 +298,12 @@ export type Settings = {
   cli_tools_dir: string
 }
 
+export type LlmThreadUsage = {
+  used: number
+  limit: number
+  waiting: number
+}
+
 export type LlmProbeBody = {
   base_url?: string | null
   api_key?: string | null
@@ -685,6 +691,7 @@ export const api = {
     return { blob, filename }
   },
   getSettings: () => request<Settings>('/api/settings'),
+  llmThreadUsage: () => request<LlmThreadUsage>('/api/settings/llm-threads'),
   putSettings: (body: Record<string, unknown>) =>
     request<Settings>('/api/settings', {
       method: 'PUT',

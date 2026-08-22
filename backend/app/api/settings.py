@@ -19,6 +19,7 @@ from ..schemas import (
     LlmModelListOut,
     LlmProbeIn,
     LlmTestOut,
+    LlmThreadUsageOut,
     SettingsOut,
     SettingsUpdate,
 )
@@ -93,6 +94,14 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
 
     llm_thread_limiter.refresh_limit(out.llm_thread_limit)
     return out
+
+
+@router.get("/llm-threads", response_model=LlmThreadUsageOut)
+def get_llm_threads() -> LlmThreadUsageOut:
+    from ..services.llm_thread import llm_thread_limiter
+
+    used, limit, waiting = llm_thread_limiter.snapshot()
+    return LlmThreadUsageOut(used=used, limit=limit, waiting=waiting)
 
 
 @router.get("/builtin-audit-modes", response_model=list[BuiltinAuditModeOut])

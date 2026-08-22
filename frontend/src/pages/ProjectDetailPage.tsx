@@ -13,6 +13,7 @@ import PhaseFlow from '../components/PhaseFlow'
 import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import VulnGroupList from '../components/VulnGroupList'
 import { WeightExtBadges } from '../components/WeightExtBadges'
+import LlmThreadUsageBar from '../components/LlmThreadUsageBar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -416,35 +417,38 @@ export default function ProjectDetailPage() {
             />
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <ProjectSettingsButton project={project} onSaved={setProject} />
-          <Button
-            variant="outline"
-            disabled={project.status === 'completed'}
-            title={project.status === 'completed' ? '已完成项目不可暂停' : undefined}
-            onClick={() => api.pause(projectId)}
-          >
-            全部暂停
-          </Button>
-          <Button variant="outline" onClick={() => api.resume(projectId)}>
-            全部续跑
-          </Button>
-          <ReconDocRerunButtons
-            project={project}
-            onStarted={(subId) => {
-              setTab('logs')
-              selectPhase(subId === 'map' ? 'recon-map' : 'recon-old-vuln')
-            }}
-          />
-          <ResetProgressButton project={project} onReset={setProject} />
-          <Button variant="destructive" onClick={() => api.cancel(projectId)}>
-            停止
-          </Button>
-          <DeleteProjectButton
-            projectId={projectId}
-            projectName={project.name}
-            onDeleted={() => navigate('/', { replace: true })}
-          />
+        <div className="flex flex-col items-end gap-2">
+          <LlmThreadUsageBar />
+          <div className="flex flex-wrap justify-end gap-2">
+            <ProjectSettingsButton project={project} onSaved={setProject} />
+            <Button
+              variant="outline"
+              disabled={project.status === 'completed'}
+              title={project.status === 'completed' ? '已完成项目不可暂停' : undefined}
+              onClick={() => api.pause(projectId)}
+            >
+              全部暂停
+            </Button>
+            <Button variant="outline" onClick={() => api.resume(projectId)}>
+              全部续跑
+            </Button>
+            <ReconDocRerunButtons
+              project={project}
+              onStarted={(subId) => {
+                setTab('logs')
+                selectPhase(subId === 'map' ? 'recon-map' : 'recon-old-vuln')
+              }}
+            />
+            <ResetProgressButton project={project} onReset={setProject} />
+            <Button variant="destructive" onClick={() => api.cancel(projectId)}>
+              停止
+            </Button>
+            <DeleteProjectButton
+              projectId={projectId}
+              projectName={project.name}
+              onDeleted={() => navigate('/', { replace: true })}
+            />
+          </div>
         </div>
       </div>
 

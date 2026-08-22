@@ -96,6 +96,7 @@ class LlmThreadLimiter:
 
     def snapshot(self) -> tuple[int, int, int]:
         """Return (used, limit, waiting)."""
+        self._ensure_loaded()
         with self._lock:
             return self._used, self._limit_locked(), len(self._queue)
 
