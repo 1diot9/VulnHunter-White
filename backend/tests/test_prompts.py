@@ -241,6 +241,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "有回显" in bounty_worker
     assert "仅响应差别" in bounty_worker
     assert "存储型 XSS" in bounty_worker
+    assert "1-click CSRF" in bounty_worker
+    assert "普通 CSRF" in bounty_worker
     assert "源码硬编码密钥" in bounty_worker
     assert "前端传输混淆" in bounty_worker
     assert "服务端机密" in bounty_worker

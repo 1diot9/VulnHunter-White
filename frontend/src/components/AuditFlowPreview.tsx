@@ -56,7 +56,7 @@ function buildNodes({
   const fastOn = fastEnabled === true
   const bypassOn = bypassEnabled === true
   const scopeChip = bounty
-    ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的硬编码密钥等。' }
+    ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、1-click CSRF、有服务端机密危害的硬编码密钥等。' }
     : { id: 'scope', label: '含低危害难利用', hint: 'CORS、反射 XSS、缺速率限制、安全头等由 Reviewer 分层。' }
 
   const mines: FlowNode[] = []

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { Separator } from '@/components/ui/separator'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api } from '../api'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+import { useAuth } from './AuthGate'
 
 const links = [
   { to: '/', label: '审计项目' },
@@ -15,6 +17,7 @@ const links = [
 
 export default function AppLayout() {
   const [consentCount, setConsentCount] = useState(0)
+  const { required, lock } = useAuth()
 
   useEffect(
     () =>
@@ -58,6 +61,11 @@ export default function AppLayout() {
               </NavLink>
             ))}
           </nav>
+          {required ? (
+            <Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={lock}>
+              退出
+            </Button>
+          ) : null}
         </div>
         <Separator />
       </header>

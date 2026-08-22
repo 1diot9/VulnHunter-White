@@ -19,6 +19,7 @@ def test_health_and_settings(tmp_env):
         assert body["http_proxy"] == ""
         assert body["chat_proxy"] == ""
         assert "cli_tools_dir" in body
+        assert body["access_token_set"] is False
 
         upd = client.put(
             "/api/settings",

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..models import AppSettings, CustomAuditMode, SessionLocal
 from ..schemas import (
+    AccessTokenUpdate,
     BuiltinAuditModeOut,
     CustomAuditModeCreate,
     CustomAuditModeOut,
@@ -27,6 +28,7 @@ from ..services import custom_audit_modes as cam
 from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.github_probe import test_connectivity as test_github_connectivity
 from ..services.llm_probe import list_models, test_connectivity
+from ..services.access_token import update_access_token_hash
 from ..services.llm_settings import (
     load_providers_raw,
     merge_providers_update,
@@ -94,6 +96,26 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
 
     llm_thread_limiter.refresh_limit(out.llm_thread_limit)
     return out
+
+
+@router.post("/access-token", response_model=SettingsOut)
+def update_access_token(body: AccessTokenUpdate) -> SettingsOut:
+    with SessionLocal() as db:
+        row = db.query(AppSettings).first()
+        if row is None:
+            row = AppSettings()
+            db.add(row)
+            db.flush()
+        try:
+            update_access_token_hash(row, body.current_token, body.new_token)
+        except ValueError as exc:
+            db.rollback()
+            msg = str(exc)
+            status = 403 if "当前令牌" in msg else 400
+            raise HTTPException(status, msg) from exc
+        db.commit()
+        db.refresh(row)
+        return settings_out_from_row(row)
 
 
 @router.get("/llm-threads", response_model=LlmThreadUsageOut)

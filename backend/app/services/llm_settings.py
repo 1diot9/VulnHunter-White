@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from ..models import AppSettings, Project, SessionLocal
 from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, SettingsOut
+from .access_token import is_access_token_configured
 
 LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
 LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer", "verifier")
@@ -134,6 +135,7 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         http_proxy=_proxy_for_api(row, "http_proxy", "https_proxy", "http_proxy"),
         chat_proxy=_proxy_for_api(row, "chat_proxy", "chat_proxy"),
         cli_tools_dir=(getattr(row, "cli_tools_dir", None) or "").strip() or "tools/cli",
+        access_token_set=is_access_token_configured(row),
     )
 
 

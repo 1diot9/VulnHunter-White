@@ -117,14 +117,14 @@ export const AUDIT_MODE_OPTIONS = [
     label: '赏金模式',
     short: '只报默认可利用的高危害漏洞',
     hint:
-      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、有服务端机密危害的源码硬编码密钥等）。CORS、反射 XSS、缺速率限制等低危害项不入库；配置文件里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。利用须在默认配置或应用自身配置下成立；提交时标明默认配置或特定配置，官方已警示的风险开关不算特定配置。',
+      '只收录默认可利用的高危害类型（RCE、注入、任意文件操作、越权、存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥等）。CORS、反射 XSS、普通 CSRF、缺速率限制等低危害项不入库；配置文件里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。利用须在默认配置或应用自身配置下成立；提交时标明默认配置或特定配置，官方已警示的风险开关不算特定配置。',
   },
   {
     value: 'full' as const,
     label: '全量模式',
     short: '同时收录低危害难利用项',
     hint:
-      '除高危害外，也收录难以利用但仍能打出差异的项（CORS、反射 XSS、缺速率限制、安全头等），由 Reviewer 标为低危害难利用。',
+      '除高危害外，也收录难以利用但仍能打出差异的项（CORS、反射 XSS、缺速率限制、安全头、普通 CSRF 等），由 Reviewer 标为低危害难利用。',
   },
   {
     value: 'custom' as const,
@@ -152,10 +152,12 @@ export const BOUNTY_SCOPE_ROWS = [
   { type: '越权', included: true, note: '' },
   { type: 'DoS', included: true, note: '' },
   { type: '存储型 XSS', included: true, note: '须持久化后在其他用户浏览器执行；不要把反射 XSS 写成存储型' },
+  { type: '1-click CSRF', included: true, note: '受害者打开恶意页面后立即触发 RCE 或其他高危操作；不要把改资料/登出等普通 CSRF 写成 1-click' },
   { type: '源码硬编码密钥', included: true, note: '须为服务端机密：JWT/HMAC 签名、接口签名 secret、私钥、第三方 API Key、保护库内/备份密文等；能造成未授权危害' },
   { type: '其他实际危害', included: true, note: '须证明代码执行、敏感数据泄露、越权读写删或任意文件操作等' },
   { type: '仅公网 SSRF', included: false, note: '打不到内网 / 元数据 / 本机敏感口' },
   { type: '反射 XSS / DOM XSS / Self-XSS', included: false, note: '' },
+  { type: '普通 CSRF / 仅缺 token', included: false, note: '改昵称、登出、点赞、发帖等低危状态变更；或需多次点击/二次确认' },
   { type: 'CORS / 安全头缺失', included: false, note: '含 ACAO 反射、CSP、X-Frame-Options 等' },
   { type: '开放重定向', included: false, note: '除非能升级为鉴权劫持、token 盗取等实际危害' },
   { type: '缺速率限制 / 验证码爆破', included: false, note: '无进一步危害时不收录' },

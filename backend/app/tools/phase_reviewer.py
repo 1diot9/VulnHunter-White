@@ -409,6 +409,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 vuln_type=str(vuln.vuln_type or ""),
                 submission_tier=submission.tier,
                 file_path=str(vuln.file_path or ""),
+                impact=calibration.impact,
             )
             if blocked:
                 return {"ok": False, "error": blocked}

@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
+import AuthGate from './components/AuthGate'
 import HomePage from './pages/HomePage'
 
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'))
@@ -20,20 +21,22 @@ function RouteFallback() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route element={<AppLayout />}>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/projects/:id" element={<ProjectDetailPage />} />
-            <Route path="/vulns" element={<VulnsPage />} />
-            <Route path="/vulns/:id" element={<VulnsPage />} />
-            <Route path="/verifier-consent" element={<VerifierConsentPage />} />
-            <Route path="/containers" element={<ContainersPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
+      <AuthGate>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/projects/:id" element={<ProjectDetailPage />} />
+              <Route path="/vulns" element={<VulnsPage />} />
+              <Route path="/vulns/:id" element={<VulnsPage />} />
+              <Route path="/verifier-consent" element={<VerifierConsentPage />} />
+              <Route path="/containers" element={<ContainersPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </AuthGate>
     </BrowserRouter>
   )
 }

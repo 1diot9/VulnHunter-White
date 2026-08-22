@@ -296,6 +296,7 @@ export type Settings = {
   http_proxy: string
   chat_proxy: string
   cli_tools_dir: string
+  access_token_set: boolean
 }
 
 export type LlmThreadUsage = {
@@ -424,11 +425,76 @@ export type GithubTest = {
   error: string | null
 }
 
+const ACCESS_TOKEN_KEY = 'vulnhunter_access_token'
+
+type AuthListener = () => void
+const authListeners = new Set<AuthListener>()
+
+export function getAccessToken(): string {
+  try {
+    return sessionStorage.getItem(ACCESS_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setAccessToken(token: string) {
+  const next = token.trim()
+  const prev = getAccessToken()
+  try {
+    if (next) sessionStorage.setItem(ACCESS_TOKEN_KEY, next)
+    else sessionStorage.removeItem(ACCESS_TOKEN_KEY)
+  } catch {
+    /* ignore quota / private mode */
+  }
+  if (prev !== next) notifyAuthChanged()
+}
+
+export function subscribeAuth(listener: AuthListener): () => void {
+  authListeners.add(listener)
+  return () => {
+    authListeners.delete(listener)
+  }
+}
+
+export function notifyAuthChanged() {
+  authListeners.forEach((fn) => fn())
+}
+
+export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
+  const token = getAccessToken()
+  if (token) params.set('access_token', token)
+  return params
+}
+
+function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  const token = getAccessToken()
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  return fetch(url, { ...init, headers })
+}
+
+function errorFromResponse(status: number, text: string, statusText: string): Error {
+  const raw = text || statusText
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown }
+    if (typeof parsed?.detail === 'string') return new Error(parsed.detail)
+  } catch {
+    /* keep raw body */
+  }
+  return new Error(raw)
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
+  const res = await apiFetch(url, init)
+  if (res.status === 401) {
+    setAccessToken('')
+  }
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || res.statusText)
+    throw errorFromResponse(res.status, text, res.statusText)
   }
   if (res.status === 204) return undefined as T
   return res.json()
@@ -674,23 +740,38 @@ export const api = {
       { method: 'POST' },
     ),
   downloadVulns: async (ids: number[]) => {
-    const res = await fetch('/api/vulns/download', {
+    const res = await apiFetch('/api/vulns/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     })
-    if (!res.ok) throw new Error(await res.text())
+    if (res.status === 401) setAccessToken('')
+    if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     return res.blob()
   },
   downloadVulnReport: async (id: number, kind: 'report' | 'advisory' = 'report') => {
-    const res = await fetch(`/api/vulns/${id}/download?kind=${kind}`)
-    if (!res.ok) throw new Error(await res.text())
+    const res = await apiFetch(`/api/vulns/${id}/download?kind=${kind}`)
+    if (res.status === 401) setAccessToken('')
+    if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     const blob = await res.blob()
     const fallback = kind === 'advisory' ? `vuln-${id}-advisory.md` : `vuln-${id}.md`
     const filename = filenameFromDisposition(res.headers.get('Content-Disposition'), fallback)
     return { blob, filename }
   },
+  authStatus: () => request<{ ok: boolean; required: boolean }>('/api/auth/status'),
+  authLogin: (token: string) =>
+    request<{ ok: boolean; required: boolean }>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }),
   getSettings: () => request<Settings>('/api/settings'),
+  updateAccessToken: (current_token: string, new_token: string) =>
+    request<Settings>('/api/settings/access-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_token, new_token }),
+    }),
   llmThreadUsage: () => request<LlmThreadUsage>('/api/settings/llm-threads'),
   putSettings: (body: Record<string, unknown>) =>
     request<Settings>('/api/settings', {

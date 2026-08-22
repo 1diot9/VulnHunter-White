@@ -44,6 +44,7 @@ class SettingsOut(BaseModel):
     http_proxy: str = ""
     chat_proxy: str = ""
     cli_tools_dir: str = "tools/cli"
+    access_token_set: bool = False
 
 
 class LlmThreadUsageOut(BaseModel):
@@ -66,6 +67,25 @@ class SettingsUpdate(BaseModel):
     http_proxy: str | None = None
     chat_proxy: str | None = None
     cli_tools_dir: str | None = None
+
+
+class AccessTokenUpdate(BaseModel):
+    current_token: str = ""
+    new_token: str = ""
+
+
+class AuthStatusOut(BaseModel):
+    ok: bool = True
+    required: bool = False
+
+
+class AuthLoginIn(BaseModel):
+    token: str = ""
+
+
+class AuthLoginOut(BaseModel):
+    ok: bool
+    required: bool = False
 
 
 class LlmProbeIn(BaseModel):

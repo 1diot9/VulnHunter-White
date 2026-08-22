@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     fofa_key: str = ""
     fofa_base_url: str = "https://fofa.info"
 
+    # Global UI/API access token. Empty = no gate. Settings can override after first save.
+    # Env: VULNHUNTER_ACCESS_TOKEN
+    access_token: str = ""
+
     # Local (harness) verification sibling sandbox. Image must exist on the host daemon.
     sandbox_image: str = "vulnhunter/sandbox:latest"
     sandbox_memory: str = "512m"

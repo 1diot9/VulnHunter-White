@@ -36,6 +36,7 @@ def tmp_env(tmp_path, monkeypatch):
     # Rebind every consumer that already imported SessionLocal
     import app.agent.checkpoint as agent_checkpoint
     import app.agent.loop as agent_loop
+    import app.api.auth as api_auth
     import app.api.docker as api_docker
     import app.api.projects as api_projects
     import app.api.settings as api_settings
@@ -45,6 +46,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.fofa as fofa_service
     import app.services.http_client as http_client_mod
     import app.services.ingest as ingest
+    import app.services.access_token as access_token
     import app.services.llm_settings as llm_settings
     import app.services.old_vuln_crawl as old_vuln_crawl
     import app.services.github_issues as github_issues
@@ -76,6 +78,7 @@ def tmp_env(tmp_path, monkeypatch):
         phase_attack_chain,
         ingest,
         llm_settings,
+        access_token,
         old_vuln_crawl,
         github_issues,
         github_probe,
@@ -94,9 +97,12 @@ def tmp_env(tmp_path, monkeypatch):
         api_projects,
         api_vulns,
         api_settings,
+        api_auth,
         api_docker,
     ):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
+
+    monkeypatch.setattr("app.config.settings.access_token", "")
 
     assert inspect(engine).has_table("projects")
     assert inspect(engine).has_table("vulns")

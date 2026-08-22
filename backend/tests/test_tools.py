@@ -949,6 +949,61 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
     )
     assert confirmed["ok"] is True
 
+    csrf = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "1-click CSRF to plugin install RCE",
+            "vuln_type": "csrf",
+            "cwe": "CWE-352",
+            "file_path": "app/PluginController.java",
+            "line_no": 40,
+            "source_sink": "POST /admin/plugin/install -> Runtime.exec",
+            "auth_premise": "已登录管理员打开恶意页",
+            "http_request": "POST /admin/plugin/install HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "auto-submit installs plugin and executes command",
+            "config_premise": "default",
+        },
+    )
+    assert csrf["ok"] is True
+    with Session() as db:
+        row = db.get(models.Vuln, csrf["vuln_id"])
+        assert row.vuln_type == "csrf"
+    csrf_low = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": csrf["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "admin",
+            "impact": "limited_info",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "1-click CSRF",
+            "root_cause_key": "csrf:PluginController",
+        },
+    )
+    assert csrf_low["ok"] is False
+    assert "1-click CSRF" in csrf_low["error"]
+    csrf_ok = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": csrf["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "admin",
+            "impact": "rce_or_full_data",
+            "exploit_complexity": "single_request",
+            "defense_status": "none",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "打开恶意页面即触发插件安装 RCE",
+            "root_cause_key": "csrf:PluginController",
+        },
+    )
+    assert csrf_ok["ok"] is True
+
     secret = registry.dispatch(
         _ctx(project, "worker"),
         "SubmitVuln",

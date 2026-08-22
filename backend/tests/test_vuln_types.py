@@ -22,6 +22,9 @@ def test_normalize_aliases():
     assert normalize_vuln_type("反射XSS") == "xss"
     assert normalize_vuln_type("存储型XSS") == "stored_xss"
     assert normalize_vuln_type("stored xss") == "stored_xss"
+    assert normalize_vuln_type("CSRF") == "csrf"
+    assert normalize_vuln_type("跨站请求伪造") == "csrf"
+    assert normalize_vuln_type("1-click CSRF") == "csrf"
     assert normalize_vuln_type("硬编码密钥") == "hardcoded_secret"
     assert normalize_vuln_type("hardcoded credentials") == "hardcoded_secret"
     assert normalize_vuln_type("") == "other"
@@ -31,6 +34,7 @@ def test_infer_from_text():
     assert infer_vuln_type_from_text("任意文件读取漏洞") == "file_read"
     assert infer_vuln_type_from_text("Log4j JNDI lookup") == "jndi_injection"
     assert infer_vuln_type_from_text("Stored XSS in profile") == "stored_xss"
+    assert infer_vuln_type_from_text("Cross-Site Request Forgery on plugin install") == "csrf"
     assert infer_vuln_type_from_text("hardcoded JWT secret") == "hardcoded_secret"
 
 

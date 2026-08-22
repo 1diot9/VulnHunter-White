@@ -36,6 +36,7 @@ def test_initial_hint_mentions_mode_rules():
     assert "赏金模式" in bounty
     assert "默认配置" in bounty
     assert "存储型 XSS" in bounty
+    assert "1-click CSRF" in bounty
     assert "源码硬编码密钥" in bounty
     assert "服务端机密" in bounty
     assert "前端传输混淆" in bounty
@@ -53,6 +54,7 @@ def test_initial_hint_mentions_mode_rules():
 def test_bounty_gates_allow_stored_xss_and_source_secrets():
     assert bounty_submit_block_reason("xss")
     assert bounty_submit_block_reason("stored_xss") is None
+    assert bounty_submit_block_reason("csrf") is None
     assert bounty_submit_block_reason("hardcoded_secret", file_path="src/JwtHelper.java") is None
     assert bounty_submit_block_reason("hardcoded_secret", file_path="application.yml")
     assert is_user_modifiable_secret_path("config/application-prod.yml")
@@ -62,6 +64,22 @@ def test_bounty_gates_allow_stored_xss_and_source_secrets():
         submission_tier="cve_candidate",
         file_path="CommentController.java",
     ) is None
+    assert bounty_confirm_block_reason(
+        vuln_type="csrf",
+        submission_tier="cve_candidate",
+        impact="rce_or_full_data",
+    ) is None
+    assert bounty_confirm_block_reason(
+        vuln_type="csrf",
+        submission_tier="cve_candidate",
+        impact="sensitive_data_or_privilege",
+    ) is None
+    csrf_low = bounty_confirm_block_reason(
+        vuln_type="csrf",
+        submission_tier="cve_candidate",
+        impact="limited_info",
+    )
+    assert csrf_low and "1-click CSRF" in csrf_low
     assert bounty_confirm_block_reason(vuln_type="xss", submission_tier="cve_candidate")
     low = bounty_confirm_block_reason(vuln_type="rce", submission_tier="low_impact")
     assert low and "MarkFalsePositive" in low

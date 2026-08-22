@@ -114,6 +114,7 @@ Linux / macOS 把第一行换成 `python3 --version`。Windows 上 `python` 应�
 | Verifier（FOFA 互联网复测） | 设置页 **FOFA Key**（或环境变量 `VULNHUNTER_FOFA_KEY`） | 验证轮会 skip |
 | 出站走代理（WebSearch / GitHub / FOFA） | 设置页 HTTP 代理，或 `.env` 里 `VULNHUNTER_HTTP_PROXY` | 直连；连不上时代理会自动改直连 |
 | Chat 走代理 | 设置页 Chat 代理，或 `VULNHUNTER_CHAT_PROXY` | Chat 默认直连，与工具代理分开 |
+| 全局访问令牌 | `.env` 的 `VULNHUNTER_ACCESS_TOKEN`，或设置页 | 未配置则不启用入口闸门，打开即可用 |
 | Java 靶场改写 PoC 时用 debug MCP | **JDK 17+**、**Maven 3.6+**，并 `mvn package` | 仍可用 HTTP PoC + `docker exec`，只是不能 attach Java 调试器 |
 | Node 靶场 debug MCP | 已装 Node；在 `tools/mcp/node-debug` 执行 `npm install` | 同上，走普通动态 |
 | Python 靶场 debug MCP | 在后端 venv 中安装 `mcp`、`debugpy` | 同上 |
@@ -244,6 +245,7 @@ Unix：`backend/.venv/bin/pip install -e tools/mcp/python-debug`。
 可将 `.env.example` 复制为仓库根或 `backend/.env`。监听端口给 `start.cmd` / `start.sh` 用；设置页保存过代理 / FOFA 后以设置为准，**尚未保存过**时才用代理 / Key 变量回退。不要把真实 Key 写进仓库。
 
 ```
+# VULNHUNTER_ACCESS_TOKEN=
 # VULNHUNTER_PORT=16780
 # VULNHUNTER_FRONTEND_PORT=15173
 VULNHUNTER_HTTP_PROXY=
@@ -253,7 +255,7 @@ VULNHUNTER_FOFA_KEY=
 GITHUB_TOKEN=
 ```
 
-`OPENAI_API_KEY` 也可作回退，日常请在设置页填写。
+`VULNHUNTER_ACCESS_TOKEN` 为全局访问令牌：配置后打开前端需先输入才能查看数据或调用功能；也可在设置页用当前令牌修改（修改后以设置为准）。未配置则不启用入口闸门。`OPENAI_API_KEY` 也可作回退，日常请在设置页填写。
 
 ## 一键启停
 
@@ -297,7 +299,7 @@ Windows 按窗口标题结束进程，并释放上次记录的端口（以及默
 
 ### 首次打开：设置页
 
-不配模型就无法创建并跑审计项目。打开 UI 后先到「设置」：
+不配模型就无法创建并跑审计项目。若配置了全局访问令牌（`.env` 的 `VULNHUNTER_ACCESS_TOKEN` 或设置页），打开 UI 后需先输入令牌。然后到「设置」：
 
 1. 选择接口协议：OpenAI **Chat Completions**（默认）或 **Anthropic Messages**
 2. 填写 **API Base URL**、**API Key**、默认**模型**（可先点拉取模型列表再保存）
@@ -388,7 +390,7 @@ pytest
 - 创建项目时选择赏金模式（默认）、全量模式或自定义模式，并可勾选挖掘路径：启发式（默认开，可再开轻量版只挖权重 100）、快速扫描（默认关）和/或历史漏洞绕过（默认关），至少开一条。每个项目可单独选择模型，不选则使用设置页全局模型。可在项目配置中粘贴或上传文本，作为挖掘 Worker 的额外人工提示，注入每轮启发式 / 快速扫描 / 历史漏洞绕过
 - 启发式在历史漏洞收集完毕后按文件定权挖掘：权重 100 为用户可控入口（HTTP 以及 WebSocket / RPC / MQ / 回调等）；更低权按角色回推、控面或薄扫。可勾选轻量版，只把权重 100 的文件当入口。快速扫描在 Recon 后用 Semgrep 找 Sink，经代码筛和短 Agent 筛选后按条回推。快速路径覆盖 SAST Sink，缺鉴权/IDOR/业务逻辑仍靠启发式。历史漏洞绕过以收集到的历史漏洞文档为输入，每轮尝试绕过一条补丁或确认未修复洞仍可打。开启的路径都结束后项目才 completed
 - 设置页可管理命名自定义审计模式提示词；内置赏金/全量提示词只读可复制。项目选用自定义时写入快照，改库不影响已绑定项目
-- 赏金模式按可利用高危害类型收口（含存储型 XSS、有服务端机密危害的源码硬编码密钥；前端传输混淆 AES / 公开下发密钥不入库）；全量模式保留低危害难利用项（CORS、反射 XSS、缺速率限制等）；自定义模式无赏金硬闸门，完全按提示词判定
+- 赏金模式按可利用高危害类型收口（含存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥；普通 CSRF / 前端传输混淆 AES / 公开下发密钥不入库）；全量模式保留低危害难利用项（CORS、反射 XSS、缺速率限制、普通 CSRF 等）；自定义模式无赏金硬闸门，完全按提示词判定
 - 可选动态验证：创建项目时默认关闭（只做静态复核）。勾选后 Reviewer 才搭建 Docker 靶场，并先跑当前 HTTP PoC（`poc.py -u` + docker exec/日志）复现；靶场可用时 ConfirmVuln 会系统再跑一遍落盘 `poc.py`，退出码非 0 则拒绝确认。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。PoC 缺失、跑不通或复现失败且需自己改写时，才用 Java/Node/Python debug MCP 动态调试。Worker / Reviewer 的 `poc.py` 用 `-u/--url` 对任意目标复测，必须支持 `--proxy` 设 HTTP 代理（空则直连），RCE 支持 `-c/--cmd` 并打印回显。自建镜像 `{项目名}-{项目ID}:lab`，Web 容器 `{项目名}-{项目ID}`，依赖容器加 `-{role}`
 - 可选 Verifier：创建项目时默认关闭，也可在项目设置中开启。Reviewer 确认前台漏洞后，用 FOFA 默认搜 10 个同款目标并按报告复测，成功 3 个即结束；当前这批不足 3 个则保留已成功的并再搜下一轮，最多 5 轮（合计最多 50 个目标）。应用指纹按项目采集一次（标题/默认页 HTML 特征 + 互联网检索）并复用；FOFA 有命中后共享，0 条可改写最多 3 次（title/app 与 `body=` 各试一条）。报告会列出全部目标并标注成功 / 失败 / 未测，复现成功须附上搜索语法。任意文件删除、DoS、SQL 增删改等会中断或篡改业务的漏洞不测互联网目标
 - 可选攻击链串联：创建时默认关闭，可在项目设置中开启。挖掘完成且审核队列清空后，根据已确认漏洞尝试多步利用

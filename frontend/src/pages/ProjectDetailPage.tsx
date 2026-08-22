@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type CustomAuditMode, type LogEvent, type Project, type Vuln } from '../api'
+import { api, withAccessTokenParam, type CustomAuditMode, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
@@ -249,7 +249,7 @@ export default function ProjectDetailPage() {
       const params = new URLSearchParams({ from_offset: String(from) })
       if (phaseRef.current) params.set('phase', phaseRef.current)
       if (logSession != null) params.set('session', String(logSession))
-      source = new EventSource(`/api/projects/${projectId}/stream?${params.toString()}`)
+      source = new EventSource(`/api/projects/${projectId}/stream?${withAccessTokenParam(params).toString()}`)
       source.onmessage = (event) => {
         if (!mounted) return
         backoffMs = 800

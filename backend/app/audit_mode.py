@@ -34,13 +34,16 @@ _AUDIT_MODE_ALIASES: dict[str, str] = {
 }
 
 # Reflected / DOM XSS stay out of bounty reports; stored_xss is allowed.
+# CSRF is allowed only as 1-click high-impact; limited_info CSRF is rejected on confirm.
 BOUNTY_DISALLOWED_TYPES = frozenset({"xss"})
 BOUNTY_DISALLOWED_TIERS = frozenset({"low_impact"})
+BOUNTY_CSRF_DISALLOWED_IMPACTS = frozenset({"limited_info"})
 
 BOUNTY_TYPE_LABELS = (
     "RCE、SSTI、反序列化、SQL 注入、XML 注入、任意文件操作（读/写/删/改/复制/解压穿越等）、"
     "能打内网的 SSRF、敏感信息泄露、文件上传、文件包含、目录遍历、认证绕过、越权、DoS、"
-    "存储型 XSS、有服务端机密危害的源码硬编码密钥，以及其他确定能造成实际危害的问题"
+    "存储型 XSS、1-click CSRF（打开恶意页面即触发 RCE 或其他高危操作）、"
+    "有服务端机密危害的源码硬编码密钥，以及其他确定能造成实际危害的问题"
 )
 
 _USER_CONFIG_SECRET_PATH = re.compile(
@@ -136,8 +139,9 @@ def initial_hint(mode: str, *, custom_name: str | None = None) -> str:
     if normalized == AUDIT_MODE_BOUNTY:
         return (
             f"当前为{AUDIT_MODE_LABELS[normalized]}：只报 {BOUNTY_TYPE_LABELS}。"
-            "CORS、反射 XSS、缺速率限制、安全头等低危害项不要提交或确认。"
-            "存储型 XSS 与有服务端机密危害的源码硬编码密钥可以提交；"
+            "CORS、反射 XSS、缺速率限制、安全头、普通 CSRF（仅缺 token / 低危状态变更）等低危害项不要提交或确认。"
+            "存储型 XSS、1-click CSRF（受害者打开恶意页面即触发 RCE 或其他高危操作）"
+            "与有服务端机密危害的源码硬编码密钥可以提交；"
             "配置文件/.env/compose 里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。"
             "利用必须在默认配置或应用自身配置选项下成立。"
             "提交时标明 config_premise=default（默认配置）或 specific（特定配置）；"
@@ -184,7 +188,8 @@ def bounty_submit_block_reason(vuln_type: str, *, file_path: str = "") -> str | 
     if vuln_type in BOUNTY_DISALLOWED_TYPES:
         return (
             "赏金模式不接收反射 XSS / DOM XSS。存储型 XSS 请用 stored_xss 提交；"
-            "不要提交 CORS、安全头、开放重定向、弱随机、单点限速绕过等低危害项。"
+            "不要提交 CORS、安全头、开放重定向、弱随机、单点限速绕过、普通 CSRF 等低危害项。"
+            "CSRF 仅当 1-click（打开恶意页面即触发 RCE 或其他高危操作）时用 csrf 提交。"
         )
     if vuln_type == "hardcoded_secret" and is_user_modifiable_secret_path(file_path):
         return (
@@ -200,14 +205,21 @@ def bounty_confirm_block_reason(
     vuln_type: str,
     submission_tier: str,
     file_path: str = "",
+    impact: str = "",
 ) -> str | None:
     if vuln_type in BOUNTY_DISALLOWED_TYPES:
         return "赏金模式应将反射 XSS / DOM XSS 判误报，不要 ConfirmVuln。存储型 XSS 类型应为 stored_xss。"
     if vuln_type == "hardcoded_secret" and is_user_modifiable_secret_path(file_path):
         return "赏金模式不入库配置文件/.env/compose 中的密钥；仅源码硬编码密钥可 Confirm。"
+    if vuln_type == "csrf" and impact in BOUNTY_CSRF_DISALLOWED_IMPACTS:
+        return (
+            "赏金模式只确认 1-click CSRF：受害者打开恶意页面后立即触发 RCE 或其他高危操作。"
+            "普通缺 CSRF token、改资料/登出/点赞等低危状态变更应 MarkFalsePositive；"
+            "impact 须为 rce_or_full_data 或 sensitive_data_or_privilege，不要用 limited_info。"
+        )
     if submission_tier in BOUNTY_DISALLOWED_TIERS:
         return (
-            "赏金模式不入库低危害难利用项（CORS/安全头/开放重定向/弱随机/单点限速绕过/反射 XSS 等）。"
+            "赏金模式不入库低危害难利用项（CORS/安全头/开放重定向/弱随机/单点限速绕过/反射 XSS/普通 CSRF 等）。"
             "请 MarkFalsePositive 丢弃，不要 ConfirmVuln。"
         )
     return None

@@ -79,6 +79,7 @@ pytest
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。
 - Reviewer 可用 `SearchTools` 搜索设置页「CLI 工具目录」（默认 `tools/cli`）里已索引的用户 CLI：一子目录一工具；后台轮询扫描，静默 Agent（Shell + 最多 30 轮）写描述；日志在该子目录 `agent.log.jsonl`。内容变了才重索引，同内容失败不自动重试。SearchTools 返回目录路径、入口绝对路径和描述；审核轮用现有 Bash/PowerShell 按绝对路径执行。
 - 出站 HTTP、Chat 代理优先用设置页；未保存过时可用 `VULNHUNTER_HTTP_PROXY` / `VULNHUNTER_CHAT_PROXY`。不要硬编码代理地址。代理不可用时自动直连。
+- 全局访问令牌：`VULNHUNTER_ACCESS_TOKEN` 或设置页；配置后前端须先输入令牌才能调 API / 看数据。设置页修改须提供当前令牌，保存后覆盖 env。未配置则不启用闸门。不要把真实令牌写进仓库。
 - Debug MCP 放在 `tools/mcp/`，用相对仓库根目录的路径；可用 `VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON` 覆盖。
 - 不要在代码、测试、文档中写入真实 API Key、GitHub PAT、FOFA Key、CEYE token 或代理凭据。
 

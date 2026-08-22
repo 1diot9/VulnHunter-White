@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Settings } from '../api'
+import { api, setAccessToken, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -169,6 +169,12 @@ export default function SettingsPage() {
   const [logMsg, setLogMsg] = useState('')
   const [logOk, setLogOk] = useState<boolean | null>(null)
   const [endpointHelpOpen, setEndpointHelpOpen] = useState(false)
+  const [currentToken, setCurrentToken] = useState('')
+  const [newToken, setNewToken] = useState('')
+  const [confirmToken, setConfirmToken] = useState('')
+  const [tokenMsg, setTokenMsg] = useState('')
+  const [tokenOk, setTokenOk] = useState<boolean | null>(null)
+  const [tokenSaving, setTokenSaving] = useState(false)
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -363,6 +369,43 @@ export default function SettingsPage() {
 
   const logDaysSafe = Number.isFinite(logDays) ? Math.max(0, Math.min(3650, Math.floor(logDays))) : 7
 
+  async function saveAccessToken() {
+    setTokenMsg('')
+    setTokenOk(null)
+    if (newToken.trim() && newToken.trim() !== confirmToken.trim()) {
+      setTokenOk(false)
+      setTokenMsg('两次输入的新令牌不一致')
+      return
+    }
+    if (s?.access_token_set && !currentToken.trim()) {
+      setTokenOk(false)
+      setTokenMsg('修改令牌需要填写当前令牌')
+      return
+    }
+    setTokenSaving(true)
+    try {
+      const next = await api.updateAccessToken(currentToken, newToken)
+      setS(next)
+      if (newToken.trim()) {
+        setAccessToken(newToken.trim())
+      } else if (!next.access_token_set) {
+        setAccessToken('')
+      } else if (currentToken.trim()) {
+        setAccessToken(currentToken.trim())
+      }
+      setCurrentToken('')
+      setNewToken('')
+      setConfirmToken('')
+      setTokenOk(true)
+      setTokenMsg(next.access_token_set ? '访问令牌已更新' : '已清除设置中的令牌覆盖')
+    } catch (e) {
+      setTokenOk(false)
+      setTokenMsg(String(e instanceof Error ? e.message : e))
+    } finally {
+      setTokenSaving(false)
+    }
+  }
+
   async function confirmPurgeLogs() {
     setLogPurging(true)
     setLogMsg('')
@@ -401,6 +444,65 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-2xl font-semibold">设置</h1>
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <div className="space-y-1.5">
+            <Label>
+              访问令牌 {s.access_token_set ? '（已配置）' : '（未配置）'}
+            </Label>
+            <div className="text-xs text-slate-500">
+              配置后打开前端需先输入令牌才能查看数据或调用功能。可在 .env 写入
+              VULNHUNTER_ACCESS_TOKEN；设置页修改后以设置为准。已配置时必须填写当前令牌。新令牌留空则清除本页覆盖，改回使用
+              .env。
+            </div>
+            {s.access_token_set ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="current-access-token">当前令牌</Label>
+                <Input
+                  id="current-access-token"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentToken}
+                  onChange={(e) => setCurrentToken(e.target.value)}
+                  placeholder="原令牌"
+                />
+              </div>
+            ) : null}
+            <div className="space-y-1.5">
+              <Label htmlFor="new-access-token">新令牌</Label>
+              <Input
+                id="new-access-token"
+                type="password"
+                autoComplete="new-password"
+                value={newToken}
+                onChange={(e) => setNewToken(e.target.value)}
+                placeholder={s.access_token_set ? '至少 4 个字符，留空则清除覆盖' : '至少 4 个字符'}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="confirm-access-token">确认新令牌</Label>
+              <Input
+                id="confirm-access-token"
+                type="password"
+                autoComplete="new-password"
+                value={confirmToken}
+                onChange={(e) => setConfirmToken(e.target.value)}
+                placeholder="再输入一次新令牌"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" disabled={tokenSaving} onClick={() => void saveAccessToken()}>
+                {tokenSaving ? '保存中…' : '更新令牌'}
+              </Button>
+              {tokenMsg ? (
+                <span className={tokenOk === false ? 'text-sm text-red-300' : 'text-sm text-slate-300'}>
+                  {tokenMsg}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
       <Card>
         <CardContent className="space-y-3 p-4">
         <div className="space-y-1.5">
