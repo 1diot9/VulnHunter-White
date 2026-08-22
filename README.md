@@ -1,6 +1,6 @@
 # VulnHunter-White
 
-特别感谢DeepAudit（https://github.com/lintsinghua/DeepAudit）和AutoCVE（https://github.com/larlarua/AutoCVE）这两个项目，给本项目提供了很多思路，尤其是前期开发时。
+特别感谢[DeepAudit](https://github.com/lintsinghua/DeepAudit)和[AutoCVE](https://github.com/larlarua/AutoCVE)这两个项目，给本项目提供了很多思路，尤其是前期开发时。
 
 白盒审计 Agent：导入 GitHub / zip Web 项目，Recon（含历史漏洞）→ 启发式 Worker（历史漏洞收集完毕后）和/或快速扫描和/或历史漏洞绕过 → Reviewer 审核（默认仅静态；可选靶场动态先跑 HTTP PoC，或局部验证用沙箱 harness）；可选 Verifier 对已确认前台漏洞做 FOFA 互联网复测；可选攻击链串联。
 
