@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -10,6 +11,7 @@ import pytest
 
 from app.agent.compression import (
     attach_todo_list,
+    clip_messages_for_summary,
     estimate_tokens,
     format_todo_list_block,
     needs_compress,
@@ -26,6 +28,7 @@ from app.services.http_client import (
     FallbackClient,
     chat_http_client,
     chat_http_timeout,
+    conclude_http_timeout,
     http_client,
     is_proxy_unavailable,
     proxy_is_skipped,
@@ -34,6 +37,7 @@ from app.services.http_client import (
     reset_proxy_skip,
 )
 from app.services.llm_gate import LlmRequestGate
+from app.services.llm_settings import ResolvedLlm
 
 
 def test_looks_like_rate_limit():
@@ -91,6 +95,8 @@ def test_needs_compress_includes_tools(monkeypatch):
 def test_format_todo_list_block():
     assert format_todo_list_block(None) == ""
     assert format_todo_list_block([]) == ""
+    assert format_todo_list_block(None, include_empty=True) == "## TodoList\n（空）"
+    assert format_todo_list_block([], include_empty=True) == "## TodoList\n（空）"
     block = format_todo_list_block(
         [
             {"id": "1", "content": "回推 sink", "status": "in_progress"},
@@ -102,6 +108,13 @@ def test_format_todo_list_block():
     assert "- [pending] 2: 写 poc 草案" in block
 
 
+def test_format_todo_list_block_keeps_full_list():
+    todos = [{"id": str(i), "content": "x" * 200, "status": "pending"} for i in range(30)]
+    block = format_todo_list_block(todos)
+    assert "29: " in block
+    assert "truncated" not in block
+
+
 def test_attach_todo_list_appends_once():
     todos = [{"id": "1", "content": "追 source", "status": "pending"}]
     once = attach_todo_list("已完成入口分析", todos)
@@ -110,6 +123,75 @@ def test_attach_todo_list_appends_once():
     assert "追 source" in once
     twice = attach_todo_list(once, todos)
     assert twice.count("## TodoList") == 1
+
+
+def test_attach_todo_list_include_empty():
+    out = attach_todo_list("摘要正文", None, include_empty=True)
+    assert "摘要正文" in out
+    assert "## TodoList" in out
+    assert "（空）" in out
+
+
+def test_maybe_inject_todolist_every_50_turns(tmp_env, project):
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    loop.state["todos"] = [{"id": "1", "content": "回推 sink", "status": "pending"}]
+    messages: list[dict] = [{"role": "user", "content": "task"}]
+    loop.watchdog.turn_count = 49
+    loop._maybe_inject_todolist(messages)
+    assert all("TodoList" not in str(m.get("content") or "") for m in messages)
+
+    loop.watchdog.turn_count = 50
+    loop._maybe_inject_todolist(messages)
+    assert messages[-1]["role"] == "user"
+    assert "每 50 轮自动注入" in messages[-1]["content"]
+    assert "回推 sink" in messages[-1]["content"]
+    n = len(messages)
+    loop._maybe_inject_todolist(messages)
+    assert len(messages) == n
+
+    loop.watchdog.turn_count = 100
+    loop._maybe_inject_todolist(messages)
+    assert len(messages) == n + 1
+    assert messages[-1]["content"].count("## TodoList") == 1
+
+
+def test_maybe_inject_todolist_empty_still_injects(tmp_env, project):
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    messages: list[dict] = [{"role": "user", "content": "task"}]
+    loop.watchdog.turn_count = 50
+    loop._maybe_inject_todolist(messages)
+    assert "## TodoList" in messages[-1]["content"]
+    assert "（空）" in messages[-1]["content"]
+
+
+def test_maybe_inject_todolist_disabled(tmp_env, project, monkeypatch):
+    monkeypatch.setattr(settings, "todo_inject_interval", 0)
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+    )
+    messages: list[dict] = [{"role": "user", "content": "task"}]
+    loop.watchdog.turn_count = 50
+    loop._maybe_inject_todolist(messages)
+    assert all("TodoList" not in str(m.get("content") or "") for m in messages)
 
 
 def test_compress_appends_todolist(tmp_env, project):
@@ -140,7 +222,7 @@ def test_compress_appends_todolist(tmp_env, project):
     assert "写 poc 草案" in user
 
 
-def test_compress_skips_empty_todolist(tmp_env, project):
+def test_compress_appends_empty_todolist(tmp_env, project):
     loop = AgentLoop(
         project_id=project,
         role="worker",
@@ -153,7 +235,10 @@ def test_compress_skips_empty_todolist(tmp_env, project):
         [{"role": "user", "content": "task"}],
         force_summary="已看完入口",
     )
-    assert "TodoList" not in out[1]["content"]
+    user = out[1]["content"]
+    assert "已看完入口" in user
+    assert "## TodoList" in user
+    assert "（空）" in user
 
 
 def test_compress_reads_todolist_from_workspace_file(tmp_env, project):
@@ -191,6 +276,112 @@ def test_chat_http_timeout_scales_and_caps(monkeypatch):
     assert short.read == 35.0
     mid = chat_http_timeout(1800, est_tokens=1000)
     assert mid.read == 180.0
+
+
+def test_conclude_http_timeout_uses_full_budget(monkeypatch):
+    monkeypatch.setattr(settings, "chat_connect_timeout", 30.0)
+    monkeypatch.setattr(settings, "chat_read_timeout_max", 600.0)
+    t = conclude_http_timeout(1800)
+    assert t.connect == 30.0
+    assert t.read == 1795.0
+    assert settings.timeout_conclude == 1800
+    assert settings.timeout_conclude_rescue == 1800
+
+
+def test_clip_messages_for_summary_keeps_last_100_and_clips_each():
+    msgs = [{"role": "user", "content": f"keep-{i}"} for i in range(120)]
+    msgs[50] = {"role": "tool", "content": "Z" * 9000}
+    clipped = clip_messages_for_summary(msgs)
+    assert len(clipped) == 100
+    assert clipped[0]["content"] == "keep-20"
+    assert clipped[-1]["content"] == "keep-119"
+    huge = next(m for m in clipped if isinstance(m.get("content"), str) and m["content"].startswith("Z"))
+    assert huge["content"].startswith("Z")
+    assert "truncated" in huge["content"]
+    assert len(huge["content"]) < 9000
+    dumped = __import__("json").dumps(clipped, ensure_ascii=False)
+    assert "keep-0" not in dumped
+    assert dumped.count("keep-") == 99
+
+
+def test_clip_messages_for_summary_clips_tool_arguments():
+    msg = {
+        "role": "assistant",
+        "content": "call",
+        "tool_calls": [
+            {
+                "id": "1",
+                "type": "function",
+                "function": {"name": "Read", "arguments": '{"path":"' + ("a" * 8000) + '"}'},
+            }
+        ],
+    }
+    clipped = clip_messages_for_summary([msg], last_n=100, per_message_chars=200)
+    args = clipped[0]["tool_calls"][0]["function"]["arguments"]
+    assert clipped[0]["tool_calls"][0]["function"]["name"] == "Read"
+    assert "truncated" in args
+    assert len(args) < 8000
+
+
+def test_request_summary_injects_todolist_then_appends_complete_list(tmp_env, project, monkeypatch):
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "只写了入口分析"}}]}
+
+    class FakeClient:
+        def __init__(self, timeout=None):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return FakeResp()
+
+    @contextmanager
+    def fake_slot(_cancel):
+        yield True
+
+    monkeypatch.setattr("app.agent.loop.chat_http_client", FakeClient)
+    monkeypatch.setattr("app.agent.loop.llm_slot", fake_slot)
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="w1",
+        llm=ResolvedLlm(
+            base_url="http://127.0.0.1:9",
+            wire_api="chat",
+            model="m",
+            api_key="k",
+            source="test",
+        ),
+    )
+    loop.state["todos"] = [{"id": "1", "content": "回推 sink", "status": "in_progress"}]
+    msgs = [{"role": "user", "content": f"keep-{i}"} for i in range(120)]
+    msgs[110] = {"role": "tool", "content": "Q" * 9000}
+    out = loop._request_summary(msgs)
+    user = captured["payload"]["messages"][1]["content"]
+    assert user.index("keep-20") < user.index("## TodoList")
+    assert "keep-119" in user
+    assert "keep-0" not in user
+    assert "回推 sink" in user
+    assert "truncated" in user
+    assert captured["timeout"].read == 1795.0
+    assert "只写了入口分析" in out
+    assert out.count("## TodoList") == 1
+    assert out.index("只写了入口分析") < out.index("## TodoList")
 
 
 def _has_proxy_transport(client) -> bool:

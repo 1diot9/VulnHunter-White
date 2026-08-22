@@ -74,6 +74,13 @@ def chat_http_timeout(remaining: float, est_tokens: int = 0) -> httpx.Timeout:
     return httpx.Timeout(connect=connect, read=read, write=60.0, pool=30.0)
 
 
+def conclude_http_timeout(budget: float) -> httpx.Timeout:
+    """Conclude/compress waits the full budget; do not cap with chat_read_timeout_max."""
+    connect = float(settings.chat_connect_timeout)
+    read = max(30.0, float(budget) - 5.0)
+    return httpx.Timeout(connect=connect, read=read, write=60.0, pool=30.0)
+
+
 def is_proxy_unavailable(exc: BaseException) -> bool:
     """True when the proxy itself cannot be used (not a slow/failed origin)."""
     if isinstance(exc, httpx.ProxyError):

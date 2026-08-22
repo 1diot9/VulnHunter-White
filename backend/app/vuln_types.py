@@ -149,7 +149,7 @@ _IMPACT_SCORES: dict[str, int] = {
 }
 
 _COMPLEXITY_SCORES: dict[str, int] = {
-    "single_request": 0,
+    "single_request": 1,
     "multi_step": 0,
     "specific_environment": -2,
 }

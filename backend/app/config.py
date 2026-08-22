@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     timeout_docker: int = 1800
     timeout_semgrep: int = 1800
     timeout_sink_triage: int = 1800
-    timeout_conclude: int = 300
+    timeout_conclude: int = 1800
     timeout_conclude_rescue: int = 1800
 
     # LLM error handling (AutoPoc-aligned)
@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     review_timeouts_before_static: int = 2
     file_inject_max_bytes: int = 80 * 1024
     worker_round_history: int = 10
+    todo_inject_interval: int = 50
     recon_doc_inject_max_chars: int = 32 * 1024
     round_report_inject_max_chars: int = 8 * 1024
     temperature: float = 0.2

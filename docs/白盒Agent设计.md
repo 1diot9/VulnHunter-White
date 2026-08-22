@@ -72,7 +72,7 @@ Chat Completions 默认直连；需要时代理走设置页「Chat 代理」，�
 | `Grep` | 源码正则搜索（同样跳过噪声目录） |
 | `Write` | 写 `workspace`/`docs`/`vulns`/`env`；不可写 `docs/old-vulns` |
 | `Bash` / `PowerShell` | 工作区沙箱执行。禁止递归全库列举；禁止删除项目自身与被审计源码。timeout 默认 120s、最多 180s，另有硬超时 |
-| `TodoWrite` | 维护**本阶段自己的**运行时待办（按角色分文件，互不覆盖） |
+| `TodoWrite` | 维护**本阶段自己的**运行时待办（按角色分文件，互不覆盖）。每 50 轮自动注入当前 TodoList；压缩 / Conclude 时也会写入完整列表 |
 | `WebSearch` | 仅历史漏洞第二轮（搜索补漏） |
 | `SearchGHSA` / `SearchGitHubIssues` | 补漏轮兜底；爬虫落盘轮禁止 |
 | `SearchOldVuln` | 搜本项目漏洞库。默认标题+摘要；传 `title`/`#id` 看全文。`kind=old` 为侦察历史洞，`kind=found` 为本项目已提交报告 |
@@ -314,7 +314,7 @@ FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
 
 ## 上下文压缩
 
-当请求估算 token 超过上下文窗口的 **85%**（设置页可配窗口，默认 128000）时主动压缩：发送 Conclude 提示词，落盘总结文档到 `docs/summaries/`，确认落盘后新开上下文，并注入总结作为初始上下文。启发式还会注入最近最多 10 轮 `workspace/rounds/` 摘要。Worker 轮次结束后系统压缩本轮并自动注入下一份尚未 `FinishFile` 的文件。
+当请求估算 token 超过上下文窗口的 **85%**（设置页可配窗口，默认 128000）时主动压缩：发送 Conclude 提示词，落盘总结文档到 `docs/summaries/`，确认落盘后新开上下文，并注入总结作为初始上下文。摘要请求默认等待 **1800s**（与抢救相同），保留本会话最近 100 条消息并对每条过长内容截断（不再把整段 JSON 截到 12k）。任何摘要都先注入完整 TodoList 再请模型总结，落盘时再追加一份完整 TodoList。运行中每 50 轮也会把当前 TodoList 注入上下文。启发式还会注入最近最多 10 轮 `workspace/rounds/` 摘要。Worker 轮次结束后系统压缩本轮并自动注入下一份尚未 `FinishFile` 的文件。
 
 ## 容错与恢复
 
@@ -338,7 +338,7 @@ FOFA Key 配在设置页或 `VULNHUNTER_FOFA_KEY`。
 | 攻击链 | `timeout_attack_chain` | 1800 |
 | Semgrep | `timeout_semgrep` | 1800 |
 | Sink 筛选 | `timeout_sink_triage` | 1800 |
-| Conclude | `timeout_conclude` | 300 |
+| Conclude | `timeout_conclude` | 1800 |
 | Conclude 抢救 | `timeout_conclude_rescue` | 1800 |
 
 盖章每批文件数：`recon_mark_batch_size=150`。
@@ -395,7 +395,7 @@ Worker 不填严重度。Reviewer 按四维校准，不按漏洞类型映射：
 | 影响范围 `impact` | RCE / 全库 / 完整控制 | +4 | `rce_or_full_data` |
 |  | 敏感数据 / 权限提升 / 部分数据 | +2 | `sensitive_data_or_privilege` |
 |  | 有限信息泄露 / 信息收集 | +1 | `limited_info` |
-| 利用复杂度 `exploit_complexity` | 单请求或简单触发 | +0 | `single_request` |
+| 利用复杂度 `exploit_complexity` | 单请求或简单触发 | +1 | `single_request` |
 |  | 多步骤利用 | +0 | `multi_step`（不加分也不扣分） |
 |  | 依赖特定环境 | -2 | `specific_environment` |
 | 防护状态 `defense_status` | 无有效防护 | +0 | `none` |

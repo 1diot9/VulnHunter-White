@@ -77,7 +77,7 @@ def test_review_severity_calibration_can_upgrade_without_type_mapping():
         exploit_complexity="single_request",
         defense_status="none",
     )
-    assert calibration.score == 5
+    assert calibration.score == 6
     assert calibration.severity == "critical"
 
 

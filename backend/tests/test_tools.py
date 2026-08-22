@@ -369,7 +369,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert conf["attack_surface_label"] == "前台"
     assert conf["required_account"] is None
     assert conf["severity"] == "high"
-    assert conf["severity_score"] == 3
+    assert conf["severity_score"] == 4
     assert conf["submission_tier"] == "cve_candidate"
     assert conf["submission_tier_label"] == "有 CVE 价值"
     assert "CVE" in conf["submission_reason"]
@@ -383,7 +383,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
         assert v.attack_surface == "frontend"
         assert v.required_account is None
         assert v.severity == "high"
-        assert v.severity_score == 3
+        assert v.severity_score == 4
         assert v.submission_tier == "cve_candidate"
         assert v.submission_reason
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
@@ -396,7 +396,7 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert "## 审核标注" in report
     assert "- 攻击面：前台" in report
     assert "- 严重度：高危（high）" in report
-    assert "- 校准得分：3" in report
+    assert "- 校准得分：4" in report
     assert "- 价值分层：有 CVE 价值（cve_candidate）" in report
     assert "- 分层理由：" in report
     assert "原始类型映射" not in report
@@ -1097,8 +1097,8 @@ def test_confirm_backend_user_account(tmp_env, project):
     assert conf["ok"] is True
     assert conf["required_account"] == "user"
     assert conf["required_account_label"] == "普通权限"
-    assert conf["severity"] == "medium"
-    assert conf["severity_score"] == 2
+    assert conf["severity"] == "high"
+    assert conf["severity_score"] == 3
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "- 所需账号：普通权限" in report
 

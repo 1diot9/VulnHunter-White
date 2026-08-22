@@ -336,13 +336,85 @@ def inject_worker_prior_block(project_id: int) -> str:
     return "\n".join(parts).strip() + "\n\n"
 
 
-_TODO_SUMMARY_MAX_CHARS = 4000
+SUMMARY_MESSAGE_TAIL = 100
+SUMMARY_MESSAGE_MAX_CHARS = 4000
+_TODO_EMPTY_PLACEHOLDER = "（空）"
 
 
-def format_todo_list_block(todos: list[Any] | None) -> str:
-    """Canonical TodoList markdown for compression / conclude summaries."""
+def clip_text_for_summary(text: str, limit: int = SUMMARY_MESSAGE_MAX_CHARS) -> str:
+    raw = text if isinstance(text, str) else str(text)
+    cap = max(1, int(limit))
+    if len(raw) <= cap:
+        return raw
+    return raw[:cap] + f"\n...[truncated {len(raw) - cap} chars]"
+
+
+def _clip_tool_call(tc: Any, limit: int) -> Any:
+    if not isinstance(tc, dict):
+        return tc
+    out = dict(tc)
+    fn = out.get("function")
+    if isinstance(fn, dict):
+        fn = dict(fn)
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            fn["arguments"] = clip_text_for_summary(args, limit)
+        elif args is not None:
+            fn["arguments"] = clip_text_for_summary(json.dumps(args, ensure_ascii=False), limit)
+        out["function"] = fn
+    return out
+
+
+def _clip_message_content(content: Any, limit: int) -> Any:
+    if isinstance(content, str):
+        return clip_text_for_summary(content, limit)
+    if isinstance(content, list):
+        parts: list[Any] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                item = dict(part)
+                item["text"] = clip_text_for_summary(str(part.get("text") or ""), limit)
+                parts.append(item)
+            elif isinstance(part, str):
+                parts.append(clip_text_for_summary(part, limit))
+            else:
+                parts.append(part)
+        return parts
+    if content is None:
+        return content
+    return clip_text_for_summary(json.dumps(content, ensure_ascii=False), limit)
+
+
+def clip_summary_message(message: Any, limit: int = SUMMARY_MESSAGE_MAX_CHARS) -> dict[str, Any]:
+    """Keep message structure; truncate content / tool arguments, do not drop the message."""
+    if not isinstance(message, dict):
+        return {"role": "unknown", "content": clip_text_for_summary(str(message), limit)}
+    out = dict(message)
+    if "content" in out:
+        out["content"] = _clip_message_content(out.get("content"), limit)
+    tcs = out.get("tool_calls")
+    if isinstance(tcs, list):
+        out["tool_calls"] = [_clip_tool_call(tc, limit) for tc in tcs]
+    return out
+
+
+def clip_messages_for_summary(
+    messages: list[dict[str, Any]] | None,
+    *,
+    last_n: int = SUMMARY_MESSAGE_TAIL,
+    per_message_chars: int = SUMMARY_MESSAGE_MAX_CHARS,
+) -> list[dict[str, Any]]:
+    """Keep the last N messages; truncate each message instead of the whole dump."""
+    rows = list(messages or [])
+    n = max(1, int(last_n))
+    cap = max(1, int(per_message_chars))
+    return [clip_summary_message(m, cap) for m in rows[-n:]]
+
+
+def format_todo_list_block(todos: list[Any] | None, *, include_empty: bool = False) -> str:
+    """Canonical TodoList markdown for compression / conclude summaries. Never truncated."""
     if not isinstance(todos, list) or not todos:
-        return ""
+        return f"## TodoList\n{_TODO_EMPTY_PLACEHOLDER}" if include_empty else ""
     lines = ["## TodoList"]
     for item in todos:
         if isinstance(item, dict):
@@ -354,15 +426,17 @@ def format_todo_list_block(todos: list[Any] | None) -> str:
         else:
             text = str(item).strip() or "(空)"
             lines.append(f"- {text}")
-    block = "\n".join(lines)
-    if len(block) > _TODO_SUMMARY_MAX_CHARS:
-        return block[:_TODO_SUMMARY_MAX_CHARS] + f"\n...[truncated {len(block) - _TODO_SUMMARY_MAX_CHARS} chars]"
-    return block
+    return "\n".join(lines)
 
 
-def attach_todo_list(summary: str | None, todos: list[Any] | None) -> str:
-    """Append the current TodoList so compression cannot drop it."""
-    block = format_todo_list_block(todos)
+def attach_todo_list(
+    summary: str | None,
+    todos: list[Any] | None,
+    *,
+    include_empty: bool = False,
+) -> str:
+    """Append the current complete TodoList so compression cannot drop it."""
+    block = format_todo_list_block(todos, include_empty=include_empty)
     text = (summary or "").rstrip()
     if not block:
         return text

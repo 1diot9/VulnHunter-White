@@ -30,6 +30,15 @@ function CreateProjectButton({ onClick }: { onClick: () => void }) {
   )
 }
 
+type RunStatusFilter = 'all' | 'running' | 'paused' | 'completed'
+
+const RUN_STATUS_FILTERS: { key: RunStatusFilter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'running', label: '运行中' },
+  { key: 'paused', label: '已暂停' },
+  { key: 'completed', label: '已完成' },
+]
+
 function projectMatchesQuery(p: Project, query: string): boolean {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (!tokens.length) return true
@@ -54,19 +63,44 @@ function projectMatchesQuery(p: Project, query: string): boolean {
   return tokens.every((token) => haystack.includes(token))
 }
 
+function projectMatchesRunStatus(p: Project, filter: RunStatusFilter): boolean {
+  if (filter === 'all') return true
+  const run = formatProjectRunStatus(p.status, p.project_paused)
+  if (filter === 'running') return run === '运行中'
+  if (filter === 'paused') return run === '已暂停'
+  return run === '已完成'
+}
+
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
 
   const refresh = () => api.listProjects().then(setProjects).catch((e) => setError(String(e)))
 
   useEffect(() => startVisibilityPoll(refresh, 4000), [])
 
-  const filteredProjects = useMemo(
+  const searchedProjects = useMemo(
     () => projects.filter((p) => projectMatchesQuery(p, search)),
     [projects, search],
+  )
+
+  const statusCounts = useMemo(() => {
+    const counts = { all: searchedProjects.length, running: 0, paused: 0, completed: 0 }
+    for (const p of searchedProjects) {
+      const run = formatProjectRunStatus(p.status, p.project_paused)
+      if (run === '运行中') counts.running += 1
+      else if (run === '已暂停') counts.paused += 1
+      else if (run === '已完成') counts.completed += 1
+    }
+    return counts
+  }, [searchedProjects])
+
+  const filteredProjects = useMemo(
+    () => searchedProjects.filter((p) => projectMatchesRunStatus(p, statusFilter)),
+    [searchedProjects, statusFilter],
   )
 
   return (
@@ -88,25 +122,38 @@ export default function HomePage() {
         onCreated={refresh}
       />
 
-      <div className="relative">
-        <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pr-8 pl-8"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索项目名称、仓库、模式、模型、状态…"
-          aria-label="搜索审计项目"
-        />
-        {search ? (
-          <button
-            type="button"
-            className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            aria-label="清除搜索"
-            onClick={() => setSearch('')}
-          >
-            <XIcon className="size-4" />
-          </button>
-        ) : null}
+      <div className="space-y-3">
+        <div className="relative">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pr-8 pl-8"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索项目名称、仓库、模式、模型、状态…"
+            aria-label="搜索审计项目"
+          />
+          {search ? (
+            <button
+              type="button"
+              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              aria-label="清除搜索"
+              onClick={() => setSearch('')}
+            >
+              <XIcon className="size-4" />
+            </button>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="按运行状态筛选">
+          {RUN_STATUS_FILTERS.map(({ key, label }) => (
+            <Button
+              key={key}
+              variant={statusFilter === key ? 'default' : 'outline'}
+              onClick={() => setStatusFilter(key)}
+            >
+              {label} {statusCounts[key]}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
@@ -212,7 +259,7 @@ export default function HomePage() {
         {filteredProjects.length === 0 ? (
           <Card className="w-full">
             <CardContent className="flex flex-col items-start gap-3 py-8 text-sm text-muted-foreground">
-              {search.trim() ? (
+              {search.trim() || statusFilter !== 'all' ? (
                 '无匹配项目'
               ) : (
                 <>

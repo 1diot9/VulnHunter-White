@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from ..config import settings
 from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
-from ..services.http_client import chat_http_client, chat_http_timeout
+from ..services.http_client import chat_http_client, chat_http_timeout, conclude_http_timeout
 from ..services.live_log import live_log
 from ..services.llm_gate import llm_gate, llm_slot
 from ..services.llm_thread import llm_thread_slot
@@ -35,6 +35,7 @@ from .chat_stream import (
 from .compression import (
     attach_todo_list,
     build_compressed_messages,
+    clip_messages_for_summary,
     estimate_tokens,
     format_todo_list_block,
     needs_compress,
@@ -410,6 +411,8 @@ class AgentLoop:
                 messages = self._compress(messages)
                 self._last_prompt_tokens = 0
                 self._persist(messages)
+
+            self._maybe_inject_todolist(messages)
 
             try:
                 resp, usage, retry_after = self._chat(messages, tools, remaining)
@@ -1002,7 +1005,33 @@ class AgentLoop:
         return write_summary(self.project_id, name, summary)
 
     def _attach_current_todos(self, summary: str) -> str:
-        return attach_todo_list(summary, load_todos(self))
+        return attach_todo_list(summary, load_todos(self), include_empty=True)
+
+    def _maybe_inject_todolist(self, messages: list[dict[str, Any]]) -> None:
+        interval = max(0, int(getattr(settings, "todo_inject_interval", 50) or 0))
+        n = int(self.watchdog.turn_count or 0)
+        if interval <= 0 or n <= 0 or n % interval != 0:
+            return
+        if int(self.state.get("todo_injected_turn") or 0) == n:
+            return
+        block = format_todo_list_block(load_todos(self), include_empty=True)
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"当前 TodoList（每 {interval} 轮自动注入，请按此待办继续，不要丢项）：\n"
+                    f"{block}"
+                ),
+            }
+        )
+        self.state["todo_injected_turn"] = n
+        self._live.system(
+            self.project_id,
+            f"已注入 TodoList（第 {n} 轮）",
+            phase=self.phase,
+            role=self.role,
+        )
+        self._persist(messages)
 
     def _compress(self, messages: list[dict[str, Any]], force_summary: str | None = None) -> list[dict[str, Any]]:
         # Ask model briefly, or synthesize
@@ -1013,21 +1042,22 @@ class AgentLoop:
         return build_compressed_messages(self.system_prompt, summary, bootstrap, messages)
 
     def _request_summary(self, messages: list[dict[str, Any]], *, rescue: bool = False) -> str:
-        todo_block = format_todo_list_block(load_todos(self))
+        todos = load_todos(self)
+        todo_block = format_todo_list_block(todos, include_empty=True)
         try:
-            dumped = json.dumps(messages[-100:], ensure_ascii=False)[:12000]
-            user_content = f"请总结以下对话（截断后）：\n{dumped}"
-            if todo_block:
-                user_content += (
-                    "\n\n当前 Agent 的 TodoList 如下，必须写入摘要并保留全部条目与状态：\n"
-                    f"{todo_block}"
-                )
+            clipped = clip_messages_for_summary(messages)
+            dumped = json.dumps(clipped, ensure_ascii=False)
+            user_content = (
+                f"请总结以下对话。已保留最近 {len(clipped)} 条消息，过长内容已按条截断：\n{dumped}"
+                "\n\n当前 Agent 的 TodoList 如下，必须写入摘要并保留全部条目与状态：\n"
+                f"{todo_block}"
+            )
             prompt_msgs = [
                 {
                     "role": "system",
                     "content": (
                         "你是上下文压缩助手。用中文输出结构化摘要，保留关键路径、已完成工作、未完成待办、当前焦点。"
-                        "若提供了 TodoList，必须把全部条目与状态写入摘要，不要省略。"
+                        "必须先阅读上面的 TodoList，把全部条目与状态写入摘要，不要省略。"
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -1054,7 +1084,7 @@ class AgentLoop:
             with llm_slot(self.cancel_event) as got_slot:
                 if not got_slot:
                     return self._attach_current_todos("（自动摘要取消）")
-                with chat_http_client(timeout=chat_http_timeout(timeout_budget, 4000)) as client:
+                with chat_http_client(timeout=conclude_http_timeout(timeout_budget)) as client:
                     r = client.post(url, headers=headers, json=payload)
                     r.raise_for_status()
                     data = r.json()
@@ -1088,10 +1118,10 @@ class AgentLoop:
         except Exception as e:  # noqa: BLE001
             self._live.error(self.project_id, f"conclude 抢救失败: {e}", phase=self.phase)
             try:
-                fallback = json.dumps(messages[-50:], ensure_ascii=False)[:8000]
+                fallback = json.dumps(clip_messages_for_summary(messages), ensure_ascii=False)
                 self._store_summary(
                     "conclude" if self.silent else f"{self.phase}-rescue",
-                    self._attach_current_todos(f"（抢救摘要失败，截断消息）\n{fallback}"),
+                    self._attach_current_todos(f"（抢救摘要失败，按条截断消息）\n{fallback}"),
                 )
             except Exception:  # noqa: BLE001
                 pass

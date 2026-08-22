@@ -1171,7 +1171,10 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="TodoWrite",
-            description="维护本阶段自己的运行时待办（按 recon / 历史漏洞 / worker / reviewer / verifier / fix 分文件，不会覆盖其他阶段）",
+            description=(
+                "维护本阶段自己的运行时待办（按 recon / 历史漏洞 / worker / reviewer / verifier / fix 分文件，不会覆盖其他阶段）。"
+                "系统每 50 轮自动把当前 TodoList 注入上下文；压缩 / Conclude 时也会写入完整列表。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {

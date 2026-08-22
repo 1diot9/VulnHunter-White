@@ -71,7 +71,7 @@
      - `sensitive_data_or_privilege`：敏感数据泄露 / 权限提升 / 部分数据(+2)
      - `limited_info`：有限信息泄露 / 信息收集(+1)
    - 利用复杂度 `exploit_complexity`：
-     - `single_request`：单请求或简单触发(+0)
+     - `single_request`：单请求或简单触发(+1)
      - `multi_step`：多步骤利用(+0)
      - `specific_environment`：依赖特定环境(-2)
    - 防护状态 `defense_status`：
