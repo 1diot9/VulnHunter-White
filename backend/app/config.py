@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VULNHUNTER_", env_file=".env", extra="ignore")
 
     host: str = "127.0.0.1"
-    port: int = 8000
+    # Default API port; start scripts also honor VULNHUNTER_PORT / --backend-port.
+    # 16780 avoids crowded uvicorn/Django 8000 and the lab scan range 18000-19000.
+    port: int = 16780
 
     # Timeouts (seconds) — aligned with AutoPoc scale
     timeout_recon: int = 3600

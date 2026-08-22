@@ -36,7 +36,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 16780
 ```
 
 手动前端：
@@ -101,5 +101,5 @@ pytest
 
 - 不要提交 `frontend/dist`、`frontend/node_modules`、`backend/.venv`、`.pytest_cache`、`data/logs`、其他 `data/projects`、`data/app.db` 等生成/运行态文件，除非用户明确要求。展示案例 `data/projects/11` 已由 `.gitignore` 例外放行。
 - 不要随意清空或重建 `data/`，其中可能包含用户审计项目和日志。
-- 需要启动服务前先确认是否已有后端 8000 或前端 5173 进程在运行，避免重复启动。
+- 需要启动服务前先确认是否已有后端（默认 16780）或前端（默认 15173）进程在运行，避免重复启动。换端口用 `start.cmd --backend-port` / `--frontend-port` 或 `VULNHUNTER_PORT` / `VULNHUNTER_FRONTEND_PORT`。
 - 若改动 Agent 提示词、阶段流程或漏洞判定逻辑，要保持已有中文术语一致：Recon、Worker、Reviewer、Verifier、Fix、历史漏洞、历史漏洞绕过、漏洞产出、审计项目、赏金模式、全量模式、自定义模式、启发式挖掘、快速扫描、攻击链、攻击链串联。

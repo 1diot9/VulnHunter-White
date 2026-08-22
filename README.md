@@ -86,7 +86,7 @@ VulnHunter-White的特点是，支持三种挖掘模式，通过docker动态验�
 | Python | **3.11+**（推荐 **3.12** 64-bit） | Windows 需能执行 `python`（勾选 PATH，带 `venv`）。Unix 优先 `python3`。Debian/Ubuntu 另装 `python3-venv` |
 | Node.js | **20 LTS**（最低 18） | 需能执行 `node`、`npm`；前端 Vite 6 需要较新 Node |
 | Git | 2.x | 从 GitHub 导入仓库时 `git clone --depth 1`；只上传 zip 也可不装，但建议装上 |
-| 空闲端口 | **8000**、**5173** | 后端 API / 前端开发服务器；被占用时先 `stop.cmd` / `sh stop.sh` |
+| 空闲端口 | **16780**、**15173** | 后端 API / 前端开发服务器；被占用时用 `--backend-port` / `--frontend-port` 换端口，或先 `stop.cmd` / `sh stop.sh` |
 | LLM 接口 | 兼容 OpenAI Chat Completions 或 Anthropic Messages | 启动后在设置页填 Base URL、API Key、模型；没有模型无法跑 Agent |
 
 启动前在仓库外任意终端确认：
@@ -239,9 +239,11 @@ Unix：`backend/.venv/bin/pip install -e tools/mcp/python-debug`。
 
 ### 7. 可选环境变量
 
-可将 `.env.example` 复制为仓库根或 `backend/.env`。设置页保存过代理 / FOFA 后以设置为准；**尚未保存过**时才用这些变量回退。不要把真实 Key 写进仓库。
+可将 `.env.example` 复制为仓库根或 `backend/.env`。监听端口给 `start.cmd` / `start.sh` 用；设置页保存过代理 / FOFA 后以设置为准，**尚未保存过**时才用代理 / Key 变量回退。不要把真实 Key 写进仓库。
 
 ```
+# VULNHUNTER_PORT=16780
+# VULNHUNTER_FRONTEND_PORT=15173
 VULNHUNTER_HTTP_PROXY=
 VULNHUNTER_HTTPS_PROXY=
 VULNHUNTER_CHAT_PROXY=
@@ -267,11 +269,13 @@ sh start.sh
 
 若已 `chmod +x start.sh`，也可 `./start.sh`。脚本是 POSIX `sh`，macOS 自带 `/bin/sh` 即可，不必装 bash。
 
-- 启动后端 `http://127.0.0.1:8000` 与前端 `http://127.0.0.1:5173`
+- 启动后端 `http://127.0.0.1:16780` 与前端 `http://127.0.0.1:15173`（避开常见的 8000 / Vite 5173）
+- 可用 `start.cmd --backend-port 19000 --frontend-port 19001`（Unix：`sh start.sh --backend-port 19000 --frontend-port 19001`）或环境变量 `VULNHUNTER_PORT` / `VULNHUNTER_FRONTEND_PORT` 换端口
 - 首次自动建 `backend/.venv`、安装 Python 依赖、在 `frontend` 执行 `npm install`
 - 默认不热更新；改后端代码时用 `start.cmd --reload` 或 `sh start.sh --reload`
-- 约 45 秒内检测 8000 / 5173 是否在听；超时会提示去看日志，不一定是失败
-- Unix 会把 PID 写到 `data/run/backend.pid`、`data/run/frontend.pid`
+- 启动前会先停掉本仓库上一份实例。若目标端口仍被**其他程序**占用，脚本直接报错退出，不会自动改端口
+- 约 45 秒内检测所选端口是否在听；超时会提示去看日志，不一定是失败
+- Unix 会把 PID 写到 `data/run/backend.pid`、`data/run/frontend.pid`；本次端口写入 `data/run/ports.env` 供 `stop` 使用
 
 停止：
 
@@ -283,11 +287,11 @@ stop.cmd
 sh stop.sh
 ```
 
-Windows 按窗口标题结束进程并释放 8000、5173；Linux/macOS 按 PID 文件 + 端口结束。
+Windows 按窗口标题结束进程，并释放上次记录的端口（以及默认 16780 / 15173）；Linux/macOS 按 PID 文件 + 端口结束。
 
 日志：`data/logs/backend.log`、`data/logs/frontend.log`。端口一直没起来时先看这两份文件。
 
-启动成功后浏览器打开 **http://127.0.0.1:5173** 。API 文档：http://127.0.0.1:8000/docs 。
+启动成功后浏览器打开 **http://127.0.0.1:15173** 。API 文档：http://127.0.0.1:16780/docs 。
 
 ### 首次打开：设置页
 
@@ -312,7 +316,7 @@ Windows：
 ```bat
 cd backend
 .venv\Scripts\activate
-uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 16780
 ```
 
 Linux / macOS：
@@ -320,7 +324,7 @@ Linux / macOS：
 ```sh
 cd backend
 . .venv/bin/activate
-uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --reload-dir app --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 16780
 ```
 
 `--timeout-graceful-shutdown 2` 不要去掉：SSE 长连接会让热加载卡在 Waiting for connections to close。
@@ -332,7 +336,7 @@ cd frontend
 npm run dev
 ```
 
-开发服务器把 `/api` 代理到 `127.0.0.1:8000`，请同时开着后端。
+开发服务器把 `/api` 代理到 `127.0.0.1:16780`（可用 `VULNHUNTER_PORT` 覆盖），请同时开着后端。手动换前端端口时设 `VULNHUNTER_FRONTEND_PORT` 或 `npm run dev -- --port 15173 --strictPort`。
 
 ## 常见启动问题
 
@@ -342,8 +346,9 @@ npm run dev
 | Unix：`need Python 3.11+` | 安装 3.11/3.12；Debian/Ubuntu：`sudo apt install python3 python3-venv python3-pip`；macOS：`brew install python@3.12` |
 | `creating backend venv` 失败 | 确认 `python -m venv --help` / `python3 -m venv --help` 可用；杀毒软件不要锁 `backend/.venv` |
 | `npm` 失败或极慢 | 换 Node 20 LTS；用 npmmirror；删掉不完整的 `frontend/node_modules` 再装 |
-| `warn: ports not ready` | 看 `data/logs/`；常见是 8000/5173 被旧进程占用，先 `stop.cmd` / `sh stop.sh` |
-| 页面能开但接口全失败 | 后端没起来，或前端不是 5173（没走到 Vite 代理） |
+| `error: backend/frontend port … is still in use` | 目标端口被其他程序占用。换端口：`start.cmd --backend-port N --frontend-port N` |
+| `warn: ports not ready` | 看 `data/logs/`；常见是旧进程没退干净，先 `stop.cmd` / `sh stop.sh` |
+| 页面能开但接口全失败 | 后端没起来，或前端端口与 Vite 代理用的 `VULNHUNTER_PORT` 不一致 |
 | GitHub 导入失败 | 确认 `git` 在 PATH；私有仓填 PAT；公司代理填设置页 HTTP 代理 |
 | 靶场 / 容器页提示 docker unavailable | 打开 Docker Desktop 或启动 docker 服务，等引擎就绪后再试 `docker ps` |
 | 局部验证说镜像不存在 | 重新执行 `scripts\build-sandbox.cmd` 或 `sh scripts/build-sandbox.sh` |

@@ -78,11 +78,44 @@ stop_pidfile() {
   rm -f "$f"
 }
 
+add_port() {
+  p=$1
+  case "$p" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+    return 0
+  fi
+  case " $PORTS " in
+    *" $p "*) ;;
+    *) PORTS="$PORTS $p" ;;
+  esac
+}
+
+PORTS=""
+add_port "${VULNHUNTER_PORT:-}"
+add_port "${VULNHUNTER_FRONTEND_PORT:-}"
+if [ -f "$PIDDIR/ports.env" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s' "$line" | tr -d '\r')
+    case "$line" in
+      VULNHUNTER_PORT=*)
+        add_port "${line#VULNHUNTER_PORT=}"
+        ;;
+      VULNHUNTER_FRONTEND_PORT=*)
+        add_port "${line#VULNHUNTER_FRONTEND_PORT=}"
+        ;;
+    esac
+  done < "$PIDDIR/ports.env"
+fi
+add_port 16780
+add_port 15173
+
 stop_pidfile "$PIDDIR/backend.pid"
 stop_pidfile "$PIDDIR/frontend.pid"
 
-# Same as Windows stop.cmd: free 8000 / 5173 even if pid files are stale.
-for port in 8000 5173; do
+# Free last-used / requested / default ports even if pid files are stale.
+for port in $PORTS; do
   pids_on_port "$port" | while IFS= read -r pid; do
     [ -n "$pid" ] || continue
     kill_tree "$pid" "$port"
@@ -108,7 +141,7 @@ if command -v pgrep >/dev/null 2>&1; then
   done
 fi
 
-rm -f "$PIDDIR/backend.pid" "$PIDDIR/frontend.pid"
+rm -f "$PIDDIR/backend.pid" "$PIDDIR/frontend.pid" "$PIDDIR/ports.env"
 
 if [ "$QUIET" -eq 0 ]; then
   echo "[VulnHunter] stopped."

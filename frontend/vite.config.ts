@@ -3,6 +3,14 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+function envPort(name: string, fallback: number): number {
+  const raw = Number.parseInt(process.env[name] || '', 10)
+  return Number.isInteger(raw) && raw >= 1 && raw <= 65535 ? raw : fallback
+}
+
+const backendPort = envPort('VULNHUNTER_PORT', 16780)
+const frontendPort = envPort('VULNHUNTER_FRONTEND_PORT', 15173)
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -56,10 +64,11 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: frontendPort,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: `http://127.0.0.1:${backendPort}`,
         changeOrigin: true,
         timeout: 0,
         configure: (proxy) => {

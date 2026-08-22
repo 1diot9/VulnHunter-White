@@ -5,6 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 LOGDIR="$ROOT/data/logs"
 mkdir -p "$LOGDIR"
+VULNHUNTER_PORT="${VULNHUNTER_PORT:-16780}"
 
 if [ "${1:-}" = "--reload" ]; then
   VULNHUNTER_RELOAD=1
@@ -20,10 +21,10 @@ fi
 if [ -n "${VULNHUNTER_RELOAD:-}" ]; then
   exec "$ROOT/backend/.venv/bin/uvicorn" app.main:app \
     --reload --reload-dir app \
-    --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 8000 \
+    --timeout-graceful-shutdown 2 --host 127.0.0.1 --port "$VULNHUNTER_PORT" \
     >>"$LOGDIR/backend.log" 2>&1
 else
   exec "$ROOT/backend/.venv/bin/uvicorn" app.main:app \
-    --timeout-graceful-shutdown 2 --host 127.0.0.1 --port 8000 \
+    --timeout-graceful-shutdown 2 --host 127.0.0.1 --port "$VULNHUNTER_PORT" \
     >>"$LOGDIR/backend.log" 2>&1
 fi

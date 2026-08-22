@@ -1,6 +1,6 @@
 #!/bin/sh
-# Start backend (8000) + frontend (5173). First run creates venv / npm install.
-# Usage: sh start.sh [--reload]
+# Start backend + frontend. First run creates venv / npm install.
+# Usage: sh start.sh [--reload] [--backend-port N] [--frontend-port N]
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -8,25 +8,83 @@ PIDDIR="$ROOT/data/run"
 LOGDIR="$ROOT/data/logs"
 mkdir -p "$PIDDIR" "$LOGDIR"
 
+# Defaults: 16780 / 15173 avoid the crowded 8000 and Vite 5173.
+VULNHUNTER_PORT="${VULNHUNTER_PORT:-16780}"
+VULNHUNTER_FRONTEND_PORT="${VULNHUNTER_FRONTEND_PORT:-15173}"
 VULNHUNTER_RELOAD=
+
+usage() {
+  echo "Usage: start.sh [--reload] [--backend-port N] [--frontend-port N]"
+  echo "  --reload           uvicorn --reload"
+  echo "  --backend-port N   API port (default 16780, or VULNHUNTER_PORT)"
+  echo "  --frontend-port N  UI port  (default 15173, or VULNHUNTER_FRONTEND_PORT)"
+  echo "  aliases: --api-port / --ui-port"
+}
+
+valid_port() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  if [ "$1" -lt 1 ] || [ "$1" -gt 65535 ]; then
+    return 1
+  fi
+  return 0
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --reload)
       VULNHUNTER_RELOAD=1
       ;;
     -h|--help)
-      echo "Usage: start.sh [--reload]"
+      usage
       exit 0
+      ;;
+    --backend-port|--api-port)
+      if [ $# -lt 2 ]; then
+        echo "[VulnHunter] $1 needs a port number"
+        exit 1
+      fi
+      VULNHUNTER_PORT=$2
+      shift
+      ;;
+    --backend-port=*|--api-port=*)
+      VULNHUNTER_PORT=${1#*=}
+      ;;
+    --frontend-port|--ui-port)
+      if [ $# -lt 2 ]; then
+        echo "[VulnHunter] $1 needs a port number"
+        exit 1
+      fi
+      VULNHUNTER_FRONTEND_PORT=$2
+      shift
+      ;;
+    --frontend-port=*|--ui-port=*)
+      VULNHUNTER_FRONTEND_PORT=${1#*=}
       ;;
     *)
       echo "[VulnHunter] unknown option: $1"
-      echo "Usage: start.sh [--reload]"
+      usage
       exit 1
       ;;
   esac
   shift
 done
-export VULNHUNTER_RELOAD
+
+if ! valid_port "$VULNHUNTER_PORT"; then
+  echo "[VulnHunter] invalid VULNHUNTER_PORT: $VULNHUNTER_PORT"
+  exit 1
+fi
+if ! valid_port "$VULNHUNTER_FRONTEND_PORT"; then
+  echo "[VulnHunter] invalid VULNHUNTER_FRONTEND_PORT: $VULNHUNTER_FRONTEND_PORT"
+  exit 1
+fi
+if [ "$VULNHUNTER_PORT" = "$VULNHUNTER_FRONTEND_PORT" ]; then
+  echo "[VulnHunter] backend and frontend ports must differ"
+  exit 1
+fi
+
+export VULNHUNTER_PORT VULNHUNTER_FRONTEND_PORT VULNHUNTER_RELOAD
 
 resolve_python() {
   cand=
@@ -104,16 +162,41 @@ fi
 
 sh "$ROOT/scripts/stop.sh" --quiet
 
+n=0
+while [ "$n" -lt 10 ]; do
+  if ! port_listening "$VULNHUNTER_PORT" && ! port_listening "$VULNHUNTER_FRONTEND_PORT"; then
+    break
+  fi
+  n=$((n + 1))
+  sleep 1
+done
+busy=
+if port_listening "$VULNHUNTER_PORT"; then
+  echo "[VulnHunter] error: backend port $VULNHUNTER_PORT is still in use"
+  busy=1
+fi
+if port_listening "$VULNHUNTER_FRONTEND_PORT"; then
+  echo "[VulnHunter] error: frontend port $VULNHUNTER_FRONTEND_PORT is still in use"
+  busy=1
+fi
+if [ -n "$busy" ]; then
+  echo "  Pick free ports: sh start.sh --backend-port N --frontend-port N"
+  exit 1
+fi
+
+printf 'VULNHUNTER_PORT=%s\nVULNHUNTER_FRONTEND_PORT=%s\n' \
+  "$VULNHUNTER_PORT" "$VULNHUNTER_FRONTEND_PORT" > "$PIDDIR/ports.env"
+
 if [ -n "$VULNHUNTER_RELOAD" ]; then
-  echo "[VulnHunter] backend  http://127.0.0.1:8000  (reload)"
+  echo "[VulnHunter] backend  http://127.0.0.1:${VULNHUNTER_PORT}  (reload)"
 else
-  echo "[VulnHunter] backend  http://127.0.0.1:8000"
+  echo "[VulnHunter] backend  http://127.0.0.1:${VULNHUNTER_PORT}"
 fi
 
 nohup sh "$ROOT/scripts/_run-backend-inner.sh" >/dev/null 2>&1 &
 echo $! > "$PIDDIR/backend.pid"
 
-echo "[VulnHunter] frontend http://127.0.0.1:5173"
+echo "[VulnHunter] frontend http://127.0.0.1:${VULNHUNTER_FRONTEND_PORT}"
 nohup sh "$ROOT/scripts/_run-frontend-inner.sh" >/dev/null 2>&1 &
 echo $! > "$PIDDIR/frontend.pid"
 
@@ -121,7 +204,7 @@ echo "[VulnHunter] waiting for ports..."
 n=0
 ready=
 while [ "$n" -lt 45 ]; do
-  if port_listening 8000 && port_listening 5173; then
+  if port_listening "$VULNHUNTER_PORT" && port_listening "$VULNHUNTER_FRONTEND_PORT"; then
     ready=1
     break
   fi
@@ -136,9 +219,10 @@ else
 fi
 
 echo
-echo "  UI:   http://127.0.0.1:5173"
-echo "  API:  http://127.0.0.1:8000/docs"
+echo "  UI:   http://127.0.0.1:${VULNHUNTER_FRONTEND_PORT}"
+echo "  API:  http://127.0.0.1:${VULNHUNTER_PORT}/docs"
 echo "  Stop: sh stop.sh"
 echo "  Dev:  sh start.sh --reload"
+echo "  Ports: sh start.sh --backend-port N --frontend-port N"
 echo "  Logs: data/logs/"
 echo
