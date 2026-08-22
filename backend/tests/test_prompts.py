@@ -353,6 +353,11 @@ def test_worker_prompts_decouple_finish_file_and_round():
     assert "中途 FinishFile 之后必须继续分析" in worker
     assert "再 FinishRound 并附简短单轮报告" not in worker
     assert "然后 FinishRound" not in initial
+    assert "确认没有漏洞" in worker or "确认无漏洞" in worker
+    assert "不要因为文件不能当入口就 FinishFile" in initial
+    assert "不能当入口" in worker
+    assert "没有独立审计价值" not in worker
+    assert "没有独立审计价值" not in initial
 
 
 def test_worker_prompts_inject_recon_and_round_history():

@@ -196,11 +196,11 @@ def test_worker_finish_nudge_every_50_turns():
     assert "50 轮" in msg
     assert "FinishFile" in msg
     assert "FinishRound" in msg
-    assert "非入口" in msg
+    assert "不能当入口" in msg
     assert "不要只标一开始注入的焦点文件" in msg
     assert "禁止立刻 FinishRound" in msg
     assert msg == WORKER_FINISH_NUDGE.format(n=50)
-    assert "看门狗：挖掘连续 50 轮未 FinishFile，已提醒立刻标记非入口文件" == w.persist_nudge_log()
+    assert "看门狗：挖掘连续 50 轮未 FinishFile，已提醒立刻标记已确认无漏洞的文件" == w.persist_nudge_log()
     assert w.note_turn() is None
     for _ in range(48):
         assert w.note_turn() is None

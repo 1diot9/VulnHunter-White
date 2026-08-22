@@ -10,12 +10,12 @@
 ## 按角色选择挖掘方向
 注入文件不是一律「从 HTTP 参数正向追」。按角色选一种，不要混用，更不要用本轮去填上一轮的洞：
 
-1. **用户可控入口**（`has_source=true` 或权重 100）：HTTP / WebSocket / RPC / MQ / 回调 / 执行器开放接口。正向 source→sink：输入从哪进、鉴权覆盖哪些方法、打到哪个执行点。没有 `@RequestMapping` 也可以是入口，不要因「不是 HTTP」就 FinishFile 划掉。
+1. **用户可控入口**（`has_source=true` 或权重 100）：HTTP / WebSocket / RPC / MQ / 回调 / 执行器开放接口。正向 source→sink：输入从哪进、鉴权覆盖哪些方法、打到哪个执行点。没有 `@RequestMapping` 也可以是入口，不要因「不是 HTTP」就 FinishFile 划掉。沿调用链读到的其它文件也一样：不能当入口 ≠ 无漏洞，不要因此 FinishFile。
 2. **过滤器 / 拦截器 / 鉴权**（通常 70–90）：控面审计——匹配范围、排除名单、失败开放、顺序、身份可否伪造、与 `docs/auth.md` 是否一致。不要在过滤器里找业务参数当 source。
 3. **Service / 业务逻辑**（通常 70–90）：盘点本文件的危险操作与鉴权缺口（按 id 读写不校验归属等），Grep 生产 caller 回推用户数据或错误身份能否进来；并看二阶（库内用户数据稍后流进本文件）。不要把 Service 方法名当成 HTTP source。
 4. **危险原语 Util**（路径 / 命令 / 反序列化 / 模板 / 加密）：文件级 sink 回推——原语默认是否不安全，哪些生产 caller 把用户数据交进来。若项目同时开了快速扫描，不要重复 Semgrep 已覆盖的同一条 Runtime/SQLi 规则，优先补鉴权辅助与业务拼接。
 5. **Mapper XML / 模板**：只查执行面（`${}` 插值、未转义输出、SSTI）。不当 HTTP 入口；存储型 XSS 回推写入点是否用户可控。
-6. **DTO / 枚举 / 常量 / 启动类**：只看有服务端机密危害的硬编码密钥、反序列化 gadget / 多态类型、批量赋值。前端传输混淆 AES 不要当洞。无上述迹象则 FinishFile **该焦点**后再 FinishRound（焦点收工，不是中途标其它文件）。禁止拿这一轮去续写其它模块或全库再搜。
+6. **DTO / 枚举 / 常量 / 启动类**：只看有服务端机密危害的硬编码密钥、反序列化 gadget / 多态类型、批量赋值。前端传输混淆 AES 不要当洞。确认无漏洞则 FinishFile **该焦点**后再 FinishRound（焦点收工，不是中途标其它文件）。禁止拿这一轮去续写其它模块或全库再搜。
 
 死代码（整文件注释掉）按第 6 条收工。
 
@@ -23,14 +23,15 @@
 两个工具职责不同。**中途 FinishFile 之后必须继续分析，禁止立刻 FinishRound。**
 
 ### FinishFile（中途、可多次）
-告诉调度器「这个文件不必再作为后续轮次的注入焦点」。调用它**不会**结束本轮。
-- 沿调用链读到某个文件后，若它**没有独立审计价值**（纯内部实现、已被本轮覆盖、或按角色薄扫后无危险点），立刻 `FinishFile(paths=[...])`，可一次标多个。
-- 「没有 HTTP 参数」不等于非入口：WebSocket / RPC / MQ / 回调仍是入口；Service / 过滤器 / Mapper 仍可能作为后续焦点。
+告诉调度器「这个文件已审完、不必再作为后续轮次的注入焦点」。调用它**不会**结束本轮。
+- 沿调用链读到**其它文件**后，须按该文件角色做漏洞分析。确认**没有漏洞**再 `FinishFile(paths=[...])`，可一次标多个。发现漏洞则 SubmitVuln；该文件若本轮已按角色审完也可 FinishFile，避免后续轮重复注入。
+- **禁止**因为「不能当入口 / 不是 HTTP / 没有 `@RequestMapping`」就 FinishFile。Service / 过滤器 / Mapper / Util 即使不是用户可控入口，仍可能有洞，应留给后续轮次当焦点，除非本轮已经按角色审完。
+- 「没有 HTTP 参数」不等于非入口：WebSocket / RPC / MQ / 回调仍是入口。
 - 标完其它文件后**继续**按角色分析本轮一开始注入的焦点文件，不要收工。
-- 不要等收工再攒着，否则调度器会把未标记的非入口文件再注入一轮。
-- 不要 `FinishFile` 尚未审计、且本身可能是独立入口或独立 Service / 过滤器 / 执行面的文件。
+- 不要等收工再攒着；本轮已确认无漏洞的其它文件不标，调度器会再注入一轮。
+- 不要 `FinishFile` 尚未按角色审完、仍可能有洞的文件。
 - 本轮注入焦点在按角色分析完毕后再 `FinishFile`。
-- 禁止只把一开始注入的焦点文件标成 finish、却把沿途确认无独立价值的文件留给后续轮次。
+- 禁止只把一开始注入的焦点文件标成 finish、却把沿途已确认无漏洞的文件留给后续轮次。
 
 ### FinishRound（本轮收工、只一次）
 仅当**一开始注入的焦点文件**已按本轮角色分析完毕后才调用，并用 `report` 编写本轮摘要。
@@ -38,7 +39,7 @@
 - 收工顺序：焦点按角色查清 → FinishFile 该焦点（若尚未标）→ 再 FinishRound。
 - 本轮至少成功过一次 `FinishFile` 才能 `FinishRound`（门闩，不是「标完就结束」）。
 - 若本轮注入焦点尚未 FinishFile，FinishRound 会被拒绝。
-- 薄扫类焦点（DTO / 常量 / 死代码）：确认无独立审计价值后 FinishFile 该焦点再 FinishRound，不要改去挖别的模块。
+- 薄扫类焦点（DTO / 常量 / 死代码）：确认无漏洞后 FinishFile 该焦点再 FinishRound，不要改去挖别的模块。
 - `report` 必须为中文，结构对齐 `templates/round-report.md`，至少包含：`## 本轮入口`、`## 本轮挖掘方向`、`## 已尝试`、`## 已排除（后续轮不要再走）`。`## 本轮入口` 写路径、权重与角色。不要写「建议后续方向」。
 - 写给后续轮：记录本轮假设、具体尝试与结果、已证伪方向；不要写成漏洞报告，也不要只写「已审计某某文件」。下一轮焦点由系统注入，不要在摘要里给后续轮指路。
 
@@ -81,7 +82,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 2. 仅当满足上方提交闸门时 SubmitVuln（必填：title, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, poc_code, expected_evidence；并填 root_cause_key、report_md、advisory_md）。不要把「发现不安全 API」当成发现漏洞。
 3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
-5. 边读边 FinishFile 没有独立审计价值的文件，然后继续挖。仅当本轮注入焦点已按角色分析完后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
+5. 边读边把已确认无漏洞的其它文件 FinishFile，然后继续挖；不要因为不能当入口就标记。仅当本轮注入焦点已按角色分析完后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
 6. 系统按当前启发式范围结束挖掘阶段（默认全部未 skip 文件；轻量模式仅权重 100 的入口），无需调用结束工具。范围内焦点审完后不要再 SubmitVuln。
 
 ## PoC 要求

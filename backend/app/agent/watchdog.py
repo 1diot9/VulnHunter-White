@@ -52,7 +52,7 @@ ATTACK_CHAIN_NO_TOOL_NUDGE = (
 NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。纯文字回复无法读取代码、执行命令或落盘结果，对任务没有进展。"
     "请立即调用工具继续工作；若本阶段门闩已满足，系统会自动结束，无需调用已移除的结束工具。"
-    "挖掘轮次：无独立审计价值的文件立刻 FinishFile（禁止因此立刻 FinishRound）；仅当一开始注入的焦点已按角色分析完后才 FinishRound；"
+    "挖掘轮次：沿调用链确认其它文件无漏洞后立刻 FinishFile（禁止因此立刻 FinishRound）；不要因为不能当入口就 FinishFile；仅当一开始注入的焦点已按角色分析完后才 FinishRound；"
     "审核请 ConfirmVuln（须标前台/后台、影响、复杂度、防护状态、价值分层；后台再标普通权限或管理员）或 MarkFalsePositive；仅根因/入口/sink 分析错了才 ReturnToWorker；"
     "互联网验证请复用项目共享 FOFA 命中或用项目指纹 FofaSearch（0 条可改写最多 3 次；当前批次不足 3 个成功可 expand 再搜，最多 5 轮 / 50 个目标） / FinishVerifier；"
     "攻击链请 SearchOldVuln（仅已确认产出）/ SubmitAttackChain（详文最多 3 条）/ IndexAttackChain / FinishAttackChain；修复请 FinishFix。"
@@ -141,9 +141,9 @@ RECON_SOURCE_EXT_PERSIST_NUDGE = (
 WORKER_FINISH_INTERVAL = 50
 
 WORKER_FINISH_NUDGE = (
-    "看门狗提醒：挖掘已连续 {n} 轮未调用 FinishFile。沿调用链已确认没有独立审计价值的文件请立刻 "
+    "看门狗提醒：挖掘已连续 {n} 轮未调用 FinishFile。沿调用链已确认无漏洞的其它文件请立刻 "
     "FinishFile(paths=[...])，不要只标一开始注入的焦点文件，也不要等收工再攒着——"
-    "未标记的非入口文件会被再次注入。FinishFile 其它文件之后继续分析本轮焦点，禁止立刻 FinishRound。"
+    "不要因为文件不能当入口就标记。FinishFile 其它文件之后继续分析本轮焦点，禁止立刻 FinishRound。"
     "仅当一开始注入的焦点文件已按角色分析完后，才 FinishFile 它并 FinishRound；report 对齐 templates/round-report.md。"
     "仍有未查清的焦点链路可继续，但不要重复已读代码或无限扩读。上下文会被压缩，拖延标记会丢失进展。"
 )
@@ -248,7 +248,7 @@ class AgentWatchdog:
     def persist_nudge_log(self) -> str:
         n = self.idle_turns
         if self.phase == "worker":
-            return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记非入口文件"
+            return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记已确认无漏洞的文件"
         if self.phase == "fast-worker":
             return f"看门狗：快速扫描连续 {n} 轮未 FinishSink，已提醒立刻结束本条 Sink"
         if self.phase == "bypass-worker":

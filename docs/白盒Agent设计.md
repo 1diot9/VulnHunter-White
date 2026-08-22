@@ -156,7 +156,7 @@ Chat Completions 默认直连；需要时代理走设置页「Chat 代理」，�
 
 #### 启发式扫描
 
-历史漏洞收集完毕后，每轮由代码注入当前权重最高且未审计的文件（优先 `has_source`）。注入的是本轮**焦点**，不是唯一可读文件。确认无独立审计价值的文件立刻 `FinishFile`（不会结束本轮）；仅当焦点已按角色分析完后，才 `FinishFile` 该焦点并 `FinishRound`（须先成功过一次 `FinishFile`，且焦点必须已标）。`FinishRound` 须附对齐 `templates/round-report.md` 的中文摘要。范围内文件都 `audited` 后，系统结束启发式，无需结束工具。
+历史漏洞收集完毕后，每轮由代码注入当前权重最高且未审计的文件（优先 `has_source`）。注入的是本轮**焦点**，不是唯一可读文件。沿调用链确认其它文件无漏洞后立刻 `FinishFile`（不会结束本轮；不要因为不能当入口就标记）；仅当焦点已按角色分析完后，才 `FinishFile` 该焦点并 `FinishRound`（须先成功过一次 `FinishFile`，且焦点必须已标）。`FinishRound` 须附对齐 `templates/round-report.md` 的中文摘要。范围内文件都 `audited` 后，系统结束启发式，无需结束工具。
 
 Reviewer 打回（仅分析债务）会新开 Fix 线程（独立于挖掘池），改完 `FinishFix` 重新入队。PoC 跑不通不要打回。
 
@@ -178,7 +178,7 @@ Reviewer 打回（仅分析债务）会新开 Fix 线程（独立于挖掘池）
 | --- | --- |
 | `SubmitVuln` | 提交待审核漏洞 |
 | `AppendAffectedLocations` | 向已有 pending 报告追加同根因受影响点 |
-| `FinishFile` | 标记文件不必再作为后续轮次注入焦点 |
+| `FinishFile` | 标记已审完（确认无漏洞或本轮已覆盖）的文件，不必再作为后续轮次注入焦点 |
 | `FinishRound` | 结束本轮（须先 FinishFile 本轮焦点） |
 | `FinishFix` | 完成分析债务修改，重新入审核队列 |
 

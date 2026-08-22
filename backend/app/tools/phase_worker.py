@@ -737,8 +737,10 @@ def register_worker_tools() -> None:
         ToolSpec(
             name="FinishFile",
             description=(
-                "中途标记文件不必再作为后续轮次注入焦点。沿调用链确认没有独立审计价值的文件立刻 "
-                "FinishFile(paths=[...])，然后继续分析本轮注入焦点，禁止立刻 FinishRound。"
+                "中途标记已审完、不必再作为后续轮次注入焦点的文件。"
+                "沿调用链确认其它文件无漏洞后立刻 FinishFile(paths=[...])，"
+                "然后继续分析本轮注入焦点，禁止立刻 FinishRound。"
+                "不要因为文件不能当入口就标记。"
                 "本轮注入焦点仅在按角色分析完后再标。不要只标一开始注入的文件。"
             ),
             parameters={

@@ -2047,6 +2047,8 @@ def test_worker_finish_tools_decouple_file_and_round():
         for t in registry.openai_tools_for_role("worker")
     }
     assert "禁止立刻 FinishRound" in tools["FinishFile"]
+    assert "不能当入口" in tools["FinishFile"]
+    assert "无漏洞" in tools["FinishFile"]
     assert "禁止立刻" in tools["FinishRound"]
     assert "templates/round-report.md" in tools["FinishRound"]
     assert "本轮须已 FinishFile" not in tools["FinishRound"]
