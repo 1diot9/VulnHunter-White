@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from dataclasses import dataclass
@@ -19,6 +20,22 @@ _RECON_AGENT_ROLES = frozenset(
 )
 _WIRE = frozenset({"chat", "responses", "anthropic"})
 _WIRE_ALIASES = {"messages": "anthropic", "claude": "anthropic"}
+_METADATA_HOSTS = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata.goog",
+        "metadata.tencentyun.com",
+    }
+)
+_METADATA_IPS = frozenset(
+    {
+        ipaddress.ip_address("169.254.169.254"),
+        ipaddress.ip_address("169.254.169.253"),
+        ipaddress.ip_address("169.254.0.23"),
+        ipaddress.ip_address("100.100.100.200"),
+        ipaddress.ip_address("fd00:ec2::254"),
+    }
+)
 
 
 def normalize_wire_api(value: str | None) -> str:
@@ -28,13 +45,73 @@ def normalize_wire_api(value: str | None) -> str:
 
 
 def normalize_llm_base_url(value: str | None) -> str:
-    url = (value or "").strip().rstrip("/")
+    url = (value or "").strip()
     if not url:
         return ""
     parsed = urlsplit(url)
+    parsed = parsed._replace(fragment="")
     if parsed.netloc.lower() == "open.bigmodel.cn" and parsed.path.rstrip("/") == "/api/v1":
         parsed = parsed._replace(path="/api/paas/v4")
-        return urlunsplit(parsed).rstrip("/")
+    return urlunsplit(parsed).rstrip("/")
+
+
+def _literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    text = (host or "").strip().strip("[]")
+    if not text:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        pass
+    if text.startswith(("0x", "0X")):
+        try:
+            return ipaddress.IPv4Address(int(text, 16))
+        except ValueError:
+            return None
+    if text.isdigit():
+        try:
+            return ipaddress.IPv4Address(int(text, 10))
+        except ValueError:
+            return None
+    return None
+
+
+def _ip_is_metadata(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_link_local:
+        return True
+    return ip in _METADATA_IPS
+
+
+def _host_is_metadata(host: str) -> bool:
+    h = (host or "").strip(".").lower()
+    if not h:
+        return False
+    if h in _METADATA_HOSTS or h.endswith(".metadata.google.internal"):
+        return True
+    ip = _literal_ip(h)
+    return ip is not None and _ip_is_metadata(ip)
+
+
+def assert_safe_llm_base_url(value: str | None) -> str:
+    """Allow local LLM (127.0.0.1 / RFC1918); reject non-http(s) and cloud metadata."""
+    url = normalize_llm_base_url(value)
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Base URL 只允许 http 或 https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Base URL 不能包含用户名或密码")
+    try:
+        host = (parsed.hostname or "").strip().lower()
+    except ValueError as exc:
+        raise ValueError("Base URL 主机名无效") from exc
+    if not host:
+        raise ValueError("Base URL 缺少主机名")
+    if _host_is_metadata(host):
+        raise ValueError("Base URL 不能指向云元数据地址")
     return url
 
 
@@ -170,7 +247,7 @@ def merge_providers_update(
             {
                 "id": pid,
                 "name": (item.name or "").strip() or pid,
-                "base_url": normalize_llm_base_url(item.base_url),
+                "base_url": assert_safe_llm_base_url(item.base_url),
                 "wire_api": wire,
                 "env_key": (item.env_key or "").strip()
                 or ("ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"),
@@ -225,7 +302,7 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
                 break
 
     if provider:
-        base_url = normalize_llm_base_url(str(provider.get("base_url") or ""))
+        base_url = assert_safe_llm_base_url(str(provider.get("base_url") or ""))
         api_key = str(provider.get("api_key") or "").strip()
         env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip()
         if not api_key:
@@ -245,7 +322,10 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         )
 
     # Fallback defaults
-    base_url = normalize_llm_base_url((row.default_base_url if row else "") or "") or "https://api.openai.com/v1"
+    base_url = (
+        assert_safe_llm_base_url((row.default_base_url if row else "") or "")
+        or "https://api.openai.com/v1"
+    )
     api_key = ((row.default_api_key if row else "") or "").strip() or (os.environ.get("OPENAI_API_KEY") or "")
     model = model or ((row.default_model if row else "") or "").strip() or "gpt-4o"
     return ResolvedLlm(
@@ -293,7 +373,7 @@ def resolve_probe_target(
 
     wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
     default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
-    url = normalize_llm_base_url(base_url) or saved_url or default_url
+    url = assert_safe_llm_base_url(normalize_llm_base_url(base_url) or saved_url or default_url)
     key = (api_key or "").strip() or saved_key or (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not key and wire == "anthropic":
         key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()

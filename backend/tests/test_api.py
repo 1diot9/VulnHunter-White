@@ -286,6 +286,50 @@ def test_create_zip_audit_mode_and_invalid(tmp_env, monkeypatch):
         assert bad.status_code == 400
 
 
+def test_upload_zip_stem_uses_basename_only():
+    from app.api.projects import _upload_zip_stem
+
+    assert _upload_zip_stem("src.zip") == "src"
+    assert _upload_zip_stem("../../../evil.py") == "evil"
+    assert _upload_zip_stem("..\\..\\..\\evil.py") == "evil"
+    assert _upload_zip_stem("..") == "upload"
+    assert _upload_zip_stem("") == "upload"
+    assert _upload_zip_stem(None) == "upload"
+
+
+def test_create_zip_ignores_path_in_filename(tmp_env, monkeypatch):
+    import io
+    import zipfile
+    from pathlib import Path
+
+    from app.main import app
+
+    captured: dict[str, object] = {}
+
+    def fake_start(pid, source_type="zip", zip_path=None, **kwargs):
+        captured["zip_path"] = zip_path
+        captured["pid"] = pid
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", fake_start)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("../../../evil.py", raw, "application/zip")},
+        )
+    assert created.status_code == 200
+    assert created.json()["name"] == "evil"
+    zip_path = captured["zip_path"]
+    assert isinstance(zip_path, Path)
+    assert zip_path.name == "src.zip"
+    assert zip_path.parent.name.startswith("vh-zip-")
+    assert zip_path.is_file()
+    assert zip_path.resolve().is_relative_to(zip_path.parent.resolve())
+
+
 def test_patch_audit_mode_only_when_paused_or_completed(tmp_env, project):
     from app.main import app
     from app.models import Project, SessionLocal

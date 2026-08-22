@@ -32,7 +32,7 @@ from ..services.access_token import update_access_token_hash
 from ..services.llm_settings import (
     load_providers_raw,
     merge_providers_update,
-    normalize_llm_base_url,
+    assert_safe_llm_base_url,
     settings_out_from_row,
 )
 
@@ -59,9 +59,15 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row = AppSettings()
             db.add(row)
             db.flush()
-        if body.llm_providers is not None:
-            merged = merge_providers_update(load_providers_raw(row), body.llm_providers)
-            row.llm_providers = json.dumps(merged, ensure_ascii=False)
+        try:
+            if body.llm_providers is not None:
+                merged = merge_providers_update(load_providers_raw(row), body.llm_providers)
+                row.llm_providers = json.dumps(merged, ensure_ascii=False)
+            if body.default_base_url is not None:
+                row.default_base_url = assert_safe_llm_base_url(body.default_base_url)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
         if body.llm_roles is not None:
             row.llm_roles = json.dumps(
                 {k: v.model_dump() for k, v in body.llm_roles.items()},
@@ -77,8 +83,6 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.fofa_base_url = (body.fofa_base_url or "").strip() or None
         if body.default_model is not None:
             row.default_model = body.default_model
-        if body.default_base_url is not None:
-            row.default_base_url = normalize_llm_base_url(body.default_base_url)
         if body.default_api_key is not None:
             row.default_api_key = body.default_api_key
         if body.context_window is not None:

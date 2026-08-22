@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 def _patch_http(monkeypatch, handler):
     import app.services.llm_probe as llm_probe
 
-    def fake_client(timeout=30.0):
+    def fake_client(timeout=30.0, **_kwargs):
         return httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout)
 
     monkeypatch.setattr(llm_probe, "chat_http_client", fake_client)
@@ -342,3 +342,115 @@ def test_resolve_llm_uses_project_model(tmp_env, project):
     fallback = resolve_llm("worker", project_id=project)
     assert fallback.model == "role-model"
     assert "+project" not in fallback.source
+
+
+def test_normalize_llm_base_url_strips_fragment():
+    from app.services.llm_settings import normalize_llm_base_url
+
+    assert (
+        normalize_llm_base_url("https://api.example.com/v1#/models")
+        == "https://api.example.com/v1"
+    )
+    assert (
+        normalize_llm_base_url("http://127.0.0.1:11434/v1#") == "http://127.0.0.1:11434/v1"
+    )
+
+
+def test_assert_safe_llm_base_url_allows_local_llm():
+    from app.services.llm_settings import assert_safe_llm_base_url
+
+    assert assert_safe_llm_base_url("http://127.0.0.1:11434/v1") == "http://127.0.0.1:11434/v1"
+    assert assert_safe_llm_base_url("http://localhost:11434/v1") == "http://localhost:11434/v1"
+    assert (
+        assert_safe_llm_base_url("http://192.168.1.10:8000/v1") == "http://192.168.1.10:8000/v1"
+    )
+    assert assert_safe_llm_base_url("http://10.0.0.8:11434/v1") == "http://10.0.0.8:11434/v1"
+    assert assert_safe_llm_base_url("http://172.17.0.2:11434/v1") == "http://172.17.0.2:11434/v1"
+    assert assert_safe_llm_base_url("") == ""
+
+
+def test_assert_safe_llm_base_url_rejects_metadata_and_schemes():
+    from app.services.llm_settings import assert_safe_llm_base_url
+
+    with pytest.raises(ValueError, match="http 或 https"):
+        assert_safe_llm_base_url("file:///etc/passwd")
+    with pytest.raises(ValueError, match="用户名或密码"):
+        assert_safe_llm_base_url("http://user:pass@api.example.com/v1")
+    with pytest.raises(ValueError, match="云元数据"):
+        assert_safe_llm_base_url("http://169.254.169.254/latest/meta-data")
+    with pytest.raises(ValueError, match="云元数据"):
+        assert_safe_llm_base_url("http://metadata.google.internal/computeMetadata/v1/")
+    with pytest.raises(ValueError, match="云元数据"):
+        assert_safe_llm_base_url("http://100.100.100.200/latest/meta-data")
+    with pytest.raises(ValueError, match="云元数据"):
+        assert_safe_llm_base_url("http://2852039166/latest/meta-data")
+    with pytest.raises(ValueError, match="云元数据"):
+        assert_safe_llm_base_url("http://[::ffff:169.254.169.254]/latest/meta-data")
+
+
+def test_list_models_strips_fragment_before_append(tmp_env, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": [{"id": "local-model"}]})
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/models",
+            json={"base_url": "http://127.0.0.1:11434/v1#/secret", "api_key": "sk-live"},
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert seen["url"] == "http://127.0.0.1:11434/v1/models"
+
+
+def test_list_models_rejects_metadata_base_url(tmp_env, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not request metadata")
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/models",
+            json={"base_url": "http://169.254.169.254/latest/meta-data", "api_key": "sk-live"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "云元数据" in body["error"]
+
+
+def test_put_settings_rejects_metadata_base_url(tmp_env):
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.put(
+            "/api/settings",
+            json={"default_base_url": "http://169.254.169.254/latest/meta-data"},
+        )
+    assert r.status_code == 400
+    assert "云元数据" in r.json()["detail"]
+
+
+def test_merge_providers_rejects_metadata_base_url():
+    from app.schemas import LlmProviderIn
+    from app.services.llm_settings import merge_providers_update
+
+    with pytest.raises(ValueError, match="云元数据"):
+        merge_providers_update(
+            [],
+            [
+                LlmProviderIn(
+                    id="bad",
+                    name="bad",
+                    base_url="http://metadata.google.internal/",
+                    wire_api="chat",
+                )
+            ],
+        )

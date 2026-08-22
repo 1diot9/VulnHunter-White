@@ -300,6 +300,15 @@ def _project_out(
     )
 
 
+def _upload_zip_stem(filename: str | None) -> str:
+    """Project name from the upload filename: basename only, never a path."""
+    name = Path(str(filename or "").replace("\\", "/")).name
+    if not name or name in {".", ".."}:
+        return "upload"
+    stem = name.rsplit(".", 1)[0].strip()
+    return stem or "upload"
+
+
 @router.get("", response_model=list[ProjectOut])
 def list_projects() -> list[ProjectOut]:
     with SessionLocal() as db:
@@ -407,7 +416,7 @@ async def create_project_zip(
     llm_model: str = Form(""),
     worker_hint: str = Form(""),
 ) -> ProjectOut:
-    raw_name = name.strip() or (file.filename or "upload").rsplit(".", 1)[0]
+    raw_name = name.strip() or _upload_zip_stem(file.filename)
     try:
         mode = parse_audit_mode(audit_mode)
         prompt = normalize_manual_lab_prompt(manual_lab_prompt)
@@ -469,7 +478,7 @@ async def create_project_zip(
         out = _project_out(db, p)
     ensure_project_dirs(pid)
     tmp = Path(tempfile.mkdtemp(prefix="vh-zip-"))
-    zip_path = tmp / (file.filename or "src.zip")
+    zip_path = tmp / "src.zip"
     content = await file.read()
     zip_path.write_bytes(content)
     start_ingest_and_audit(pid, source_type="zip", zip_path=zip_path)

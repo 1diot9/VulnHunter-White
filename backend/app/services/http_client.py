@@ -209,8 +209,12 @@ class FallbackClient(httpx.Client):
         super().close()
 
 
-def _make_client(timeout: float | httpx.Timeout, proxy: str | None) -> httpx.Client:
-    kwargs: dict = {"timeout": timeout, "follow_redirects": True, "trust_env": False}
+def _make_client(
+    timeout: float | httpx.Timeout,
+    proxy: str | None,
+    follow_redirects: bool = True,
+) -> httpx.Client:
+    kwargs: dict = {"timeout": timeout, "follow_redirects": follow_redirects, "trust_env": False}
     if proxy:
         kwargs["proxy"] = proxy
         return FallbackClient(**kwargs)
@@ -221,10 +225,14 @@ def http_client(timeout: float | httpx.Timeout = 30.0) -> httpx.Client:
     return _make_client(timeout, proxy_url())
 
 
-def chat_http_client(timeout: float | httpx.Timeout = 30.0) -> httpx.Client:
+def chat_http_client(
+    timeout: float | httpx.Timeout = 30.0,
+    *,
+    follow_redirects: bool = True,
+) -> httpx.Client:
     """Chat Completions: direct by default; ignores OS/system proxy.
 
     Set Settings.chat_proxy or VULNHUNTER_CHAT_PROXY only when Chat must use a proxy.
     If that proxy cannot be reached, the request is retried without a proxy.
     """
-    return _make_client(timeout, chat_proxy_url())
+    return _make_client(timeout, chat_proxy_url(), follow_redirects=follow_redirects)

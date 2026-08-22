@@ -122,16 +122,19 @@ def _choice_text(data: dict[str, Any]) -> str:
 
 
 def list_models(body: LlmProbeIn) -> LlmModelListOut:
-    base_url, api_key, _model, wire_api = resolve_probe_target(
-        base_url=body.base_url,
-        api_key=body.api_key,
-        model=body.model,
-        wire_api=body.wire_api,
-    )
+    try:
+        base_url, api_key, _model, wire_api = resolve_probe_target(
+            base_url=body.base_url,
+            api_key=body.api_key,
+            model=body.model,
+            wire_api=body.wire_api,
+        )
+    except ValueError as e:
+        return LlmModelListOut(ok=False, error=str(e))
     url = base_url + "/models"
     started = time.perf_counter()
     try:
-        with chat_http_client(timeout=_PROBE_TIMEOUT) as client:
+        with chat_http_client(timeout=_PROBE_TIMEOUT, follow_redirects=False) as client:
             r = client.get(url, headers=_headers(api_key, wire_api))
     except Exception as e:  # noqa: BLE001
         return LlmModelListOut(ok=False, error=_transport_error(e))
@@ -160,12 +163,15 @@ def list_models(body: LlmProbeIn) -> LlmModelListOut:
 
 
 def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
-    base_url, api_key, model, wire_api = resolve_probe_target(
-        base_url=body.base_url,
-        api_key=body.api_key,
-        model=body.model,
-        wire_api=body.wire_api,
-    )
+    try:
+        base_url, api_key, model, wire_api = resolve_probe_target(
+            base_url=body.base_url,
+            api_key=body.api_key,
+            model=body.model,
+            wire_api=body.wire_api,
+        )
+    except ValueError as e:
+        return LlmTestOut(ok=False, error=str(e))
     if not model:
         return LlmTestOut(ok=False, error="请填写模型名")
     if not api_key:
@@ -186,7 +192,7 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
         headers = _headers(api_key, wire_api)
     started = time.perf_counter()
     try:
-        with chat_http_client(timeout=_PROBE_TIMEOUT) as client:
+        with chat_http_client(timeout=_PROBE_TIMEOUT, follow_redirects=False) as client:
             r = client.post(url, headers=headers, json=payload)
     except Exception as e:  # noqa: BLE001
         return LlmTestOut(ok=False, model=model, error=_transport_error(e))
