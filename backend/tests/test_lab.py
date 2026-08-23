@@ -6,15 +6,18 @@ import subprocess
 from app.services.lab import (
     find_free_port,
     finish_manual_lab,
+    lab_bring_up_failed,
     lab_compose_project,
     lab_container_name,
     lab_doc_path,
+    lab_had_docker_lab,
     lab_image_name,
     lab_name_prefixes,
     lab_naming,
     lab_setup_failed,
     lab_setup_finished,
     load_env,
+    mark_lab_bring_up_failed,
     mark_lab_setup_finished,
     name_matches_lab_prefix,
     recreate_lab,
@@ -302,6 +305,69 @@ def test_recreate_lab_compose_uses_canonical_project_name(project, monkeypatch):
     assert compose_calls[0][2:6] == ["-p", lab_compose_project(project), "-f", str(compose_path)]
     assert compose_calls[0][-2:] == ["up", "-d"]
     assert load_env(project)["container_name"] == lab_container_name(project)
+
+
+def test_recreate_lab_start_mode_does_not_compose(project, monkeypatch):
+    from app.services import lab
+    from app.services.paths import env_dir
+
+    compose_path = env_dir(project) / "docker-compose.yml"
+    compose_path.write_text("services:\n  app:\n    image: demo:old\n", encoding="utf-8")
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": lab_image_name(project),
+            "container_name": lab_container_name(project),
+            "container_port": 8080,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(command)
+        if command[:2] == ["docker", "inspect"]:
+            return _completed(command, returncode=1, stderr="missing")
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = recreate_lab(project, mode="start")
+
+    assert result["ok"] is False
+    assert result["error_class"] == "missing"
+    assert result["need_agent"] is True
+    assert not any(c[:2] == ["docker", "compose"] for c in calls)
+
+
+def test_mark_lab_bring_up_failed_clears_target_gate(project):
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "container_name": lab_container_name(project),
+            "lab_ever_ready": True,
+        },
+    )
+    assert lab_had_docker_lab(project) is True
+    env = mark_lab_bring_up_failed(project, reason="start failed", via="test")
+    assert env["bring_up_failed"] is True
+    assert env["accepted"] is False
+    assert "target_url" not in env or not env.get("target_url")
+    assert env.get("last_target_url") == "http://127.0.0.1:18080"
+    assert lab_bring_up_failed(project) is True
+    assert "start failed" in lab_doc_path(project).read_text(encoding="utf-8")
+    reset_lab_setup_for_retry(project, "再试")
+    assert lab_bring_up_failed(project) is False
+    assert lab_setup_finished(project) is False
 
 
 def test_lab_setup_finished_only_after_mark(project):

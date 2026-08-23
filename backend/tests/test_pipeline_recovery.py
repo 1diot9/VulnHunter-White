@@ -1032,7 +1032,7 @@ def test_reviewer_lab_note_prefers_manual_then_docker(tmp_env, project, monkeypa
             "status": "running",
         },
     )
-    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid: {"ok": True, "via": "reuse", "target_url": "http://127.0.0.1:18080"})
+    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid, mode="full": {"ok": True, "via": "reuse", "target_url": "http://127.0.0.1:18080"})
     monkeypatch.setattr(pipeline, "debug_ports_for_runtime", lambda env: {"mcp": None})
     _enable_dynamic_verify(project)
     with Session() as db:
@@ -1118,7 +1118,7 @@ def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monke
             "container_name": f"vulnhunter-{project}",
         },
     )
-    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid: {"ok": True, "via": "reuse"})
+    monkeypatch.setattr(pipeline, "recreate_lab", lambda pid, mode="full": {"ok": True, "via": "reuse"})
     called = {"loop": 0}
 
     class BoomLoop:
@@ -1198,3 +1198,56 @@ def test_reviewer_once_appends_dynamic_followup_without_interrupt(tmp_env, proje
     assert INTERRUPT_RESUME not in last["content"]
     assert "仅静态" not in str(captured["system"] or "")
     assert "动态验证阶梯" in str(captured["system"] or "")
+
+
+def test_prepare_lab_for_review_returns_bringup_when_start_needs_agent(tmp_env, project, monkeypatch):
+    from app.services.lab import mark_lab_setup_finished, save_env
+
+    _enable_dynamic_verify(project)
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+            "container_name": f"vulnhunter-{project}",
+            "image": "demo:lab",
+            "lab_ever_ready": True,
+        },
+    )
+    mark_lab_setup_finished(project, via="test")
+    monkeypatch.setattr(
+        pipeline,
+        "recreate_lab",
+        lambda pid, mode="full": {
+            "ok": False,
+            "error": "port busy",
+            "error_class": "start_failed",
+            "need_agent": True,
+        },
+    )
+    monkeypatch.setattr(pipeline, "docker_available", lambda: True)
+    assert pipeline._prepare_lab_for_review(project) == "bringup"
+    assert pipeline._next_reviewer_step(project, pending=1) == "lab-bringup"
+
+
+def test_prepare_lab_for_review_quick_static_without_docker_lab(tmp_env, project):
+    from app.services.lab import mark_lab_setup_finished
+
+    _enable_dynamic_verify(project)
+    mark_lab_setup_finished(project, skipped=True, notes="无 docker", via="test")
+    assert pipeline._prepare_lab_for_review(project) == "static"
+    assert pipeline._next_reviewer_step(project, pending=1) == "review"
+
+
+def test_reviewer_round_verify_force_static_after_bringup_failed(tmp_env, project):
+    from app.services.lab import mark_lab_bring_up_failed
+
+    _enable_dynamic_verify(project)
+    mark_lab_bring_up_failed(project, reason="compose up failed", via="test")
+    lab_note, debug_plan, system, force_static = pipeline._reviewer_round_verify(project, timeout_streak=0)
+    assert force_static is True
+    assert debug_plan["reason"] == "lab_bring_up_failed"
+    assert "强制仅静态" in lab_note
+    assert "compose up failed" in lab_note
+    assert "仅静态" in system

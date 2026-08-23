@@ -28,11 +28,14 @@ POC_RUN_FAIL_HINT = (
 
 
 def resolve_lab_target_url(project_id: int) -> str | None:
-    """Prefer env.json target_url, else the first manual/lab URL."""
+    """Prefer a running Docker lab URL; else the first manual/lab URL. Skip stale Docker URLs after bring-up failure."""
+    from .lab import lab_bring_up_failed, lab_ready, load_env
+
     env = load_env(project_id)
-    target = str((env or {}).get("target_url") or "").strip()
-    if target:
-        return target
+    if lab_ready(env) and not lab_bring_up_failed(project_id):
+        target = str((env or {}).get("target_url") or "").strip()
+        if target:
+            return target
     urls = lab_target_urls(project_id)
     return urls[0] if urls else None
 

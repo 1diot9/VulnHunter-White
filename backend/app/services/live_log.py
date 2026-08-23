@@ -41,8 +41,8 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
     "bypass": frozenset({"bypass-worker", "bypass_worker"}),
     "bypass-worker": frozenset({"bypass-worker", "bypass_worker"}),
     "fix": frozenset({"fix"}),
-    "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab"}),
-    "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
+    "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab", "reviewer-lab-bringup", "reviewer_lab_bringup"}),
+    "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab", "reviewer-lab-bringup", "reviewer_lab_bringup"}),
     "reviewer-review": frozenset({"reviewer"}),
     "verifier": frozenset({"verifier"}),
     "attack_chain": frozenset({"attack_chain", "attack-chain"}),
@@ -561,7 +561,7 @@ def log_phase_of(phase: str | None) -> str | None:
         return "bypass-worker"
     if p == "fix":
         return "fix"
-    if p in ("reviewer-lab", "reviewer_lab"):
+    if p in ("reviewer-lab", "reviewer_lab", "reviewer-lab-bringup", "reviewer_lab_bringup"):
         return "reviewer-lab"
     if p in ("reviewer", "reviewer-review"):
         return "reviewer"
@@ -620,7 +620,7 @@ def control_phase_of_filter(phase: str | None) -> str | None:
         return "recon"
     if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass", "bypass-worker", "bypass_worker"):
         return "worker"
-    if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-review"):
+    if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-lab-bringup", "reviewer_lab_bringup", "reviewer-review"):
         return "reviewer"
     if phase == "verifier":
         return "verifier"

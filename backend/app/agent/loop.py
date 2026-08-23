@@ -747,10 +747,17 @@ class AgentLoop:
                         result.round_summary = conclude.read_text(encoding="utf-8", errors="replace")
                     return result
                 if left in (5, 1):
-                    warn = (
-                        f"还剩 {left} 轮，请立刻 FinishIndex(description=..., entry=...)。"
-                        "超时将 conclude 并落盘失败原因。"
-                    )
+                    if self.phase in ("reviewer-lab-bringup", "reviewer_lab_bringup"):
+                        warn = (
+                            f"还剩 {left} 轮。停止继续改 Docker。"
+                            "立刻 FinishLab(skipped=true, reason=总结靶场拉起失败的具体原因)。"
+                            "超时将强制结束并转为静态审核。"
+                        )
+                    else:
+                        warn = (
+                            f"还剩 {left} 轮，请立刻 FinishIndex(description=..., entry=...)。"
+                            "超时将 conclude 并落盘失败原因。"
+                        )
                     self._live.system(self.project_id, warn, phase=self.phase, role=self.role)
                     messages.append({"role": "user", "content": warn})
                     self._persist(messages)

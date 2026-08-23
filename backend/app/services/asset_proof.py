@@ -344,17 +344,21 @@ def _extract_urls(text: str) -> list[str]:
 
 
 def lab_target_urls(project_id: int) -> list[str]:
+    from .lab import lab_bring_up_failed, lab_ready, load_env
+
     urls: list[str] = []
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if proj:
             urls.extend(_extract_urls(str(proj.manual_lab_prompt or "")))
     env = load_env(project_id)
-    target = str(env.get("target_url") or "").strip()
-    if target:
-        urls.append(target)
-    notes = str(env.get("notes") or "")
-    urls.extend(_extract_urls(notes))
+    docker_ok = lab_ready(env) and not lab_bring_up_failed(project_id)
+    if docker_ok:
+        target = str(env.get("target_url") or "").strip()
+        if target:
+            urls.append(target)
+        notes = str(env.get("notes") or "")
+        urls.extend(_extract_urls(notes))
     urls.extend(_extract_urls(str(env.get("manual_notes") or "")))
     unique: list[str] = []
     for item in urls:

@@ -186,10 +186,67 @@ def lab_setup_failed(project_id: int) -> bool:
     return not lab_ready(env)
 
 
+def lab_bring_up_failed(project_id: int) -> bool:
+    """True after review-time bring-up exhausted; subsequent reviews stay static until retry."""
+    return _truthy(load_env(project_id).get("bring_up_failed"))
+
+
+def lab_had_docker_lab(project_id: int) -> bool:
+    """True when a Docker lab was accepted at least once (metadata still present)."""
+    env = load_env(project_id)
+    if _truthy(env.get("lab_ever_ready")):
+        return True
+    if _truthy(env.get("accepted")) and (
+        env.get("container_name") or env.get("container_id") or env.get("image")
+    ):
+        return True
+    return False
+
+
+def mark_lab_bring_up_failed(
+    project_id: int,
+    *,
+    reason: str = "",
+    via: str = "bring-up",
+) -> dict[str, Any]:
+    """Record project-level bring-up failure and clear Docker target gate for ConfirmVuln."""
+    env = dict(load_env(project_id) or {})
+    env["bring_up_failed"] = True
+    env["setup_finished"] = True
+    env["accepted"] = False
+    prev_url = str(env.get("target_url") or "").strip()
+    if prev_url:
+        env["last_target_url"] = prev_url
+    env.pop("target_url", None)
+    env["status"] = "bring_up_failed"
+    text = str(reason or "").strip() or "靶场拉起失败"
+    prev_notes = str(env.get("notes") or "").strip()
+    fail_line = f"bring_up_failed: {text}"
+    env["notes"] = f"{prev_notes}\n{fail_line}".strip() if prev_notes else fail_line
+    env["bring_up_fail_reason"] = text
+    save_env(project_id, env)
+    write_lab_doc(project_id, env, via=via)
+    return env
+
+
+def clear_lab_bring_up_failed(project_id: int) -> dict[str, Any]:
+    env = dict(load_env(project_id) or {})
+    changed = False
+    for key in ("bring_up_failed", "bring_up_fail_reason"):
+        if key in env:
+            env.pop(key)
+            changed = True
+    if changed:
+        save_env(project_id, env)
+    return env
+
+
 def reset_lab_setup_for_retry(project_id: int, user_message: str = "") -> dict[str, Any]:
     """Clear setup_finished so reviewer-lab can run again; optional user steering note."""
     env = dict(load_env(project_id) or {})
     env["setup_finished"] = False
+    env["bring_up_failed"] = False
+    env.pop("bring_up_fail_reason", None)
     env["user_retry_requested"] = True
     text = str(user_message or "").strip()
     if text:
@@ -257,6 +314,10 @@ def mark_lab_setup_finished(
         env["accepted"] = False
         if not env.get("status"):
             env["status"] = "skipped"
+    elif lab_ready(env):
+        env["lab_ever_ready"] = True
+        env["bring_up_failed"] = False
+        env.pop("bring_up_fail_reason", None)
     if notes:
         prev = str(env.get("notes") or "").strip()
         env["notes"] = f"{prev}\n{notes}".strip() if prev else notes
@@ -494,19 +555,28 @@ def refresh_env_from_container(env: dict[str, Any], info: dict[str, Any]) -> dic
     return env
 
 
-def recreate_lab(project_id: int) -> dict[str, Any]:
-    """Try to bring up lab from env/ compose or recorded container."""
-    env = load_env(project_id)
-    if not env:
-        return {"ok": False, "error": "无 env.json"}
-    if not docker_available():
-        return {"ok": False, "error": "本机无 docker"}
-    ed = env_dir(project_id)
-    compose = None
+def _compose_file(ed: Path) -> Path | None:
     for name in ("docker-compose.yml", "compose.yml", "docker-compose.yaml"):
         if (ed / name).exists():
-            compose = ed / name
-            break
+            return ed / name
+    return None
+
+
+def recreate_lab(project_id: int, *, mode: str = "full") -> dict[str, Any]:
+    """Try to bring up lab from env/ compose or recorded container.
+
+    mode:
+      - ``start``: inspect + ``docker start`` only (no compose up / rebuild). Used at review open.
+      - ``full``: also ``compose up -d`` or start by image name when the container is missing.
+    """
+    env = load_env(project_id)
+    if not env:
+        return {"ok": False, "error": "无 env.json", "error_class": "no_env", "need_agent": False}
+    if not docker_available():
+        return {"ok": False, "error": "本机无 docker", "error_class": "no_docker", "need_agent": False}
+    start_only = str(mode or "full").strip().lower() == "start"
+    ed = env_dir(project_id)
+    compose = _compose_file(ed)
     try:
         inspected = _inspect_container(_container_candidates(project_id, env))
         if inspected:
@@ -517,15 +587,34 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
                 if proc.returncode != 0:
                     env = refresh_env_from_container(env, info)
                     save_env(project_id, env)
-                    return {"ok": False, "error": proc.stderr or proc.stdout or "docker start failed", "env": env}
+                    return {
+                        "ok": False,
+                        "error": proc.stderr or proc.stdout or "docker start failed",
+                        "env": env,
+                        "error_class": "start_failed",
+                        "need_agent": True,
+                    }
                 inspected_after_start = _inspect_container(_container_candidates(project_id, env))
                 if inspected_after_start:
                     _, info = inspected_after_start
             env = refresh_env_from_container(env, info)
+            if lab_ready(env) or (env.get("accepted") and _container_running(info)):
+                env["lab_ever_ready"] = True
+                env["bring_up_failed"] = False
+                env.pop("bring_up_fail_reason", None)
             save_env(project_id, env)
             via = "reuse" if was_running else "start"
             write_lab_doc_if_ready(project_id, env, via=via)
-            return {"ok": True, "env": env, "via": via}
+            return {"ok": True, "env": env, "via": via, "need_agent": False}
+
+        if start_only:
+            return {
+                "ok": False,
+                "error": "容器不存在，审核开场仅允许 docker start，不自动 compose/build",
+                "env": env,
+                "error_class": "missing",
+                "need_agent": bool(compose),
+            }
 
         env = remap_ports_if_needed(env)
         if compose:
@@ -535,32 +624,62 @@ def recreate_lab(project_id: int) -> dict[str, Any]:
                 timeout=600,
             )
             if proc.returncode != 0:
-                return {"ok": False, "error": proc.stderr or proc.stdout, "env": env}
+                return {
+                    "ok": False,
+                    "error": proc.stderr or proc.stdout,
+                    "env": env,
+                    "error_class": "compose_failed",
+                    "need_agent": True,
+                }
             inspected = _inspect_container(_container_candidates(project_id, env))
             if inspected:
                 _, info = inspected
                 env = refresh_env_from_container(env, info)
             env["status"] = "running"
+            env["lab_ever_ready"] = True
+            env["bring_up_failed"] = False
+            env.pop("bring_up_fail_reason", None)
             save_env(project_id, env)
             write_lab_doc_if_ready(project_id, env, via="compose")
-            return {"ok": True, "env": env, "via": "compose"}
+            return {"ok": True, "env": env, "via": "compose", "need_agent": False}
         image = env.get("image")
         name = env.get("container_name") or lab_container_name(project_id)
         if image:
             proc = _docker_run(["start", name])
             if proc.returncode != 0:
-                return {"ok": False, "error": proc.stderr or proc.stdout or "docker start failed", "env": env}
+                return {
+                    "ok": False,
+                    "error": proc.stderr or proc.stdout or "docker start failed",
+                    "env": env,
+                    "error_class": "start_failed",
+                    "need_agent": True,
+                }
             inspected = _inspect_container([name])
             if inspected:
                 _, info = inspected
                 env = refresh_env_from_container(env, info)
             env["status"] = "running"
+            env["lab_ever_ready"] = True
+            env["bring_up_failed"] = False
+            env.pop("bring_up_fail_reason", None)
             save_env(project_id, env)
             write_lab_doc_if_ready(project_id, env, via="start")
-            return {"ok": True, "env": env, "via": "start"}
-        return {"ok": False, "error": "无 compose 且无 image", "env": env}
+            return {"ok": True, "env": env, "via": "start", "need_agent": False}
+        return {
+            "ok": False,
+            "error": "无 compose 且无 image",
+            "env": env,
+            "error_class": "missing",
+            "need_agent": False,
+        }
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e), "env": env}
+        return {
+            "ok": False,
+            "error": str(e),
+            "env": env,
+            "error_class": "exception",
+            "need_agent": False,
+        }
 
 
 def debug_ports_for_runtime(env: dict[str, Any]) -> dict[str, Any]:

@@ -60,14 +60,19 @@ from ..prompts import load_prompt, render_prompt
 from ..services.custom_audit_modes import project_custom_overlay
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
+    clear_lab_bring_up_failed,
     clear_lab_retry_flags,
     debug_ports_for_runtime,
+    docker_available,
+    lab_bring_up_failed,
+    lab_had_docker_lab,
     lab_naming,
     lab_ready,
     lab_round_complete,
     lab_setup_failed,
     lab_setup_finished,
     load_env,
+    mark_lab_bring_up_failed,
     mark_lab_setup_finished,
     recreate_lab,
     reset_lab_setup_for_retry,
@@ -133,7 +138,7 @@ CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker"),
-    "reviewer": ("reviewer", "reviewer-lab"),
+    "reviewer": ("reviewer", "reviewer-lab", "reviewer-lab-bringup"),
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
 }
@@ -225,7 +230,7 @@ def control_phase(phase: str) -> str:
         "bypass",
     ):
         return "worker"
-    if p in ("reviewer", "reviewer-lab", "reviewer_lab"):
+    if p in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-lab-bringup", "reviewer_lab_bringup"):
         return "reviewer"
     if p == "verifier":
         return "verifier"
@@ -1349,6 +1354,45 @@ def _reviewer_has_lab_work(project_id: int) -> bool:
     return not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
 
 
+def _reviewer_has_bringup_work(project_id: int) -> bool:
+    if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+        return False
+    if bool(list_resumable_runs(project_id, "reviewer-lab-bringup")):
+        return True
+    return _prepare_lab_for_review(project_id) == "bringup"
+
+
+def _prepare_lab_for_review(project_id: int) -> str:
+    """Return ready | bringup | static for review-time Docker handling."""
+    if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+        return "static"
+    if lab_bring_up_failed(project_id):
+        return "static"
+    if not lab_setup_finished(project_id):
+        return "static"
+    env = load_env(project_id)
+    if lab_ready(env):
+        rec = recreate_lab(project_id, mode="start")
+        if rec.get("ok") and lab_ready(load_env(project_id)):
+            return "ready"
+        # Was marked running in env.json but inspect/start disagreed.
+        env = load_env(project_id)
+    if not lab_had_docker_lab(project_id):
+        return "static"
+    if not docker_available():
+        mark_lab_bring_up_failed(project_id, reason="本机无 docker", via="review-open")
+        return "static"
+    rec = recreate_lab(project_id, mode="start")
+    if rec.get("ok") and lab_ready(load_env(project_id)):
+        clear_lab_bring_up_failed(project_id)
+        return "ready"
+    if rec.get("need_agent"):
+        return "bringup"
+    reason = str(rec.get("error") or "靶场无法启动")
+    mark_lab_bring_up_failed(project_id, reason=reason, via="review-open")
+    return "static"
+
+
 def _reviewer_has_review_work(project_id: int, pending: int | None = None) -> bool:
     if pending is None:
         with SessionLocal() as db:
@@ -1383,12 +1427,22 @@ _HARNESS_REVIEW_NOTE = (
     "不要把 harness 写进 poc.py。应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"
 )
 
+_BRINGUP_FAILED_NOTE = (
+    "Docker 靶场拉起失败（见 docs/lab.md），本轮强制仅静态审核。"
+    "不要搭建或启动 Docker、不要对靶场发请求或运行 poc.py、不要 docker exec / debug MCP。"
+    "ConfirmVuln 必须 evidence_level=static_only。"
+)
+
 
 def _docker_lab_note(project_id: int) -> str | None:
     env = load_env(project_id)
+    if lab_bring_up_failed(project_id):
+        return None
     if not (lab_ready(env) or env.get("accepted")):
         return None
-    rec = recreate_lab(project_id)
+    rec = recreate_lab(project_id, mode="start")
+    if not rec.get("ok"):
+        return None
     dbg = debug_ports_for_runtime(load_env(project_id) or env)
     return f"环境: {json_dumps(rec)}\n调试: {json_dumps(dbg)}"
 
@@ -1399,6 +1453,10 @@ def _reviewer_lab_note(project_id: int) -> str:
         return _STATIC_REVIEW_NOTE
     if mode == VERIFY_MODE_HARNESS:
         return _HARNESS_REVIEW_NOTE
+    if lab_bring_up_failed(project_id):
+        reason = str(load_env(project_id).get("bring_up_fail_reason") or "").strip()
+        extra = f"失败原因：{reason}\n" if reason else ""
+        return f"{extra}{_BRINGUP_FAILED_NOTE}\n{_ASSET_PROOF_LAB_HINT}"
     _enabled, prompt = _read_manual_lab(project_id)
     docker_note = _docker_lab_note(project_id)
     if prompt:
@@ -1430,12 +1488,19 @@ def _reviewer_lab_note(project_id: int) -> str:
 
 
 def _next_reviewer_step(project_id: int, pending: int) -> str:
-    """Prefer reviewing with a manual lab note; otherwise finish Docker lab first."""
+    """Prefer reviewing with a manual lab note; otherwise finish Docker lab / bring-up first."""
     lab_pending = _reviewer_has_lab_work(project_id)
     review_work = _reviewer_has_review_work(project_id, pending)
-    if not lab_pending:
-        return "review"
-    if review_work and (_read_manual_lab(project_id)[1] or not lab_pending):
+    manual = bool(_read_manual_lab(project_id)[1])
+    # Initial Docker lab first, unless reviewing with a manual lab note.
+    if lab_pending and not (review_work and manual):
+        return "lab"
+    if review_work and is_lab_mode(_read_dynamic_verify_mode(project_id)):
+        if bool(list_resumable_runs(project_id, "reviewer-lab-bringup")):
+            return "lab-bringup"
+        if lab_setup_finished(project_id) and _prepare_lab_for_review(project_id) == "bringup":
+            return "lab-bringup"
+    if review_work:
         return "review"
     if lab_pending:
         return "lab"
@@ -1460,7 +1525,7 @@ _POC_PROMPT_PHASES = frozenset(
     {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
 )
 _WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
-_LAB_HINT_PHASES = frozenset({"reviewer-lab"})
+_LAB_HINT_PHASES = frozenset({"reviewer-lab", "reviewer-lab-bringup"})
 
 
 def _phase_system_prompt(
@@ -1509,14 +1574,24 @@ def _reviewer_round_verify(
     project_id: int, *, timeout_streak: int
 ) -> tuple[str, dict[str, Any], str, bool]:
     """lab_note, debug_plan, system_prompt, force_static."""
-    force_static = static_after_review_timeouts(timeout_streak)
+    force_static = static_after_review_timeouts(timeout_streak) or lab_bring_up_failed(project_id)
     if force_static:
-        lab_note = _timeout_forced_static_note(timeout_streak)
-        debug_plan: dict[str, Any] = {
-            "enabled": False,
-            "preferred": "static_only",
-            "reason": "consecutive_review_timeouts",
-        }
+        if lab_bring_up_failed(project_id):
+            reason = str(load_env(project_id).get("bring_up_fail_reason") or "").strip()
+            extra = f"失败原因：{reason}\n" if reason else ""
+            lab_note = f"{extra}{_BRINGUP_FAILED_NOTE}"
+            debug_plan = {
+                "enabled": False,
+                "preferred": "static_only",
+                "reason": "lab_bring_up_failed",
+            }
+        else:
+            lab_note = _timeout_forced_static_note(timeout_streak)
+            debug_plan = {
+                "enabled": False,
+                "preferred": "static_only",
+                "reason": "consecutive_review_timeouts",
+            }
         system = _phase_system_prompt(project_id, "reviewer.md", verify_mode=VERIFY_MODE_OFF)
         return lab_note, debug_plan, system, True
     lab_note = _reviewer_lab_note(project_id)
@@ -2082,7 +2157,9 @@ def _maybe_complete_project(
 ) -> bool:
     if reviewer_busy or fix_busy or verifier_busy or attack_chain_busy:
         return False
-    if list_resumable_runs(project_id, "reviewer") or list_resumable_runs(project_id, "reviewer-lab"):
+    if list_resumable_runs(project_id, "reviewer") or list_resumable_runs(
+        project_id, "reviewer-lab"
+    ) or list_resumable_runs(project_id, "reviewer-lab-bringup"):
         return False
     if list_resumable_runs(project_id, "attack_chain"):
         return False
@@ -2102,7 +2179,11 @@ def _maybe_complete_project(
 
 def _refresh_project_after_reviewer(project_id: int) -> None:
     """Clear leftover reviewing when the review queue is empty."""
-    if _reviewer_has_lab_work(project_id) or _reviewer_has_review_work(project_id):
+    if (
+        _reviewer_has_lab_work(project_id)
+        or _reviewer_has_bringup_work(project_id)
+        or _reviewer_has_review_work(project_id)
+    ):
         return
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -2190,8 +2271,9 @@ def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
     if _phase_is_paused(project_id, "reviewer"):
         return
     has_lab_work = _reviewer_has_lab_work(project_id)
+    has_bringup_work = _reviewer_has_bringup_work(project_id)
     has_review_work = _reviewer_has_review_work(project_id, pending)
-    if not has_lab_work and not has_review_work:
+    if not has_lab_work and not has_bringup_work and not has_review_work:
         return
     with _lock:
         t = _reviewer_threads.get(project_id)
@@ -2230,15 +2312,22 @@ def _run_reviewer_loop(project_id: int) -> None:
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
-            if not _reviewer_has_lab_work(project_id) and not _reviewer_has_review_work(project_id, pending):
+            if (
+                not _reviewer_has_lab_work(project_id)
+                and not _reviewer_has_bringup_work(project_id)
+                and not _reviewer_has_review_work(project_id, pending)
+            ):
                 _refresh_project_after_reviewer(project_id)
                 cancel.wait(timeout=5.0)
                 continue
             with _lock:
                 _reviewer_inflight[project_id] = True
             try:
-                if _next_reviewer_step(project_id, pending) == "lab":
+                step = _next_reviewer_step(project_id, pending)
+                if step == "lab":
                     _run_reviewer_lab(project_id)
+                elif step == "lab-bringup":
+                    _run_reviewer_lab_bringup(project_id)
                 else:
                     _run_reviewer_once(project_id)
             finally:
@@ -3887,7 +3976,7 @@ def _run_reviewer_lab(project_id: int) -> None:
             return
         env = load_env(project_id)
         if env.get("accepted"):
-            rec = recreate_lab(project_id)
+            rec = recreate_lab(project_id, mode="start")
             if lab_ready(load_env(project_id) or env):
                 mark_lab_setup_finished(project_id, via=str(rec.get("via") or "reuse"))
                 clear_lab_retry_flags(project_id)
@@ -4020,6 +4109,139 @@ def _run_reviewer_lab(project_id: int) -> None:
         live_log.error(project_id, f"环境搭建轮异常: {e}", phase="reviewer-lab")
         if not lab_setup_finished(project_id):
             mark_lab_setup_finished(project_id, skipped=True, notes=f"环境搭建轮异常: {e}", via="lab-round")
+
+
+def _lab_bringup_system_prompt(project_id: int) -> str:
+    names = lab_naming(project_id)
+    return f"{render_prompt('reviewer-lab-bringup.md', **names)}\n"
+
+
+def _run_reviewer_lab_bringup(project_id: int) -> None:
+    """After code docker start fails: agent tries to bring the existing lab up, then static on failure."""
+    cancel = _cancel_event(project_id)
+    phase = "reviewer-lab-bringup"
+    try:
+        if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+            _finish_resumable_phase(project_id, phase)
+            return
+        if lab_bring_up_failed(project_id):
+            _finish_resumable_phase(project_id, phase)
+            return
+        if lab_ready(load_env(project_id)):
+            clear_lab_bring_up_failed(project_id)
+            _finish_resumable_phase(project_id, phase)
+            return
+
+        last_err = ""
+        rec = recreate_lab(project_id, mode="start")
+        if rec.get("ok") and lab_ready(load_env(project_id)):
+            clear_lab_bring_up_failed(project_id)
+            _finish_resumable_phase(project_id, phase)
+            live_log.system(project_id, "代码已重新拉起 Docker 靶场", phase=phase, role="reviewer_lab")
+            return
+        last_err = str(rec.get("error") or "")
+        if not rec.get("need_agent") and not lab_had_docker_lab(project_id):
+            mark_lab_bring_up_failed(project_id, reason=last_err or "无可拉起的 Docker 靶场", via="bring-up")
+            _finish_resumable_phase(project_id, phase)
+            return
+
+        system = _lab_bringup_system_prompt(project_id)
+        user = _prompt_with_summary(
+            phase,
+            project_id,
+            _initial_prompt(
+                "reviewer-lab-bringup.md",
+                bringup_error=last_err or "docker start 失败",
+                **_audit_mode_vars(project_id),
+                **lab_naming(project_id),
+            ),
+        )
+        cp = _adopt_resumable(project_id, phase)
+        run_id = cp.phase_run_id if cp else _new_phase_run(project_id, phase, "reviewer_lab")
+        llm = resolve_llm("reviewer", project_id=project_id)
+        timeout_sec = int(settings.timeout_docker)
+        max_turns = max(1, int(getattr(settings, "lab_bringup_max_turns", 50) or 50))
+        try:
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "reviewer"), "reviewer"):
+                _finish_phase_run(run_id, "cancelled")
+                return
+            if lab_ready(load_env(project_id)):
+                clear_lab_bring_up_failed(project_id)
+                _finish_phase_run(run_id, "completed")
+                return
+            if cp:
+                loop = _loop_from_checkpoint(
+                    cp,
+                    cancel=cancel,
+                    stop_when=lambda st: lab_round_complete(project_id, st),
+                    timeout_sec=timeout_sec,
+                    llm=llm,
+                )
+                # Checkpoint resume may not carry max_turns; enforce here.
+                loop.max_turns = max_turns
+            else:
+                _consume_force_new(project_id, "reviewer")
+                _start_log_session(project_id, phase, "靶场拉起", role="reviewer_lab")
+                loop = AgentLoop(
+                    project_id=project_id,
+                    role="reviewer_lab",
+                    phase=phase,
+                    system_prompt=system,
+                    user_prompt=user,
+                    phase_run_id=run_id,
+                    cancel_event=_loop_cancel(project_id, "reviewer"),
+                    pause_event=_combined_pause(project_id, "reviewer"),
+                    timeout_sec=timeout_sec,
+                    context_window=_context_window(),
+                    stop_when=lambda st: lab_round_complete(project_id, st),
+                    llm=llm,
+                    max_turns=max_turns,
+                )
+            result = loop.run()
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            if result.cancelled:
+                _finish_phase_run(run_id, "cancelled")
+                return
+            if _should_skip_checkpoint(project_id, "reviewer"):
+                _finish_phase_run(run_id, "cancelled", "用户新跑")
+                return
+            if lab_ready(load_env(project_id)) or lab_round_complete(project_id, result.state):
+                if lab_ready(load_env(project_id)):
+                    clear_lab_bring_up_failed(project_id)
+                    mark_lab_setup_finished(project_id, via="bring-up")
+                    live_log.system(project_id, "靶场拉起成功，继续动态审核", phase=phase, role="reviewer_lab")
+                elif not lab_bring_up_failed(project_id):
+                    # FinishLab(skipped) already marked failure.
+                    pass
+                _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
+                return
+
+            reason = ""
+            if result.round_summary:
+                reason = str(result.round_summary).strip()[:2000]
+            if not reason:
+                reason = str(result.error or result.stop_reason or "拉起轮未完成").strip()
+            if result.stop_reason == "max_turns":
+                reason = f"超过 {max_turns} 轮仍未拉起：{reason}"
+            elif result.timed_out or result.stop_reason == "timeout":
+                reason = f"拉起轮超时：{reason}"
+            mark_lab_bring_up_failed(project_id, reason=reason, via="bring-up")
+            _finish_phase_run(run_id, "failed", error=reason)
+            live_log.system(
+                project_id,
+                "靶场拉起失败，后续审核强制仅静态",
+                phase=phase,
+                role="reviewer_lab",
+            )
+        finally:
+            if cp:
+                _release_adopted(project_id, cp.phase_run_id)
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"靶场拉起轮异常: {e}", phase=phase)
+        if not lab_bring_up_failed(project_id) and not lab_ready(load_env(project_id)):
+            mark_lab_bring_up_failed(project_id, reason=f"拉起轮异常: {e}", via="bring-up")
 
 
 def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:

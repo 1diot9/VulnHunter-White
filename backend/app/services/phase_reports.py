@@ -36,6 +36,7 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "fix": ("worker", "挖掘", "fix"),
     "reviewer": ("reviewer", "审核", "reviewer"),
     "reviewer-lab": ("reviewer", "审核", "lab"),
+    "reviewer-lab-bringup": ("reviewer", "审核", "lab"),
     "verifier": ("verifier", "验证", "verify"),
     "attack_chain": ("attack_chain", "攻击链", "chain"),
 }

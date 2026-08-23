@@ -264,6 +264,55 @@ def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
     assert coerce_evidence_level("局部验证", mode="harness") == "harness"
 
 
+def test_bring_up_failed_forces_static_tools_and_confirm(tmp_env, project):
+    from app.models import SessionLocal
+    from app.services.lab import mark_lab_bring_up_failed, save_env
+    from app.tools import native_shell_tool
+
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "status": "running",
+            "target_url": "http://127.0.0.1:18080",
+            "lab_ever_ready": True,
+        },
+    )
+    mark_lab_bring_up_failed(project, reason="start failed", via="test")
+    with SessionLocal() as db:
+        v = Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+            review_timeout_streak=0,
+            poc_code=_LAB_POC_OK,
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+    names = {
+        t["function"]["name"]
+        for t in registry.openai_tools_for_role("reviewer", project_id=project, vuln_id=vid)
+    }
+    assert native_shell_tool() not in names
+    conf = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=vid),
+        "ConfirmVuln",
+        {
+            "vuln_id": vid,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True, conf
+    assert conf["evidence_level"] == "static_only"
+    assert conf["status"] == "static_only"
+    assert "poc_run" not in conf
+
+
 def test_project_verify_mode_legacy_enabled_is_lab(tmp_env, project):
     from app.models import SessionLocal
 

@@ -33,6 +33,12 @@ LAB_NO_TOOL_NUDGE = (
     "无法搭建则 FinishLab(skipped=true, reason=...)。不要审核漏洞。"
 )
 
+LAB_BRINGUP_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。本轮只负责把已有 Docker 靶场拉起来，不要重建镜像、不要审核漏洞。"
+    "请立刻 docker inspect / docker start / docker compose up -d --no-build / 查日志改端口，"
+    "Write env/env.json；可访问后 FinishLab。无法拉起则 FinishLab(skipped=true, reason=...)。"
+)
+
 VERIFIER_NO_TOOL_NUDGE = (
     "你这一轮没有调用任何工具。请立刻 Read 漏洞报告。"
     "若本项目已有共享 FOFA 命中，直接按这些目标复测，不要为换语法再 FofaSearch；"
@@ -268,6 +274,8 @@ class AgentWatchdog:
     def note_no_tools(self) -> str:
         """Record a genuine no-tool-call turn and return the reminder to inject."""
         self.consecutive_no_tool_turns += 1
+        if self.phase in ("reviewer-lab-bringup", "reviewer_lab_bringup"):
+            return LAB_BRINGUP_NO_TOOL_NUDGE
         if self.phase in ("reviewer-lab", "reviewer_lab"):
             return LAB_NO_TOOL_NUDGE
         if self.phase == "verifier":

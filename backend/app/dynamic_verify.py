@@ -219,7 +219,13 @@ def static_after_review_timeouts(streak: Any) -> bool:
 
 
 def vuln_forces_static_review(*, project_id: int | None, vuln_id: int | None) -> bool:
-    if project_id is None or vuln_id is None:
+    if project_id is None:
+        return False
+    from .services.lab import lab_bring_up_failed
+
+    if lab_bring_up_failed(int(project_id)):
+        return True
+    if vuln_id is None:
         return False
     from .models import SessionLocal, Vuln
 

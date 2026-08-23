@@ -31,7 +31,14 @@ from ..services.asset_proof import (
     maybe_enrich_asset_proof,
     upgrade_project_fingerprints,
 )
-from ..services.lab import lab_ready, load_env, mark_lab_setup_finished
+from ..services.lab import (
+    clear_lab_bring_up_failed,
+    lab_bring_up_failed,
+    lab_ready,
+    load_env,
+    mark_lab_bring_up_failed,
+    mark_lab_setup_finished,
+)
 from ..services.paths import vuln_dir
 from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
 from ..services.poc_script import poc_cli_block_reason, read_poc_code, write_harness_code, write_poc_code
@@ -400,7 +407,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         proj = db.get(Project, ctx.project_id)
         stored_poc = vuln.poc_code or ""
         verify_mode = project_verify_mode(proj)
-        if static_after_review_timeouts(vuln.review_timeout_streak):
+        if static_after_review_timeouts(vuln.review_timeout_streak) or lab_bring_up_failed(
+            ctx.project_id
+        ):
             verify_mode = VERIFY_MODE_OFF
         evidence = coerce_evidence_level(evidence_raw, mode=verify_mode)
         audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
@@ -677,17 +686,27 @@ def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
     skipped = bool(args.get("skipped"))
     reason = str(args.get("reason") or args.get("notes") or "").strip()
     env = load_env(ctx.project_id)
+    bringup = str(ctx.phase or "") in ("reviewer-lab-bringup", "reviewer_lab_bringup")
     if not skipped and not lab_ready(env):
         return call_fail(
             "靶场尚未 accepted=true 且 status=running。先启动 Docker 并 Write env/env.json，"
             "或 FinishLab(skipped=true, reason=无法搭建的原因)"
         )
-    env = mark_lab_setup_finished(
-        ctx.project_id,
-        skipped=skipped,
-        notes=reason or None,
-        via="FinishLab",
-    )
+    if bringup and skipped:
+        env = mark_lab_bring_up_failed(
+            ctx.project_id,
+            reason=reason or "拉起轮 FinishLab(skipped)",
+            via="FinishLab-bringup",
+        )
+    else:
+        if bringup and not skipped:
+            clear_lab_bring_up_failed(ctx.project_id)
+        env = mark_lab_setup_finished(
+            ctx.project_id,
+            skipped=skipped,
+            notes=reason or None,
+            via="FinishLab-bringup" if bringup else "FinishLab",
+        )
     ctx.state["lab_done"] = True
     return {
         "ok": True,
@@ -695,6 +714,7 @@ def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "lab_ready": lab_ready(env),
         "lab_doc_path": "docs/lab.md",
         "setup_finished": True,
+        "bring_up_failed": bool(env.get("bring_up_failed")),
     }
 
 

@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     max_review_rejects: int = 1
     # Same pending vuln: after this many consecutive reviewer timeouts, next round is static-only.
     review_timeouts_before_static: int = 2
+    # Review-time Docker bring-up agent: max model turns after code start fails (wall clock still timeout_docker).
+    lab_bringup_max_turns: int = 50
     file_inject_max_bytes: int = 80 * 1024
     worker_round_history: int = 10
     todo_inject_interval: int = 50
