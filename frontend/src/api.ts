@@ -62,6 +62,28 @@ export type Project = {
   verifier_pending?: number
 }
 
+export type ProjectRunStatusCounts = {
+  all: number
+  running: number
+  paused: number
+  completed: number
+}
+
+export type ProjectList = {
+  items: Project[]
+  total: number
+  limit: number
+  offset: number
+  status_counts: ProjectRunStatusCounts
+}
+
+export type ProjectListQuery = {
+  limit?: number
+  offset?: number
+  q?: string
+  run_status?: 'all' | 'running' | 'paused' | 'completed'
+}
+
 export type CustomAuditMode = {
   id: number
   name: string
@@ -516,7 +538,15 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 }
 
 export const api = {
-  listProjects: () => request<Project[]>('/api/projects'),
+  listProjects: (query?: ProjectListQuery) => {
+    const params = new URLSearchParams()
+    if (query?.limit != null) params.set('limit', String(query.limit))
+    if (query?.offset != null) params.set('offset', String(query.offset))
+    if (query?.q) params.set('q', query.q)
+    if (query?.run_status) params.set('run_status', query.run_status)
+    const s = params.toString()
+    return request<ProjectList>(`/api/projects${s ? `?${s}` : ''}`)
+  },
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
   createGithub: (
     source_url: string,

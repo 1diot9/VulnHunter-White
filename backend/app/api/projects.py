@@ -6,7 +6,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, func
+from sqlalchemy import case, cast, func, or_
+from sqlalchemy.types import String
 
 from ..audit_mode import (
     AUDIT_MODE_CUSTOM,
@@ -49,7 +50,9 @@ from ..schemas import (
     PhaseReportList,
     PhaseRunOut,
     ProjectCreate,
+    ProjectListOut,
     ProjectOut,
+    ProjectRunStatusCounts,
     ProjectUpdate,
     normalize_manual_lab_prompt,
     normalize_worker_hint,
@@ -300,6 +303,59 @@ def _project_out(
     )
 
 
+def _apply_project_search(query, q: str):
+    tokens = [t for t in (q or "").strip().lower().split() if t]
+    if not tokens:
+        return query
+    for token in tokens:
+        pattern = f"%{token}%"
+        query = query.filter(
+            or_(
+                Project.name.ilike(pattern),
+                Project.identity.ilike(pattern),
+                Project.source_url.ilike(pattern),
+                Project.source_type.ilike(pattern),
+                Project.llm_model.ilike(pattern),
+                Project.custom_audit_mode_name.ilike(pattern),
+                Project.audit_mode.ilike(pattern),
+                Project.status.ilike(pattern),
+                cast(Project.id, String).ilike(pattern),
+            )
+        )
+    return query
+
+
+def _project_run_bucket(status: str, project_paused: bool) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "paused" or project_paused:
+        return "paused"
+    if status in {"cancelled", "error"}:
+        return "stopped"
+    return "running"
+
+
+def _filter_project_rows(
+    rows: list[Project],
+    run_status: str,
+) -> tuple[list[Project], ProjectRunStatusCounts]:
+    counts = ProjectRunStatusCounts()
+    filtered: list[Project] = []
+    for p in rows:
+        paused = bool(get_phase_states(p.id).get("project_paused"))
+        bucket = _project_run_bucket(p.status, paused)
+        counts.all += 1
+        if bucket == "running":
+            counts.running += 1
+        elif bucket == "paused":
+            counts.paused += 1
+        elif bucket == "completed":
+            counts.completed += 1
+        if run_status == "all" or run_status == bucket:
+            filtered.append(p)
+    return filtered, counts
+
+
 def _upload_zip_stem(filename: str | None) -> str:
     """Project name from the upload filename: basename only, never a path."""
     name = Path(str(filename or "").replace("\\", "/")).name
@@ -309,14 +365,32 @@ def _upload_zip_stem(filename: str | None) -> str:
     return stem or "upload"
 
 
-@router.get("", response_model=list[ProjectOut])
-def list_projects() -> list[ProjectOut]:
+@router.get("", response_model=ProjectListOut)
+def list_projects(
+    limit: int = Query(5, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    q: str = Query(""),
+    run_status: str = Query("all", pattern="^(all|running|paused|completed)$"),
+) -> ProjectListOut:
     with SessionLocal() as db:
-        rows = db.query(Project).order_by(Project.id.desc()).all()
-        ids = [p.id for p in rows]
+        query = _apply_project_search(db.query(Project), q)
+        rows = query.order_by(Project.id.desc()).all()
+        filtered, status_counts = _filter_project_rows(rows, run_status)
+        total = len(filtered)
+        page_rows = filtered[offset : offset + limit]
+        ids = [p.id for p in page_rows]
         summaries = _project_summaries(db, ids)
         exts = indexed_weight_exts(db, ids)
-        return [_project_out(db, p, summaries.get(p.id), exts.get(p.id, [])) for p in rows]
+        items = [
+            _project_out(db, p, summaries.get(p.id), exts.get(p.id, [])) for p in page_rows
+        ]
+        return ProjectListOut(
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            status_counts=status_counts,
+        )
 
 
 @router.get("/{project_id}", response_model=ProjectOut)

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PlusIcon, SearchIcon, XIcon } from 'lucide-react'
-import { api, type Project } from '../api'
+import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
+import { api, type Project, type ProjectRunStatusCounts } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { GithubLink } from '../components/GithubLink'
@@ -13,9 +13,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { githubRepoHref, githubRepoLabel } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatProjectStatus, formatTokenUsage } from '../lib/utils'
+import { githubRepoHref } from '../lib/github'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+
+const PAGE_SIZE = 5
+
+const EMPTY_STATUS_COUNTS: ProjectRunStatusCounts = {
+  all: 0,
+  running: 0,
+  paused: 0,
+  completed: 0,
+}
 
 function CreateProjectButton({ onClick }: { onClick: () => void }) {
   return (
@@ -39,69 +48,86 @@ const RUN_STATUS_FILTERS: { key: RunStatusFilter; label: string }[] = [
   { key: 'completed', label: '已完成' },
 ]
 
-function projectMatchesQuery(p: Project, query: string): boolean {
-  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (!tokens.length) return true
-  const haystack = [
-    p.name,
-    String(p.id),
-    `#${p.id}`,
-    p.identity,
-    p.source_url,
-    p.source_type,
-    p.llm_model || '全局模型',
-    formatAuditMode(p.audit_mode, p.custom_audit_mode_name),
-    p.custom_audit_mode_name,
-    formatMiningPaths(p),
-    formatProjectRunStatus(p.status, p.project_paused),
-    formatProjectStatus(p.status),
-    githubRepoLabel(p),
-  ]
-    .filter(Boolean)
-    .join('\n')
-    .toLowerCase()
-  return tokens.every((token) => haystack.includes(token))
-}
-
-function projectMatchesRunStatus(p: Project, filter: RunStatusFilter): boolean {
-  if (filter === 'all') return true
-  const run = formatProjectRunStatus(p.status, p.project_paused)
-  if (filter === 'running') return run === '运行中'
-  if (filter === 'paused') return run === '已暂停'
-  return run === '已完成'
-}
-
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
+  const [total, setTotal] = useState(0)
+  const [statusCounts, setStatusCounts] = useState<ProjectRunStatusCounts>(EMPTY_STATUS_COUNTS)
+  const [page, setPage] = useState(0)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
 
-  const refresh = () => api.listProjects().then(setProjects).catch((e) => setError(String(e)))
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  useEffect(() => startVisibilityPoll(refresh, 4000), [])
-
-  const searchedProjects = useMemo(
-    () => projects.filter((p) => projectMatchesQuery(p, search)),
-    [projects, search],
+  const applyListData = useCallback(
+    (data: Awaited<ReturnType<typeof api.listProjects>>) => {
+      setProjects(data.items)
+      setTotal(data.total)
+      setStatusCounts(data.status_counts)
+      const nextPageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
+      if (page >= nextPageCount) setPage(Math.max(0, nextPageCount - 1))
+    },
+    [page],
   )
 
-  const statusCounts = useMemo(() => {
-    const counts = { all: searchedProjects.length, running: 0, paused: 0, completed: 0 }
-    for (const p of searchedProjects) {
-      const run = formatProjectRunStatus(p.status, p.project_paused)
-      if (run === '运行中') counts.running += 1
-      else if (run === '已暂停') counts.paused += 1
-      else if (run === '已完成') counts.completed += 1
+  const fetchProjects = useCallback(
+    (showLoading = false) => {
+      if (showLoading) setLoading(true)
+      return api
+        .listProjects({
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+          q: search,
+          run_status: statusFilter,
+        })
+        .then(applyListData)
+        .catch((e) => setError(String(e)))
+        .finally(() => {
+          if (showLoading) setLoading(false)
+        })
+    },
+    [page, search, statusFilter, applyListData],
+  )
+
+  useLayoutEffect(() => {
+    setLoading(true)
+  }, [page, search, statusFilter])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = (showLoading: boolean) =>
+      api
+        .listProjects({
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+          q: search,
+          run_status: statusFilter,
+        })
+        .then((data) => {
+          if (!cancelled) applyListData(data)
+        })
+        .catch((e) => {
+          if (!cancelled) setError(String(e))
+        })
+        .finally(() => {
+          if (!cancelled && showLoading) setLoading(false)
+        })
+
+    load(true)
+
+    const stopPoll = startVisibilityPoll(() => {
+      if (cancelled) return
+      return load(false)
+    }, 4000)
+
+    return () => {
+      cancelled = true
+      stopPoll()
     }
-    return counts
-  }, [searchedProjects])
-
-  const filteredProjects = useMemo(
-    () => searchedProjects.filter((p) => projectMatchesRunStatus(p, statusFilter)),
-    [searchedProjects, statusFilter],
-  )
+  }, [page, search, statusFilter, applyListData])
 
   return (
     <div className="w-full space-y-6">
@@ -119,7 +145,10 @@ export default function HomePage() {
       <CreateProjectDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={refresh}
+        onCreated={() => {
+          setPage(0)
+          fetchProjects(true)
+        }}
       />
 
       <div className="space-y-3">
@@ -128,7 +157,10 @@ export default function HomePage() {
           <Input
             className="pr-8 pl-8"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setPage(0)
+              setSearch(e.target.value)
+            }}
             placeholder="搜索项目名称、仓库、模式、模型、状态…"
             aria-label="搜索审计项目"
           />
@@ -137,7 +169,10 @@ export default function HomePage() {
               type="button"
               className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
               aria-label="清除搜索"
-              onClick={() => setSearch('')}
+              onClick={() => {
+                setPage(0)
+                setSearch('')
+              }}
             >
               <XIcon className="size-4" />
             </button>
@@ -148,7 +183,10 @@ export default function HomePage() {
             <Button
               key={key}
               variant={statusFilter === key ? 'default' : 'outline'}
-              onClick={() => setStatusFilter(key)}
+              onClick={() => {
+                setPage(0)
+                setStatusFilter(key)
+              }}
             >
               {label} {statusCounts[key]}
             </Button>
@@ -158,8 +196,17 @@ export default function HomePage() {
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
 
-      <div className="flex w-full flex-col gap-3">
-        {filteredProjects.map((p) => {
+      <div className="flex w-full min-h-[12rem] flex-col gap-3">
+        {loading ? (
+          <Card className="w-full">
+            <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+              <Loader2Icon className="size-8 animate-spin" aria-hidden />
+              <span className="text-sm">加载项目列表…</span>
+            </CardContent>
+          </Card>
+        ) : null}
+        {!loading
+          ? projects.map((p) => {
           const runStatus = formatProjectRunStatus(p.status, p.project_paused)
           return (
           <Card key={p.id} className="w-full">
@@ -206,7 +253,7 @@ export default function HomePage() {
                     projectId={p.id}
                     projectName={p.name}
                     size="sm"
-                    onDeleted={refresh}
+                    onDeleted={() => fetchProjects(true)}
                   />
                 </div>
               </CardAction>
@@ -255,8 +302,9 @@ export default function HomePage() {
             </CardContent>
           </Card>
           )
-        })}
-        {filteredProjects.length === 0 ? (
+        })
+          : null}
+        {!loading && projects.length === 0 ? (
           <Card className="w-full">
             <CardContent className="flex flex-col items-start gap-3 py-8 text-sm text-muted-foreground">
               {search.trim() || statusFilter !== 'all' ? (
@@ -271,6 +319,36 @@ export default function HomePage() {
           </Card>
         ) : null}
       </div>
+
+      {total > PAGE_SIZE ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <span>
+            第 {page + 1} / {pageCount} 页，共 {total} 项
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || page <= 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              aria-label="上一页"
+            >
+              <ChevronLeftIcon className="size-4" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || page + 1 >= pageCount}
+              onClick={() => setPage((p) => p + 1)}
+              aria-label="下一页"
+            >
+              下一页
+              <ChevronRightIcon className="size-4" />
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -93,7 +93,7 @@ export default function VulnsPage() {
       .catch(() => {})
 
   useEffect(() => {
-    api.listProjects().then(setProjects).catch(() => {})
+    api.listProjects({ limit: 200 }).then((data) => setProjects(data.items)).catch(() => {})
   }, [])
 
   useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter, trackingFilter])

@@ -209,7 +209,47 @@ def test_projects_list_empty(tmp_env):
     with TestClient(app) as client:
         r = client.get("/api/projects")
         assert r.status_code == 200
-        assert r.json() == []
+        body = r.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+        assert body["limit"] == 5
+        assert body["status_counts"] == {
+            "all": 0,
+            "running": 0,
+            "paused": 0,
+            "completed": 0,
+        }
+
+
+def test_projects_list_pagination(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import SessionLocal, Project
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        for i in range(7):
+            db.add(
+                Project(
+                    name=f"proj-{i}",
+                    source_type="zip",
+                    status="pending",
+                )
+            )
+        db.commit()
+
+    with TestClient(app) as client:
+        first = client.get("/api/projects", params={"limit": 5, "offset": 0}).json()
+        assert len(first["items"]) == 5
+        assert first["total"] == 7
+        assert first["limit"] == 5
+        assert first["offset"] == 0
+        assert first["status_counts"]["all"] == 7
+
+        second = client.get("/api/projects", params={"limit": 5, "offset": 5}).json()
+        assert len(second["items"]) == 2
+        assert second["total"] == 7
+        assert second["offset"] == 5
 
 
 def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
@@ -636,8 +676,8 @@ def test_project_weight_exts_marks_agent_added(tmp_env, project):
             {"ext": ".ftl", "agent_added": True, "files": 2},
             {"ext": ".xml", "agent_added": True, "files": 1},
         ]
-        listed = client.get("/api/projects").json()
-        row = next(p for p in listed if p["id"] == project)
+        listed = client.get("/api/projects", params={"limit": 100}).json()
+        row = next(p for p in listed["items"] if p["id"] == project)
         assert row["weight_exts"] == body["weight_exts"]
 
 

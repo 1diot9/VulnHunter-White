@@ -306,6 +306,21 @@ class ProjectOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProjectRunStatusCounts(BaseModel):
+    all: int = 0
+    running: int = 0
+    paused: int = 0
+    completed: int = 0
+
+
+class ProjectListOut(BaseModel):
+    items: list[ProjectOut] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 5
+    offset: int = 0
+    status_counts: ProjectRunStatusCounts = Field(default_factory=ProjectRunStatusCounts)
+
+
 class VulnOut(BaseModel):
     id: int
     project_id: int
