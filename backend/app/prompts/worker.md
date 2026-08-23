@@ -86,7 +86,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 6. 系统按当前启发式范围结束挖掘阶段（默认全部未 skip 文件；轻量模式仅权重 100 的入口），无需调用结束工具。范围内焦点审完后不要再 SubmitVuln。
 
 ## PoC 要求
-- poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），并必须提供 `--proxy`（空则直连）且接到全部 HTTP 请求；有 `--proxy` 时访问 `127.0.0.1`/`localhost` 也必须强制走代理（覆盖 `proxy_bypass`，不要本机旁路）。不要写死靶场地址或代理。这是给 Reviewer / Verifier 换目标复测的**静态草案**；有靶场时由 Reviewer 收口，不要指望自己能动态调通。
+- poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），并必须提供 `--proxy`（空则直连）且接到全部 HTTP 请求；有 `--proxy` 时访问 `127.0.0.1`/`localhost` 也必须强制走代理（覆盖 `proxy_bypass`，不要本机旁路）。HTTPS 须默认跳过证书校验并在 `https://` 目标打印告警（可选 `--strict-ssl`）。不要写死靶场地址或代理。这是给 Reviewer / Verifier 换目标复测的**静态草案**；有靶场时由 Reviewer 收口，不要指望自己能动态调通。
 - 漏洞参数也走 CLI：RCE / 命令注入必须支持 `-c/--cmd` 执行自定义命令，**有回显则把命令输出打印到 stdout**；文件读 `-f/--file`、SSRF `--ssrf-url`（有回显打印目标正文，仅差别则打印通/不通对照）、需登录 `--cookie`/`--token` 等同理，并给安全默认值，使只传 `-u` 也能打出代表证据。
 - http_request 为完整 HTTP 请求包。
 - PoC 必须按静态分析证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。

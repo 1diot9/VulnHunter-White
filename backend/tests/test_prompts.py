@@ -221,6 +221,8 @@ def test_poc_prompt_requires_cli_parameters():
     assert "不要写死" in poc
     assert "退出码 0" in poc
     assert "系统再执行" in poc
+    assert "--strict-ssl" in poc
+    assert "跳过 TLS 证书校验" in poc
     reviewer = load_prompt("reviewer.md")
     assert "poc_code" in reviewer
     assert "-c/--cmd" in reviewer

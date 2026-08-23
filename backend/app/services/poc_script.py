@@ -13,6 +13,10 @@ _FORCE_LOCAL_PROXY_RE = re.compile(
     r"proxy_bypass|should_bypass_proxies|never_bypass|trust_env",
     re.I,
 )
+_SSL_HANDLING_RE = re.compile(
+    r"check_hostname|CERT_NONE|verify\s*=\s*False|--strict-ssl|HTTPSHandler\s*\(\s*context\s*=",
+    re.I,
+)
 _HTTP_HINT_RE = re.compile(
     r"requests\.|httpx\.|urllib|aiohttp|http\.client",
     re.I,
@@ -22,6 +26,7 @@ POC_CLI_ERROR = (
     "poc_code 必须用 argparse 接收目标（-u/--url）和 HTTP 代理（--proxy，空则直连），"
     "不要写死地址或代理；有 --proxy 时 127.0.0.1/localhost 也必须强制走代理"
     "（覆盖 urllib.request.proxy_bypass，勿让本机地址旁路）；"
+    "HTTPS 须默认跳过证书校验并在 https:// 目标打印告警（--strict-ssl 可选恢复校验）；"
     "RCE 另须支持 -c/--cmd，有回显须打印命令输出。"
 )
 
@@ -49,6 +54,7 @@ def poc_cli_block_reason(poc_code: str | None) -> str | None:
         _has_url_flag(text)
         and _has_proxy_flag(text)
         and _FORCE_LOCAL_PROXY_RE.search(text)
+        and _SSL_HANDLING_RE.search(text)
     ):
         return None
     return POC_CLI_ERROR

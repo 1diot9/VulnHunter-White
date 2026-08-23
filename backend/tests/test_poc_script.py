@@ -14,12 +14,14 @@ def test_poc_cli_allows_stub_and_parameterized_http():
     assert poc_cli_block_reason("print('poc')\n") is None
     assert poc_cli_block_reason("") is None
     ok = """
-import argparse, urllib.request
+import argparse, ssl, urllib.request
 p = argparse.ArgumentParser()
 p.add_argument("-u", "--url", required=True)
 p.add_argument("--proxy", default="")
+p.add_argument("--strict-ssl", action="store_true")
 p.add_argument("-c", "--cmd", default="id")
 urllib.request.proxy_bypass = lambda host, **kw: False
+urllib.request.HTTPSHandler(context=ssl.create_default_context())
 args = p.parse_args()
 print(urllib.request.urlopen(args.url).read())
 """
@@ -54,6 +56,19 @@ print(opener.open(args.url).read())
     assert poc_cli_block_reason(hardcoded_proxy) == POC_CLI_ERROR
 
 
+def test_poc_cli_rejects_http_without_ssl_handling():
+    no_ssl = """
+import argparse, urllib.request
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+urllib.request.proxy_bypass = lambda host, **kw: False
+args = p.parse_args()
+print(urllib.request.urlopen(args.url).read())
+"""
+    assert poc_cli_block_reason(no_ssl) == POC_CLI_ERROR
+
+
 def test_poc_cli_rejects_proxy_that_bypasses_localhost():
     bypasses = """
 import argparse, urllib.request
@@ -81,6 +96,7 @@ import argparse
 p = argparse.ArgumentParser()
 p.add_argument("-u", "--url", required=True)
 p.add_argument("--proxy", default="")
+p.add_argument("--strict-ssl", action="store_true")
 args = p.parse_args()
 print(args.url)
 """
