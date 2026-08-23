@@ -47,6 +47,13 @@ from .watchdog import (
     identical_redirect_nudge,
     identical_tool_nudge,
 )
+from ..services.conversation_archive import db_phase_to_log_phase
+from ..services.conversation_steer import (
+    STEER_USER_PREFIX,
+    consume_steer_messages,
+    register_loop,
+    unregister_loop,
+)
 
 INTERRUPT_RESUME = (
     "刚才因暂停或进程中断。请从中断处继续完成任务，不要无故重来。"
@@ -348,6 +355,15 @@ class AgentLoop:
             return self._run_loop()
 
     def _run_loop(self) -> LoopResult:
+        if not self.silent:
+            register_loop(self)
+        try:
+            return self._run_loop_inner()
+        finally:
+            if not self.silent:
+                unregister_loop(self)
+
+    def _run_loop_inner(self) -> LoopResult:
         deadline = time.time() + max(60, self.timeout_sec)
         if self._initial_messages:
             messages: list[dict[str, Any]] = list(self._initial_messages)
@@ -413,6 +429,7 @@ class AgentLoop:
                 self._persist(messages)
 
             self._maybe_inject_todolist(messages)
+            self._maybe_inject_steer(messages)
 
             try:
                 resp, usage, retry_after = self._chat(messages, tools, remaining)
@@ -1006,6 +1023,25 @@ class AgentLoop:
 
     def _attach_current_todos(self, summary: str) -> str:
         return attach_todo_list(summary, load_todos(self), include_empty=True)
+
+    def _maybe_inject_steer(self, messages: list[dict[str, Any]]) -> None:
+        if self.silent:
+            return
+        log_phase = db_phase_to_log_phase(self.phase)
+        pending = consume_steer_messages(self.project_id, log_phase)
+        if not pending:
+            return
+        for text in pending:
+            block = f"{STEER_USER_PREFIX}{text}\n\n请按以上用户引导调整后续行动，不要无故重来。"
+            messages.append({"role": "user", "content": block})
+            preview = text[:120] + ("…" if len(text) > 120 else "")
+            self._live.system(
+                self.project_id,
+                f"用户引导：{preview}",
+                phase=self.phase,
+                role=self.role,
+            )
+        self._persist(messages)
 
     def _maybe_inject_todolist(self, messages: list[dict[str, Any]]) -> None:
         interval = max(0, int(getattr(settings, "todo_inject_interval", 50) or 0))

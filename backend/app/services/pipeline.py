@@ -118,6 +118,7 @@ _verifier_inflight: dict[int, bool] = {}
 _attack_chain_inflight: dict[int, bool] = {}
 _fix_inflight: dict[int, set[int]] = {}
 _adopted_phase_runs: set[tuple[int, int]] = set()
+_pending_conversation_message: dict[tuple[int, str], str] = {}
 _fast_prepare_threads: dict[int, threading.Thread] = {}
 _fast_last_dir: dict[int, str] = {}
 _DB_LOCK_RETRY_SECONDS = 1.0
@@ -1083,7 +1084,12 @@ def _finish_phase_run(run_id: int, status: str, error: str | None = None) -> Non
             pr.error = error
             pr.finished_at = utcnow()
             db.commit()
-    if project_id is not None:
+    if project_id is not None and phase:
+        cp = load_checkpoint(project_id, run_id)
+        if cp and cp.messages and status in ("completed", "failed", "cancelled"):
+            from .conversation_archive import archive_checkpoint
+
+            archive_checkpoint(project_id, phase, cp)
         if phase == "reviewer" and status == "completed":
             archive_reviewer_checkpoint(project_id, run_id)
         clear_checkpoint(project_id, run_id)
@@ -1558,6 +1564,200 @@ def _note_reviewer_round_end(project_id: int, vuln_id: int | None, result: Any) 
         )
 
 
+def _conversation_hint_block(project_id: int, phase: str) -> str:
+    from .conversation_archive import db_phase_to_log_phase
+
+    lp = db_phase_to_log_phase(phase)
+    text = _pending_conversation_message.pop((project_id, lp), "")
+    if not text:
+        return ""
+    return (
+        "## 用户对话指示\n"
+        "以下为用户在本小阶段新开或接续对话时提供的额外说明。请在本轮分析中参考；"
+        "不要因此偏离本轮焦点任务。\n\n"
+        f"{text}\n\n"
+    )
+
+
+def _set_conversation_message(project_id: int, log_phase: str, message: str) -> None:
+    from .conversation_archive import normalize_log_phase
+
+    text = (message or "").strip()
+    if text:
+        _pending_conversation_message[(project_id, normalize_log_phase(log_phase))] = text
+
+
+def _log_phase_control(log_phase: str) -> str:
+    from .conversation_archive import normalize_log_phase
+
+    lp = normalize_log_phase(log_phase)
+    if lp.startswith("recon"):
+        return "recon"
+    if lp in ("mine", "fast", "bypass", "fix"):
+        return "worker"
+    if lp.startswith("reviewer"):
+        return "reviewer"
+    if lp == "verifier":
+        return "verifier"
+    if lp == "attack_chain":
+        return "attack_chain"
+    return control_phase(lp)
+
+
+def _append_continue_user_message(cp: LoopCheckpoint, message: str) -> None:
+    if message:
+        content = f"## 用户接续指示\n{message}\n\n请从中断处继续。"
+    else:
+        content = "用户请求接续此对话，请从中断处继续。"
+    cp.messages = list(cp.messages) + [{"role": "user", "content": content}]
+
+
+def request_conversation_continue(project_id: int, log_phase: str, message: str = "") -> dict[str, Any]:
+    """Resume the latest conversation for a log sub-phase from checkpoint or archive."""
+    from .conversation_archive import load_archived, log_phase_to_db_phases, normalize_log_phase
+
+    lp = normalize_log_phase(log_phase)
+    cp: LoopCheckpoint | None = None
+    run_id: int | None = None
+    for db_phase in log_phase_to_db_phases(lp):
+        for pr in list_resumable_runs(project_id, db_phase):
+            loaded = load_checkpoint(project_id, pr.id)
+            if loaded and loaded.messages:
+                cp = loaded
+                run_id = pr.id
+                break
+        if cp:
+            break
+    from_archive = False
+    if not cp:
+        cp = load_archived(project_id, lp)
+        from_archive = cp is not None
+    if not cp:
+        raise ValueError("没有可接续的对话")
+
+    _append_continue_user_message(cp, message)
+    if from_archive:
+        run_id = _new_phase_run(
+            project_id,
+            cp.phase,
+            cp.role,
+            worker_id=cp.worker_id,
+            vuln_id=cp.vuln_id,
+            file_path=cp.file_path,
+        )
+        cp.phase_run_id = run_id
+    else:
+        assert run_id is not None
+        cp.phase_run_id = run_id
+    save_checkpoint(cp, status="running")
+    set_phase_run_status(run_id, "running")
+
+    control = _log_phase_control(lp)
+    was_paused = _pause_event(project_id).is_set()
+    _pause_event(project_id).clear()
+    _phase_pause_event(project_id, control).clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    if not was_paused:
+        _set_project_running(project_id)
+    elif control != "recon":
+        for p in CONTROL_PHASES:
+            if p != control:
+                _phase_pause_event(project_id, p).set()
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "paused":
+                proj.status = "recon" if not proj.recon_done else "auditing"
+                proj.error = None
+                db.commit()
+
+    live_log.system(project_id, f"用户接续对话（{lp}）", phase=cp.phase, role=cp.role)
+    start_audit(project_id)
+    return {"ok": True, "action": "continue", "log_phase": lp, **get_phase_states(project_id)}
+
+
+def request_conversation_new(project_id: int, log_phase: str, message: str = "") -> dict[str, Any]:
+    """Start a fresh conversation round for a log sub-phase."""
+    from .conversation_archive import clear_archived, log_phase_to_db_phases, normalize_log_phase
+    from .conversation_steer import is_loop_running
+
+    lp = normalize_log_phase(log_phase)
+    _set_conversation_message(project_id, lp, message)
+
+    if lp == "recon-map":
+        if not recon_map_ready(project_id):
+            raise ValueError("地图/鉴权尚未完成，完成后才能新开更新")
+        return request_recon_subphase_rerun(project_id, "map")
+    if lp == "recon-old-vuln":
+        if not recon_old_vulns_ready(project_id):
+            raise ValueError("历史漏洞尚未完成，完成后才能新开更新")
+        return request_recon_subphase_rerun(project_id, "old_vulns")
+    if lp == "reviewer-lab":
+        if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+            raise ValueError("仅靶场动态验证模式可新开环境搭建")
+        if is_loop_running(project_id, lp):
+            _abandon_db_phase_runs(project_id, ("reviewer-lab",), reason="用户新开环境搭建")
+            _bump_phase_generation(project_id, "reviewer")
+            reset_lab_setup_for_retry(project_id, message)
+            _force_new_run.add((project_id, "reviewer"))
+        elif lab_setup_failed(project_id) and lab_setup_finished(project_id):
+            return request_lab_setup_retry(project_id, message)
+        elif not lab_setup_finished(project_id):
+            raise ValueError("环境搭建正在进行中，请使用引导")
+        else:
+            _abandon_db_phase_runs(project_id, ("reviewer-lab",), reason="用户新开环境搭建")
+            reset_lab_setup_for_retry(project_id, message)
+            _force_new_run.add((project_id, "reviewer"))
+        was_paused = _pause_event(project_id).is_set()
+        _phase_pause_event(project_id, "reviewer").clear()
+        cancel = _cancel_event(project_id)
+        if cancel.is_set():
+            cancel.clear()
+        if not was_paused:
+            _set_project_running(project_id)
+        live_log.system(project_id, "用户新开环境搭建对话", phase="reviewer-lab", role="reviewer_lab")
+        _ensure_reviewer(project_id, cancel)
+        return {"ok": True, "action": "new", "log_phase": lp, **get_phase_states(project_id)}
+
+    db_phases = log_phase_to_db_phases(lp)
+    control = _log_phase_control(lp)
+
+    if is_loop_running(project_id, lp):
+        _abandon_db_phase_runs(project_id, db_phases, reason="用户新开对话")
+        _bump_phase_generation(project_id, control)
+
+    _force_new_run.add((project_id, control))
+    clear_archived(project_id, lp)
+    for db_phase in db_phases:
+        _abandon_db_phase_runs(project_id, (db_phase,), reason="用户新开对话")
+
+    was_paused = _pause_event(project_id).is_set()
+    _pause_event(project_id).clear()
+    _phase_pause_event(project_id, control).clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    if not was_paused:
+        _set_project_running(project_id)
+    else:
+        for p in CONTROL_PHASES:
+            if p != control:
+                _phase_pause_event(project_id, p).set()
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "paused":
+                proj.status = "recon" if control == "recon" and not proj.recon_done else "auditing"
+                if control == "recon" and not proj.recon_done:
+                    proj.status = "recon"
+                proj.error = None
+                db.commit()
+
+    live_log.system(project_id, f"用户新开对话（{lp}）", phase=db_phases[0] if db_phases else lp)
+    start_audit(project_id)
+    return {"ok": True, "action": "new", "log_phase": lp, **get_phase_states(project_id)}
+
+
 def _worker_hint_block(project_id: int) -> str:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -1622,6 +1822,9 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
         policy = inject_security_policy_block(project_id)
         if policy:
             text = f"{policy}{text}"
+    conv = _conversation_hint_block(project_id, phase)
+    if conv:
+        text = f"{text.rstrip()}\n\n{conv}"
     if phase in _WORKER_HINT_PHASES:
         hint = _worker_hint_block(project_id)
         if hint:

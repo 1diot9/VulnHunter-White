@@ -112,6 +112,18 @@ export type PhaseState = {
   force_new?: boolean
 }
 
+export type ConversationState = {
+  log_phase: string
+  running: boolean
+  can_continue: boolean
+  can_new: boolean
+  can_steer: boolean
+  has_archived: boolean
+  latest_session: number
+}
+
+export type ConversationAction = 'steer' | 'continue' | 'new'
+
 export type VulnTrackingStatus = 'none' | 'submitted' | 'ignored'
 
 export type Vuln = {
@@ -678,6 +690,23 @@ export const api = {
     request<{ ok: boolean }>(`/api/settings/custom-audit-modes/${id}`, { method: 'DELETE' }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
+  getConversationState: (id: number, logPhase: string) =>
+    request<ConversationState>(
+      `/api/projects/${id}/conversation?log_phase=${encodeURIComponent(logPhase)}`,
+    ),
+  postConversation: (
+    id: number,
+    body: { log_phase: string; action: ConversationAction; message?: string },
+  ) =>
+    request(`/api/projects/${id}/conversation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        log_phase: body.log_phase,
+        action: body.action,
+        message: body.message ?? '',
+      }),
+    }),
   rerunReconSubphase: (id: number, subphase: 'map' | 'old_vulns') =>
     request(`/api/projects/${id}/recon-subphases/${subphase}/rerun`, { method: 'POST' }),
   retryLabSetup: (id: number, userMessage = '') =>

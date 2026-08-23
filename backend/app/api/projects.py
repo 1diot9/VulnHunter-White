@@ -58,6 +58,9 @@ from ..schemas import (
     normalize_worker_hint,
     normalize_lab_retry_message,
     LabSetupRetryBody,
+    ConversationBody,
+    ConversationStateOut,
+    normalize_conversation_message,
 )
 from ..services.ingest import indexed_weight_exts
 from ..dynamic_verify import is_lab_mode, project_verify_mode
@@ -67,6 +70,7 @@ from ..services.llm_settings import normalize_project_llm_model
 from ..services import custom_audit_modes as cam
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
+from ..services.conversation import get_conversation_state, request_conversation
 from ..services.pipeline import (
     get_phase_states,
     note_audit_mode_changed,
@@ -837,6 +841,28 @@ def project_phase_state(project_id: int) -> dict:
         if not db.get(Project, project_id):
             raise HTTPException(404, "项目不存在")
     return get_phase_states(project_id)
+
+
+@router.get("/{project_id}/conversation", response_model=ConversationStateOut)
+def get_project_conversation(
+    project_id: int,
+    log_phase: str = Query(..., min_length=1),
+) -> ConversationStateOut:
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    return ConversationStateOut(**get_conversation_state(project_id, log_phase))
+
+
+@router.post("/{project_id}/conversation")
+def post_project_conversation(project_id: int, body: ConversationBody) -> dict:
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    try:
+        return request_conversation(project_id, body.log_phase, body.action, body.message)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.post("/{project_id}/recon-subphases/{subphase}/rerun")

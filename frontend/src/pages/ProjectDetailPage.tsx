@@ -5,8 +5,7 @@ import { AuditModeSelect } from '../components/AuditModeSelect'
 import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { ResetProgressButton } from '../components/ResetProgressButton'
-import { ReconDocRerunButtons } from '../components/ReconDocRerunButtons'
-import { LabSetupRetryButton } from '../components/LabSetupRetryButton'
+import { ConversationComposer } from '../components/ConversationComposer'
 import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
@@ -433,20 +432,6 @@ export default function ProjectDetailPage() {
             <Button variant="outline" onClick={() => api.resume(projectId)}>
               全部续跑
             </Button>
-            <ReconDocRerunButtons
-              project={project}
-              onStarted={(subId) => {
-                setTab('logs')
-                selectPhase(subId === 'map' ? 'recon-map' : 'recon-old-vuln')
-              }}
-            />
-            <LabSetupRetryButton
-              project={project}
-              onStarted={() => {
-                setTab('logs')
-                selectPhase('reviewer-lab')
-              }}
-            />
             <ResetProgressButton project={project} onReset={setProject} />
             <Button variant="destructive" onClick={() => api.cancel(projectId)}>
               停止
@@ -640,6 +625,19 @@ export default function ProjectDetailPage() {
               displaySessionRef.current = next
               setDisplaySession(next)
               setLogSession(n)
+            }}
+          />
+          <ConversationComposer
+            projectId={projectId}
+            logPhase={phaseFilter}
+            session={displaySession}
+            sessionCount={sessionCount}
+            projectStatus={project.status}
+            onSent={() => {
+              followLiveRef.current = true
+              displaySessionRef.current = sessionCountRef.current
+              setDisplaySession(sessionCountRef.current)
+              setLogSession(null)
             }}
           />
           </CardContent>

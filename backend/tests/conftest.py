@@ -65,6 +65,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.sink_queue as sink_queue
     import app.services.demo_seed as demo_seed
     import app.services.bypass_queue as bypass_queue
+    import app.services.conversation as conversation_service
 
     for mod in (
         models,
@@ -91,6 +92,7 @@ def tmp_env(tmp_path, monkeypatch):
         pipeline,
         sink_queue,
         bypass_queue,
+        conversation_service,
         demo_seed,
         agent_loop,
         agent_checkpoint,

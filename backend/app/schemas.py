@@ -188,6 +188,31 @@ def normalize_lab_retry_message(raw: Any) -> str:
     return text
 
 
+def normalize_conversation_message(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if "\x00" in text:
+        raise ValueError("消息必须是文本，不能包含空字节")
+    if len(text) > WORKER_HINT_MAX:
+        raise ValueError(f"消息过长，最多 {WORKER_HINT_MAX} 字")
+    return text
+
+
+class ConversationBody(BaseModel):
+    log_phase: str = Field(..., min_length=1, max_length=64)
+    action: Literal["steer", "continue", "new"]
+    message: str = Field(default="", max_length=WORKER_HINT_MAX)
+
+
+class ConversationStateOut(BaseModel):
+    log_phase: str
+    running: bool
+    can_continue: bool
+    can_new: bool
+    can_steer: bool
+    has_archived: bool
+    latest_session: int = 1
+
+
 class LabSetupRetryBody(BaseModel):
     user_message: str = Field(default="", max_length=WORKER_HINT_MAX)
 

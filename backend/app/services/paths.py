@@ -82,6 +82,8 @@ def ensure_project_dirs(project_id: int) -> Path:
         "src",
         "workspace",
         "workspace/checkpoints",
+        "workspace/last-conversation",
+        "workspace/steer",
         "workspace/rounds",
         "docs",
         "docs/old-vulns",
@@ -141,6 +143,18 @@ def workspace_dir(project_id: int) -> Path:
 
 def checkpoints_dir(project_id: int) -> Path:
     path = workspace_dir(project_id) / "checkpoints"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def last_conversation_dir(project_id: int) -> Path:
+    path = workspace_dir(project_id) / "last-conversation"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def steer_dir(project_id: int) -> Path:
+    path = workspace_dir(project_id) / "steer"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
