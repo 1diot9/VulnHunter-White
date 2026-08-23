@@ -60,14 +60,17 @@ from ..prompts import load_prompt, render_prompt
 from ..services.custom_audit_modes import project_custom_overlay
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
+    clear_lab_retry_flags,
     debug_ports_for_runtime,
     lab_naming,
     lab_ready,
     lab_round_complete,
+    lab_setup_failed,
     lab_setup_finished,
     load_env,
     mark_lab_setup_finished,
     recreate_lab,
+    reset_lab_setup_for_retry,
 )
 from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
@@ -625,6 +628,52 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
         _threads.setdefault(project_id, []).append(rt)
     rt.start()
     return {"ok": True, "subphase": sub, "label": label, **get_phase_states(project_id)}
+
+
+def request_lab_setup_retry(project_id: int, user_message: str = "") -> dict[str, Any]:
+    """Force another reviewer-lab round after setup retries were exhausted."""
+    if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+        raise ValueError("仅靶场动态验证模式可续跑环境搭建")
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可续跑环境搭建")
+
+    if not lab_setup_failed(project_id):
+        raise ValueError("环境搭建尚未结束或靶场已就绪，无需续跑")
+    if not lab_setup_finished(project_id):
+        raise ValueError("环境搭建正在进行中")
+
+    _abandon_db_phase_runs(project_id, ("reviewer-lab",), reason="用户续跑环境搭建")
+    _force_new_run.add((project_id, "reviewer"))
+    reset_lab_setup_for_retry(project_id, user_message)
+
+    was_paused = _pause_event(project_id).is_set()
+    _phase_pause_event(project_id, "reviewer").clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    if not was_paused:
+        _set_project_running(project_id)
+    else:
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "paused":
+                proj.status = "auditing"
+                proj.error = None
+                db.commit()
+
+    live_log.system(
+        project_id,
+        "用户请求续跑环境搭建",
+        phase="reviewer-lab",
+        role="reviewer_lab",
+    )
+    _ensure_reviewer(project_id, cancel)
+    return {"ok": True, **get_phase_states(project_id)}
 
 
 def _run_recon_subphase_rerun(project_id: int, subphase: str, restore_pause: bool) -> None:
@@ -1405,6 +1454,7 @@ _POC_PROMPT_PHASES = frozenset(
     {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
 )
 _WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
+_LAB_HINT_PHASES = frozenset({"reviewer-lab"})
 
 
 def _phase_system_prompt(
@@ -1522,6 +1572,33 @@ def _worker_hint_block(project_id: int) -> str:
     )
 
 
+def _lab_retry_hint_block(project_id: int) -> str:
+    env = load_env(project_id)
+    text = str(env.get("retry_user_message") or "").strip()
+    if not text:
+        return ""
+    return (
+        "## 用户续跑指示\n"
+        "用户因环境搭建超时/重试用尽而请求再次搭建靶场。请优先按以下方向继续：\n\n"
+        f"{text}\n\n"
+    )
+
+
+def _lab_initial_prompt_doc(project_id: int) -> str:
+    env = load_env(project_id)
+    if _truthy(env.get("user_retry_requested")):
+        return "reviewer-lab-user-retry.md"
+    return "reviewer-lab.md"
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
 def _initial_prompt(name: str, **kwargs: object) -> str:
     """Render a user-message document from prompts/initial/ and inject it as-is."""
     kwargs.setdefault("audit_mode", "bounty")
@@ -1547,6 +1624,10 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
             text = f"{policy}{text}"
     if phase in _WORKER_HINT_PHASES:
         hint = _worker_hint_block(project_id)
+        if hint:
+            text = f"{text.rstrip()}\n\n{hint}"
+    if phase in _LAB_HINT_PHASES:
+        hint = _lab_retry_hint_block(project_id)
         if hint:
             text = f"{text.rstrip()}\n\n{hint}"
     return text
@@ -3606,6 +3687,7 @@ def _run_reviewer_lab(project_id: int) -> None:
             rec = recreate_lab(project_id)
             if lab_ready(load_env(project_id) or env):
                 mark_lab_setup_finished(project_id, via=str(rec.get("via") or "reuse"))
+                clear_lab_retry_flags(project_id)
                 _finish_resumable_phase(project_id, "reviewer-lab")
                 live_log.system(project_id, "已复用现有 Docker 靶场，环境搭建轮结束", phase="reviewer-lab", role="reviewer_lab")
                 return
@@ -3615,7 +3697,7 @@ def _run_reviewer_lab(project_id: int) -> None:
             "reviewer-lab",
             project_id,
             _initial_prompt(
-                "reviewer-lab.md",
+                _lab_initial_prompt_doc(project_id),
                 **_audit_mode_vars(project_id),
                 **lab_naming(project_id),
             ),
@@ -3634,6 +3716,7 @@ def _run_reviewer_lab(project_id: int) -> None:
                     return
                 if lab_round_complete(project_id):
                     mark_lab_setup_finished(project_id, via="lab-round")
+                    clear_lab_retry_flags(project_id)
                     _finish_phase_run(run_id, "completed")
                     live_log.system(project_id, "动态环境搭建轮已完成", phase="reviewer-lab", role="reviewer_lab")
                     return
@@ -3678,6 +3761,7 @@ def _run_reviewer_lab(project_id: int) -> None:
                     return
                 if lab_round_complete(project_id, result.state):
                     mark_lab_setup_finished(project_id, via="lab-round")
+                    clear_lab_retry_flags(project_id)
                     _finish_phase_run(run_id, "completed")
                     live_log.system(project_id, "动态环境搭建轮已完成", phase="reviewer-lab", role="reviewer_lab")
                     return

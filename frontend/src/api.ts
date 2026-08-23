@@ -59,6 +59,7 @@ export type Project = {
   project_paused?: boolean
   recon_subphases?: ReconSubphase[]
   lab_setup_done?: boolean
+  lab_setup_retryable?: boolean
   verifier_pending?: number
 }
 
@@ -679,6 +680,12 @@ export const api = {
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
   rerunReconSubphase: (id: number, subphase: 'map' | 'old_vulns') =>
     request(`/api/projects/${id}/recon-subphases/${subphase}/rerun`, { method: 'POST' }),
+  retryLabSetup: (id: number, userMessage = '') =>
+    request(`/api/projects/${id}/lab-setup/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_message: userMessage }),
+    }),
   resetProgress: (id: number) =>
     request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST' }),
   cancel: (id: number) => request(`/api/projects/${id}/cancel`, { method: 'POST' }),

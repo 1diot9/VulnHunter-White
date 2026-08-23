@@ -139,6 +139,37 @@ def test_recon_subphase_rerun_requires_ready(tmp_env, project):
         pipeline.request_recon_subphase_rerun(project, "old_vulns")
 
 
+def test_lab_setup_retry_requires_exhausted_setup(tmp_env, project, monkeypatch):
+    from app.services.lab import lab_setup_failed, load_env, mark_lab_setup_finished
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.dynamic_verify_enabled = True
+        proj.dynamic_verify_mode = "lab"
+        db.commit()
+
+    with pytest.raises(ValueError, match="尚未结束"):
+        pipeline.request_lab_setup_retry(project)
+
+    mark_lab_setup_finished(project, skipped=True, notes="环境搭建轮次重试用尽", via="test")
+    assert lab_setup_failed(project)
+
+    called = {"ensure": 0}
+
+    def fake_ensure(pid, cancel):  # noqa: ANN001
+        called["ensure"] += 1
+
+    monkeypatch.setattr(pipeline, "_ensure_reviewer", fake_ensure)
+    out = pipeline.request_lab_setup_retry(project, "用 src/docker-compose.yml")
+    assert out["ok"] is True
+    assert called["ensure"] == 1
+    assert load_env(project).get("user_retry_requested") is True
+    assert load_env(project).get("retry_user_message") == "用 src/docker-compose.yml"
+    assert not lab_setup_failed(project)
+
+
 def test_clear_old_vuln_completion_preserves_docs(tmp_env, project):
     from app.tools.phase_recon import mark_old_vuln_search_complete
 

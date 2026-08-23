@@ -56,9 +56,12 @@ from ..schemas import (
     ProjectUpdate,
     normalize_manual_lab_prompt,
     normalize_worker_hint,
+    normalize_lab_retry_message,
+    LabSetupRetryBody,
 )
 from ..services.ingest import indexed_weight_exts
-from ..services.lab import lab_setup_finished, sync_manual_lab_notes
+from ..dynamic_verify import is_lab_mode, project_verify_mode
+from ..services.lab import lab_setup_failed, lab_setup_finished, sync_manual_lab_notes
 from ..services.live_log import live_log
 from ..services.llm_settings import normalize_project_llm_model
 from ..services import custom_audit_modes as cam
@@ -74,6 +77,7 @@ from ..services.pipeline import (
     request_cancel,
     request_pause,
     request_recon_subphase_rerun,
+    request_lab_setup_retry,
     request_resume,
     request_worker_progress_reset,
     start_audit,
@@ -298,6 +302,7 @@ def _project_out(
         tokens_total=summary["tokens_total"],
         recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
         lab_setup_done=lab_setup_finished(p.id),
+        lab_setup_retryable=is_lab_mode(project_verify_mode(p)) and lab_setup_failed(p.id),
         verifier_pending=int(summary.get("verifier_pending") or 0),
         **_phase_state_fields(p.id),
     )
@@ -841,6 +846,18 @@ def rerun_recon_subphase(project_id: int, subphase: str) -> dict:
             raise HTTPException(404, "项目不存在")
     try:
         return request_recon_subphase_rerun(project_id, subphase)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/{project_id}/lab-setup/retry")
+def retry_lab_setup(project_id: int, body: LabSetupRetryBody | None = None) -> dict:
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    try:
+        msg = normalize_lab_retry_message((body.user_message if body else "") or "")
+        return request_lab_setup_retry(project_id, msg)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 

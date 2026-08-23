@@ -1202,6 +1202,36 @@ def test_phase_control_endpoints(tmp_env, project, monkeypatch):
         assert gone.status_code == 404
 
 
+def test_lab_setup_retry_api(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+    from app.services.lab import mark_lab_setup_finished
+
+    monkeypatch.setattr(pipeline, "_ensure_reviewer", lambda pid, cancel: None)
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.dynamic_verify_enabled = True
+        p.dynamic_verify_mode = "lab"
+        db.commit()
+    mark_lab_setup_finished(project, skipped=True, notes="环境搭建轮次重试用尽", via="test")
+
+    with TestClient(app) as client:
+        body = client.get(f"/api/projects/{project}").json()
+        assert body["lab_setup_retryable"] is True
+        bad = client.post(f"/api/projects/{project}/lab-setup/retry", json={})
+        assert bad.status_code == 200
+        assert bad.json()["ok"] is True
+        after = client.get(f"/api/projects/{project}").json()
+        assert after["lab_setup_retryable"] is False
+        assert after["lab_setup_done"] is False
+        with_msg = client.post(
+            f"/api/projects/{project}/lab-setup/retry",
+            json={"user_message": "优先 compose"},
+        )
+        assert with_msg.status_code == 400
+
+
 def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monkeypatch):
     from app.main import app
     from app.models import Project, SessionLocal

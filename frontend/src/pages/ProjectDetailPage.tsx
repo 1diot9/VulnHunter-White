@@ -6,6 +6,7 @@ import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { ResetProgressButton } from '../components/ResetProgressButton'
 import { ReconDocRerunButtons } from '../components/ReconDocRerunButtons'
+import { LabSetupRetryButton } from '../components/LabSetupRetryButton'
 import { GithubLink } from '../components/GithubLink'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
@@ -437,6 +438,13 @@ export default function ProjectDetailPage() {
               onStarted={(subId) => {
                 setTab('logs')
                 selectPhase(subId === 'map' ? 'recon-map' : 'recon-old-vuln')
+              }}
+            />
+            <LabSetupRetryButton
+              project={project}
+              onStarted={() => {
+                setTab('logs')
+                selectPhase('reviewer-lab')
               }}
             />
             <ResetProgressButton project={project} onReset={setProject} />

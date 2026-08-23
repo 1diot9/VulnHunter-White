@@ -179,6 +179,19 @@ def normalize_worker_hint(raw: Any) -> str:
     return text
 
 
+def normalize_lab_retry_message(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if "\x00" in text:
+        raise ValueError("续跑说明必须是文本，不能包含空字节")
+    if len(text) > WORKER_HINT_MAX:
+        raise ValueError(f"续跑说明过长，最多 {WORKER_HINT_MAX} 字")
+    return text
+
+
+class LabSetupRetryBody(BaseModel):
+    user_message: str = Field(default="", max_length=WORKER_HINT_MAX)
+
+
 class CustomAuditModeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     body: str = Field(..., min_length=1, max_length=16000)
@@ -301,6 +314,7 @@ class ProjectOut(BaseModel):
     project_paused: bool = False
     recon_subphases: list[dict[str, Any]] = Field(default_factory=list)
     lab_setup_done: bool = False
+    lab_setup_retryable: bool = False
     verifier_pending: int = 0
 
     model_config = {"from_attributes": True}

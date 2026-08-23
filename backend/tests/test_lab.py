@@ -12,12 +12,14 @@ from app.services.lab import (
     lab_image_name,
     lab_name_prefixes,
     lab_naming,
+    lab_setup_failed,
     lab_setup_finished,
     load_env,
     mark_lab_setup_finished,
     name_matches_lab_prefix,
     recreate_lab,
     remap_ports_if_needed,
+    reset_lab_setup_for_retry,
     save_env,
     sync_manual_lab_notes,
 )
@@ -323,7 +325,32 @@ def test_mark_lab_setup_finished_skipped_writes_doc(project):
     assert env["setup_finished"] is True
     assert env["accepted"] is False
     assert lab_setup_finished(project) is True
+    assert lab_setup_failed(project) is True
     assert "无 docker" in lab_doc_path(project).read_text(encoding="utf-8")
+
+
+def test_reset_lab_setup_for_retry_clears_finished_and_stores_message(project):
+    mark_lab_setup_finished(project, skipped=True, notes="环境搭建轮次重试用尽", via="test")
+    assert lab_setup_failed(project) is True
+    reset_lab_setup_for_retry(project, "优先 compose")
+    assert lab_setup_finished(project) is False
+    env = load_env(project)
+    assert env.get("user_retry_requested") is True
+    assert env.get("retry_user_message") == "优先 compose"
+
+
+def test_lab_setup_failed_false_when_running(project):
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    assert lab_setup_finished(project) is True
+    assert lab_setup_failed(project) is False
 
 
 def test_finish_manual_lab_skips_docker_and_writes_notes(project):

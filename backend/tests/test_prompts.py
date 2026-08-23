@@ -38,6 +38,7 @@ INITIAL_DOCS = (
     "reviewer-lab-retry-loop.md",
     "reviewer-lab-retry-timeout.md",
     "reviewer-lab-retry-other.md",
+    "reviewer-lab-user-retry.md",
     "verifier.md",
     "fast_worker.md",
     "bypass_worker.md",

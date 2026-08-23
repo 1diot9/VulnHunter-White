@@ -178,6 +178,39 @@ def lab_setup_finished(project_id: int) -> bool:
     return _truthy(load_env(project_id).get("setup_finished"))
 
 
+def lab_setup_failed(project_id: int) -> bool:
+    """True when the lab round ended without a running accepted env."""
+    env = load_env(project_id)
+    if not _truthy(env.get("setup_finished")):
+        return False
+    return not lab_ready(env)
+
+
+def reset_lab_setup_for_retry(project_id: int, user_message: str = "") -> dict[str, Any]:
+    """Clear setup_finished so reviewer-lab can run again; optional user steering note."""
+    env = dict(load_env(project_id) or {})
+    env["setup_finished"] = False
+    env["user_retry_requested"] = True
+    text = str(user_message or "").strip()
+    if text:
+        env["retry_user_message"] = text
+    else:
+        env.pop("retry_user_message", None)
+    save_env(project_id, env)
+    return env
+
+
+def clear_lab_retry_flags(project_id: int) -> None:
+    env = dict(load_env(project_id) or {})
+    changed = False
+    for key in ("user_retry_requested", "retry_user_message"):
+        if key in env:
+            env.pop(key)
+            changed = True
+    if changed:
+        save_env(project_id, env)
+
+
 def lab_round_complete(project_id: int, state: dict[str, Any] | None = None) -> bool:
     if state and state.get("lab_done"):
         return True
