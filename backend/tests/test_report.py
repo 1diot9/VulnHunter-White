@@ -282,3 +282,32 @@ def test_extract_product_hints_skips_placeholders():
 
     text = "# SQLI in login\n\n## 漏洞厂商全称\n暂未明确\n\n## 已知受影响产品及版本\nXXOA 办公系统\n"
     assert extract_product_hints(text) == ["XXOA 办公系统"]
+
+
+def test_missing_report_headings_bypass_requires_patch_section():
+    from app.services.report import missing_report_headings
+
+    minimal = "\n".join(
+        [
+            "## 摘要",
+            "## 漏洞描述",
+            "## 漏洞危害",
+            "## 漏洞厂商全称",
+            "## 已知受影响产品及版本",
+            "## 互联网资产证明",
+            "## 漏洞技术细节",
+            "### Source → Sink",
+            "## 同根因受影响点",
+            "## 复现证明",
+            "## 修复方案",
+            "## 备注",
+        ]
+    )
+    assert missing_report_headings(minimal, bypass=False) == []
+    assert "### 补丁绕过简析" in missing_report_headings(minimal, bypass=True)
+    with_patch = minimal.replace(
+        "## 漏洞技术细节",
+        "## 漏洞技术细节\n\n### 补丁绕过简析\nok",
+        1,
+    )
+    assert missing_report_headings(with_patch, bypass=True) == []

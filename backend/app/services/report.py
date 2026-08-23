@@ -347,6 +347,39 @@ Do not run this against systems you do not own or have authorization to test.
 """
 
 
+REPORT_REQUIRED_H2: tuple[str, ...] = (
+    "## 摘要",
+    "## 漏洞描述",
+    "## 漏洞危害",
+    "## 漏洞厂商全称",
+    "## 已知受影响产品及版本",
+    "## 互联网资产证明",
+    "## 漏洞技术细节",
+    "## 同根因受影响点",
+    "## 复现证明",
+    "## 修复方案",
+    "## 备注",
+)
+
+BYPASS_PATCH_BYPASS_HEADING = "### 补丁绕过简析"
+ASSET_PROOF_HEADING_ALIASES = (ASSET_PROOF_HEADING, "## 应用搜索指纹")
+
+
+def _has_report_heading(text: str, heading: str) -> bool:
+    if heading == ASSET_PROOF_HEADING:
+        return any(alias in text for alias in ASSET_PROOF_HEADING_ALIASES)
+    return heading in text
+
+
+def missing_report_headings(text: str, *, bypass: bool = False) -> list[str]:
+    """Return required markdown headings missing from a Chinese report body."""
+    body = text or ""
+    missing = [h for h in REPORT_REQUIRED_H2 if not _has_report_heading(body, h)]
+    if bypass and BYPASS_PATCH_BYPASS_HEADING not in body:
+        missing.append(BYPASS_PATCH_BYPASS_HEADING)
+    return missing
+
+
 def upsert_report_section(path: Path, heading: str, body: str) -> None:
     """Replace or append a trailing markdown section under ``heading``."""
     section = f"{heading}\n\n{body.strip()}\n"

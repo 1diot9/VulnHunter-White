@@ -24,6 +24,7 @@ from ..services.poc_script import poc_cli_block_reason, write_poc_code
 from ..services.report import (
     default_advisory_md,
     ensure_search_fingerprint_section,
+    missing_report_headings,
     write_advisory_md,
     write_report_md,
 )
@@ -283,6 +284,17 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return soft
 
     mining_path = _resolve_mining_path(ctx)
+    report_md_raw = args.get("report_md")
+    if mining_path == "bypass" and report_md_raw:
+        missing = missing_report_headings(str(report_md_raw), bypass=True)
+        if missing:
+            return {
+                "ok": False,
+                "error": (
+                    "历史漏洞绕过 report_md 须对齐 templates/vuln-report-bypass.md，"
+                    f"缺少: {', '.join(missing)}"
+                ),
+            }
 
     with SessionLocal() as db:
         vuln = Vuln(
@@ -309,7 +321,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         db.refresh(vuln)
         vuln_id = vuln.id
         vdir = vuln_dir(ctx.project_id, vuln_id)
-        report = args.get("report_md") or _default_report(args, vtype)
+        report = report_md_raw or _default_report(args, vtype, mining_path=mining_path)
         report = _ensure_affected_section(str(report), args)
         from ..services.asset_proof import (
             ensure_project_fingerprints,
@@ -392,7 +404,11 @@ def _append_affected_locations(ctx, args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-def _default_report(args: dict[str, Any], vtype: str) -> str:
+def _default_report(
+    args: dict[str, Any],
+    vtype: str,
+    mining_path: str | None = None,
+) -> str:
     primary = format_location_line(
         {
             "file_path": str(args.get("file_path") or "").replace("\\", "/"),
@@ -400,6 +416,18 @@ def _default_report(args: dict[str, Any], vtype: str) -> str:
             "method": None,
             "note": "代表点",
         }
+    )
+    bypass = mining_path == "bypass"
+    patch_bypass_section = (
+        "\n### 补丁绕过简析\n待补全：原漏洞与官方补丁/修复方式；当前源码中绕过或未修复原因。\n"
+        if bypass
+        else ""
+    )
+    desc_second = (
+        f"第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，"
+        f"数据流为 {args.get('source_sink')}；说明与历史漏洞文档的关系（原 CVE/补丁与当前变体或仍可利用点）。"
+        if bypass
+        else f"第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，数据流为 {args.get('source_sink')}。"
     )
     return f"""---
 title: {args.get('title')}
@@ -418,7 +446,7 @@ summary: {args.get('source_sink', '')[:200]}
 ## 漏洞描述
 第一段：待根据厂商与产品资料补全系统介绍。
 
-第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，数据流为 {args.get('source_sink')}。
+{desc_second}
 
 ## 漏洞危害
 - 已证明危害：{args.get('expected_evidence')}
@@ -433,7 +461,7 @@ summary: {args.get('source_sink', '')[:200]}
 暂未明确
 
 ## 漏洞技术细节
-
+{patch_bypass_section}
 ### Source → Sink
 {args.get('source_sink')}
 
@@ -683,7 +711,14 @@ def register_worker_tools() -> None:
                     "fofa_fingerprint": {"type": "string"},
                     "x_fingerprint": {"type": "string"},
                     "fingerprint_basis": {"type": "string"},
-                    "report_md": {"type": "string"},
+                    "report_md": {
+                        "type": "string",
+                        "description": (
+                            "中文报告。历史漏洞绕过须对齐 templates/vuln-report-bypass.md"
+                            "（同 vuln-report.md 且 ## 漏洞技术细节 下第一节为 ### 补丁绕过简析）；"
+                            "启发式/快速扫描对齐 templates/vuln-report.md。"
+                        ),
+                    },
                     "advisory_md": {
                         "type": "string",
                         "description": (

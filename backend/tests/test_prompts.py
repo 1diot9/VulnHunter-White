@@ -436,9 +436,15 @@ def test_bypass_worker_prompts():
     assert "不要 FinishFile / FinishRound / FinishSink" in worker
     assert "patched" in worker
     assert "unpatched" in worker
+    assert "templates/vuln-report-bypass.md" in worker
+    assert "### 补丁绕过简析" in worker
+    assert "advisory_md" in worker
     assert "FinishBypass" in initial
     assert "${old_vuln_doc}" in initial
     assert "bypass_submitted" in initial
+    assert "vuln-report-bypass.md" in initial
+    assert "补丁绕过简析" in initial
+    assert "简短" not in initial
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():

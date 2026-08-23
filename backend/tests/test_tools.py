@@ -442,6 +442,23 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
     )
     assert bypass["ok"] is True
     assert bypass["mining_path"] == "bypass"
+    bypass_report = (vuln_dir(project, bypass["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert "### 补丁绕过简析" in bypass_report
+    tech_idx = bypass_report.index("## 漏洞技术细节")
+    patch_idx = bypass_report.index("### 补丁绕过简析")
+    sink_idx = bypass_report.index("### Source → Sink")
+    assert tech_idx < patch_idx < sink_idx
+
+    bad = registry.dispatch(
+        _ctx(project, "bypass_worker"),
+        "SubmitVuln",
+        {
+            **payload("bypass-bad", "app/BypassBad.java"),
+            "report_md": "# bad\n\n## 漏洞描述\nonly partial\n",
+        },
+    )
+    assert bad["ok"] is False
+    assert "vuln-report-bypass.md" in bad["error"]
 
     with Session() as db:
         parent = db.get(models.Vuln, fast["vuln_id"])
