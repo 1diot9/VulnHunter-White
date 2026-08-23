@@ -407,6 +407,7 @@ class VulnDetail(VulnOut):
     expected_evidence: str | None = None
     report_md: str | None = None
     advisory_md: str | None = None
+    cve_json: str | None = None
     merged_from_ids: list[int] = Field(default_factory=list)
     verifier_poc: str | None = None
     verifier_response: str | None = None

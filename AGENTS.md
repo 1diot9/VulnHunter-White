@@ -8,7 +8,7 @@ VulnHunter 是一个白盒审计 Agent 平台：导入 GitHub 仓库或源码 zi
 
 - 后端：`backend/app`，FastAPI + SQLAlchemy + SQLite，负责项目导入、阶段调度、Agent 循环、工具注册、报告与漏洞数据。
 - 前端：`frontend`，Vite + React + TypeScript + Tailwind，用于审计项目、实时日志、阶段报告、漏洞列表和设置页。
-- 模板：`templates`，阶段报告和提示词相关模板。漏洞中文报告对齐 `templates/vuln-report.md`，英文 GitHub Advisory 填表稿对齐 `templates/vuln-advisory.md`（写入 `vulns/{id}/advisory.md`）。
+- 模板：`templates`，阶段报告和提示词相关模板。漏洞中文报告对齐 `templates/vuln-report.md`，英文 GitHub Advisory 填表稿对齐 `templates/vuln-advisory.md`（写入 `vulns/{id}/advisory.md`），CVE 5.2 JSON 对齐 `templates/cve.json`（写入 `vulns/{id}/cve.json`；Agent 用 `ReadCveRecord` / `SetCveRecordField` 逐字段填写，未知字段统一占位符 `VULNHUNTER_PENDING`）。
 - 运行态数据：`data/projects/{id}`、`data/logs`、`data/app.db`。除非任务明确要求，不要手工改运行态数据或提交生成文件。例外：仓库自带展示案例 `data/projects/11`（MemoBoard / `vulnhunter-python-lab`）及其 `showcase/db-seed.json`；`init_db()` 会幂等导入对应 DB 行，可用 `VULNHUNTER_DEMO_SEED=0` 关闭。不要提交整份 `data/app.db`。
 
 ## 常用命令

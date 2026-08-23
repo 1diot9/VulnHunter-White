@@ -70,7 +70,7 @@ export default function VulnsPage() {
   const [search, setSearch] = useState('')
   const [dynamicBusy, setDynamicBusy] = useState(false)
   const [dynamicError, setDynamicError] = useState('')
-  const [reportKind, setReportKind] = useState<'report' | 'advisory'>('report')
+  const [reportKind, setReportKind] = useState<'report' | 'advisory' | 'cve'>('report')
   const [advisoryCopied, setAdvisoryCopied] = useState(false)
 
   const projectNameById = useMemo(() => {
@@ -169,7 +169,7 @@ export default function VulnsPage() {
     saveBlob(await api.downloadVulns(ids), filename)
   }
 
-  async function downloadReport(id: number, kind: 'report' | 'advisory' = 'report') {
+  async function downloadReport(id: number, kind: 'report' | 'advisory' | 'cve' = 'report') {
     try {
       const { blob, filename } = await api.downloadVulnReport(id, kind)
       saveBlob(blob, filename)
@@ -579,11 +579,21 @@ export default function VulnsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={reportKind === 'advisory' ? !detail.advisory_md : !detail.report_md}
+                    disabled={
+                      reportKind === 'advisory'
+                        ? !detail.advisory_md
+                        : reportKind === 'cve'
+                          ? !detail.cve_json
+                          : !detail.report_md
+                    }
                     onClick={() => downloadReport(detail.id, reportKind)}
                   >
                     <DownloadIcon data-icon="inline-start" />
-                    {reportKind === 'advisory' ? '下载 Advisory' : '下载报告'}
+                    {reportKind === 'advisory'
+                      ? '下载 Advisory'
+                      : reportKind === 'cve'
+                        ? '下载 CVE JSON'
+                        : '下载报告'}
                   </Button>
                   {detail.can_dynamic_verify || detail.dynamic_verify_queued ? (
                     <TooltipProvider delay={200}>
@@ -663,6 +673,13 @@ export default function VulnsPage() {
                   >
                     Advisory
                   </Button>
+                  <Button
+                    size="sm"
+                    variant={reportKind === 'cve' ? 'default' : 'outline'}
+                    onClick={() => setReportKind('cve')}
+                  >
+                    CVE JSON
+                  </Button>
                   {reportKind === 'advisory' ? (
                     <Button
                       size="sm"
@@ -682,6 +699,10 @@ export default function VulnsPage() {
                 {reportKind === 'advisory' ? (
                   <pre className="max-h-[min(70vh,48rem)] overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs leading-relaxed text-slate-200">
                     {detail.advisory_md || '暂无 Advisory。Worker / Reviewer 会写入 vulns/{id}/advisory.md。'}
+                  </pre>
+                ) : reportKind === 'cve' ? (
+                  <pre className="max-h-[min(70vh,48rem)] overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs leading-relaxed text-slate-200">
+                    {detail.cve_json || '暂无 CVE JSON。Worker / Reviewer 通过 ReadCveRecord / SetCveRecordField 写入 vulns/{id}/cve.json。'}
                   </pre>
                 ) : (
                   <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>

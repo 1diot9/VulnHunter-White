@@ -767,6 +767,8 @@ def test_vulns_list_and_download(tmp_env, project):
         assert "**产出时间**：" in (body.get("report_md") or "")
         assert "GitHub Security Advisory" in (body.get("advisory_md") or "")
         assert "## Title" in (body.get("advisory_md") or "")
+        assert body.get("cve_json")
+        assert "CVE_RECORD" in (body.get("cve_json") or "")
         dl = client.post("/api/vulns/download", json={"ids": [vid]})
         assert dl.status_code == 200
         assert dl.headers["content-type"].startswith("application/zip")
@@ -777,6 +779,7 @@ def test_vulns_list_and_download(tmp_env, project):
         names = zipfile.ZipFile(io.BytesIO(dl.content)).namelist()
         assert f"vuln-{vid}/report.md" in names
         assert f"vuln-{vid}/advisory.md" in names
+        assert f"vuln-{vid}/cve.json" in names
         one = client.get(f"/api/vulns/{vid}/download")
         assert one.status_code == 200
         assert one.headers["content-type"].startswith("text/markdown")
@@ -789,6 +792,11 @@ def test_vulns_list_and_download(tmp_env, project):
         assert advisory.status_code == 200
         assert "GitHub Security Advisory" in advisory.text
         assert f'filename="vuln-{vid}-advisory.md"' in advisory.headers["content-disposition"]
+        cve = client.get(f"/api/vulns/{vid}/download?kind=cve")
+        assert cve.status_code == 200
+        assert cve.headers["content-type"].startswith("application/json")
+        assert "CVE_RECORD" in cve.text
+        assert f'filename="vuln-{vid}-cve.json"' in cve.headers["content-disposition"]
         assert client.get(f"/api/vulns/{vid}/download?kind=nope").status_code == 400
         assert client.get("/api/vulns/999999/download").status_code == 404
 

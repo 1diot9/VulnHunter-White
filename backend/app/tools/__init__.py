@@ -117,6 +117,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "TodoWrite",
             "SearchOldVuln",
             "SubmitVuln",
+            "ReadCveRecord",
+            "SetCveRecordField",
             "AppendAffectedLocations",
             "FinishFile",
             "FinishRound",
@@ -130,6 +132,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "Glob",
             "SearchOldVuln",
             "SubmitVuln",
+            "ReadCveRecord",
+            "SetCveRecordField",
             "AppendAffectedLocations",
             "FinishSink",
         }
@@ -141,6 +145,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "Glob",
             "SearchOldVuln",
             "SubmitVuln",
+            "ReadCveRecord",
+            "SetCveRecordField",
             "AppendAffectedLocations",
             "FinishBypass",
         }
@@ -164,6 +170,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "MarkFalsePositive",
             "ReturnToWorker",
             "RunCode",
+            "ReadCveRecord",
+            "SetCveRecordField",
         }
     ),
     "reviewer_lab": frozenset(
@@ -190,6 +198,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SearchOldVuln",
             "FinishFix",
             "SubmitVuln",
+            "ReadCveRecord",
+            "SetCveRecordField",
             "AppendAffectedLocations",
         }
     ),
@@ -547,3 +557,4 @@ def register_all_tools() -> None:
     from . import phase_verifier  # noqa: F401
     from . import phase_attack_chain  # noqa: F401
     from . import run_code  # noqa: F401
+    from . import phase_cve_record  # noqa: F401

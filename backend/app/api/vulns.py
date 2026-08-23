@@ -32,6 +32,7 @@ from ..services.pipeline import (
 )
 from ..services.poc_script import read_poc_code
 from ..services.report import stamp_produced_at
+from ..services.cve_record import format_cve_record_json
 from ..services import vuln_followup
 from ..services.verifier import (
     awaiting_user_verifier_count,
@@ -45,8 +46,8 @@ router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
-ALLOWED_REPORT_KINDS = frozenset({"report", "advisory"})
-REPORT_KIND_FILES = {"report": "report.md", "advisory": "advisory.md"}
+ALLOWED_REPORT_KINDS = frozenset({"report", "advisory", "cve"})
+REPORT_KIND_FILES = {"report": "report.md", "advisory": "advisory.md", "cve": "cve.json"}
 
 
 def _tracking_status_out(value: str | None) -> str:
@@ -80,15 +81,19 @@ def _read_advisory_md(v: Vuln) -> str | None:
     return (text + "\n") if text else None
 
 
+def _read_cve_json(v: Vuln) -> str | None:
+    return format_cve_record_json(v.project_id, v.id)
+
+
 def _report_download_filename(vuln_id: int, title: str | None, kind: str = "report") -> str:
     slug = _UNSAFE_FILENAME_RE.sub("_", (title or "").strip())
     slug = re.sub(r"\s+", " ", slug).strip(" ._")
     if len(slug) > 80:
         slug = slug[:80].rstrip(" ._")
-    suffix = "-advisory" if kind == "advisory" else ""
+    suffix = "-advisory" if kind == "advisory" else "-cve" if kind == "cve" else ""
     if slug:
-        return f"vuln-{vuln_id}-{slug}{suffix}.md"
-    return f"vuln-{vuln_id}{suffix}.md"
+        return f"vuln-{vuln_id}-{slug}{suffix}.md" if kind != "cve" else f"vuln-{vuln_id}-{slug}{suffix}.json"
+    return f"vuln-{vuln_id}{suffix}.md" if kind != "cve" else f"vuln-{vuln_id}{suffix}.json"
 
 
 def _report_score(v: Vuln) -> int | None:
@@ -249,6 +254,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             expected_evidence=v.expected_evidence,
             report_md=report_md,
             advisory_md=advisory_md,
+            cve_json=_read_cve_json(v),
             merged_from_ids=merged_from,
             verifier_poc=getattr(v, "verifier_poc", None),
             verifier_response=getattr(v, "verifier_response", None),
@@ -262,19 +268,29 @@ def get_vuln(vuln_id: int) -> VulnDetail:
 @router.get("/{vuln_id}/download")
 def download_vuln_report(vuln_id: int, kind: str = "report") -> Response:
     if kind not in ALLOWED_REPORT_KINDS:
-        raise HTTPException(400, "kind 须为 report|advisory")
+        raise HTTPException(400, "kind 须为 report|advisory|cve")
     with SessionLocal() as db:
         v = db.get(Vuln, vuln_id)
         if not v:
             raise HTTPException(404, "漏洞不存在")
-        text = _read_advisory_md(v) if kind == "advisory" else _read_report_md(v)
+        if kind == "advisory":
+            text = _read_advisory_md(v)
+            media_type = "text/markdown; charset=utf-8"
+            ascii_name = f"vuln-{v.id}-advisory.md"
+        elif kind == "cve":
+            text = _read_cve_json(v)
+            media_type = "application/json; charset=utf-8"
+            ascii_name = f"vuln-{v.id}-cve.json"
+        else:
+            text = _read_report_md(v)
+            media_type = "text/markdown; charset=utf-8"
+            ascii_name = f"vuln-{v.id}.md"
         if text is None:
             raise HTTPException(404, "报告不存在")
         filename = _report_download_filename(v.id, v.title, kind)
-        ascii_name = f"vuln-{v.id}-advisory.md" if kind == "advisory" else f"vuln-{v.id}.md"
         return Response(
             content=text.encode("utf-8"),
-            media_type="text/markdown; charset=utf-8",
+            media_type=media_type,
             headers={
                 "Content-Disposition": (
                     f'attachment; filename="{ascii_name}"; '
@@ -365,6 +381,9 @@ def download_vulns(body: DownloadBody) -> StreamingResponse:
                 advisory = _read_advisory_md(v)
                 if advisory is not None:
                     zf.writestr(f"vuln-{v.id}/advisory.md", advisory)
+                cve_json = _read_cve_json(v)
+                if cve_json is not None:
+                    zf.writestr(f"vuln-{v.id}/cve.json", cve_json)
                 for fp in vdir.glob("*"):
                     if not fp.is_file() or fp.name in REPORT_KIND_FILES.values():
                         continue

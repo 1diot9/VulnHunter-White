@@ -311,3 +311,98 @@ def test_missing_report_headings_bypass_requires_patch_section():
         1,
     )
     assert missing_report_headings(with_patch, bypass=True) == []
+
+
+def test_cve_record_initialize_and_fill(tmp_env, project):
+    import json
+
+    from app.services.cve_record import (
+        CVE_FIELD_PLACEHOLDER,
+        cve_record_path,
+        cve_record_status,
+        initialize_cve_record,
+        read_cve_record,
+        set_cve_field,
+    )
+    from app.tools import ToolContext, registry
+
+    payload = {
+        "title": "sqli demo",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Db.java",
+        "line_no": 3,
+        "source_sink": "id -> query",
+        "auth_premise": "none",
+        "http_request": "GET /x HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "500",
+        "config_premise": "default",
+        "report_md": "# sqli\n\n## 摘要\nx\n## 漏洞描述\nx\n## 漏洞危害\nx\n## 漏洞厂商全称\nx\n## 已知受影响产品及版本\nx\n## 互联网资产证明\nx\n## 漏洞技术细节\nx\n## 同根因受影响点\nx\n## 复现证明\nx\n## 修复方案\nx\n## 备注\nx\n",
+    }
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        payload,
+    )
+    assert out["ok"] is True
+    vid = out["vuln_id"]
+    path = cve_record_path(project, vid)
+    assert path.is_file()
+    record = read_cve_record(project, vid)
+    assert record is not None
+    assert record["cveMetadata"]["cveId"] == CVE_FIELD_PLACEHOLDER
+    status = cve_record_status(project, vid)
+    assert status["all_required_filled"] is False
+    assert status["required_pending"]
+
+    read_out = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid),
+        "ReadCveRecord",
+        {},
+    )
+    assert read_out["ok"] is True
+    assert read_out["placeholder"] == CVE_FIELD_PLACEHOLDER
+    assert any(f["needs_fill"] for f in read_out["fields"])
+
+    set_out = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid),
+        "SetCveRecordField",
+        {
+            "path": "containers.cna.descriptions[0].value",
+            "value": "Example product is affected by SQL injection.",
+        },
+    )
+    assert set_out["ok"] is True
+    assert "SQL injection" in json.loads(path.read_text(encoding="utf-8"))["containers"]["cna"]["descriptions"][0]["value"]
+
+    set_cve_field(
+        project,
+        vid,
+        "containers.cna.problemTypes[0].descriptions[0].description",
+        "SQL Injection",
+    )
+    set_cve_field(project, vid, "containers.cna.affected[0].versions[0].version", "<=1.0.0")
+    set_cve_field(
+        project,
+        vid,
+        "containers.cna.descriptions[0].supportingMedia[0].value",
+        "Example product is affected by SQL injection.",
+    )
+    set_cve_field(project, vid, "containers.cna.references[0].url", "https://example.com/advisory")
+    status = cve_record_status(project, vid)
+    assert status["all_required_filled"] is True
+
+    bad = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid),
+        "SetCveRecordField",
+        {"path": "dataType", "value": "HACKED"},
+    )
+    assert bad["ok"] is False
+
+
+def test_cve_record_initialize_standalone(tmp_env, project):
+    from app.services.cve_record import CVE_FIELD_PLACEHOLDER, initialize_cve_record
+
+    record = initialize_cve_record(project, 999)
+    assert record["containers"]["cna"]["descriptions"][0]["value"] == CVE_FIELD_PLACEHOLDER

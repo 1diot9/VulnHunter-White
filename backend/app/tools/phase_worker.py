@@ -21,6 +21,7 @@ from ..services.affected_locations import (
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.paths import vuln_dir
 from ..services.poc_script import poc_cli_block_reason, write_poc_code
+from ..services.cve_record import initialize_cve_record
 from ..services.report import (
     default_advisory_md,
     ensure_search_fingerprint_section,
@@ -348,6 +349,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         report = overlay_project_fingerprints(report, ctx.project_id)
         write_report_md(vdir / "report.md", report, vuln.created_at)
         write_advisory_md(vdir / "advisory.md", str(args.get("advisory_md") or default_advisory_md(args)))
+        initialize_cve_record(ctx.project_id, vuln_id)
         (vdir / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         write_poc_code(ctx.project_id, vuln_id, str(args["poc_code"]))
         vuln.report_path = f"vulns/{vuln_id}/report.md"

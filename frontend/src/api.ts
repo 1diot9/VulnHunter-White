@@ -194,6 +194,7 @@ export type VulnDetail = Vuln & {
   expected_evidence: string | null
   report_md: string | null
   advisory_md: string | null
+  cve_json: string | null
   merged_from_ids?: number[]
   verifier_poc?: string | null
   verifier_response?: string | null
@@ -815,12 +816,13 @@ export const api = {
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     return res.blob()
   },
-  downloadVulnReport: async (id: number, kind: 'report' | 'advisory' = 'report') => {
+  downloadVulnReport: async (id: number, kind: 'report' | 'advisory' | 'cve' = 'report') => {
     const res = await apiFetch(`/api/vulns/${id}/download?kind=${kind}`)
     if (res.status === 401) setAccessToken('')
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     const blob = await res.blob()
-    const fallback = kind === 'advisory' ? `vuln-${id}-advisory.md` : `vuln-${id}.md`
+    const fallback =
+      kind === 'advisory' ? `vuln-${id}-advisory.md` : kind === 'cve' ? `vuln-${id}-cve.json` : `vuln-${id}.md`
     const filename = filenameFromDisposition(res.headers.get('Content-Disposition'), fallback)
     return { blob, filename }
   },
