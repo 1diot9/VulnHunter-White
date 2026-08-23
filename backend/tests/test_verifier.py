@@ -752,6 +752,13 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
     assert cache is not None
     assert cache["query"] == 'title="demo"'
     assert len(cache["sample"]) == 3
+    from app.services.report import extract_asset_queries
+    from app.services.paths import vuln_dir
+
+    fofa1, _ = extract_asset_queries((vuln_dir(project, vuln1) / "report.md").read_text(encoding="utf-8"))
+    fofa2, _ = extract_asset_queries((vuln_dir(project, vuln2) / "report.md").read_text(encoding="utf-8"))
+    assert fofa1 == 'title="demo"'
+    assert fofa2 == 'title="demo"'
 
     second_ctx = _ctx(project, "verifier", vuln_id=vuln2)
     second = registry.dispatch(second_ctx, "FofaSearch", {"query": 'title="should-not-hit-api"'})
@@ -781,7 +788,6 @@ def test_fofa_search_shared_across_vulns(tmp_env, project, monkeypatch):
     )
     assert out["ok"] is True, out
     assert out["fofa_query"] == 'title="demo"'
-    from app.services.paths import vuln_dir
 
     report = (vuln_dir(project, vuln2) / "report.md").read_text(encoding="utf-8")
     assert "### FOFA 搜索语法" in report
@@ -1168,6 +1174,89 @@ def test_complete_gates_wait_for_verifier(tmp_env, project):
         proj.verifier_enabled = False
         db.commit()
     assert project_complete_gates(project) is True
+
+
+def test_fofa_search_writebacks_asset_proof_section(tmp_env, project, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 1,
+                "results": [
+                    ["hit.example", "1.1.1.1", "80", "Demo", "example.com", "Org", "http"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    from app.services.paths import app_fingerprints_path, vuln_dir
+    from app.services.report import extract_asset_queries, replace_search_fingerprint_section
+
+    report_path = vuln_dir(project, vuln_id) / "report.md"
+    report_path.write_text(
+        replace_search_fingerprint_section(
+            report_path.read_text(encoding="utf-8"),
+            fofa='title="old-guess"',
+            x='app="keep-x"',
+        ),
+        encoding="utf-8",
+    )
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FofaSearch",
+        {"query": 'title="demo"'},
+    )
+    assert out["ok"] is True
+    report = report_path.read_text(encoding="utf-8")
+    fofa, x = extract_asset_queries(report)
+    assert fofa == 'title="demo"'
+    assert x == 'app="keep-x"'
+    assert 'title="old-guess"' not in report
+    fp = json.loads(app_fingerprints_path(project).read_text(encoding="utf-8"))
+    assert fp["fofa"] == 'title="demo"'
+    assert fp["origin"] == "verifier"
+
+
+def test_fofa_empty_search_does_not_writeback_asset_proof(tmp_env, project, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"error": False, "size": 0, "results": []})
+            ),
+            timeout=timeout,
+        ),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    from app.services.paths import vuln_dir
+    from app.services.report import extract_asset_queries, replace_search_fingerprint_section
+
+    report_path = vuln_dir(project, vuln_id) / "report.md"
+    report_path.write_text(
+        replace_search_fingerprint_section(
+            report_path.read_text(encoding="utf-8"),
+            fofa='title="old-guess"',
+            x='app="keep-x"',
+        ),
+        encoding="utf-8",
+    )
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FofaSearch",
+        {"query": 'title="too-narrow"'},
+    )
+    assert out["ok"] is True
+    assert out["returned"] == 0
+    fofa, x = extract_asset_queries(report_path.read_text(encoding="utf-8"))
+    assert fofa == 'title="old-guess"'
+    assert x == 'app="keep-x"'
 
 
 def test_extract_fofa_query_from_report():

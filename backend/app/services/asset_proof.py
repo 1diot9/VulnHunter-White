@@ -269,7 +269,7 @@ _HTML_SUFFIXES = {
 _ICON_NAMES = frozenset({"favicon.ico", "favicon.png", "favicon.gif", "favicon.jpg", "logo.ico"})
 _MAX_SOURCE_FILES = 400
 _MAX_SOURCE_BYTES = 256_000
-_ORIGIN_RANK = {"lab": 3, "source": 2, "web": 1, "manual": 1, "": 0}
+_ORIGIN_RANK = {"verifier": 4, "lab": 3, "source": 2, "web": 1, "manual": 1, "": 0}
 _CLAUSE_FIELD_RE = re.compile(
     r'\b(title|body|header|icon_hash|app|product)\s*=\s*"([^"]{1,160})"',
     re.IGNORECASE,
@@ -1082,16 +1082,22 @@ def upgrade_project_fingerprints(
     *,
     origin: str,
 ) -> dict[str, Any]:
-    """Write a better fingerprint (lab/manual) over a weaker cache."""
+    """Write a better fingerprint (lab/manual/verifier) over a weaker cache."""
     incoming = dict(payload)
     incoming["origin"] = origin
     incoming["ok"] = True
     with _fingerprint_lock(project_id):
         cached = load_project_fingerprints(project_id)
+        if origin == "verifier":
+            fofa_q = " ".join(str(incoming.get("fofa") or "").split()).strip()
+            if fofa_q and not is_placeholder_query(fofa_q) and not fingerprint_query_error(fofa_q, label="FOFA "):
+                merged = _merge_fingerprint_payloads({"fofa": fofa_q, "ok": True}, cached or {})
+                merged["origin"] = "verifier"
+                return save_project_fingerprints(project_id, merged)
         if fingerprints_usable(cached) and _origin_rank(str(cached.get("origin") or "")) >= _origin_rank(origin):
-            if origin != "lab":
+            if origin not in ("lab", "verifier"):
                 return cached
-            if str(cached.get("origin") or "").startswith("lab"):
+            if str(cached.get("origin") or "").startswith(origin):
                 return cached
         if fingerprints_usable(incoming):
             incoming["origin"] = origin
@@ -1175,6 +1181,59 @@ def collect_lab_fingerprints(
             "title/app 与默认页 body 特征是互补检索，有命中即可；不要叠 title&&app&&icon_hash。"
             "不要把漏洞路径、PoC 参数或一次性业务数据当作唯一指纹。"
         ),
+    }
+
+
+def sync_verified_fofa_fingerprint(
+    project_id: int,
+    fofa_query: object,
+    *,
+    vuln_id: int | None = None,
+) -> dict[str, Any]:
+    """After FOFA returns hits, write the working query back to reports and project fingerprints."""
+    from .verifier import fofa_cache_has_targets, load_project_fofa_cache
+
+    query = " ".join(str(fofa_query or "").split()).strip()
+    if not query or is_placeholder_query(query):
+        return {"ok": True, "updated": False, "reason": "empty_or_placeholder"}
+    err = fingerprint_query_error(query, label="FOFA ")
+    if err:
+        return {"ok": False, "error": err}
+    cache = load_project_fofa_cache(project_id)
+    if not fofa_cache_has_targets(cache):
+        return {"ok": True, "updated": False, "reason": "no_fofa_hits"}
+    cache_query = " ".join(str((cache or {}).get("query") or "").split()).strip()
+    if cache_query:
+        query = cache_query
+    upgrade_project_fingerprints(project_id, {"fofa": query}, origin="verifier")
+    from ..models import SessionLocal, Vuln
+
+    confirmed = ("confirmed", "static_only")
+    updated_vuln_ids: list[int] = []
+    with SessionLocal() as db:
+        vuln_ids = [
+            int(row.id)
+            for row in db.query(Vuln)
+            .filter(Vuln.project_id == project_id, Vuln.status.in_(confirmed))
+            .all()
+        ]
+    if vuln_id is not None and int(vuln_id) not in vuln_ids:
+        vuln_ids.append(int(vuln_id))
+    for vid in vuln_ids:
+        path = vuln_dir(project_id, vid) / "report.md"
+        if not path.is_file():
+            continue
+        current_fofa, current_x = extract_asset_queries(path.read_text(encoding="utf-8", errors="ignore"))
+        if current_fofa == query:
+            continue
+        applied = apply_asset_proof(project_id, vid, fofa=query, x=current_x)
+        if applied.get("ok"):
+            updated_vuln_ids.append(vid)
+    return {
+        "ok": True,
+        "updated": bool(updated_vuln_ids),
+        "fofa": query,
+        "updated_vuln_ids": updated_vuln_ids,
     }
 
 

@@ -61,6 +61,14 @@ def _cached_fofa_payload(ctx, cache: dict[str, Any], *, guidance: str) -> dict[s
     ctx.state["fofa_query"] = cache.get("query") or ctx.state.get("fofa_query") or ""
     ctx.state["fofa_targets"] = list(cache.get("sample") or [])
     ctx.state["fofa_cached"] = True
+    if fofa_cache_has_targets(cache) and cache.get("query"):
+        from ..services.asset_proof import sync_verified_fofa_fingerprint
+
+        sync_verified_fofa_fingerprint(
+            ctx.project_id,
+            str(cache.get("query") or ""),
+            vuln_id=ctx.vuln_id,
+        )
     page = fofa_page(cache)
     return {
         "ok": True,
@@ -406,6 +414,10 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
     report_path = verifier_report_path(ctx.project_id, int(vuln_id))
     report_path.write_text(f"# Verifier · 漏洞 #{int(vuln_id)}\n\n{body}", encoding="utf-8")
     upsert_report_section(vuln_dir(ctx.project_id, int(vuln_id)) / "report.md", _REVIEW_HEADING, body)
+    if fofa_query and fofa_cache_has_targets(cache):
+        from ..services.asset_proof import sync_verified_fofa_fingerprint
+
+        sync_verified_fofa_fingerprint(ctx.project_id, fofa_query, vuln_id=int(vuln_id))
     with SessionLocal() as db:
         vuln = db.get(Vuln, int(vuln_id))
         if not vuln or vuln.project_id != ctx.project_id:

@@ -443,6 +443,10 @@ def save_project_fofa_cache(
     path = fofa_cache_path(project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if rows and payload.get("query"):
+        from .asset_proof import sync_verified_fofa_fingerprint
+
+        sync_verified_fofa_fingerprint(project_id, payload["query"])
     return payload
 
 
