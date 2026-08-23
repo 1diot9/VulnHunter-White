@@ -487,6 +487,8 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "### Impact" in advisory_text
     assert "## Affected products" in advisory_text
     assert "## Severity / CWE" in advisory_text
+    assert "**CVSS 3.1:**" in advisory_text
+    assert "**CVSS 4.0:**" in advisory_text
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():

@@ -224,6 +224,14 @@ def test_write_advisory_md_no_produced_at(tmp_path):
     assert "**产出时间**" not in text
 
 
+def test_default_advisory_md_includes_cvss_fields():
+    from app.services.report import default_advisory_md
+
+    text = default_advisory_md({"title": "demo", "cwe": "CWE-89"})
+    assert "**CVSS 3.1:**" in text
+    assert "**CVSS 4.0:**" in text
+
+
 def test_ensure_search_fingerprint_section_inserts_before_poc():
     text = "# t\n\n## 预期证据\nok\n\n## PoC\n见 poc.py\n"
     out = ensure_search_fingerprint_section(text, fofa='title="A"', x='app="A"', basis="- 标题：A")

@@ -341,7 +341,8 @@ Do not run this against systems you do not own or have authorization to test.
 ## Severity / CWE
 
 - **Severity:** (Reviewer)
-- **CVSS 3.1:**
+- **CVSS 3.1:** (Reviewer)
+- **CVSS 4.0:** (Reviewer)
 - **CWE:** {cwe}
 - **Related:**
 """
