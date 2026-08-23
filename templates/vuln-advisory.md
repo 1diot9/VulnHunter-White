@@ -30,7 +30,15 @@ Copy from the next `### Summary` through the end of Impact.
 
 Requires a running instance you are authorized to test. Do not include real secrets.
 
-(HTTP request(s) and/or a minimal Python snippet. Contrast blocked vs accepted responses when that proves the bypass.)
+**Must include at least one raw HTTP request packet** in a `http` fenced block (method, path, headers, and body if any). Do not rely on curl one-liners or screenshots alone. Contrast blocked vs accepted requests/responses when that proves the bypass.
+
+For header or body values that are long (roughly 80+ characters, e.g. Base64 blobs, serialized gadgets, JWTs), replace the long portion with a short descriptive placeholder such as `<BASE64_PAYLOAD>`, `<JWT_TOKEN>`, or `<SERIALIZED_GADGET>` while keeping the surrounding structure and short attack primitives intact.
+
+Optionally reference the reproducible CLI script in the same directory (`python poc.py -u http://TARGET:PORT`; add `--proxy` when needed).
+
+```http
+
+```
 
 Do not run this against systems you do not own or have authorization to test.
 

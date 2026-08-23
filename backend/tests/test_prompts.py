@@ -489,6 +489,8 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "## Severity / CWE" in advisory_text
     assert "**CVSS 3.1:**" in advisory_text
     assert "**CVSS 4.0:**" in advisory_text
+    assert "raw HTTP request packet" in advisory_text
+    assert "<BASE64_PAYLOAD>" in advisory_text
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():

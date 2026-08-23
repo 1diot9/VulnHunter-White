@@ -102,7 +102,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令 | MarkFalsePositive |
 | PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理）、缺打印、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
 | 指纹占位、`lab.md` 引用、报告缺段、危害写过头（如 SSRF 回显 vs 仅探测） | 本轮 Write `report.md` / `request.http` 后 Confirm |
-| 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 CVSS 3.1/4.0 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 的基础分、严重度标签与向量字符串，与 ConfirmVuln 严重度校准一致）或 ConfirmVuln 传 `advisory_md` |
+| 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 CVSS 3.1/4.0、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 的基础分、严重度标签与向量字符串，与 ConfirmVuln 严重度校准一致；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述/版本/参考链接 | `ReadCveRecord` 查看字段，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`）；不要 Write 整份 `cve.json` |
 | 入口 / sink / 根因分析错了，需要重新读源码补分析 | ReturnToWorker（写清缺哪一块）；上限 1 次，超过由系统误报 |
 | 同根因同危害多份 | MergeIntoVuln，不要误报、不要打回 |

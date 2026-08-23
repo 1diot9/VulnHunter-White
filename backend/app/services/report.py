@@ -312,6 +312,8 @@ Expected evidence: {evidence}
 
 Requires a running instance you are authorized to test. Do not include real secrets.
 
+Must include at least one raw HTTP request packet below. Replace long header/body values (roughly 80+ characters) with descriptive placeholders such as `<BASE64_PAYLOAD>`.
+
 {http_block}
 
 ```text
