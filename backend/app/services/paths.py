@@ -100,6 +100,41 @@ def src_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "src"
 
 
+# GitHub 官方安全策略常见路径（SECURITY.md）
+_SECURITY_POLICY_REL_CANDIDATES = (
+    "SECURITY.md",
+    ".github/SECURITY.md",
+    "docs/SECURITY.md",
+    "security.md",
+    ".github/security.md",
+    "docs/security.md",
+)
+
+
+def find_security_policy_path(project_id: int) -> Path | None:
+    """Return src/.../SECURITY.md when the imported tree ships a security policy."""
+    root = src_dir(project_id)
+    if not root.is_dir():
+        return None
+    for rel in _SECURITY_POLICY_REL_CANDIDATES:
+        path = root / rel
+        if path.is_file():
+            return path
+    for path in root.iterdir():
+        if path.is_file() and path.name.lower() == "security.md":
+            return path
+    return None
+
+
+def security_policy_rel_path(project_id: int) -> str | None:
+    """Workspace-relative path like src/SECURITY.md for prompts and inject blocks."""
+    path = find_security_policy_path(project_id)
+    if not path:
+        return None
+    root = src_dir(project_id)
+    return "src/" + path.relative_to(root).as_posix()
+
+
 def workspace_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "workspace"
 

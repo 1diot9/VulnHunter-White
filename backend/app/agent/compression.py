@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
-from ..services.paths import docs_dir, summaries_dir, workspace_dir
+from ..services.paths import docs_dir, find_security_policy_path, src_dir, summaries_dir, workspace_dir
 
 
 def _str_tokens(text: str) -> int:
@@ -180,6 +180,73 @@ def max_round_report_no(project_id: int) -> int:
     return found[-1][0] if found else 0
 
 
+def _security_policy_inject_parts(project_id: int, doc_cap: int) -> list[str]:
+    """SECURITY.md body for Worker / Reviewer initial context."""
+    path = find_security_policy_path(project_id)
+    if not path:
+        return []
+    text = _read_capped(path, doc_cap)
+    if not text:
+        return []
+    rel = "src/" + path.relative_to(src_dir(project_id)).as_posix()
+    return [
+        f"### {rel}（项目安全策略 / SECURITY.md）\n"
+        "以下为仓库官方安全策略，评判漏洞时须对照：尤其注意「不接收 / 不在范围 / out of scope」等声明，"
+        "此类问题应误报或标 low_impact，不要 SubmitVuln / ConfirmVuln。\n"
+        f"{text}\n"
+    ]
+
+
+def inject_security_policy_block(project_id: int) -> str:
+    """Standalone SECURITY.md block for Reviewer (and other phases that skip recon docs)."""
+    doc_cap = settings.recon_doc_inject_max_chars
+    parts = _security_policy_inject_parts(project_id, doc_cap)
+    if not parts:
+        return ""
+    body = (
+        "## 项目安全策略（SECURITY.md）\n"
+        "以下为仓库官方安全策略，审核漏洞时须对照。\n\n"
+        + parts[0]
+    )
+    return body.strip() + "\n\n"
+
+
+def _inject_recon_docs_header(worker_detail: bool) -> str:
+    if worker_detail:
+        return (
+            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
+            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用，不要再 Glob/Read 去重建模块划分、"
+            "HTTP / 非 HTTP 入口或鉴权模型。\n"
+        )
+    return (
+        "## 侦察产物（已完成，禁止再梳理项目结构）\n"
+        "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用。\n"
+    )
+
+
+def _append_recon_doc_parts(
+    project_id: int,
+    parts: list[str],
+    *,
+    worker_detail: bool = False,
+) -> bool:
+    """Append code-map, auth, and SECURITY.md when present."""
+    docs = docs_dir(project_id)
+    doc_cap = settings.recon_doc_inject_max_chars
+    map_text = _read_capped(docs / "code-map.md", doc_cap)
+    auth_text = _read_capped(docs / "auth.md", doc_cap)
+    security_parts = _security_policy_inject_parts(project_id, doc_cap)
+    if not (map_text or auth_text or security_parts):
+        return False
+    parts.append(_inject_recon_docs_header(worker_detail))
+    if map_text:
+        parts.append(f"### docs/code-map.md\n{map_text}\n")
+    if auth_text:
+        parts.append(f"### docs/auth.md\n{auth_text}\n")
+    parts.extend(security_parts)
+    return True
+
+
 def list_recent_fast_round_reports(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
     cap = settings.worker_round_history if limit is None else limit
     rounds = workspace_dir(project_id) / "rounds"
@@ -197,19 +264,7 @@ def max_fast_round_report_no(project_id: int) -> int:
 def inject_fast_prior_block(project_id: int) -> str:
     """Recon docs plus recent FinishSink round reports."""
     parts: list[str] = []
-    docs = docs_dir(project_id)
-    doc_cap = settings.recon_doc_inject_max_chars
-    map_text = _read_capped(docs / "code-map.md", doc_cap)
-    auth_text = _read_capped(docs / "auth.md", doc_cap)
-    if map_text or auth_text:
-        parts.append(
-            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
-            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用。\n"
-        )
-        if map_text:
-            parts.append(f"### docs/code-map.md\n{map_text}\n")
-        if auth_text:
-            parts.append(f"### docs/auth.md\n{auth_text}\n")
+    _append_recon_doc_parts(project_id, parts)
     reports = list_recent_fast_round_reports(project_id)
     if reports:
         n = len(reports)
@@ -243,19 +298,7 @@ def max_bypass_round_report_no(project_id: int) -> int:
 def inject_bypass_prior_block(project_id: int) -> str:
     """Recon docs plus recent FinishBypass round reports."""
     parts: list[str] = []
-    docs = docs_dir(project_id)
-    doc_cap = settings.recon_doc_inject_max_chars
-    map_text = _read_capped(docs / "code-map.md", doc_cap)
-    auth_text = _read_capped(docs / "auth.md", doc_cap)
-    if map_text or auth_text:
-        parts.append(
-            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
-            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用。\n"
-        )
-        if map_text:
-            parts.append(f"### docs/code-map.md\n{map_text}\n")
-        if auth_text:
-            parts.append(f"### docs/auth.md\n{auth_text}\n")
+    _append_recon_doc_parts(project_id, parts)
     reports = list_recent_bypass_round_reports(project_id)
     if reports:
         n = len(reports)
@@ -291,19 +334,7 @@ def list_recent_worker_round_summaries(project_id: int, limit: int | None = None
 def inject_worker_prior_block(project_id: int) -> str:
     """Recon architecture/auth plus recent mining round summaries for a new Worker round."""
     parts: list[str] = []
-    docs = docs_dir(project_id)
-    doc_cap = settings.recon_doc_inject_max_chars
-    map_text = _read_capped(docs / "code-map.md", doc_cap)
-    auth_text = _read_capped(docs / "auth.md", doc_cap)
-    if map_text or auth_text:
-        parts.append(
-            "## 侦察产物（已完成，禁止再梳理项目结构）\n"
-            "以下是侦察阶段落盘的代码地图与鉴权文档。直接使用，不要再 Glob/Read 去重建模块划分、HTTP / 非 HTTP 入口或鉴权模型。\n"
-        )
-        if map_text:
-            parts.append(f"### docs/code-map.md\n{map_text}\n")
-        if auth_text:
-            parts.append(f"### docs/auth.md\n{auth_text}\n")
+    _append_recon_doc_parts(project_id, parts, worker_detail=True)
 
     reports = list_recent_round_reports(project_id)
     if reports:

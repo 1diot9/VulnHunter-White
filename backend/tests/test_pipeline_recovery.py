@@ -356,6 +356,12 @@ def _write_recon_docs(project: int) -> None:
     (docs / "auth.md").write_text("# 鉴权\nJWT 过滤器。\n", encoding="utf-8")
 
 
+def _write_security_policy(project: int, text: str = "# Security\n不接收 CSRF。\n") -> None:
+    from app.services.paths import src_dir
+
+    (src_dir(project) / "SECURITY.md").write_text(text, encoding="utf-8")
+
+
 def _write_round_report(project: int, n: int, text: str) -> None:
     rounds = workspace_dir(project) / "rounds"
     rounds.mkdir(parents=True, exist_ok=True)
@@ -424,6 +430,25 @@ def test_bind_worker_round_id_resume_avoids_overwrite(tmp_env, project):
     assert loop.state["round_id"] == 4
 
 
+def test_worker_prior_block_injects_security_policy(tmp_env, project):
+    _write_recon_docs(project)
+    _write_security_policy(project, "# Policy\n不接收 CSRF 与缺少 HttpOnly。\n")
+
+    block = inject_worker_prior_block(project)
+    assert "src/SECURITY.md" in block
+    assert "不接收 CSRF" in block
+    assert "项目安全策略" in block
+
+
+def test_worker_prior_block_injects_security_policy_without_recon_docs(tmp_env, project):
+    _write_security_policy(project, "# Policy\n仅 SECURITY.md。\n")
+
+    block = inject_worker_prior_block(project)
+    assert "src/SECURITY.md" in block
+    assert "仅 SECURITY.md" in block
+    assert "docs/code-map.md" not in block
+
+
 def test_worker_prior_block_injects_recon_and_recent_rounds(tmp_env, project):
     _write_recon_docs(project)
     for n in range(1, 13):
@@ -481,6 +506,7 @@ def test_worker_prior_block_falls_back_to_compression_summaries(tmp_env, project
 
 def test_prompt_with_summary_injects_prior_only_for_worker_files(tmp_env, project):
     _write_recon_docs(project)
+    _write_security_policy(project, "# Policy\n不接收目录遍历。\n")
     _write_round_report(project, 1, "已否决 /debug 路径。")
 
     worker = pipeline._prompt_with_summary("worker", project, "本轮任务正文", for_file=True)
@@ -492,6 +518,8 @@ def test_prompt_with_summary_injects_prior_only_for_worker_files(tmp_env, projec
     reviewer = pipeline._prompt_with_summary("reviewer", project, "审核正文")
     assert "入口在 Main.java" not in reviewer
     assert "已否决 /debug 路径" not in reviewer
+    assert "src/SECURITY.md" in reviewer
+    assert "不接收目录遍历" in reviewer
     assert "审核正文" in reviewer
 
 

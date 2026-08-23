@@ -27,6 +27,7 @@ from ..agent.compression import (
     inject_summary_block,
     inject_fast_prior_block,
     inject_bypass_prior_block,
+    inject_security_policy_block,
     inject_worker_prior_block,
     latest_summary,
     max_fast_round_report_no,
@@ -1540,6 +1541,10 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
         prior = inject_worker_prior_block(project_id)
         if prior:
             text = f"{prior}{text}"
+    if phase == "reviewer":
+        policy = inject_security_policy_block(project_id)
+        if policy:
+            text = f"{policy}{text}"
     if phase in _WORKER_HINT_PHASES:
         hint = _worker_hint_block(project_id)
         if hint:
