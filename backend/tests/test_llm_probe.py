@@ -132,6 +132,34 @@ def test_connectivity_success(tmp_env, monkeypatch):
     assert body["latency_ms"] is not None
 
 
+def test_connectivity_kimi_k3_uses_max_completion_tokens(tmp_env, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/test",
+            json={
+                "base_url": "https://api.moonshot.cn/v1",
+                "api_key": "sk-live",
+                "model": "kimi-k3",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    assert "temperature" not in payload
+    assert "max_tokens" not in payload
+    assert payload["max_completion_tokens"] == 16
+
+
 def test_connectivity_requires_model_and_key(tmp_env, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 

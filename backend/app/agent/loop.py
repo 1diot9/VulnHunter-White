@@ -27,6 +27,13 @@ from .anthropic_compat import (
     consume_anthropic_stream,
     is_anthropic_wire,
 )
+from .llm_compat import (
+    param_to_drop,
+    prepare_chat_body,
+    preserves_assistant_reasoning,
+    sampling_temperature,
+    strip_reasoning_fields,
+)
 from .chat_stream import (
     ChatStreamCancelled,
     ChatStreamProviderError,
@@ -110,18 +117,26 @@ def _content_text(message: dict[str, Any]) -> str:
     return str(content).strip()
 
 
-def _sanitize_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sanitize_chat_messages(
+    messages: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
     """Coerce null/missing content to empty string for OpenAI-compatible gateways.
 
     OpenAI allows assistant ``content=null`` with ``tool_calls``. Qwen/DashScope
     and several compatible gateways reject that as "content field is a required
     field" (HTTP 400). Empty string is accepted by both.
+
+    Kimi K2.5+ / K3 require the complete assistant message (including
+    ``reasoning_content``) on later turns; other providers may 400 on that field.
     """
+    keep_reasoning = preserves_assistant_reasoning(model)
     out: list[dict[str, Any]] = []
     for m in messages:
         if not isinstance(m, dict):
             continue
-        nm = dict(m)
+        nm = dict(m) if keep_reasoning else strip_reasoning_fields(m)
         if nm.get("content") is None:
             nm["content"] = ""
         out.append(nm)
@@ -520,6 +535,8 @@ class AgentLoop:
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": content}
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
             messages.append(assistant_msg)
             self._persist(messages)
             persist_nudge = self.watchdog.note_turn(tool_names)
@@ -777,7 +794,7 @@ class AgentLoop:
                 messages=messages,
                 tools=tools,
                 stream=True,
-                temperature=settings.temperature,
+                temperature=sampling_temperature(self.llm.model, settings.temperature),
             )
             consume = consume_anthropic_stream
         else:
@@ -788,13 +805,13 @@ class AgentLoop:
             }
             body = {
                 "model": self.llm.model,
-                "messages": _sanitize_chat_messages(messages),
-                "temperature": settings.temperature,
+                "messages": _sanitize_chat_messages(messages, model=self.llm.model),
                 "tools": tools,
                 "tool_choice": "auto",
                 "stream": True,
                 "stream_options": {"include_usage": True},
             }
+            prepare_chat_body(body, self.llm.model, temperature=settings.temperature)
             consume = consume_chat_stream
         last_err: Exception | None = None
         est_tokens = estimate_tokens(messages, tools)
@@ -854,15 +871,17 @@ class AgentLoop:
                     raise RateLimitError("429 rate limited", retry_after=retry_after)
                 if status >= 500:
                     raise TransientError(f"HTTP {status}: {(err_text or '')[:300]}")
-                if status == 400 and body.get("stream_options"):
-                    body = {k: v for k, v in body.items() if k != "stream_options"}
-                    self._live.system(
-                        self.project_id,
-                        f"HTTP 400，去掉 stream_options 后重试：{(err_text or '')[:180]}",
-                        phase=self.phase,
-                        role=self.role,
-                    )
-                    continue
+                if status == 400:
+                    drop_key = param_to_drop(body, err_text)
+                    if drop_key:
+                        body = {k: v for k, v in body.items() if k != drop_key}
+                        self._live.system(
+                            self.project_id,
+                            f"HTTP 400，去掉 {drop_key} 后重试：{(err_text or '')[:180]}",
+                            phase=self.phase,
+                            role=self.role,
+                        )
+                        continue
                 if status >= 400:
                     raise TransientError(f"HTTP {status}: {(err_text or '')[:300]}")
                 if not data:
@@ -1114,7 +1133,7 @@ class AgentLoop:
                 payload: dict[str, Any] = build_anthropic_body(
                     model=self.llm.model,
                     messages=prompt_msgs,
-                    temperature=0.2,
+                    temperature=sampling_temperature(self.llm.model, 0.2),
                     max_tokens=1024,
                 )
             else:
@@ -1123,7 +1142,8 @@ class AgentLoop:
                     "Authorization": f"Bearer {self.llm.api_key}",
                     "Content-Type": "application/json",
                 }
-                payload = {"model": self.llm.model, "messages": prompt_msgs, "temperature": 0.2}
+                payload = {"model": self.llm.model, "messages": prompt_msgs}
+                prepare_chat_body(payload, self.llm.model, temperature=0.2)
             with llm_slot(self.cancel_event) as got_slot:
                 if not got_slot:
                     return self._attach_current_todos("（自动摘要取消）")

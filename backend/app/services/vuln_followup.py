@@ -13,7 +13,7 @@ from ..agent.anthropic_compat import (
     consume_anthropic_stream,
     is_anthropic_wire,
 )
-from ..agent.llm_compat import apply_temperature, sampling_temperature
+from ..agent.llm_compat import param_to_drop, prepare_chat_body, sampling_temperature
 from ..agent.checkpoint import LoopCheckpoint, load_checkpoint
 from ..agent.chat_stream import ChatStreamError, ChatStreamProviderError, consume_chat_stream
 from ..config import settings
@@ -621,7 +621,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        apply_temperature(body, llm.model, settings.temperature)
+        prepare_chat_body(body, llm.model, temperature=settings.temperature)
         consume = consume_chat_stream
     timeout = chat_http_timeout(float(settings.timeout_reviewer_static or 180), 0)
     try:
@@ -630,11 +630,9 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                 with client.stream("POST", url, headers=headers, json=body) as res:
                     if res.status_code == 400:
                         text = res.read().decode("utf-8", errors="replace")
-                        if "temperature" in body and "temperature" in text.lower():
-                            body.pop("temperature", None)
-                            continue
-                        if body.get("stream_options"):
-                            body.pop("stream_options", None)
+                        drop_key = param_to_drop(body, text)
+                        if drop_key:
+                            body.pop(drop_key, None)
                             continue
                         raise FollowUpLlmError(f"LLM HTTP 400: {text[:300]}")
                     if res.status_code == 401:

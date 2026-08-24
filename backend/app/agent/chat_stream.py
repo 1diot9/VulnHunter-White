@@ -63,8 +63,9 @@ def parse_sse_line(line: Any) -> Any:
             return None
         try:
             return json.loads(data)
-        except json.JSONDecodeError as e:
-            raise ChatStreamError(f"invalid SSE JSON: {e}") from e
+        except json.JSONDecodeError:
+            # Truncated keep-alive / proxy junk: skip like AutoPoc's Chat gateway.
+            return None
     if text.startswith("{"):
         try:
             return json.loads(text)

@@ -21,8 +21,8 @@ def test_parse_sse_line_done_and_comments():
     assert parse_sse_line(": keep-alive") is None
     done = parse_sse_line("data: [DONE]")
     assert done is not None and done is not parse_sse_line("data: {}")
-    payload = parse_sse_line('data: {"choices":[]}')
-    assert payload == {"choices": []}
+    assert parse_sse_line("data: {not-json") is None
+    assert parse_sse_line('data: {"choices":[]}') == {"choices": []}
     raw = parse_sse_line('{"choices":[{"message":{"content":"hi"}}]}')
     assert raw["choices"][0]["message"]["content"] == "hi"
 
@@ -167,7 +167,7 @@ class _FakeClient:
         return self.response
 
 
-def _loop(monkeypatch, client: _FakeClient) -> AgentLoop:
+def _loop(monkeypatch, client: _FakeClient, *, model: str = "glm-5.2") -> AgentLoop:
     monkeypatch.setattr("app.agent.loop.chat_http_client", lambda timeout=None: client)
     monkeypatch.setattr("app.agent.loop.live_log.system", lambda *a, **k: None)
     monkeypatch.setattr("app.agent.loop.llm_gate.note_rate_limit", lambda retry_after=None: None)
@@ -180,7 +180,7 @@ def _loop(monkeypatch, client: _FakeClient) -> AgentLoop:
         llm=ResolvedLlm(
             base_url="http://llm.test/v1",
             wire_api="chat",
-            model="glm-5.2",
+            model=model,
             api_key="k",
             source="test",
         ),
@@ -208,6 +208,7 @@ def test_chat_streams_and_assembles(monkeypatch):
     assert usage["cached_tokens"] == 2
     assert client.captured["json"]["stream"] is True
     assert client.captured["json"]["stream_options"] == {"include_usage": True}
+    assert client.captured["json"]["temperature"] == 0.2
 
 
 def test_chat_http_429(monkeypatch):
@@ -248,6 +249,81 @@ def test_sanitize_chat_messages_coerces_null_content():
     assert out[3]["content"] == ""
     assert original[1]["content"] is None
     assert "content" not in original[2]
+
+
+def test_sanitize_chat_messages_keeps_reasoning_for_kimi_k3():
+    original = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "plan",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+        }
+    ]
+    kept = _sanitize_chat_messages(original, model="kimi-k3")
+    glm_kept = _sanitize_chat_messages(original, model="glm-5.2")
+    stripped = _sanitize_chat_messages(original, model="gpt-4o")
+    assert kept[0]["reasoning_content"] == "plan"
+    assert glm_kept[0]["reasoning_content"] == "plan"
+    assert "reasoning_content" not in stripped[0]
+    assert original[0]["reasoning_content"] == "plan"
+
+
+def test_chat_omits_temperature_for_kimi_k3(monkeypatch):
+    resp = _FakeResponse(
+        lines=[
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+    )
+    client = _FakeClient(resp)
+    loop = _loop(monkeypatch, client, model="moonshotai/kimi-k3")
+    loop._chat([{"role": "user", "content": "hi"}], [], remaining=1800)
+    body = client.captured["json"]
+    assert "temperature" not in body
+    assert body["model"] == "moonshotai/kimi-k3"
+
+
+def test_chat_sends_temperature_for_glm(monkeypatch):
+    resp = _FakeResponse(
+        lines=[
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+    )
+    client = _FakeClient(resp)
+    loop = _loop(monkeypatch, client, model="glm-5.2")
+    loop._chat([{"role": "user", "content": "hi"}], [], remaining=1800)
+    body = client.captured["json"]
+    assert body["temperature"] == 0.2
+
+
+def test_chat_drops_temperature_on_400(monkeypatch):
+    responses = [
+        _FakeResponse(
+            status_code=400,
+            body=b'{"error":{"message":"Parameter \'temperature\'=0.2 is not supported for kimi-k3 model."}}',
+        ),
+        _FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                "data: [DONE]",
+            ]
+        ),
+    ]
+    captured = []
+
+    class _SeqClient(_FakeClient):
+        def stream(self, method, url, headers=None, json=None):
+            captured.append(json)
+            return responses[len(captured) - 1]
+
+    loop = _loop(monkeypatch, _SeqClient(responses[0]), model="custom-k3-gateway")
+    data, _usage, _ra = loop._chat([{"role": "user", "content": "hi"}], [], remaining=1800)
+    assert data["choices"][0]["message"]["content"] == "ok"
+    assert captured[0]["temperature"] == 0.2
+    assert "temperature" not in captured[1]
+    assert captured[1]["stream"] is True
 
 
 def test_chat_sends_empty_string_for_null_assistant_content(monkeypatch):

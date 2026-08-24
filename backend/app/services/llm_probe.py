@@ -15,6 +15,7 @@ from ..agent.anthropic_compat import (
     build_anthropic_body,
     is_anthropic_wire,
 )
+from ..agent.llm_compat import prepare_chat_body
 from ..schemas import LlmModelListOut, LlmProbeIn, LlmTestOut
 from .http_client import chat_http_client
 from .llm_settings import resolve_probe_target
@@ -184,11 +185,14 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
         headers = _headers(api_key, wire_api)
     else:
         url = base_url + "/chat/completions"
-        payload = {
-            "model": model,
-            "messages": probe_messages,
-            "max_tokens": 16,
-        }
+        payload = prepare_chat_body(
+            {
+                "model": model,
+                "messages": probe_messages,
+                "max_tokens": 16,
+            },
+            model,
+        )
         headers = _headers(api_key, wire_api)
     started = time.perf_counter()
     try:
