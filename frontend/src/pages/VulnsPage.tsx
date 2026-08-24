@@ -72,6 +72,7 @@ export default function VulnsPage() {
   const [dynamicError, setDynamicError] = useState('')
   const [reportKind, setReportKind] = useState<'report' | 'advisory' | 'cve'>('report')
   const [advisoryCopied, setAdvisoryCopied] = useState(false)
+  const [cveCopied, setCveCopied] = useState(false)
 
   const projectNameById = useMemo(() => {
     const map = new Map<number, string>()
@@ -109,10 +110,12 @@ export default function VulnsPage() {
       setDynamicBusy(false)
       setReportKind('report')
       setAdvisoryCopied(false)
+      setCveCopied(false)
       return
     }
     setReportKind('report')
     setAdvisoryCopied(false)
+    setCveCopied(false)
     return startVisibilityPoll(() => {
       api.getVuln(detailId).then(setDetail).catch(() => setDetail(null))
     }, 5000)
@@ -185,6 +188,18 @@ export default function VulnsPage() {
       await navigator.clipboard.writeText(text)
       setAdvisoryCopied(true)
       window.setTimeout(() => setAdvisoryCopied(false), 1600)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function copyCveJson() {
+    const text = detail?.cve_json
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCveCopied(true)
+      window.setTimeout(() => setCveCopied(false), 1600)
     } catch {
       /* ignore */
     }
@@ -693,6 +708,21 @@ export default function VulnsPage() {
                         <CopyIcon data-icon="inline-start" />
                       )}
                       {advisoryCopied ? '已复制' : '复制到 GitHub'}
+                    </Button>
+                  ) : null}
+                  {reportKind === 'cve' ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!detail.cve_json}
+                      onClick={() => copyCveJson()}
+                    >
+                      {cveCopied ? (
+                        <CheckIcon data-icon="inline-start" />
+                      ) : (
+                        <CopyIcon data-icon="inline-start" />
+                      )}
+                      {cveCopied ? '已复制' : '复制 CVE JSON'}
                     </Button>
                   ) : null}
                 </div>
