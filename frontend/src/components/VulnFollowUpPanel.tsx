@@ -175,17 +175,9 @@ export default function VulnFollowUpPanel({
               可追问报告，也可生成修订稿并在预览确认后写回漏洞报告文件。
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant={mode === 'ask' ? 'default' : 'outline'} onClick={() => setMode('ask')}>
-              询问报告
-            </Button>
-            <Button size="sm" variant={mode === 'revise' ? 'default' : 'outline'} onClick={() => setMode('revise')}>
-              修改报告
-            </Button>
-            <Badge variant={thread?.reviewer_context_available ? 'info' : 'outline'}>
-              {loading ? '加载中' : thread?.reviewer_context_available ? contextLabel : '暂无上下文'}
-            </Badge>
-          </div>
+          <Badge variant={thread?.reviewer_context_available ? 'info' : 'outline'}>
+            {loading ? '加载中' : thread?.reviewer_context_available ? contextLabel : '暂无上下文'}
+          </Badge>
         </div>
 
         {!loading && !thread?.reviewer_context_available ? (
@@ -236,6 +228,14 @@ export default function VulnFollowUpPanel({
         ) : null}
 
         <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant={mode === 'ask' ? 'default' : 'outline'} onClick={() => setMode('ask')}>
+              询问报告
+            </Button>
+            <Button size="sm" variant={mode === 'revise' ? 'default' : 'outline'} onClick={() => setMode('revise')}>
+              修改报告
+            </Button>
+          </div>
           {mode === 'revise' ? (
             <div className="flex flex-wrap gap-2">
               {(['report', 'advisory', 'cve'] as VulnReportKind[]).map((kind) => (
