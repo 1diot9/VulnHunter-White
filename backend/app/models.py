@@ -302,6 +302,10 @@ class AttackChain(Base):
     vuln_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # static | verified | skipped_interaction — lab dynamic verify outcome for detailed chains
+    verify_status: Mapped[str] = mapped_column(String(32), default="static")
+    # Relative path to chain.py when dynamically verified (or written then skipped)
+    script_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -466,6 +470,10 @@ def _ensure_columns() -> None:
             "verifier_ask_reason": "TEXT",
             "verifier_user_instruction": "TEXT",
             "verifier_consent": "BOOLEAN DEFAULT 0",
+        },
+        "attack_chains": {
+            "verify_status": "VARCHAR(32) DEFAULT 'static'",
+            "script_path": "VARCHAR(1024)",
         },
     }
     with engine.begin() as conn:

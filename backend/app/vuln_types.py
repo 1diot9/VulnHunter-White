@@ -33,6 +33,9 @@ VULN_TYPES: tuple[str, ...] = (
 ALLOWED_VULN_TYPES = frozenset(VULN_TYPES)
 PENDING_SEVERITY = "pending"
 
+# 攻击链动态验证：需受害者浏览器 / 人工点击等交互的类型，整链跳过靶场复测
+INTERACTIVE_VULN_TYPES = frozenset({"xss", "stored_xss", "csrf"})
+
 VULN_TYPE_LABELS: dict[str, str] = {
     "rce": "RCE",
     "ssti": "SSTI",

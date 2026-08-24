@@ -2,7 +2,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 
 export const ATTACK_CHAIN_HINT =
-  '挖掘与审核都结束后，根据本项目已确认漏洞尝试多步串联利用，扩大危害。已确认洞少于 2 条时自动跳过。不执行 PoC、不打靶场。默认关闭。'
+  '挖掘与审核都结束后，根据本项目已确认漏洞尝试多步串联利用，扩大危害。已确认洞少于 2 条时自动跳过。有本地 Docker 靶场时，对无需用户交互的链编写串联脚本并动态验证；含 XSS 等需交互的链跳过验证。默认关闭。'
 
 export function AttackChainToggle({
   enabled,

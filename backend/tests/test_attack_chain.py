@@ -99,12 +99,12 @@ def test_attack_chain_acl():
     assert "SearchOldVuln" in allowed
     assert "Read" in allowed
     assert "Grep" in allowed
+    assert "Write" in allowed
+    assert "Bash" in allowed or "PowerShell" in allowed
     assert "TodoWrite" in allowed
     assert "SubmitAttackChain" in allowed
     assert "IndexAttackChain" in allowed
     assert "FinishAttackChain" in allowed
-    assert "Write" not in allowed
-    assert "Bash" not in allowed
     assert "SubmitVuln" not in allowed
     assert "WebSearch" not in allowed
 
@@ -479,3 +479,170 @@ def test_create_and_patch_attack_chain_enabled(tmp_env, monkeypatch):
     enabled = client.patch(f"/api/projects/{pid}", json={"attack_chain_enabled": True})
     assert enabled.status_code == 200
     assert enabled.json()["attack_chain_enabled"] is True
+
+
+_CHAIN_SCRIPT_OK = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+args = p.parse_args()
+print("chain-ok", args.url)
+raise SystemExit(0)
+"""
+
+_CHAIN_SCRIPT_FAIL = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+args = p.parse_args()
+print("chain-miss", args.url)
+raise SystemExit(2)
+"""
+
+
+def _lab_up(project, url: str = "http://127.0.0.1:18080"):
+    from app.services.lab import save_env
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "status": "running",
+            "target_url": url,
+            "lab_ever_ready": True,
+            "container_name": f"test-{project}",
+        },
+    )
+
+
+def test_submit_static_without_lab_needs_no_script(tmp_env, project):
+    a = _submit_and_confirm(project, title="洞 A")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "静态链",
+            "vuln_ids": [a, b],
+            "summary": "无靶场",
+            "steps": "## 步骤\n静态\n",
+        },
+    )
+    assert ok["ok"] is True, ok
+    assert ok["verify_status"] == "static"
+    assert not ok.get("script_path")
+
+
+def test_lab_noninteractive_requires_chain_script(tmp_env, project):
+    _lab_up(project)
+    a = _submit_and_confirm(project, title="洞 A", vuln_type="sqli")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java", vuln_type="rce")
+    ctx = _ctx(project, "attack_chain")
+    missing = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "缺脚本",
+            "vuln_ids": [a, b],
+            "summary": "应拒绝",
+            "steps": "## 步骤\n无脚本\n",
+        },
+    )
+    assert missing["ok"] is False
+    assert "chain_script" in str(missing.get("error") or "")
+
+
+def test_lab_verifies_chain_script_and_lands_py(tmp_env, project):
+    _lab_up(project)
+    a = _submit_and_confirm(project, title="洞 A", vuln_type="sqli")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java", vuln_type="rce")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "已验证链",
+            "vuln_ids": [a, b],
+            "summary": "SQLi 到 RCE",
+            "steps": "## 步骤\n1\n2\n",
+            "chain_script": _CHAIN_SCRIPT_OK,
+        },
+    )
+    assert ok["ok"] is True, ok
+    assert ok["verify_status"] == "verified"
+    assert ok.get("script_path", "").endswith(".py")
+    script = attack_chains_dir(project) / ok["script_path"].split("/")[-1]
+    assert script.is_file()
+    assert "chain-ok" in script.read_text(encoding="utf-8")
+    with _db() as db:
+        row = db.get(AttackChain, ok["chain_id"])
+        assert row is not None
+        assert row.verify_status == "verified"
+        assert row.script_path == ok["script_path"]
+    index = (attack_chains_dir(project) / "index.md").read_text(encoding="utf-8")
+    assert "已动态验证" in index
+
+
+def test_lab_rejects_failing_chain_script(tmp_env, project):
+    _lab_up(project)
+    a = _submit_and_confirm(project, title="洞 A", vuln_type="info_disclosure")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java", vuln_type="auth_bypass")
+    ctx = _ctx(project, "attack_chain")
+    bad = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "失败链",
+            "vuln_ids": [a, b],
+            "summary": "应失败",
+            "steps": "## 步骤\n失败\n",
+            "chain_script": _CHAIN_SCRIPT_FAIL,
+        },
+    )
+    assert bad["ok"] is False
+    assert bad.get("exit_code") == 2
+    assert not list(attack_chains_dir(project).glob("*.md"))
+
+
+def test_interactive_xss_skips_dynamic_verify(tmp_env, project):
+    _lab_up(project)
+    a = _submit_and_confirm(project, title="存储 XSS", vuln_type="stored_xss")
+    b = _submit_and_confirm(project, title="后台 RCE", file_path="b.java", vuln_type="rce")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "XSS 链",
+            "vuln_ids": [a, b],
+            "summary": "需 admin 打开页面",
+            "steps": "## 步骤\n需受害者交互\n",
+        },
+    )
+    assert ok["ok"] is True, ok
+    assert ok["verify_status"] == "skipped_interaction"
+    assert ok.get("skipped_interaction") is True
+    assert not ok.get("script_path")
+
+
+def test_needs_interaction_flag_skips_even_without_xss_type(tmp_env, project):
+    _lab_up(project)
+    a = _submit_and_confirm(project, title="洞 A", vuln_type="info_disclosure")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java", vuln_type="rce")
+    ctx = _ctx(project, "attack_chain")
+    ok = registry.dispatch(
+        ctx,
+        "SubmitAttackChain",
+        {
+            "title": "声明交互",
+            "vuln_ids": [a, b],
+            "summary": "Agent 声明需交互",
+            "steps": "## 步骤\n需扫码\n",
+            "needs_interaction": True,
+        },
+    )
+    assert ok["ok"] is True, ok
+    assert ok["verify_status"] == "skipped_interaction"

@@ -1444,6 +1444,31 @@ _BRINGUP_FAILED_NOTE = (
     "ConfirmVuln 必须 evidence_level=static_only。"
 )
 
+_ATTACK_CHAIN_STATIC_NOTE = (
+    "## 动态验证\n\n"
+    "当前无可用的本地 Docker 靶场：只做静态串联推理与文档，不要执行利用、不要 curl 目标。"
+    "SubmitAttackChain 不必传 chain_script。"
+)
+
+
+def _attack_chain_lab_note(project_id: int) -> str:
+    """Inject lab URL for non-interactive chain script verification when Docker lab is up."""
+    from ..tools.phase_attack_chain import resolve_attack_chain_lab_url
+
+    target = resolve_attack_chain_lab_url(project_id)
+    if not target:
+        return _ATTACK_CHAIN_STATIC_NOTE
+    return (
+        "## 动态验证（本地 Docker 靶场可用）\n\n"
+        f"- 靶场 URL：`{target}`\n"
+        "- 无用户交互的详文链：须编写 `chain_script`（Python，`-u/--url` + `--proxy`），"
+        "SubmitAttackChain 时传入；系统会执行 `python chain.py -u <target_url> --proxy \"\"`，"
+        "退出码非 0 则拒绝提交。\n"
+        "- 含 XSS / 存储型 XSS / CSRF，或任何需受害者浏览器/人工点击的链："
+        "传 `needs_interaction=true`，**跳过**动态验证，不要为这类链强行写必跑脚本。\n"
+        "- 只打上述靶场 URL，禁止打互联网目标。可用 Write/Bash 调试脚本后再提交。"
+    )
+
 
 def _docker_lab_note(project_id: int) -> str | None:
     env = load_env(project_id)
@@ -4712,6 +4737,9 @@ def _run_attack_chain_once(project_id: int) -> None:
             catalog=json_dumps(catalog),
             **_agent_prompt_vars(project_id),
         )
+        lab_note = _attack_chain_lab_note(project_id)
+        if lab_note:
+            body = f"{body.rstrip()}\n\n{lab_note}\n"
         user = _prompt_with_summary("attack_chain", project_id, body)
         run_id = _new_phase_run(project_id, "attack_chain", "attack_chain")
         _consume_force_new(project_id, "attack_chain")

@@ -220,6 +220,8 @@
         "vuln_ids": "[183, 184]",
         "summary": "匿名用户通过未授权 SQLi 拖取 admin 明文密码，登录获取 admin 会话后利用 ping 接口命令注入实现 RCE，从匿名访问到完全控制服务器。",
         "report_path": "docs/attack-chains/匿名-SQLi-泄露-admin-凭据-登录-ping-命令注入-RCE.md",
+        "verify_status": "static",
+        "script_path": null,
         "created_at": "2026-08-20 07:49:36.095988",
         "updated_at": "2026-08-20 07:49:36.095988"
       },
@@ -230,6 +232,8 @@
         "vuln_ids": "[185, 184]",
         "summary": "匿名 POST /api/notes 注入 XSS payload（漏洞 185），admin 访问公开 /notes 页面时脚本在其浏览器执行，通过同源 fetch('/api/tools/ping?host=;cmd') 携带 admin session 自动满足鉴权（漏洞 184），实现 RCE 并外带结果；需 admin 访问 /notes 页面。",
         "report_path": null,
+        "verify_status": "skipped_interaction",
+        "script_path": null,
         "created_at": "2026-08-20 07:49:36.128027",
         "updated_at": "2026-08-20 07:49:36.128027"
       }
