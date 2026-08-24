@@ -61,6 +61,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.tools.phase_reviewer as phase_reviewer
     import app.tools.phase_verifier as phase_verifier
     import app.tools.phase_attack_chain as phase_attack_chain
+    import app.tools.phase_cve_record as phase_cve_record
     import app.tools.phase_worker as phase_worker
     import app.services.sink_queue as sink_queue
     import app.services.demo_seed as demo_seed
@@ -77,6 +78,7 @@ def tmp_env(tmp_path, monkeypatch):
         phase_reviewer,
         phase_verifier,
         phase_attack_chain,
+        phase_cve_record,
         ingest,
         llm_settings,
         access_token,

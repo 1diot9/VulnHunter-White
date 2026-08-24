@@ -16,6 +16,22 @@ CVE_FIELD_PLACEHOLDER = "VULNHUNTER_PENDING"
 _CVE_TEMPLATE_PATH = TEMPLATES_DIR / "cve.json"
 _EXAMPLE_RE = re.compile(r"\[EXAMPLE", re.IGNORECASE)
 _PATH_TOKEN_RE = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTTP_REQ_RE = re.compile(
+    r"(?im)(?:^|>)\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\S+[^\n]*HTTP/"
+)
+_LIB_POC_RE = re.compile(
+    r"(?i)\b(harness|public api|api call|invoke\b|function\s+[A-Za-z_][\w.]*\s*\(|"
+    r"class\s+[A-Za-z_])"
+)
+_CHAIN_RE = re.compile(
+    r"(?i)(source\s*(?:→|->|to)\s*sink|attack (?:path|chain)|call chain|"
+    r"entrypoint|end ?point|parameter|controller|sink\b)"
+)
+_DESC_MIN_CHARS = 400
+_PLAIN_DESC_PATH = "containers.cna.descriptions[0].value"
+_HTML_DESC_PATH = "containers.cna.descriptions[0].supportingMedia[0].value"
+_DETAIL_DESC_PATHS = frozenset({_PLAIN_DESC_PATH, _HTML_DESC_PATH})
 
 
 @dataclass(frozen=True)
@@ -37,11 +53,12 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
     ),
     FillableField(
         "containers.cna.descriptions[0].value",
-        "漏洞英文描述（纯文本）",
+        "漏洞英文详述（纯文本）：产品与版本、根因、入口→sink 链路、完整 HTTP 请求包"
+        "（无 HTTP 面则写 API/调用链）、危害；长串用占位符。不要一句话摘要。",
     ),
     FillableField(
         "containers.cna.descriptions[0].supportingMedia[0].value",
-        "漏洞英文描述（HTML，可与 value 相同）",
+        "同上内容的 HTML：段落用 <p>，HTTP/API PoC 放在 <pre> 中。",
     ),
     FillableField(
         "containers.cna.references[0].url",
@@ -141,6 +158,41 @@ def is_unfilled_value(value: Any) -> bool:
     return False
 
 
+def _plain_text(value: Any, *, html: bool) -> str:
+    text = str(value or "")
+    if html:
+        text = _HTML_TAG_RE.sub(" ", text)
+    return " ".join(text.split()).strip()
+
+
+def description_detail_issues(value: Any, *, html: bool = False) -> list[str]:
+    """Return reasons a CVE description is too thin for CNA review."""
+    if is_unfilled_value(value):
+        return ["尚未填写或仍是占位符/示例"]
+    raw = str(value)
+    plain = _plain_text(raw, html=html)
+    issues: list[str] = []
+    if len(plain) < _DESC_MIN_CHARS:
+        issues.append("描述过短，须写清产品/版本、根因、入口→sink 链路、PoC 与危害")
+    has_http = bool(_HTTP_REQ_RE.search(raw))
+    has_lib = bool(_LIB_POC_RE.search(raw))
+    if not has_http and not has_lib:
+        issues.append("须含完整 HTTP 请求包，或无 HTTP 面时写清 API/调用链 PoC")
+    if not _CHAIN_RE.search(raw):
+        issues.append("须写明入口→sink 漏洞链路（端点/参数/文件或 sink）")
+    if html and not re.search(r"(?i)<(p|pre|br|div)\b", raw):
+        issues.append("supportingMedia 须为 HTML（段落用 <p>，PoC 放 <pre>）")
+    if html and has_http and "<pre" not in raw.lower():
+        issues.append("HTML 描述中的 HTTP 请求包须放在 <pre> 中")
+    return issues
+
+
+def _quality_issues_for(path: str, value: Any) -> list[str]:
+    if path not in _DETAIL_DESC_PATHS:
+        return []
+    return description_detail_issues(value, html=path == _HTML_DESC_PATH)
+
+
 def _apply_placeholders(record: dict[str, Any]) -> None:
     for spec in FILLABLE_FIELDS:
         try:
@@ -194,18 +246,21 @@ def list_fillable_fields(record: dict[str, Any]) -> list[dict[str, Any]]:
                     "current_value": None,
                     "needs_fill": spec.required,
                     "missing": True,
+                    "quality_issues": ["字段缺失"],
                 }
             )
             continue
-        needs_fill = is_unfilled_value(current)
+        issues = _quality_issues_for(spec.path, current)
+        needs_fill = is_unfilled_value(current) or bool(issues)
         rows.append(
             {
                 "path": spec.path,
                 "description": spec.description,
                 "required": spec.required,
                 "current_value": current,
-                "needs_fill": needs_fill if spec.required else needs_fill,
+                "needs_fill": needs_fill,
                 "missing": False,
+                "quality_issues": issues,
             }
         )
     return rows
@@ -226,11 +281,14 @@ def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[
     write_cve_record(project_id, vuln_id, record)
     spec = _FILLABLE_BY_PATH[normalized]
     current = get_by_path(record, normalized)
+    issues = _quality_issues_for(normalized, current)
+    needs_fill = (is_unfilled_value(current) or bool(issues)) if spec.required else False
     return {
         "ok": True,
         "path": normalized,
         "current_value": current,
-        "needs_fill": is_unfilled_value(current) if spec.required else False,
+        "needs_fill": needs_fill,
+        "quality_issues": issues,
     }
 
 

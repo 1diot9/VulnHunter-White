@@ -47,6 +47,8 @@ def _read_cve_record(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "message": (
             "使用 SetCveRecordField 逐字段写入；无法确定的字段保持占位符 "
             f"{status['placeholder']}，不要直接 Write 整份 cve.json。"
+            " descriptions[0].value 须为英文详述（产品/版本、根因、入口→sink 链路、"
+            "完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），supportingMedia 用 HTML（PoC 放 <pre>）。"
         ),
     }
     if args.get("include_record"):
@@ -105,6 +107,7 @@ registry.register(
         name="SetCveRecordField",
         description=(
             "写入 CVE JSON 的单个字段（路径见 ReadCveRecord）。"
+            "descriptions[0].value 须含漏洞链路与 HTTP/API PoC，不要一句话摘要。"
             "仅可写预定义字段；未知信息请传统一占位符，不要 Write 整份 cve.json。"
         ),
         parameters={

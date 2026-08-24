@@ -503,14 +503,20 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     assert "不要把中文报告粘进去" in text
     assert "VULNHUNTER_PENDING" in text
     assert "### 补丁绕过简析" in text
+    assert "英文详述" in text
+    assert "完整 HTTP 请求包" in text
+    assert "漏洞链路" in text
+    assert "<pre>" in text
     assert "报告格式专章" in load_prompt("worker.md")
     assert "报告格式专章" in load_prompt("bypass_worker.md")
 
     overlay = pipeline._phase_system_prompt(project, "worker.md")
     assert "报告 / Advisory / CVE 格式" in overlay
     assert "必须为英文 GitHub Advisory 填表稿" in overlay
+    assert "英文详述" in overlay
     reviewer = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "报告 / Advisory / CVE 格式" in reviewer
+    assert "英文详述" in reviewer
 
     from app.models import Vuln
     from app.services.vuln_followup import _build_revision_messages
@@ -548,6 +554,18 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     report_joined = "\n".join(m["content"] for m in report_msgs)
     assert "必须为中文" in report_joined
     assert "必须保留 `### 补丁绕过简析`" in report_joined
+
+    cve_msgs = _build_revision_messages(
+        vuln=vuln,
+        ctx=None,
+        history=[],
+        kind="cve",
+        current="{}",
+        instruction="补充描述",
+    )
+    cve_joined = "\n".join(m["content"] for m in cve_msgs)
+    assert "英文详述" in cve_joined
+    assert "完整 HTTP 请求包" in cve_joined
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():

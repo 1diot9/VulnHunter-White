@@ -20,3 +20,11 @@
 
 - 对齐 `templates/cve.json`。未知字段保持统一占位符 `VULNHUNTER_PENDING`。
 - Agent 挖掘/审核轮次用 `ReadCveRecord` / `SetCveRecordField` 逐字段填写，不要 Write 整份 `cve.json`。
+- `containers.cna.descriptions[0].value` 必须是可供 CNA 审核的**英文详述**，不要一句话摘要，也不要把中文报告或 Advisory Markdown 章节标题粘进去。按下面顺序写清：
+  1. **产品**：厂商/单位、产品名称、受影响版本。
+  2. **根因**：漏洞类型（CWE）、缺失或被绕过的控制、关键文件/函数。
+  3. **漏洞链路**：入口（端点/参数/鉴权前提）→ 中间处理 → sink；写明默认部署下为何能打通。
+  4. **PoC**：有 HTTP 面时写完整原始 HTTP 请求包（方法、路径、必要头、body；`Host` 用 `TARGET`）；约 80+ 字符的长串用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符。无 HTTP 面（组件库/公开 API）时写可复现的 API/调用链或 harness 调用，不要留空。
+  5. **危害**：成功利用后攻击者能做什么；剩余控制条件如实写，不要夸大。
+- `supportingMedia[0].value` 是同一内容的 HTML：段落用 `<p>`，HTTP/API PoC 放在 `<pre>` 中。不要只复制一句纯文本。
+- `problemTypes[0].descriptions[0].description` 仍只填 CWE 弱点英文名，不是整段漏洞描述。

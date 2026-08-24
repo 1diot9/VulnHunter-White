@@ -40,7 +40,10 @@ def _revision_format_rules(kind: str, *, bypass: bool) -> str:
         focus = (
             "本次只改 CVE JSON：revised_text 必须是完整合法 CVE 5.2 JSON 字符串"
             "（详情页改写输出整份文档，不调用 ReadCveRecord / SetCveRecordField）；"
-            "未知字段继续使用 VULNHUNTER_PENDING。不要改成中文报告或 Advisory。"
+            "未知字段继续使用 VULNHUNTER_PENDING。"
+            " descriptions[0].value 须为英文详述（产品/版本、根因、入口→sink 链路、"
+            "完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），supportingMedia 用 HTML。"
+            "不要改成中文报告或 Advisory。"
         )
     elif kind == "advisory":
         focus = (

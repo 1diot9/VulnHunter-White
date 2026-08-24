@@ -54,12 +54,12 @@
       "descriptions": [
         {
           "lang": "en",
-          "value": "[EXAMPLE DESCRIPTION] supplier/product/version is affected by vulnerability type/root cause/impact.",
+          "value": "[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control. Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization. HTTP PoC:\n\nGET /path HTTP/1.1\nHost: TARGET\n\nImpact: a remote attacker can cause the stated impact on a default deployment.",
           "supportingMedia": [
             {
               "type": "text/html",
               "base64": false,
-              "value": "[EXAMPLE DESCRIPTION] supplier/product/version is affected by vulnerability type/root cause/impact."
+              "value": "<p>[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control.</p><p>Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization.</p><pre>GET /path HTTP/1.1\nHost: TARGET</pre><p>Impact: a remote attacker can cause the stated impact on a default deployment.</p>"
             }
           ]
         }

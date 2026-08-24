@@ -14,6 +14,25 @@ from app.services.report import (
 from app.services.paths import vuln_dir
 from app.tools import ToolContext, registry
 
+_DETAILED_CVE_DESC = """ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because Db.java query() concatenates the id parameter into a JDBC statement without parameterization.
+Attack chain: an unauthenticated GET to /api/item (source: query parameter id) reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.
+HTTP PoC:
+GET /api/item?id=1%20OR%201=1 HTTP/1.1
+Host: TARGET
+
+Impact: a remote unauthenticated attacker can read or modify database rows. Remaining control: none on the default install.
+"""
+
+_DETAILED_CVE_HTML = (
+    "<p>ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because "
+    "Db.java query() concatenates the id parameter into a JDBC statement without parameterization.</p>"
+    "<p>Attack chain: an unauthenticated GET to /api/item (source: query parameter id) "
+    "reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.</p>"
+    "<pre>GET /api/item?id=1%20OR%201=1 HTTP/1.1\nHost: TARGET</pre>"
+    "<p>Impact: a remote unauthenticated attacker can read or modify database rows. "
+    "Remaining control: none on the default install.</p>"
+)
+
 
 def test_stamp_after_h1():
     dt = datetime(2026, 8, 16, 1, 17, 0, tzinfo=timezone.utc)
@@ -328,7 +347,6 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         CVE_FIELD_PLACEHOLDER,
         cve_record_path,
         cve_record_status,
-        initialize_cve_record,
         read_cve_record,
         set_cve_field,
     )
@@ -372,8 +390,9 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
     assert read_out["ok"] is True
     assert read_out["placeholder"] == CVE_FIELD_PLACEHOLDER
     assert any(f["needs_fill"] for f in read_out["fields"])
+    assert "英文详述" in read_out["message"]
 
-    set_out = registry.dispatch(
+    thin = registry.dispatch(
         ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid),
         "SetCveRecordField",
         {
@@ -381,7 +400,20 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
             "value": "Example product is affected by SQL injection.",
         },
     )
+    assert thin["ok"] is True
+    assert thin["needs_fill"] is True
+    assert thin["quality_issues"]
+
+    set_out = registry.dispatch(
+        ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid),
+        "SetCveRecordField",
+        {
+            "path": "containers.cna.descriptions[0].value",
+            "value": _DETAILED_CVE_DESC,
+        },
+    )
     assert set_out["ok"] is True
+    assert set_out["needs_fill"] is False
     assert "SQL injection" in json.loads(path.read_text(encoding="utf-8"))["containers"]["cna"]["descriptions"][0]["value"]
 
     set_cve_field(
@@ -395,7 +427,7 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         project,
         vid,
         "containers.cna.descriptions[0].supportingMedia[0].value",
-        "Example product is affected by SQL injection.",
+        _DETAILED_CVE_HTML,
     )
     set_cve_field(project, vid, "containers.cna.references[0].url", "https://example.com/advisory")
     status = cve_record_status(project, vid)
@@ -414,3 +446,20 @@ def test_cve_record_initialize_standalone(tmp_env, project):
 
     record = initialize_cve_record(project, 999)
     assert record["containers"]["cna"]["descriptions"][0]["value"] == CVE_FIELD_PLACEHOLDER
+
+
+def test_cve_description_detail_issues():
+    from app.services.cve_record import description_detail_issues
+
+    assert description_detail_issues("Example product is affected by SQL injection.")
+    assert not description_detail_issues(_DETAILED_CVE_DESC)
+    html_plain = description_detail_issues(_DETAILED_CVE_DESC, html=True)
+    assert any("pre" in item for item in html_plain)
+    assert not description_detail_issues(_DETAILED_CVE_HTML, html=True)
+
+    lib_desc = """ExampleCorp WidgetLib through 2.1.0 is affected by path traversal because Parser.parse() concatenates the caller-supplied name into a filesystem path.
+Attack chain: a public API call Parser.parse(name) (source: name argument) reaches the sink FileInputStream without normalizing against the intended base directory.
+PoC via public API / harness: invoke Parser.parse("../secrets/key.pem") from a trusted caller on a default install.
+Impact: a local caller can read files outside the intended directory. Remaining control: none if the library is used as documented.
+"""
+    assert not description_detail_issues(lib_desc)
