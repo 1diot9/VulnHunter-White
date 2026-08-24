@@ -489,6 +489,37 @@ class VulnFollowUpIn(BaseModel):
     question: str = Field(min_length=1, max_length=20000)
 
 
+class VulnReportRevisionIn(BaseModel):
+    kind: Literal["report", "advisory", "cve"] = "report"
+    instruction: str = Field(min_length=1, max_length=20000)
+
+
+class VulnReportRevisionOut(BaseModel):
+    vuln_id: int
+    project_id: int
+    kind: Literal["report", "advisory", "cve"]
+    reviewer_phase_run_id: int | None = None
+    reviewer_context_available: bool = False
+    original_text: str
+    revised_text: str
+    summary: str = ""
+
+
+class VulnReportApplyIn(BaseModel):
+    kind: Literal["report", "advisory", "cve"] = "report"
+    content: str = Field(min_length=1, max_length=200000)
+    note: str | None = Field(default=None, max_length=20000)
+
+
+class VulnReportApplyOut(BaseModel):
+    ok: bool
+    vuln_id: int
+    project_id: int
+    kind: Literal["report", "advisory", "cve"]
+    content: str
+    message: str = ""
+
+
 class VulnFollowUpMessage(BaseModel):
     id: str
     role: Literal["user", "assistant"]

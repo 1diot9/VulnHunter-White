@@ -491,6 +491,63 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "**CVSS 4.0:**" in advisory_text
     assert "raw HTTP request packet" in advisory_text
     assert "<BASE64_PAYLOAD>" in advisory_text
+    assert "Write all fill-in content in English" in advisory_text
+    assert "Do not use Chinese" in advisory_text
+
+
+def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, project):
+    text = load_prompt("report-formats.md")
+    assert "# 报告 / Advisory / CVE 格式" in text
+    assert "必须为中文" in text
+    assert "必须为英文 GitHub Advisory 填表稿" in text
+    assert "不要把中文报告粘进去" in text
+    assert "VULNHUNTER_PENDING" in text
+    assert "### 补丁绕过简析" in text
+    assert "报告格式专章" in load_prompt("worker.md")
+    assert "报告格式专章" in load_prompt("bypass_worker.md")
+
+    overlay = pipeline._phase_system_prompt(project, "worker.md")
+    assert "报告 / Advisory / CVE 格式" in overlay
+    assert "必须为英文 GitHub Advisory 填表稿" in overlay
+    reviewer = pipeline._phase_system_prompt(project, "reviewer.md")
+    assert "报告 / Advisory / CVE 格式" in reviewer
+
+    from app.models import Vuln
+    from app.services.vuln_followup import _build_revision_messages
+
+    vuln = Vuln(
+        id=1,
+        project_id=project,
+        title="demo",
+        vuln_type="idor",
+        severity="high",
+        status="confirmed",
+    )
+    advisory_msgs = _build_revision_messages(
+        vuln=vuln,
+        ctx=None,
+        history=[],
+        kind="advisory",
+        current="# Title\n",
+        instruction="补充 Impact",
+    )
+    advisory_joined = "\n".join(m["content"] for m in advisory_msgs)
+    assert "报告 / Advisory / CVE 格式" in advisory_joined
+    assert "必须为英文 GitHub Advisory 填表稿" in advisory_joined
+    assert "修订稿正文必须保持英文" in advisory_joined
+
+    vuln.mining_path = "bypass"
+    report_msgs = _build_revision_messages(
+        vuln=vuln,
+        ctx=None,
+        history=[],
+        kind="report",
+        current="# 摘要\n",
+        instruction="补充危害",
+    )
+    report_joined = "\n".join(m["content"] for m in report_msgs)
+    assert "必须为中文" in report_joined
+    assert "必须保留 `### 补丁绕过简析`" in report_joined
 
 
 def test_pipeline_source_has_no_inline_initial_prompts():

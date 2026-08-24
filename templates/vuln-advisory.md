@@ -1,6 +1,6 @@
 # GitHub Security Advisory
 
-English fill-in for the GitHub Advisory form. Copy from `### Summary` through Impact into the Description field. Leave Patched versions empty if there is no upstream fix.
+Write all fill-in content in English (GitHub Advisory form). Do not use Chinese in Title, Description, or Severity notes. Copy from `### Summary` through Impact into the Description field. Leave Patched versions empty if there is no upstream fix.
 
 Do not render this file as HTML in the product UI; keep it as copy-paste Markdown source.
 

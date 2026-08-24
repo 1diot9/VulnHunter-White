@@ -1578,6 +1578,9 @@ def _target_kind_overlay(project_id: int) -> str:
 _POC_PROMPT_PHASES = frozenset(
     {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
 )
+_REPORT_FORMAT_PHASES = frozenset(
+    {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md"}
+)
 _WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
 _LAB_HINT_PHASES = frozenset({"reviewer-lab", "reviewer-lab-bringup"})
 
@@ -1604,6 +1607,8 @@ def _phase_system_prompt(
     parts = [base, overlay, _target_kind_overlay(project_id)]
     if name in _POC_PROMPT_PHASES:
         parts.append(load_prompt("poc.md").strip())
+    if name in _REPORT_FORMAT_PHASES:
+        parts.append(load_prompt("report-formats.md").strip())
     if name == "reviewer.md":
         chosen = verify_mode if verify_mode is not None else _read_dynamic_verify_mode(project_id)
         if chosen == VERIFY_MODE_OFF:

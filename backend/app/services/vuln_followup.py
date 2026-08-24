@@ -13,14 +13,48 @@ from ..agent.anthropic_compat import (
     consume_anthropic_stream,
     is_anthropic_wire,
 )
+from ..agent.llm_compat import apply_temperature, sampling_temperature
 from ..agent.checkpoint import LoopCheckpoint, load_checkpoint
 from ..agent.chat_stream import ChatStreamError, ChatStreamProviderError, consume_chat_stream
 from ..config import settings
 from ..models import PhaseRun, SessionLocal, Vuln
+from ..prompts import load_prompt
 from ..services.http_client import chat_http_client, chat_http_timeout
 from ..services.llm_settings import resolve_llm
+from .cve_record import format_cve_record_json, write_cve_record
 from .paths import project_root, vuln_dir
-from .report import stamp_produced_at
+from .report import stamp_produced_at, write_advisory_md, write_report_md
+
+
+REPORT_KINDS = frozenset({"report", "advisory", "cve"})
+REPORT_KIND_LABELS = {
+    "report": "中文报告",
+    "advisory": "Advisory",
+    "cve": "CVE JSON",
+}
+
+
+def _revision_format_rules(kind: str, *, bypass: bool) -> str:
+    rules = load_prompt("report-formats.md").strip()
+    if kind == "cve":
+        focus = (
+            "本次只改 CVE JSON：revised_text 必须是完整合法 CVE 5.2 JSON 字符串"
+            "（详情页改写输出整份文档，不调用 ReadCveRecord / SetCveRecordField）；"
+            "未知字段继续使用 VULNHUNTER_PENDING。不要改成中文报告或 Advisory。"
+        )
+    elif kind == "advisory":
+        focus = (
+            "本次只改英文 GitHub Advisory：revised_text 必须是完整英文 Markdown，"
+            "结构、章节与语言与提交/收口时相同。用户指令即使是中文，也不要把 Advisory 改成中文，不要把中文报告粘进去。"
+        )
+    else:
+        focus = (
+            "本次只改中文报告：revised_text 必须是完整中文 Markdown，"
+            "结构、章节与语言与提交/收口时相同。"
+        )
+        if bypass:
+            focus += " 本条为历史漏洞绕过产出，必须保留 `### 补丁绕过简析`。"
+    return f"{rules}\n\n{focus}"
 
 
 class FollowUpError(RuntimeError):
@@ -147,6 +181,63 @@ def _read_report_md(vuln: Vuln) -> str:
         return ""
 
 
+def _normalize_kind(kind: str) -> str:
+    normalized = (kind or "report").strip().lower()
+    if normalized not in REPORT_KINDS:
+        raise ValueError("kind 须为 report|advisory|cve")
+    return normalized
+
+
+def _report_path(vuln: Vuln, kind: str) -> Path:
+    if kind == "report" and vuln.report_path:
+        return project_root(vuln.project_id) / vuln.report_path
+    name = "advisory.md" if kind == "advisory" else "cve.json" if kind == "cve" else "report.md"
+    return vuln_dir(vuln.project_id, vuln.id) / name
+
+
+def _read_report_text(vuln: Vuln, kind: str) -> str:
+    kind = _normalize_kind(kind)
+    if kind == "report":
+        return _read_report_md(vuln)
+    if kind == "cve":
+        return format_cve_record_json(vuln.project_id, vuln.id) or ""
+    path = _report_path(vuln, kind)
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n").strip()
+        return (text + "\n") if text else ""
+    except OSError:
+        return ""
+
+
+def _write_report_text(vuln: Vuln, kind: str, content: str) -> str:
+    kind = _normalize_kind(kind)
+    text = (content or "").replace("\r\n", "\n").strip()
+    if not text:
+        raise ValueError("修订内容不能为空")
+    path = _report_path(vuln, kind)
+    if kind == "report":
+        write_report_md(path, text, vuln.created_at)
+        with SessionLocal() as db:
+            row = db.get(Vuln, vuln.id)
+            if row and not row.report_path:
+                row.report_path = f"vulns/{vuln.id}/report.md"
+                db.commit()
+        return path.read_text(encoding="utf-8", errors="ignore")
+    if kind == "advisory":
+        write_advisory_md(path, text)
+        return path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        record = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"CVE JSON 不是合法 JSON: {e}") from e
+    if not isinstance(record, dict):
+        raise ValueError("CVE JSON 须为对象")
+    write_cve_record(vuln.project_id, vuln.id, record)
+    return format_cve_record_json(vuln.project_id, vuln.id) or ""
+
+
 def _load_thread(project_id: int, vuln_id: int) -> dict[str, Any]:
     data = _load_json(_thread_path(project_id, vuln_id), {})
     messages = data.get("messages")
@@ -212,6 +303,98 @@ def ask_followup(vuln_id: int, question: str) -> dict[str, Any]:
         "reviewer_phase_run_id": run_id,
         "reviewer_context_available": True,
         "messages": history,
+    }
+
+
+def generate_report_revision(vuln_id: int, kind: str, instruction: str) -> dict[str, Any]:
+    kind = _normalize_kind(kind)
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise ValueError("修改指令不能为空")
+    vuln = _get_vuln(vuln_id)
+    current = _read_report_text(vuln, kind)
+    if not current:
+        raise ValueError(f"当前漏洞暂无可修改的 {REPORT_KIND_LABELS[kind]}")
+    ctx = latest_reviewer_context(vuln.project_id, vuln.id)
+    thread = _load_thread(vuln.project_id, vuln.id)
+    history = list(thread["messages"])
+    answer = _call_reviewer_llm(
+        project_id=vuln.project_id,
+        messages=_build_revision_messages(
+            vuln=vuln,
+            ctx=ctx,
+            history=history,
+            kind=kind,
+            current=current,
+            instruction=instruction,
+        ),
+    )
+    summary, revised = _parse_revision_response(answer)
+    if not revised.strip():
+        raise FollowUpLlmError("模型未返回修订内容")
+    if kind == "cve":
+        try:
+            json.loads(revised)
+        except json.JSONDecodeError as e:
+            raise FollowUpLlmError(f"模型返回的 CVE JSON 不合法: {e}") from e
+    run_id = int(ctx["phase_run_id"]) if ctx and ctx.get("phase_run_id") is not None else None
+    user_msg = {
+        "id": uuid.uuid4().hex,
+        "role": "user",
+        "content": f"【修改{REPORT_KIND_LABELS[kind]}】\n{instruction}",
+        "created_at": _now_iso(),
+        "reviewer_phase_run_id": run_id,
+    }
+    assistant_msg = {
+        "id": uuid.uuid4().hex,
+        "role": "assistant",
+        "content": f"已生成 {REPORT_KIND_LABELS[kind]} 修订稿，应用前请预览。\n\n{summary or '（模型未提供摘要）'}",
+        "created_at": _now_iso(),
+        "reviewer_phase_run_id": run_id,
+    }
+    history.extend([user_msg, assistant_msg])
+    _save_thread(vuln.project_id, vuln.id, history)
+    return {
+        "vuln_id": vuln.id,
+        "project_id": vuln.project_id,
+        "kind": kind,
+        "reviewer_phase_run_id": run_id,
+        "reviewer_context_available": bool(ctx),
+        "original_text": current,
+        "revised_text": revised,
+        "summary": summary,
+    }
+
+
+def apply_report_revision(vuln_id: int, kind: str, content: str, note: str = "") -> dict[str, Any]:
+    kind = _normalize_kind(kind)
+    vuln = _get_vuln(vuln_id)
+    written = _write_report_text(vuln, kind, content)
+    ctx = latest_reviewer_context(vuln.project_id, vuln.id)
+    run_id = int(ctx["phase_run_id"]) if ctx and ctx.get("phase_run_id") is not None else None
+    thread = _load_thread(vuln.project_id, vuln.id)
+    history = list(thread["messages"])
+    note_text = (note or "").strip()
+    history.append(
+        {
+            "id": uuid.uuid4().hex,
+            "role": "assistant",
+            "content": (
+                f"已应用 {REPORT_KIND_LABELS[kind]} 修订稿。"
+                + (f"\n\n修订说明：{note_text}" if note_text else "")
+            ),
+            "created_at": _now_iso(),
+            "reviewer_phase_run_id": run_id,
+        }
+    )
+    _save_thread(vuln.project_id, vuln.id, history)
+    return {
+        "ok": True,
+        "vuln_id": vuln.id,
+        "project_id": vuln.project_id,
+        "kind": kind,
+        "content": written,
+        "message": f"已写回 {REPORT_KIND_LABELS[kind]}",
     }
 
 
@@ -326,6 +509,94 @@ def _build_chat_messages(
     return messages
 
 
+def _build_revision_messages(
+    *,
+    vuln: Vuln,
+    ctx: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    kind: str,
+    current: str,
+    instruction: str,
+) -> list[dict[str, str]]:
+    label = REPORT_KIND_LABELS[kind]
+    system = str((ctx or {}).get("system_prompt") or "").strip() or "你是 VulnHunter 的 Reviewer。"
+    system += (
+        "\n\n现在进入漏洞报告修改模式。请只根据当前报告、漏洞元数据、Reviewer 上下文和用户修改指令生成完整修订稿。"
+        "不要改变漏洞状态，不要编造未出现的动态验证结果、互联网验证结果、CVE 编号、提交状态或真实密钥。"
+        "必须保留原报告中仍然正确的事实和证据。"
+        "返回严格 JSON 对象，字段为 summary 与 revised_text，不要输出 Markdown 代码围栏或额外解释。"
+        "改写必须遵守与提交/收口时相同的格式要求：\n"
+        f"{_revision_format_rules(kind, bypass=getattr(vuln, 'mining_path', None) == 'bypass')}"
+    )
+    context = (
+        f"漏洞 #{vuln.id}: {vuln.title}\n"
+        f"漏洞类型: {vuln.vuln_type}\n"
+        f"严重性: {vuln.severity}\n"
+        f"状态: {vuln.status}\n"
+        f"证据等级: {vuln.evidence_level or 'unknown'}\n"
+        f"分层: {vuln.submission_tier or 'unknown'}\n"
+        f"根因键: {vuln.root_cause_key or 'unknown'}\n"
+        f"挖掘路径: {vuln.mining_path or 'unknown'}\n\n"
+        f"## 当前{label}\n{current}\n\n"
+        "## Reviewer 轮次上下文\n"
+        f"{_reviewer_transcript_text(ctx) if ctx else '（无 Reviewer 上下文，仅基于当前报告修订）'}"
+    )
+    history_text = _followup_history_text(history)
+    if history_text:
+        context += "\n\n" + history_text
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": context},
+        {
+            "role": "user",
+            "content": (
+                (
+                    f"请按以下指令修改英文 Advisory（修订稿正文必须保持英文），返回 JSON：\n{instruction}\n\n"
+                    if kind == "advisory"
+                    else (
+                        f"请按以下指令修改 CVE JSON（修订稿必须是完整 JSON，未知字段保持 VULNHUNTER_PENDING），返回 JSON：\n{instruction}\n\n"
+                        if kind == "cve"
+                        else f"请按以下指令修改{label}（修订稿必须保持中文报告结构），返回 JSON：\n{instruction}\n\n"
+                    )
+                )
+                + 'JSON 格式示例：{"summary":"本次修改摘要","revised_text":"完整修订后内容"}'
+            ),
+        },
+    ]
+    return messages
+
+
+def _strip_json_fence(text: str) -> str:
+    body = (text or "").strip()
+    if body.startswith("```"):
+        lines = body.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        body = "\n".join(lines).strip()
+    return body
+
+
+def _parse_revision_response(answer: str) -> tuple[str, str]:
+    body = _strip_json_fence(answer)
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return "模型未返回结构化摘要，已将完整回答作为修订稿。", answer.strip()
+    if not isinstance(data, dict):
+        return "", answer.strip()
+    summary = str(data.get("summary") or "").strip()
+    revised = data.get("revised_text")
+    if isinstance(revised, (dict, list)):
+        revised = json.dumps(revised, ensure_ascii=False, indent=2)
+    elif not isinstance(revised, str):
+        revised = data.get("content")
+        if isinstance(revised, (dict, list)):
+            revised = json.dumps(revised, ensure_ascii=False, indent=2)
+    return summary, str(revised or "").strip()
+
+
 def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
     llm = resolve_llm("reviewer", project_id=project_id)
     if is_anthropic_wire(llm.wire_api):
@@ -335,7 +606,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
             model=llm.model,
             messages=list(messages),
             stream=True,
-            temperature=settings.temperature,
+            temperature=sampling_temperature(llm.model, settings.temperature),
         )
         consume = consume_anthropic_stream
     else:
@@ -347,19 +618,25 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
         body = {
             "model": llm.model,
             "messages": messages,
-            "temperature": settings.temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        apply_temperature(body, llm.model, settings.temperature)
         consume = consume_chat_stream
     timeout = chat_http_timeout(float(settings.timeout_reviewer_static or 180), 0)
     try:
         with chat_http_client(timeout=timeout) as client:
             for _attempt in range(2):
                 with client.stream("POST", url, headers=headers, json=body) as res:
-                    if res.status_code == 400 and body.get("stream_options"):
-                        body.pop("stream_options", None)
-                        continue
+                    if res.status_code == 400:
+                        text = res.read().decode("utf-8", errors="replace")
+                        if "temperature" in body and "temperature" in text.lower():
+                            body.pop("temperature", None)
+                            continue
+                        if body.get("stream_options"):
+                            body.pop("stream_options", None)
+                            continue
+                        raise FollowUpLlmError(f"LLM HTTP 400: {text[:300]}")
                     if res.status_code == 401:
                         raise FollowUpLlmError("401 密钥无效，请检查设置页模型配置")
                     if res.status_code >= 400:

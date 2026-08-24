@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Input } from '@/components/ui/input'
 import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
+import ProjectFilterCombobox from '../components/ProjectFilterCombobox'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
 import {
@@ -94,7 +95,7 @@ export default function VulnsPage() {
       .catch(() => {})
 
   useEffect(() => {
-    api.listProjects({ limit: 200 }).then((data) => setProjects(data.items)).catch(() => {})
+    api.listAllProjects().then(setProjects).catch(() => {})
   }, [])
 
   useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter, trackingFilter])
@@ -163,7 +164,6 @@ export default function VulnsPage() {
     detail?.dynamic_verify_queued || dynamicBusy
       ? `已接续原审核轮次，正在静态结论上追加${dynamicVerifyKind}，不是互联网验证。`
       : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
-  const projectFilterLabel = projectId == null ? '全部项目' : projectNameById.get(projectId) || `项目 ${projectId}`
   const surfaceFilterLabel =
     surfaceFilter === 'frontend' ? '前台漏洞' : surfaceFilter === 'backend' ? '后台漏洞' : '全部前后台'
 
@@ -339,25 +339,7 @@ export default function VulnsPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={projectId == null ? '__all__' : String(projectId)}
-          onValueChange={(value) => {
-            if (value == null) return
-            setProjectId(value === '__all__' ? undefined : Number(value))
-          }}
-        >
-          <SelectTrigger className="w-auto min-w-52">
-            <SelectValue>{projectFilterLabel}</SelectValue>
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            <SelectItem value="__all__">全部项目</SelectItem>
-            {projects.map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ProjectFilterCombobox projects={projects} projectId={projectId} onProjectIdChange={setProjectId} />
         <Select value={surfaceFilter} onValueChange={(value) => setSurfaceFilter(value as typeof surfaceFilter)}>
           <SelectTrigger className="w-auto min-w-36">
             <SelectValue>{surfaceFilterLabel}</SelectValue>
@@ -750,7 +732,14 @@ export default function VulnsPage() {
                     <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
                   </div>
                 ) : null}
-                <VulnFollowUpPanel vulnId={detail.id} />
+                <VulnFollowUpPanel
+                  vulnId={detail.id}
+                  onReportApplied={async () => {
+                    const next = await api.getVuln(detail.id)
+                    setDetail(next)
+                    await refresh()
+                  }}
+                />
               </div>
             ) : (
               <div className="text-sm text-muted-foreground">加载报告…</div>

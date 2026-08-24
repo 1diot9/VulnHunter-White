@@ -251,6 +251,9 @@ def test_projects_list_pagination(tmp_env, monkeypatch):
         assert second["total"] == 7
         assert second["offset"] == 5
 
+        over = client.get("/api/projects", params={"limit": 200})
+        assert over.status_code == 422
+
 
 def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
     from app.main import app
@@ -972,6 +975,109 @@ def test_vuln_followups_continue_archived_reviewer_context(tmp_env, project, mon
         assert "刚才说的校验具体缺在哪？" in joined
         assert followup_messages[-1]["role"] == "user"
         assert followup_messages[-1]["content"] == "刚才说的校验具体缺在哪？"
+
+
+def test_vuln_report_revision_preview_and_apply(tmp_env, project, monkeypatch):
+    from app.agent.checkpoint import LoopCheckpoint, save_checkpoint
+    from app.main import app
+    from app.models import PhaseRun, SessionLocal, Vuln
+    from app.services import pipeline
+    from app.services.paths import vuln_dir
+
+    with SessionLocal() as db:
+        vuln = Vuln(
+            project_id=project,
+            title="CSRF report",
+            vuln_type="csrf",
+            severity="high",
+            status="confirmed",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        vuln.report_path = f"vulns/{vuln.id}/report.md"
+        run = PhaseRun(project_id=project, phase="reviewer", role="reviewer", vuln_id=vuln.id)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        vid = vuln.id
+        run_id = run.id
+
+    report_path = vuln_dir(project, vid) / "report.md"
+    report_path.write_text("# CSRF report\n\nold impact\n", encoding="utf-8")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt="Reviewer system",
+            user_prompt="请审核漏洞",
+            messages=[
+                {"role": "system", "content": "Reviewer system"},
+                {"role": "assistant", "content": "Reviewer 原始判断：CSRF 可触发敏感操作。"},
+            ],
+            state={"review_done": True},
+            vuln_id=vid,
+        )
+    )
+    pipeline._finish_phase_run(run_id, "completed")
+
+    seen: dict[str, object] = {}
+
+    def fake_llm(project_id: int, messages: list[dict[str, str]]) -> str:
+        seen["messages"] = messages
+        return '{"summary":"补充影响描述","revised_text":"# CSRF report\\n\\nnew impact\\n"}'
+
+    monkeypatch.setattr("app.services.vuln_followup._call_reviewer_llm", fake_llm)
+
+    with TestClient(app) as client:
+        draft = client.post(
+            f"/api/vulns/{vid}/report-revisions",
+            json={"kind": "report", "instruction": "补充危害"},
+        )
+        assert draft.status_code == 200
+        body = draft.json()
+        assert body["kind"] == "report"
+        assert body["summary"] == "补充影响描述"
+        assert body["revised_text"] == "# CSRF report\n\nnew impact"
+        assert body["reviewer_context_available"] is True
+        assert "Reviewer 原始判断" in seen["messages"][1]["content"]
+        system = seen["messages"][0]["content"]
+        assert "报告 / Advisory / CVE 格式" in system
+        assert "必须为中文" in system
+        assert "templates/vuln-report.md" in system
+
+        (vuln_dir(project, vid) / "advisory.md").write_text(
+            "# GitHub Security Advisory\n\n## Title\n\n```\nold title\n```\n",
+            encoding="utf-8",
+        )
+        draft_adv = client.post(
+            f"/api/vulns/{vid}/report-revisions",
+            json={"kind": "advisory", "instruction": "补充 Impact"},
+        )
+        assert draft_adv.status_code == 200
+        adv_system = seen["messages"][0]["content"]
+        assert "必须为英文 GitHub Advisory 填表稿" in adv_system
+        assert "不要把中文报告粘进去" in adv_system
+        assert "修订稿正文必须保持英文" in seen["messages"][-1]["content"]
+
+        applied = client.post(
+            f"/api/vulns/{vid}/report-revisions/apply",
+            json={"kind": "report", "content": body["revised_text"], "note": body["summary"]},
+        )
+        assert applied.status_code == 200
+        assert applied.json()["ok"] is True
+        assert "new impact" in report_path.read_text(encoding="utf-8")
+
+        detail = client.get(f"/api/vulns/{vid}").json()
+        assert "new impact" in detail["report_md"]
+
+        bad_cve = client.post(
+            f"/api/vulns/{vid}/report-revisions/apply",
+            json={"kind": "cve", "content": "{bad"},
+        )
+        assert bad_cve.status_code == 400
 
 
 def test_dynamic_verify_continues_archived_reviewer_round(tmp_env, project, monkeypatch):

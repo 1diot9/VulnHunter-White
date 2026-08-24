@@ -259,6 +259,28 @@ export type VulnFollowUpThread = {
   messages: VulnFollowUpMessage[]
 }
 
+export type VulnReportKind = 'report' | 'advisory' | 'cve'
+
+export type VulnReportRevision = {
+  vuln_id: number
+  project_id: number
+  kind: VulnReportKind
+  reviewer_phase_run_id: number | null
+  reviewer_context_available: boolean
+  original_text: string
+  revised_text: string
+  summary: string
+}
+
+export type VulnReportApplyResult = {
+  ok: boolean
+  vuln_id: number
+  project_id: number
+  kind: VulnReportKind
+  content: string
+  message: string
+}
+
 export type LogEvent = {
   kind: string
   text?: string
@@ -590,6 +612,21 @@ export const api = {
     const s = params.toString()
     return request<ProjectList>(`/api/projects${s ? `?${s}` : ''}`)
   },
+  /** Page through GET /api/projects (max limit 100) until every project is loaded. */
+  listAllProjects: async () => {
+    const pageSize = 100
+    const items: Project[] = []
+    let offset = 0
+    let total = Number.POSITIVE_INFINITY
+    while (offset < total) {
+      const page = await request<ProjectList>(`/api/projects?limit=${pageSize}&offset=${offset}`)
+      items.push(...page.items)
+      total = page.total
+      if (!page.items.length) break
+      offset += page.items.length
+    }
+    return items
+  },
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
   createGithub: (
     source_url: string,
@@ -845,6 +882,18 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
+    }),
+  generateVulnReportRevision: (id: number, kind: VulnReportKind, instruction: string) =>
+    request<VulnReportRevision>(`/api/vulns/${id}/report-revisions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, instruction }),
+    }),
+  applyVulnReportRevision: (id: number, kind: VulnReportKind, content: string, note?: string) =>
+    request<VulnReportApplyResult>(`/api/vulns/${id}/report-revisions/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, content, note: note || null }),
     }),
   requestDynamicVerify: (id: number) =>
     request<{ ok: boolean; vuln_id: number; project_id: number; phase_run_id: number }>(

@@ -21,6 +21,10 @@ from ..schemas import (
     VulnFollowUpIn,
     VulnFollowUpThread,
     VulnOut,
+    VulnReportApplyIn,
+    VulnReportApplyOut,
+    VulnReportRevisionIn,
+    VulnReportRevisionOut,
     VulnTrackingBatchIn,
     VulnTrackingIn,
 )
@@ -328,6 +332,32 @@ def ask_vuln_followup(vuln_id: int, body: VulnFollowUpIn) -> VulnFollowUpThread:
         raise HTTPException(409, str(e)) from e
     except vuln_followup.FollowUpLlmError as e:
         raise HTTPException(502, str(e)) from e
+
+
+@router.post("/{vuln_id}/report-revisions", response_model=VulnReportRevisionOut)
+def generate_vuln_report_revision(vuln_id: int, body: VulnReportRevisionIn) -> VulnReportRevisionOut:
+    try:
+        return VulnReportRevisionOut.model_validate(
+            vuln_followup.generate_report_revision(vuln_id, body.kind, body.instruction)
+        )
+    except vuln_followup.FollowUpNotFound as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except vuln_followup.FollowUpLlmError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@router.post("/{vuln_id}/report-revisions/apply", response_model=VulnReportApplyOut)
+def apply_vuln_report_revision(vuln_id: int, body: VulnReportApplyIn) -> VulnReportApplyOut:
+    try:
+        return VulnReportApplyOut.model_validate(
+            vuln_followup.apply_report_revision(vuln_id, body.kind, body.content, body.note or "")
+        )
+    except vuln_followup.FollowUpNotFound as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.patch("/{vuln_id}", response_model=VulnOut)

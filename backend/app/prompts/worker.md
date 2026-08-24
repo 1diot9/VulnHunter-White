@@ -90,12 +90,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 - 漏洞参数也走 CLI：RCE / 命令注入必须支持 `-c/--cmd` 执行自定义命令，**有回显则把命令输出打印到 stdout**；文件读 `-f/--file`、SSRF `--ssrf-url`（有回显打印目标正文，仅差别则打印通/不通对照）、需登录 `--cookie`/`--token` 等同理，并给安全默认值，使只传 `-u` 也能打出代表证据。
 - http_request 为完整 HTTP 请求包。
 - PoC 必须按静态分析证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。
-- report_md 必须为中文，结构对齐 `templates/vuln-report.md`，至少包含：`## 摘要`、`## 漏洞描述`、`## 漏洞危害`、`## 漏洞厂商全称`、`## 已知受影响产品及版本`、`## 互联网资产证明`、`## 漏洞技术细节`、`## 同根因受影响点`、`## 复现证明`、`## 修复方案`、`## 备注`。
-- `advisory_md` 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`（含 **CVSS 3.1** 与 **CVSS 4.0**：基础分、严重度标签与向量字符串；不确定时留空由 Reviewer 填）。`### PoC` 须含 `http` 代码块形式的完整 HTTP 请求包；请求包内长字符串（约 80+ 字符）用描述性占位符（如 `<BASE64_PAYLOAD>`）替代。不要把中文报告粘进去；Description 按 GitHub 表单可直接粘贴。系统写入 `vulns/{id}/advisory.md`。
-- CVE 格式 JSON 对齐 `templates/cve.json`，系统写入 `vulns/{id}/cve.json`。**不要直接 Write 或生成整份 JSON**；用 `ReadCveRecord` 查看待填字段，用 `SetCveRecordField` 逐字段写入。无法确定的字段保持统一占位符 `VULNHUNTER_PENDING`。
-- `## 互联网资产证明` 直接复用项目共享指纹 `docs/app-fingerprints.json`（侦察结束后系统已采集一次：标题/app 与默认页 HTML 的 body 特征 / 静态资源/仓库 favicon，以及互联网检索的 FOFA 语句）。不要每条漏洞重新识别，不要编造 hash；系统会在 SubmitVuln 时写入。测绘语句不允许出现「或」关系。title/app 与 `body="页面特征"` 都可写，不要默认叠成过窄的 title&&app&&icon_hash。
-- 「基础环境搭建」只引用 `docs/lab.md`，不要复述镜像、端口、凭据或启动命令；文档尚不存在时写「动态环境尚未落盘，见 `docs/lab.md`」。
-- 漏洞描述采用两段式：第一段概述厂商/单位与产品系统，第二段概述漏洞成因与后果。SQL 注入须在危害中说明是否能获取 OS-Shell。SSRF 须在危害中写明观察面：有回显 / 仅响应差别（内网端口探测）。
+- 中文 `report_md`、英文 `advisory_md`、CVE JSON 的章节、语言与占位符见系统附加的**报告格式专章**（对齐 `templates/vuln-report.md`、`templates/vuln-advisory.md`、`templates/cve.json`）。`## 互联网资产证明` 复用 `docs/app-fingerprints.json`（不要每条漏洞重新识别；测绘语句不允许出现「或」）。「基础环境搭建」只引用 `docs/lab.md`。
 
 ## 互联网资产证明规则
 - 指纹是**项目级应用指纹**，不是漏洞入口，也不是每条报告各采一次。以 `docs/app-fingerprints.json` 为准；没有该文件时系统会采集一次并复用。
