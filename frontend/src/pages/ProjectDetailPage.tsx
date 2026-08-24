@@ -7,6 +7,7 @@ import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { ResetProgressButton } from '../components/ResetProgressButton'
 import { ConversationComposer } from '../components/ConversationComposer'
 import { GithubLink } from '../components/GithubLink'
+import { LabControlPanel } from '../components/LabControlPanel'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
 import PhaseFlow from '../components/PhaseFlow'
@@ -446,6 +447,9 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       </div>
+
+      {normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled) ===
+        'lab' && <LabControlPanel project={project} />}
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">

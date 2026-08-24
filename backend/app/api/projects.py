@@ -20,6 +20,7 @@ from ..dynamic_verify import (
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     apply_verify_mode,
+    is_lab_mode,
     project_verify_mode,
     resolve_verify_mode,
     verify_mode_enabled,
@@ -68,11 +69,20 @@ from ..schemas import (
     LabSetupRetryBody,
     ConversationBody,
     ConversationStateOut,
+    ProjectLabOut,
+    ProjectLabPatch,
     normalize_conversation_message,
 )
 from ..services.ingest import indexed_weight_exts
-from ..dynamic_verify import is_lab_mode, project_verify_mode
-from ..services.lab import lab_setup_failed, lab_setup_finished, sync_manual_lab_notes
+from ..services.lab import (
+    get_lab_status,
+    lab_setup_failed,
+    lab_setup_finished,
+    patch_lab_ports,
+    start_lab,
+    stop_lab,
+    sync_manual_lab_notes,
+)
 from ..services.live_log import live_log
 from ..services.llm_settings import normalize_project_llm_model
 from ..services import custom_audit_modes as cam
@@ -920,6 +930,56 @@ def retry_lab_setup(project_id: int, body: LabSetupRetryBody | None = None) -> d
         return request_lab_setup_retry(project_id, msg)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+
+
+def _require_lab_project(project_id: int) -> Project:
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "项目不存在")
+        mode = project_verify_mode(p)
+        if not is_lab_mode(mode):
+            raise HTTPException(400, "当前项目未开启靶场动态验证")
+        return p
+
+
+@router.get("/{project_id}/lab", response_model=ProjectLabOut)
+def project_lab_status(project_id: int) -> ProjectLabOut:
+    _require_lab_project(project_id)
+    return ProjectLabOut.model_validate(get_lab_status(project_id))
+
+
+@router.patch("/{project_id}/lab", response_model=ProjectLabOut)
+def project_lab_patch(project_id: int, body: ProjectLabPatch) -> ProjectLabOut:
+    _require_lab_project(project_id)
+    result = patch_lab_ports(
+        project_id,
+        host_port=body.host_port,
+        jdwp_host_port=body.jdwp_host_port,
+        inspect_host_port=body.inspect_host_port,
+        debugpy_host_port=body.debugpy_host_port,
+    )
+    if result.get("error") and not result.get("has_env"):
+        raise HTTPException(400, str(result["error"]))
+    return ProjectLabOut.model_validate(result)
+
+
+@router.post("/{project_id}/lab/start", response_model=ProjectLabOut)
+def project_lab_start(project_id: int) -> ProjectLabOut:
+    _require_lab_project(project_id)
+    result = start_lab(project_id)
+    if not result.get("ok"):
+        raise HTTPException(400, str(result.get("error") or "启动失败"))
+    return ProjectLabOut.model_validate(result)
+
+
+@router.post("/{project_id}/lab/stop", response_model=ProjectLabOut)
+def project_lab_stop(project_id: int) -> ProjectLabOut:
+    _require_lab_project(project_id)
+    result = stop_lab(project_id)
+    if not result.get("ok"):
+        raise HTTPException(400, str(result.get("error") or "停止失败"))
+    return ProjectLabOut.model_validate(result)
 
 
 @router.post("/{project_id}/reset-progress", response_model=ProjectOut)

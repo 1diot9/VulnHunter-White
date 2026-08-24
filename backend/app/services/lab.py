@@ -428,23 +428,100 @@ def find_free_port(host: str = "127.0.0.1", start: int = 18000, end: int = 19000
     raise RuntimeError("无可用端口")
 
 
-def remap_ports_if_needed(env: dict[str, Any]) -> dict[str, Any]:
-    """If host_port is busy, allocate a free one and update target_url."""
-    host_port = env.get("host_port")
-    if not host_port:
-        return env
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", int(host_port)))
-        return env
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _host_port_kwargs(env: dict[str, Any]) -> dict[str, int | None]:
+    return {
+        "host_port": _optional_int(env.get("host_port")),
+        "jdwp_host_port": _optional_int(env.get("jdwp_host_port")),
+        "inspect_host_port": _optional_int(env.get("inspect_host_port")),
+        "debugpy_host_port": _optional_int(env.get("debugpy_host_port")),
+    }
+
+
+def _apply_port_fields(
+    env: dict[str, Any],
+    updated: dict[str, int | None],
+    *,
+    changes: list[str] | None = None,
+) -> dict[str, Any]:
+    env = dict(env)
+    old_host = _optional_int(env.get("host_port"))
+    for key, value in updated.items():
+        if value is not None:
+            env[key] = int(value)
+    new_host = _optional_int(env.get("host_port"))
+    if new_host is not None:
+        if old_host is not None and old_host != new_host:
+            url = str(env.get("target_url") or "")
+            if f":{old_host}" in url:
+                env["target_url"] = url.replace(f":{old_host}", f":{new_host}")
+            else:
+                env["target_url"] = _target_url_with_port(env.get("target_url"), new_host)
+        elif not env.get("target_url"):
+            env["target_url"] = f"http://127.0.0.1:{new_host}"
+        else:
+            env["target_url"] = _target_url_with_port(env.get("target_url"), new_host)
+    if changes:
+        note = "port remapped: " + "; ".join(changes)
+        prev = str(env.get("notes") or "").strip()
+        env["notes"] = f"{prev}\n{note}".strip() if prev else note
+    return env
+
+
+def _compose_extra_ports(compose: Path | None) -> list[int]:
+    if compose is None or not compose.is_file():
+        return []
+    try:
+        from .lab_ports import extract_compose_host_ports
+
+        return extract_compose_host_ports(compose.read_text(encoding="utf-8"))
     except OSError:
-        new_port = find_free_port()
-        env = dict(env)
-        env["host_port"] = new_port
-        url = env.get("target_url") or f"http://127.0.0.1:{new_port}"
-        env["target_url"] = url.replace(f":{host_port}", f":{new_port}")
-        env["notes"] = (env.get("notes") or "") + f"\nport remapped {host_port}->{new_port}"
-        return env
+        return []
+
+
+def _rewrite_compose_file(compose: Path | None, mapping: dict[int, int]) -> int:
+    if not compose or not mapping or not compose.is_file():
+        return 0
+    from .lab_ports import rewrite_compose_host_ports
+
+    text = compose.read_text(encoding="utf-8")
+    new_text, n = rewrite_compose_host_ports(text, mapping)
+    if n <= 0 or new_text == text:
+        return 0
+    compose.write_text(new_text, encoding="utf-8")
+    return n
+
+
+def remap_ports_if_needed(
+    env: dict[str, Any],
+    *,
+    compose: Path | None = None,
+    force_all: bool = False,
+) -> tuple[dict[str, Any], dict[int, int], list[str]]:
+    """Remap busy host ports (and optional compose extras); may rewrite compose YAML."""
+    from .lab_ports import resolve_host_port_conflicts
+
+    kwargs = _host_port_kwargs(env)
+    if not any(v is not None for v in kwargs.values()) and not _compose_extra_ports(compose):
+        return env, {}, []
+    updated, mapping, changes = resolve_host_port_conflicts(
+        **kwargs,
+        extra_ports=_compose_extra_ports(compose),
+        force_all=force_all,
+    )
+    if not mapping:
+        return env, {}, []
+    env = _apply_port_fields(env, updated, changes=changes)
+    _rewrite_compose_file(compose, mapping)
+    return env, mapping, changes
 
 
 def _docker_run(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -616,7 +693,7 @@ def recreate_lab(project_id: int, *, mode: str = "full") -> dict[str, Any]:
                 "need_agent": bool(compose),
             }
 
-        env = remap_ports_if_needed(env)
+        env, _mapping, _changes = remap_ports_if_needed(env, compose=compose)
         if compose:
             proc = _docker_run(
                 ["compose", "-p", lab_compose_project(project_id), "-f", str(compose), "up", "-d"],
@@ -695,3 +772,340 @@ def debug_ports_for_runtime(env: dict[str, Any]) -> dict[str, Any]:
         out["mcp"] = "python"
         out["port"] = env.get("debugpy_host_port")
     return out
+
+
+def _lab_can_start(env: dict[str, Any], compose: Path | None) -> bool:
+    if not env:
+        return False
+    if compose is not None:
+        return True
+    if env.get("container_id") or env.get("container_name") or env.get("image"):
+        return True
+    return bool(env.get("accepted"))
+
+
+def _busy_port_list(env: dict[str, Any], compose: Path | None = None) -> list[int]:
+    from .docker_service import docker_service
+
+    kwargs = _host_port_kwargs(env)
+    extras = _compose_extra_ports(compose)
+    busy: list[int] = []
+    seen: set[int] = set()
+    for value in (*kwargs.values(), *extras):
+        if value is None:
+            continue
+        port = int(value)
+        if port in seen:
+            continue
+        seen.add(port)
+        if docker_service.is_port_in_use(port):
+            busy.append(port)
+    return busy
+
+
+def lab_status_payload(
+    project_id: int,
+    *,
+    env: dict[str, Any] | None = None,
+    ports_remapped: bool = False,
+    port_changes: list[str] | None = None,
+    error: str | None = None,
+    ok: bool = True,
+) -> dict[str, Any]:
+    """Build a project-lab status dict for API responses."""
+    env = dict(env if env is not None else load_env(project_id))
+    ed = env_dir(project_id)
+    compose = _compose_file(ed)
+    status = str(env.get("status") or "").strip() or "absent"
+    running = False
+    if docker_available() and env:
+        inspected = _inspect_container(_container_candidates(project_id, env))
+        if inspected:
+            _, info = inspected
+            status = _status_from_inspect(info)
+            running = _container_running(info)
+            env = refresh_env_from_container(env, info)
+    conflicts = _busy_port_list(env, compose) if env else []
+    can_start = _lab_can_start(env, compose) and docker_available()
+    return {
+        "ok": ok,
+        "has_env": bool(env),
+        "can_start": can_start and not running,
+        "can_stop": running,
+        "status": status if env else "absent",
+        "target_url": env.get("target_url"),
+        "host_port": _optional_int(env.get("host_port")),
+        "jdwp_host_port": _optional_int(env.get("jdwp_host_port")),
+        "inspect_host_port": _optional_int(env.get("inspect_host_port")),
+        "debugpy_host_port": _optional_int(env.get("debugpy_host_port")),
+        "container_name": env.get("container_name"),
+        "container_id": env.get("container_id"),
+        "image": env.get("image"),
+        "runtime": env.get("runtime"),
+        "ports_remapped": bool(ports_remapped),
+        "port_changes": list(port_changes or []),
+        "port_conflicts": conflicts,
+        "error": error,
+    }
+
+
+def get_lab_status(project_id: int) -> dict[str, Any]:
+    return lab_status_payload(project_id)
+
+
+def patch_lab_ports(
+    project_id: int,
+    *,
+    host_port: int | None = None,
+    jdwp_host_port: int | None = None,
+    inspect_host_port: int | None = None,
+    debugpy_host_port: int | None = None,
+) -> dict[str, Any]:
+    """Update env.json host ports only; compose is rewritten on next start if needed."""
+    env = load_env(project_id)
+    if not env:
+        return lab_status_payload(project_id, ok=False, error="无 env.json")
+    updated: dict[str, int | None] = {}
+    if host_port is not None:
+        updated["host_port"] = int(host_port)
+    if jdwp_host_port is not None:
+        updated["jdwp_host_port"] = int(jdwp_host_port)
+    if inspect_host_port is not None:
+        updated["inspect_host_port"] = int(inspect_host_port)
+    if debugpy_host_port is not None:
+        updated["debugpy_host_port"] = int(debugpy_host_port)
+    if not updated:
+        return lab_status_payload(project_id, env=env)
+    env = _apply_port_fields(env, updated)
+    save_env(project_id, env)
+    if lab_ready(env) or env.get("accepted"):
+        write_lab_doc(project_id, env, via="port-patch")
+    return lab_status_payload(project_id, env=env)
+
+
+def _remove_lab_containers(project_id: int, env: dict[str, Any]) -> None:
+    """Force-remove primary + same-prefix containers so compose can rebind ports."""
+    from .docker_service import docker_service, collect_project_refs
+
+    refs = [r for r in collect_project_refs() if r.id == int(project_id)]
+    for item in docker_service.list_containers(refs, running_only=False):
+        if item.get("project_id") != int(project_id):
+            continue
+        try:
+            docker_service.remove(item["id"], force=True)
+        except Exception:  # noqa: BLE001
+            pass
+    for candidate in _container_candidates(project_id, env):
+        proc = _docker_run(["rm", "-f", str(candidate)], timeout=60)
+        _ = proc
+
+
+def _compose_up_lab(project_id: int, compose: Path, ed: Path) -> subprocess.CompletedProcess[str]:
+    return _docker_run(
+        [
+            "compose",
+            "-p",
+            lab_compose_project(project_id),
+            "-f",
+            str(compose),
+            "up",
+            "-d",
+            "--remove-orphans",
+        ],
+        cwd=ed,
+        timeout=600,
+    )
+
+
+def _user_recreate_lab(
+    project_id: int,
+    *,
+    force_all: bool = False,
+) -> dict[str, Any]:
+    """Remap ports, rewrite compose, compose up (no --build). Used by one-click start."""
+    from .lab_ports import looks_like_port_conflict
+
+    env = load_env(project_id)
+    if not env:
+        return lab_status_payload(project_id, ok=False, error="无 env.json")
+    if not docker_available():
+        return lab_status_payload(project_id, env=env, ok=False, error="本机无 docker")
+
+    ed = env_dir(project_id)
+    compose = _compose_file(ed)
+    all_changes: list[str] = []
+    remapped = False
+
+    env, mapping, changes = remap_ports_if_needed(env, compose=compose, force_all=force_all)
+    if mapping:
+        remapped = True
+        all_changes.extend(changes)
+        _remove_lab_containers(project_id, env)
+        save_env(project_id, env)
+
+    def _bring_up() -> tuple[bool, str]:
+        if compose:
+            proc = _compose_up_lab(project_id, compose, ed)
+            if proc.returncode != 0:
+                return False, (proc.stderr or proc.stdout or "compose up failed").strip()
+            return True, ""
+        name = env.get("container_name") or lab_container_name(project_id)
+        image = env.get("image")
+        if not image and not name:
+            return False, "无 compose 且无 image/container_name"
+        # Prefer recreate via compose; without compose try start by name
+        proc = _docker_run(["start", str(name)])
+        if proc.returncode != 0:
+            return False, (proc.stderr or proc.stdout or "docker start failed").strip()
+        return True, ""
+
+    ok_up, err = _bring_up()
+    if not ok_up and looks_like_port_conflict(err) and not force_all:
+        env, mapping, changes = remap_ports_if_needed(env, compose=compose, force_all=True)
+        if mapping:
+            remapped = True
+            all_changes.extend(changes)
+        _remove_lab_containers(project_id, env)
+        save_env(project_id, env)
+        ok_up, err = _bring_up()
+
+    if not ok_up:
+        save_env(project_id, env)
+        return lab_status_payload(
+            project_id,
+            env=env,
+            ok=False,
+            error=err or "启动失败",
+            ports_remapped=remapped,
+            port_changes=all_changes,
+        )
+
+    inspected = _inspect_container(_container_candidates(project_id, env))
+    if inspected:
+        _, info = inspected
+        env = refresh_env_from_container(env, info)
+    env["status"] = "running"
+    env["accepted"] = True
+    env["lab_ever_ready"] = True
+    env["bring_up_failed"] = False
+    env.pop("bring_up_fail_reason", None)
+    save_env(project_id, env)
+    write_lab_doc_if_ready(project_id, env, via="user-start")
+    return lab_status_payload(
+        project_id,
+        env=env,
+        ports_remapped=remapped,
+        port_changes=all_changes,
+    )
+
+
+def start_lab(project_id: int, *, force_recreate: bool = False) -> dict[str, Any]:
+    """One-click start: docker start when possible, else remap + compose up."""
+    from .lab_ports import any_host_ports_in_use, looks_like_port_conflict
+
+    env = load_env(project_id)
+    if not env:
+        return lab_status_payload(project_id, ok=False, error="无 env.json")
+    if not docker_available():
+        return lab_status_payload(project_id, env=env, ok=False, error="本机无 docker")
+
+    ed = env_dir(project_id)
+    compose = _compose_file(ed)
+    if not _lab_can_start(env, compose):
+        return lab_status_payload(
+            project_id,
+            env=env,
+            ok=False,
+            error="无可用靶场产物，请先完成环境搭建",
+        )
+
+    ports_busy = any_host_ports_in_use(
+        **_host_port_kwargs(env),
+        extra_ports=_compose_extra_ports(compose),
+    )
+    inspected = _inspect_container(_container_candidates(project_id, env))
+
+    if force_recreate:
+        return _user_recreate_lab(project_id, force_all=ports_busy)
+
+    if inspected:
+        identifier, info = inspected
+        if _container_running(info):
+            env = refresh_env_from_container(env, info)
+            env["lab_ever_ready"] = True
+            env["bring_up_failed"] = False
+            env.pop("bring_up_fail_reason", None)
+            save_env(project_id, env)
+            write_lab_doc_if_ready(project_id, env, via="reuse")
+            return lab_status_payload(project_id, env=env)
+
+        if ports_busy:
+            return _user_recreate_lab(project_id, force_all=False)
+
+        proc = _docker_run(["start", identifier])
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "docker start failed").strip()
+            return _user_recreate_lab(
+                project_id,
+                force_all=looks_like_port_conflict(err),
+            )
+        inspected_after = _inspect_container(_container_candidates(project_id, env))
+        if inspected_after:
+            _, info = inspected_after
+            if _container_running(info):
+                env = refresh_env_from_container(env, info)
+                env["lab_ever_ready"] = True
+                env["bring_up_failed"] = False
+                env.pop("bring_up_fail_reason", None)
+                save_env(project_id, env)
+                write_lab_doc_if_ready(project_id, env, via="start")
+                return lab_status_payload(project_id, env=env)
+        # started but not running → recreate
+        return _user_recreate_lab(project_id, force_all=False)
+
+    # container absent
+    return _user_recreate_lab(project_id, force_all=False)
+
+
+def stop_lab(project_id: int) -> dict[str, Any]:
+    """Stop primary lab container and project sidecars; update env.json status."""
+    from .docker_service import docker_service, collect_project_refs
+
+    env = load_env(project_id)
+    if not env:
+        return lab_status_payload(project_id, ok=False, error="无 env.json")
+    if not docker_available():
+        return lab_status_payload(project_id, env=env, ok=False, error="本机无 docker")
+
+    refs = [r for r in collect_project_refs() if r.id == int(project_id)]
+    items = docker_service.list_containers(refs, running_only=False)
+    errors: list[str] = []
+    stopped_any = False
+    for item in items:
+        if item.get("project_id") != int(project_id):
+            continue
+        try:
+            status = docker_service.stop(item["id"])
+            stopped_any = True
+            _ = status
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{item.get('name') or item.get('id')}: {exc}")
+
+    # Fallback: stop by recorded names
+    if not stopped_any:
+        for candidate in _container_candidates(project_id, env):
+            proc = _docker_run(["stop", str(candidate)], timeout=60)
+            if proc.returncode == 0:
+                stopped_any = True
+
+    inspected = _inspect_container(_container_candidates(project_id, env))
+    if inspected:
+        _, info = inspected
+        env = refresh_env_from_container(env, info)
+    else:
+        env = dict(env)
+        env["status"] = "exited"
+    save_env(project_id, env)
+    write_lab_doc(project_id, env, via="user-stop")
+    err = "; ".join(errors) if errors else None
+    return lab_status_payload(project_id, env=env, ok=not errors, error=err)

@@ -217,6 +217,34 @@ class LabSetupRetryBody(BaseModel):
     user_message: str = Field(default="", max_length=WORKER_HINT_MAX)
 
 
+class ProjectLabOut(BaseModel):
+    ok: bool = True
+    has_env: bool = False
+    can_start: bool = False
+    can_stop: bool = False
+    status: str = "absent"
+    target_url: str | None = None
+    host_port: int | None = None
+    jdwp_host_port: int | None = None
+    inspect_host_port: int | None = None
+    debugpy_host_port: int | None = None
+    container_name: str | None = None
+    container_id: str | None = None
+    image: str | None = None
+    runtime: str | None = None
+    ports_remapped: bool = False
+    port_changes: list[str] = Field(default_factory=list)
+    port_conflicts: list[int] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ProjectLabPatch(BaseModel):
+    host_port: int | None = Field(default=None, ge=1, le=65535)
+    jdwp_host_port: int | None = Field(default=None, ge=1, le=65535)
+    inspect_host_port: int | None = Field(default=None, ge=1, le=65535)
+    debugpy_host_port: int | None = Field(default=None, ge=1, le=65535)
+
+
 class CustomAuditModeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     body: str = Field(..., min_length=1, max_length=16000)

@@ -89,25 +89,34 @@ def test_remap_when_busy(monkeypatch):
     # Force first bind to fail by pretending host_port is occupied via monkeypatch of socket
     import socket
 
+    from app.services import docker_service as ds
+
     original_bind = socket.socket.bind
     calls = {"n": 0}
 
     def fake_bind(self, address):  # noqa: ANN001
         calls["n"] += 1
         host, port = address
-        if port == 18080 and calls["n"] == 1:
+        if port == 18080:
             raise OSError("busy")
         return original_bind(self, address)
 
     monkeypatch.setattr(socket.socket, "bind", fake_bind)
+    # is_port_in_use also connect-probes; keep connect failing so bind is the signal
+    monkeypatch.setattr(ds.docker_service, "allocate_free_ports", lambda n, host="127.0.0.1": [19001][:n])
+    monkeypatch.setattr(ds.docker_service, "find_free_port", lambda host="127.0.0.1": 19001)
+    monkeypatch.setattr(ds.docker_service, "is_port_in_use", lambda p, host="127.0.0.1": int(p) == 18080)
+
     env = {
         "host_port": 18080,
         "target_url": "http://127.0.0.1:18080",
         "notes": "",
     }
-    out = remap_ports_if_needed(env)
-    assert out["host_port"] != 18080
+    out, mapping, changes = remap_ports_if_needed(env)
+    assert out["host_port"] == 19001
+    assert mapping.get(18080) == 19001
     assert str(out["host_port"]) in out["target_url"]
+    assert changes
 
 
 def _inspect_json(project_id: int, *, running: bool, host_port: int) -> str:
@@ -430,3 +439,190 @@ def test_finish_manual_lab_skips_docker_and_writes_notes(project):
     synced = sync_manual_lab_notes(project, "http://10.0.0.8:9")
     assert synced is not None
     assert "http://10.0.0.8:9" in lab_doc_path(project).read_text(encoding="utf-8")
+
+
+def test_patch_lab_ports_updates_env_and_target_url(project):
+    from app.services.lab import patch_lab_ports
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080/app",
+            "status": "exited",
+            "container_name": f"demo-{project}",
+        },
+    )
+    out = patch_lab_ports(project, host_port=19090)
+    assert out["ok"] is True
+    assert out["host_port"] == 19090
+    saved = load_env(project)
+    assert saved["host_port"] == 19090
+    assert saved["target_url"] == "http://127.0.0.1:19090/app"
+
+
+def test_start_lab_starts_stopped_container(project, monkeypatch):
+    from app.services import lab
+    from app.services.lab import start_lab
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "runtime": "java",
+            "image": "demo:lab",
+            "container_name": lab_container_name(project),
+            "container_port": 8080,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        "app.services.lab_ports.any_host_ports_in_use",
+        lambda **_: False,
+    )
+
+    inspect_n = {"n": 0}
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        if command[:2] == ["docker", "inspect"]:
+            inspect_n["n"] += 1
+            running = inspect_n["n"] > 1
+            return _completed(
+                command,
+                stdout=_inspect_json(project, running=running, host_port=18080),
+            )
+        if command[:2] == ["docker", "start"]:
+            return _completed(command)
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+    result = start_lab(project)
+    assert result["ok"] is True
+    assert result["status"] == "running"
+    assert load_env(project)["status"] == "running"
+
+
+def test_start_lab_recreates_when_ports_busy(project, monkeypatch):
+    from app.services import lab
+    from app.services.lab import start_lab
+    from app.services.paths import env_dir
+
+    ed = env_dir(project)
+    compose = ed / "docker-compose.yml"
+    compose.write_text(
+        'services:\n  app:\n    image: demo:lab\n    ports:\n      - "127.0.0.1:18080:8080"\n',
+        encoding="utf-8",
+    )
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "image": "demo:lab",
+            "container_name": lab_container_name(project),
+            "container_port": 8080,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+        },
+    )
+    monkeypatch.setattr(lab, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        "app.services.lab_ports.any_host_ports_in_use",
+        lambda **_: True,
+    )
+    monkeypatch.setattr(
+        "app.services.docker_service.docker_service.is_port_in_use",
+        lambda p, host="127.0.0.1": int(p) == 18080,
+    )
+    monkeypatch.setattr(
+        "app.services.docker_service.docker_service.allocate_free_ports",
+        lambda n, host="127.0.0.1": [28080][:n],
+    )
+    monkeypatch.setattr(
+        "app.services.docker_service.docker_service.find_free_port",
+        lambda host="127.0.0.1": 28080,
+    )
+    monkeypatch.setattr(lab, "_remove_lab_containers", lambda *_a, **_k: None)
+
+    # Existing stopped container → ports busy → recreate path
+    def inspect_stopped(candidates):  # noqa: ANN001
+        import json
+
+        return (
+            candidates[0],
+            json.loads(_inspect_json(project, running=False, host_port=18080))[0],
+        )
+
+    after_up = {"done": False}
+
+    def inspect_maybe(candidates):  # noqa: ANN001
+        if after_up["done"]:
+            import json
+
+            return (
+                candidates[0],
+                json.loads(_inspect_json(project, running=True, host_port=28080))[0],
+            )
+        return inspect_stopped(candidates)
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ARG001
+        if command[:2] == ["docker", "compose"]:
+            after_up["done"] = True
+            return _completed(command)
+        return _completed(command, returncode=1, stderr="unexpected")
+
+    monkeypatch.setattr(lab, "_inspect_container", inspect_maybe)
+    monkeypatch.setattr(lab.subprocess, "run", fake_run)
+
+    result = start_lab(project)
+    assert result["ok"] is True
+    assert result["ports_remapped"] is True
+    assert load_env(project)["host_port"] == 28080
+    assert "28080:8080" in compose.read_text(encoding="utf-8")
+
+
+def test_project_lab_api_requires_lab_mode(project, tmp_env):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as client:
+        denied = client.get(f"/api/projects/{project}/lab")
+        assert denied.status_code == 400
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        p = db.get(models.Project, project)
+        p.dynamic_verify_mode = "lab"
+        p.dynamic_verify_enabled = True
+        db.commit()
+
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "host_port": 18080,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "exited",
+            "container_name": f"demo-{project}",
+            "image": "demo:lab",
+        },
+    )
+    with TestClient(app) as client:
+        status = client.get(f"/api/projects/{project}/lab")
+        assert status.status_code == 200
+        body = status.json()
+        assert body["has_env"] is True
+        assert body["host_port"] == 18080
+
+        patched = client.patch(
+            f"/api/projects/{project}/lab",
+            json={"host_port": 18181},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["host_port"] == 18181
+        assert load_env(project)["host_port"] == 18181

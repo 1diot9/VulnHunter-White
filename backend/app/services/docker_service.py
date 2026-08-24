@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -335,6 +336,47 @@ class DockerService:
         if not self.ping():
             raise DockerException("docker unavailable")
         return self.client
+
+    def find_free_port(self, host: str = "127.0.0.1") -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
+
+    def allocate_free_ports(self, count: int, *, host: str = "127.0.0.1") -> list[int]:
+        """Reserve multiple free ports at once to avoid races."""
+        if count <= 0:
+            return []
+        socks: list[socket.socket] = []
+        ports: list[int] = []
+        try:
+            for _ in range(count):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind((host, 0))
+                ports.append(int(sock.getsockname()[1]))
+                socks.append(sock)
+            return ports
+        finally:
+            for sock in socks:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def is_port_in_use(self, port: int, host: str = "127.0.0.1") -> bool:
+        """True if host port cannot bind or already has a listener."""
+        port = int(port)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind((host, port))
+            except OSError:
+                return True
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.3)
+            try:
+                sock.connect((host, port))
+                return True
+            except (ConnectionRefusedError, TimeoutError, OSError):
+                return False
 
     def get_container(self, container_id: str) -> Container | None:
         with self._lock:

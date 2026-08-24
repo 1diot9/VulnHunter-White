@@ -64,6 +64,34 @@ export type Project = {
   verifier_pending?: number
 }
 
+export type ProjectLab = {
+  ok: boolean
+  has_env: boolean
+  can_start: boolean
+  can_stop: boolean
+  status: string
+  target_url: string | null
+  host_port: number | null
+  jdwp_host_port: number | null
+  inspect_host_port: number | null
+  debugpy_host_port: number | null
+  container_name: string | null
+  container_id: string | null
+  image: string | null
+  runtime: string | null
+  ports_remapped: boolean
+  port_changes: string[]
+  port_conflicts: number[]
+  error: string | null
+}
+
+export type ProjectLabPatch = {
+  host_port?: number | null
+  jdwp_host_port?: number | null
+  inspect_host_port?: number | null
+  debugpy_host_port?: number | null
+}
+
 export type ProjectRunStatusCounts = {
   all: number
   running: number
@@ -722,6 +750,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_message: userMessage }),
     }),
+  getLab: (id: number) => request<ProjectLab>(`/api/projects/${id}/lab`),
+  patchLab: (id: number, body: ProjectLabPatch) =>
+    request<ProjectLab>(`/api/projects/${id}/lab`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  startLab: (id: number) =>
+    request<ProjectLab>(`/api/projects/${id}/lab/start`, { method: 'POST' }),
+  stopLab: (id: number) =>
+    request<ProjectLab>(`/api/projects/${id}/lab/stop`, { method: 'POST' }),
   resetProgress: (id: number) =>
     request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST' }),
   cancel: (id: number) => request(`/api/projects/${id}/cancel`, { method: 'POST' }),
