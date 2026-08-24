@@ -63,7 +63,7 @@ from ..target_kind import (
     target_kind_label,
 )
 from ..services.custom_audit_modes import project_custom_overlay
-from ..services.ingest import build_file_index, clone_github, extract_zip
+from ..services.ingest import backfill_missing_source_exts, build_file_index, clone_github, extract_zip
 from ..services.lab import (
     clear_lab_bring_up_failed,
     clear_lab_retry_flags,
@@ -2916,6 +2916,13 @@ def _run_recon(project_id: int) -> None:
     """Run recon sub-phases strictly in series: map/auth → source-ext → old vulns → mark."""
     cancel = _cancel_event(project_id)
     try:
+        filled = backfill_missing_source_exts(project_id)
+        if filled.get("added_count"):
+            live_log.system(
+                project_id,
+                f"已补齐默认源码索引 {filled['added_count']} 个文件（{', '.join(filled.get('exts') or [])}）",
+                phase="recon",
+            )
         if _maybe_mark_recon_done(project_id):
             return
         if recon_map_ready(project_id):

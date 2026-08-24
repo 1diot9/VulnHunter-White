@@ -232,12 +232,27 @@ def _search_root(ctx, root_rel: str | None) -> Path:
     return root.parent if root.is_file() else root
 
 
+_READ_PATH_KEYS = ("paths", "path", "file", "file_path", "filename", "target")
+
+
+def _read_target_paths(args: dict[str, Any]) -> list[str]:
+    for key in _READ_PATH_KEYS:
+        val = args.get(key)
+        if val in (None, "", []):
+            continue
+        if isinstance(val, str):
+            text = val.strip()
+            return [text] if text else []
+        if isinstance(val, list):
+            return [str(x).strip() for x in val if str(x).strip()]
+    return []
+
+
 def _read_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
-    paths = args.get("paths") or args.get("path")
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = _read_target_paths(args)
     if not paths:
-        return call_fail("缺少 path/paths")
+        keys = ", ".join(sorted(str(k) for k in args)) or "无"
+        return call_fail(f"缺少 path/paths（收到参数: {keys}）。必须传 path 或 paths。")
     raw_max = _optional_int(args, "max_bytes")
     cap = settings.file_inject_max_bytes
     max_bytes = cap if raw_max is None else max(_READ_MIN_BYTES, min(raw_max, cap))
@@ -1069,8 +1084,15 @@ def register_common_tools() -> None:
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "paths": {"type": "array", "items": {"type": "string"}},
+                    "path": {
+                        "type": "string",
+                        "description": "要读取的单个文件路径（相对工作区，如 src/foo.py）。读多个文件时改用 paths。",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要读取的多个文件路径。与 path 二选一。",
+                    },
                     "offset": {
                         "type": "integer",
                         "description": "起始行号，从 1 计；负数表示从末尾倒数。省略则从第 1 行开始。",
@@ -1084,6 +1106,7 @@ def register_common_tools() -> None:
                         "description": "单次字节上限，有硬顶。完整读取请用 offset/limit 分页，不要靠增大此值。",
                     },
                 },
+                "required": ["path"],
             },
             handler=_read_handler,
             parallel_safe=True,
@@ -1111,10 +1134,20 @@ def register_common_tools() -> None:
             parameters={
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string"},
-                    "root": {"type": "string"},
-                    "limit": {"type": "integer"},
+                    "pattern": {
+                        "type": "string",
+                        "description": "glob 模式，如 **/*.py 或 src/foo/*.clj",
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "搜索根目录，相对工作区。省略则从源码根开始。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "最多返回条数。",
+                    },
                 },
+                "required": ["pattern"],
             },
             handler=_glob_handler,
             parallel_safe=True,

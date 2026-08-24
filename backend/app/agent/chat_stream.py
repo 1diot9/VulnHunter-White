@@ -87,6 +87,51 @@ def _append_reasoning(parts: list[str], obj: dict[str, Any]) -> None:
                 return
 
 
+def _try_json_object(text: str) -> dict[str, Any] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _append_tool_arguments(slot: dict[str, Any], incoming: Any) -> None:
+    """Fold streamed tool arguments.
+
+    OpenAI fragments are concatenated. Some gateways (Kimi K3 / 百炼 compatible-mode)
+    send a complete JSON object per delta, sometimes as a dict rather than a string;
+    concatenating those would drop earlier keys such as ``path`` or yield invalid JSON.
+    """
+    fn = slot["function"]
+    existing = fn.get("arguments") or ""
+    incoming_obj: dict[str, Any] | None = None
+    incoming_fragment = ""
+    if isinstance(incoming, dict):
+        incoming_obj = incoming
+    elif isinstance(incoming, str) and incoming:
+        incoming_obj = _try_json_object(incoming)
+        if incoming_obj is None:
+            incoming_fragment = incoming
+    else:
+        return
+    if incoming_obj is not None:
+        existing_obj = _try_json_object(existing)
+        if existing_obj is not None:
+            existing_obj.update(incoming_obj)
+            fn["arguments"] = json.dumps(existing_obj, ensure_ascii=False)
+            return
+        if not existing:
+            fn["arguments"] = json.dumps(incoming_obj, ensure_ascii=False)
+            return
+        fn["arguments"] = existing + json.dumps(incoming_obj, ensure_ascii=False)
+        return
+    if incoming_fragment:
+        fn["arguments"] = existing + incoming_fragment
+
+
 def _merge_tool_call(slots: dict[int, dict[str, Any]], tc: dict[str, Any], fallback_index: int) -> None:
     try:
         idx = int(tc.get("index")) if tc.get("index") is not None else fallback_index
@@ -110,9 +155,8 @@ def _merge_tool_call(slots: dict[int, dict[str, Any]], tc: dict[str, Any], fallb
             slot["function"]["name"] = name
         elif not existing.startswith(name):
             slot["function"]["name"] += name
-    args = fn.get("arguments")
-    if isinstance(args, str) and args:
-        slot["function"]["arguments"] += args
+    if "arguments" in fn:
+        _append_tool_arguments(slot, fn.get("arguments"))
 
 
 def _merge_delta(

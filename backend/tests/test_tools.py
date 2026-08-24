@@ -63,6 +63,22 @@ def test_mark_source_sets_weight_100(tmp_env, project):
         assert any(s.method_name == "login" for s in srcs)
 
 
+def test_mark_source_indexes_clojure_paths(tmp_env, project):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    (src / "metabase").mkdir(parents=True, exist_ok=True)
+    (src / "metabase" / "api.clj").write_text("(ns metabase.api)\n", encoding="utf-8")
+    build_file_index(project)
+    out = registry.dispatch(
+        _ctx(project, "recon"),
+        "MarkSource",
+        {"file": "src/metabase/api.clj", "method": "POST /api/session"},
+    )
+    assert out["ok"] is True
+    assert out["count"] == 1
+
+
 def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     from app.tools.phase_recon import (
         apply_recon_done,
@@ -2054,6 +2070,27 @@ def test_read_small_file_numbered(tmp_env, project):
     assert f["content"].lstrip().startswith("1|")
     keys = list(f.keys())
     assert keys.index("truncated") < keys.index("content")
+
+
+def test_read_schema_requires_described_path():
+    tools = {t["function"]["name"]: t["function"] for t in registry.openai_tools_for_role("recon")}
+    params = tools["Read"]["parameters"]
+    assert "path" in params["required"]
+    assert params["properties"]["path"]["description"]
+
+
+def test_read_accepts_file_alias(tmp_env, project):
+    out = registry.dispatch(_ctx(project, "worker"), "Read", {"file": "src/app/Main.java", "limit": 20})
+    assert out["ok"] is True
+    assert "content" in out["files"][0]
+
+
+def test_read_missing_path_lists_received_keys(tmp_env, project):
+    out = registry.dispatch(_ctx(project, "worker"), "Read", {"limit": 250, "max_bytes": 16000})
+    assert out["ok"] is False
+    assert "缺少 path/paths" in out["error"]
+    assert "limit" in out["error"]
+    assert "max_bytes" in out["error"]
 
 
 def test_read_pages_large_file_with_next_offset(tmp_env, project):

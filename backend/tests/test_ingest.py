@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.services.ingest import (
+    backfill_missing_source_exts,
     build_file_index,
     detect_identity,
     expand_file_index,
@@ -175,3 +176,51 @@ def test_collect_and_rmtree_long_paths(tmp_env, project):
 
     force_rmtree(src / "deep")
     assert not windows_long_path(src / "deep").exists()
+
+
+def test_build_file_index_includes_clojure(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    src = src_dir(project)
+    (src / "metabase").mkdir(parents=True, exist_ok=True)
+    (src / "metabase" / "api.clj").write_text("(ns metabase.api)\n", encoding="utf-8")
+    n = build_file_index(project)
+    assert n >= 2
+    with Session() as db:
+        paths = {
+            r.path.replace("\\", "/")
+            for r in db.query(models.FileWeight).filter(models.FileWeight.project_id == project)
+        }
+        assert "metabase/api.clj" in paths
+        assert any(p.endswith("Main.java") for p in paths)
+
+
+def test_backfill_missing_source_exts_indexes_new_languages(tmp_env, project, monkeypatch):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    src = src_dir(project)
+    (src / "metabase").mkdir(parents=True, exist_ok=True)
+    (src / "metabase" / "api.clj").write_text("(ns metabase.api)\n", encoding="utf-8")
+    from app.services import ingest as ingest_mod
+
+    original = ingest_mod.SOURCE_EXTS
+    monkeypatch.setattr(
+        ingest_mod,
+        "SOURCE_EXTS",
+        frozenset(ext for ext in original if ext not in {".clj", ".cljs", ".cljc"}),
+    )
+    build_file_index(project)
+    with Session() as db:
+        paths = {
+            r.path.replace("\\", "/")
+            for r in db.query(models.FileWeight).filter(models.FileWeight.project_id == project)
+        }
+        assert "metabase/api.clj" not in paths
+
+    monkeypatch.setattr(ingest_mod, "SOURCE_EXTS", original)
+    out = backfill_missing_source_exts(project)
+    assert ".clj" in out["exts"]
+    assert out["added_count"] >= 1
+    assert "metabase/api.clj" in out["added"]
+    again = backfill_missing_source_exts(project)
+    assert again["added_count"] == 0

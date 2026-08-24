@@ -270,7 +270,11 @@ def _load_weight_rows(db, project_id: int, paths: list[str]) -> dict[str, FileWe
 def _unmatched_error(unmatched: list[str]) -> str:
     preview = ", ".join(unmatched[:8])
     extra = f" …共 {len(unmatched)} 个" if len(unmatched) > 8 else ""
-    return f"未找到文件索引（{len(unmatched)}）: {preview}{extra}"
+    return (
+        f"未找到文件索引（{len(unmatched)}）: {preview}{extra}。"
+        "路径相对 src/（不要重复 src/src）；若文件在磁盘上但扩展名不在默认语言白名单，"
+        "等扩展名会话 AddSourceExt 后再标。"
+    )
 
 
 def _score_unmarked_path(path: str) -> tuple[int, str]:
@@ -987,10 +991,17 @@ def register_recon_tools() -> None:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "file": {"type": "string"},
-                                "method": {"type": "string"},
-                                "note": {"type": "string"},
+                                "file": {
+                                    "type": "string",
+                                    "description": "入口文件路径，相对 src/，如 src/metabase/session/api.clj",
+                                },
+                                "method": {
+                                    "type": "string",
+                                    "description": "HTTP 方法与路由，或非 HTTP 入口说明",
+                                },
+                                "note": {"type": "string", "description": "入口说明，可省略"},
                             },
+                            "required": ["file"],
                         },
                     },
                     "file": {"type": "string"},
@@ -1012,11 +1023,18 @@ def register_recon_tools() -> None:
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "paths": {"type": "array", "items": {"type": "string"}},
-                    "weight": {"type": "integer"},
+                    "path": {
+                        "type": "string",
+                        "description": "单个文件路径，相对 src/。多个文件改用 paths。",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多个文件路径。与 path 二选一。",
+                    },
+                    "weight": {"type": "integer", "description": "审计权重 0-100"},
                 },
-                "required": ["weight"],
+                "required": ["path", "weight"],
             },
             handler=_mark_weight,
         )
@@ -1028,9 +1046,17 @@ def register_recon_tools() -> None:
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "paths": {"type": "array", "items": {"type": "string"}},
+                    "path": {
+                        "type": "string",
+                        "description": "单个文件路径，相对 src/。多个文件改用 paths。",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多个文件路径。与 path 二选一。",
+                    },
                 },
+                "required": ["path"],
             },
             handler=_mark_skip,
         )

@@ -38,6 +38,12 @@ SOURCE_EXTS = frozenset(
         ".aspx",
         ".jsp",
         ".vue",
+        ".clj",
+        ".cljs",
+        ".cljc",
+        ".scala",
+        ".groovy",
+        ".rs",
     }
 )
 
@@ -439,3 +445,17 @@ def expand_file_index(
         "exts": accepted,
         "rejected": rejected,
     }
+
+
+def backfill_missing_source_exts(project_id: int) -> dict:
+    """Index newly added SOURCE_EXTS without wiping existing marks.
+
+    Older projects were ingested before languages like Clojure landed in the
+    default whitelist; recon MarkSource then reports 「未找到文件索引」 for real files.
+    """
+    with SessionLocal() as db:
+        present = {row["ext"] for row in indexed_weight_exts(db, [project_id]).get(project_id) or []}
+    missing = [ext for ext in sorted(SOURCE_EXTS) if ext not in present]
+    if not missing:
+        return {"added": [], "added_count": 0, "skipped_test": 0, "exts": [], "rejected": []}
+    return expand_file_index(project_id, missing)

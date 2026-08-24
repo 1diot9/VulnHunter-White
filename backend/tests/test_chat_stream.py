@@ -78,6 +78,93 @@ def test_assemble_tool_call_fragments():
     assert json.loads(tc["function"]["arguments"]) == {"path": "a.java"}
 
 
+def test_assemble_tool_call_merges_object_and_json_arguments():
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "Read",
+                                    "arguments": {
+                                        "path": "src/session/api.clj",
+                                        "limit": 250,
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {"arguments": '{"limit":250,"max_bytes":16000}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    ]
+    out = assemble_chat_completion(chunks)
+    tc = out["choices"][0]["message"]["tool_calls"][0]
+    assert json.loads(tc["function"]["arguments"]) == {
+        "path": "src/session/api.clj",
+        "limit": 250,
+        "max_bytes": 16000,
+    }
+
+
+def test_assemble_tool_call_merges_complete_json_argument_chunks():
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "Read", "arguments": '{"path":"a.clj"}'},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": '{"limit":200,"max_bytes":12000}'}}
+                        ]
+                    }
+                }
+            ]
+        },
+    ]
+    out = assemble_chat_completion(chunks)
+    tc = out["choices"][0]["message"]["tool_calls"][0]
+    assert json.loads(tc["function"]["arguments"]) == {
+        "path": "a.clj",
+        "limit": 200,
+        "max_bytes": 12000,
+    }
+
+
 def test_consume_stops_at_done_and_skips_keepalive():
     lines = [
         ": ping",
