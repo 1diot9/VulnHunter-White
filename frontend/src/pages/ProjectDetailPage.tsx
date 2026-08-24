@@ -23,6 +23,8 @@ import {
   formatMiningPaths,
   formatMiningProgress,
   formatProjectStatus,
+  formatTargetKind,
+  formatTargetKindHint,
   formatTokens,
   projectStatusBadgeVariant,
 } from '../lib/utils'
@@ -498,6 +500,9 @@ export default function ProjectDetailPage() {
               {project.audit_mode === 'custom' ? null : <BountyScopeButton />}
             </span>
           )}
+          <Badge variant="outline" title={formatTargetKindHint(project.target_kind)}>
+            {formatTargetKind(project.target_kind)}
+          </Badge>
           <Badge variant="outline">{formatMiningPaths(project)}</Badge>
           <Badge variant="outline" title={project.llm_model ? '项目模型' : '使用设置页全局模型'}>
             {project.llm_model || '全局模型'}
@@ -510,6 +515,7 @@ export default function ProjectDetailPage() {
         </div>
         <WeightExtBadges exts={project.weight_exts} />
         <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {formatTargetKindHint(project.target_kind)}{' '}
           {formatAuditModeHint(project.audit_mode, project.custom_audit_mode_name)}
           {project.fast_enabled
             ? ' 快速扫描覆盖 SAST Sink（命令执行、注入、反序列化等）；缺鉴权、IDOR、业务逻辑仍靠启发式。'

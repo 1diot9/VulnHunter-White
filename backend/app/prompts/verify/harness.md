@@ -13,3 +13,4 @@
 6. 成立性门槛**不降**：source→sink 可达不够；禁止种文件/改非应用配置来让洞成立。局部验证只是动态证据来源，不是降低默认可利用标准。
 7. 不要标 `dynamic` / `mcp`。无运行中的站点，不要 `CollectLabFingerprints`。
 8. 沙箱默认无网。SSRF 等必须出网的类型不要指望 harness 打通，走静态判断。
+9. **组件库审计**：Confirm 以 `RunCode` harness 为准；勿因缺 HTTP 靶场或 `poc.py` 不能 `-u` 打 URL 而误报。纯库洞可把 harness 当作主证据，`poc.py` 可为 API 调用脚本。

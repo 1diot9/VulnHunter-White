@@ -246,6 +246,7 @@ class ProjectCreate(BaseModel):
     source_type: Literal["github", "zip"] = "github"
     source_url: str | None = None
     audit_mode: Literal["bounty", "full", "custom"] = "bounty"
+    target_kind: Literal["web", "library", "mixed"] = "web"
     custom_audit_mode_id: int | None = None
     manual_lab: bool = False
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
@@ -263,6 +264,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     audit_mode: Literal["bounty", "full", "custom"] | None = None
+    target_kind: Literal["web", "library", "mixed"] | None = None
     custom_audit_mode_id: int | None = None
     manual_lab: bool | None = None
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
@@ -294,6 +296,7 @@ class ProjectOut(BaseModel):
     phase: str
     recon_done: bool
     audit_mode: str = "bounty"
+    target_kind: str = "web"
     custom_audit_mode_id: int | None = None
     custom_audit_mode_name: str = ""
     custom_audit_prompt: str = ""

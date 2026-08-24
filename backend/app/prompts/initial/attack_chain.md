@@ -1,5 +1,7 @@
 # 攻击链串联任务
 
+挖掘模式：${audit_mode_label}。审计对象：${target_kind_label}。
+
 挖掘与审核已结束。本项目当前有 **${confirmed_count}** 条已确认漏洞（`confirmed` / `static_only`）。
 
 ## 已确认漏洞目录（摘要）

@@ -9,7 +9,7 @@ FinishSink 即本轮结束。未调用 FinishSink 则本轮作废，Sink 退回�
 
 ## 回推要求
 1. Grep 所在函数/符号的生产调用。无生产调用（仅测试/死代码）→ `FinishSink(verdict=unreachable)`。
-2. 沿 caller 回推到 HTTP/RPC/上传等用户可控入口。到达的必须是用户输入，不是内部常量。
+2. 沿 caller 回推到 HTTP/RPC/上传等用户可控入口，或组件公开 API / 解析入口。到达的必须是用户/调用方输入，不是内部常量。
 3. 有明确消毒且不可绕过 → `sanitized`。已知允许的业务能力 → `intended`（对照 docs/auth.md）。规则误报/非执行点 → `noise`。
 4. 只有用户可控输入能打到真实 sink，且默认部署下能打出可观察危害，才 SubmitVuln，然后 `FinishSink(verdict=vuln_submitted, vuln_id=...)`。提交时必填 `config_premise`（`default` / `specific`）；特定配置不含官方已警示的风险开关。
 

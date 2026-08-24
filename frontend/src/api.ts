@@ -14,6 +14,7 @@ export type Project = {
   phase: string
   recon_done: boolean
   audit_mode: 'bounty' | 'full' | 'custom'
+  target_kind: 'web' | 'library' | 'mixed'
   custom_audit_mode_id: number | null
   custom_audit_mode_name: string
   custom_audit_prompt: string
@@ -567,6 +568,7 @@ export const api = {
     name = '',
     audit_mode: 'bounty' | 'full' | 'custom' = 'bounty',
     opts: {
+      target_kind?: 'web' | 'library' | 'mixed'
       custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string
@@ -590,6 +592,7 @@ export const api = {
         source_url,
         name,
         audit_mode,
+        target_kind: opts.target_kind || 'web',
         custom_audit_mode_id: opts.custom_audit_mode_id ?? null,
         manual_lab: Boolean(opts.manual_lab),
         manual_lab_prompt: opts.manual_lab_prompt || '',
@@ -610,6 +613,7 @@ export const api = {
     name = '',
     audit_mode: 'bounty' | 'full' | 'custom' = 'bounty',
     opts: {
+      target_kind?: 'web' | 'library' | 'mixed'
       custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string
@@ -629,6 +633,7 @@ export const api = {
     fd.append('file', file)
     if (name) fd.append('name', name)
     fd.append('audit_mode', audit_mode)
+    fd.append('target_kind', opts.target_kind || 'web')
     if (opts.custom_audit_mode_id != null) {
       fd.append('custom_audit_mode_id', String(opts.custom_audit_mode_id))
     }
@@ -653,6 +658,7 @@ export const api = {
     id: number,
     body: {
       audit_mode?: 'bounty' | 'full' | 'custom'
+      target_kind?: 'web' | 'library' | 'mixed'
       custom_audit_mode_id?: number | null
       manual_lab?: boolean
       manual_lab_prompt?: string | null

@@ -49,6 +49,7 @@ from ..services.root_cause import (
     mismatched_root_cause_key_error,
     stamp_root_cause_on_parent,
 )
+from ..target_kind import normalize_target_kind
 from ..vuln_types import (
     REVIEW_FACTOR_LABELS,
     SeverityCalibration,
@@ -395,7 +396,11 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     verify_mode = VERIFY_MODE_OFF
     evidence = EVIDENCE_STATIC
     if poc_code:
-        poc_blocked = poc_cli_block_reason(str(poc_code))
+        kind = normalize_target_kind(None)
+        with SessionLocal() as db:
+            proj = db.get(Project, ctx.project_id)
+            kind = normalize_target_kind(getattr(proj, "target_kind", None) if proj else None)
+        poc_blocked = poc_cli_block_reason(str(poc_code), target_kind=kind)
         if poc_blocked:
             return {"ok": False, "error": poc_blocked}
     with SessionLocal() as db:

@@ -1,4 +1,5 @@
 挖掘模式：${audit_mode_label}。${audit_mode_hint}
+审计对象：${target_kind_label}。${target_kind_hint}
 Verifier 验证漏洞 ID=${vuln_id}
 元数据: ${payload}
 报告内 FOFA 语句: ${fofa_query}

@@ -38,7 +38,7 @@ from ..agent.loop import AgentLoop
 from ..audit_mode import (
     AUDIT_MODE_CUSTOM,
     audit_mode_label,
-    initial_hint,
+    initial_hint as audit_mode_initial_hint,
     is_bounty_mode,
     normalize_audit_mode,
 )
@@ -57,6 +57,11 @@ from ..dynamic_verify import (
 from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active, mining_path_label
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
+from ..target_kind import (
+    initial_hint as target_kind_initial_hint,
+    normalize_target_kind,
+    target_kind_label,
+)
 from ..services.custom_audit_modes import project_custom_overlay
 from ..services.ingest import build_file_index, clone_github, extract_zip
 from ..services.lab import (
@@ -1317,6 +1322,12 @@ def _read_audit_mode(project_id: int) -> str:
         return normalize_audit_mode(None if not proj else proj.audit_mode)
 
 
+def _read_target_kind(project_id: int) -> str:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return normalize_target_kind(getattr(proj, "target_kind", None) if proj else None)
+
+
 def _read_manual_lab(project_id: int) -> tuple[bool, str]:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -1517,8 +1528,26 @@ def _audit_mode_vars(project_id: int) -> dict[str, str]:
     return {
         "audit_mode": mode,
         "audit_mode_label": audit_mode_label(mode, custom_name=custom_name or None),
-        "audit_mode_hint": initial_hint(mode, custom_name=custom_name or None),
+        "audit_mode_hint": audit_mode_initial_hint(mode, custom_name=custom_name or None),
     }
+
+
+def _target_kind_vars(project_id: int) -> dict[str, str]:
+    kind = _read_target_kind(project_id)
+    return {
+        "target_kind": kind,
+        "target_kind_label": target_kind_label(kind),
+        "target_kind_hint": target_kind_initial_hint(kind),
+    }
+
+
+def _agent_prompt_vars(project_id: int) -> dict[str, str]:
+    return {**_audit_mode_vars(project_id), **_target_kind_vars(project_id)}
+
+
+def _target_kind_overlay(project_id: int) -> str:
+    kind = _read_target_kind(project_id)
+    return load_prompt(f"target_kinds/{kind}.md").strip()
 
 
 _POC_PROMPT_PHASES = frozenset(
@@ -1547,7 +1576,7 @@ def _phase_system_prompt(
             )
     else:
         overlay = load_prompt(f"modes/{mode}.md").strip()
-    parts = [base, overlay]
+    parts = [base, overlay, _target_kind_overlay(project_id)]
     if name in _POC_PROMPT_PHASES:
         parts.append(load_prompt("poc.md").strip())
     if name == "reviewer.md":
@@ -1558,7 +1587,7 @@ def _phase_system_prompt(
             parts.append(load_prompt("verify/harness.md").strip())
         elif chosen == VERIFY_MODE_LAB:
             parts.append(load_prompt("verify/lab.md").strip())
-    return "\n\n".join(parts) + "\n"
+    return "\n\n".join(p for p in parts if p) + "\n"
 
 
 def _timeout_forced_static_note(streak: int) -> str:
@@ -1878,7 +1907,10 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     """Render a user-message document from prompts/initial/ and inject it as-is."""
     kwargs.setdefault("audit_mode", "bounty")
     kwargs.setdefault("audit_mode_label", audit_mode_label("bounty"))
-    kwargs.setdefault("audit_mode_hint", initial_hint("bounty"))
+    kwargs.setdefault("audit_mode_hint", audit_mode_initial_hint("bounty"))
+    kwargs.setdefault("target_kind", "web")
+    kwargs.setdefault("target_kind_label", target_kind_label("web"))
+    kwargs.setdefault("target_kind_hint", target_kind_initial_hint("web"))
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -3043,7 +3075,14 @@ def _run_recon_gated_session(
     prompt_vars: dict[str, Any] | None = None,
 ) -> bool:
     system = load_prompt(prompt_name)
-    vars_ = {"project_id": project_id, **(prompt_vars or {})}
+    tk = _target_kind_overlay(project_id)
+    if tk:
+        system = f"{system.rstrip()}\n\n{tk}\n"
+    vars_ = {
+        "project_id": project_id,
+        **_target_kind_vars(project_id),
+        **(prompt_vars or {}),
+    }
     user = _prompt_with_summary(phase, project_id, _initial_prompt(initial_doc, **vars_))
     cp = _adopt_resumable(project_id, phase)
     run_id = cp.phase_run_id if cp else _new_phase_run(project_id, phase, role)
@@ -3150,6 +3189,9 @@ def _run_recon_gated_session(
 
 def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
     system = load_prompt("recon-mark.md")
+    tk = _target_kind_overlay(project_id)
+    if tk:
+        system = f"{system.rstrip()}\n\n{tk}\n"
     llm = resolve_llm("recon", project_id=project_id)
     batch_size = max(1, int(settings.recon_mark_batch_size))
     while not cancel.is_set():
@@ -3218,6 +3260,7 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
             total=total,
             batch_count=len(batch),
             paths=lines,
+            **_target_kind_vars(project_id),
         )
         run_id = _new_phase_run(project_id, "recon-mark", "recon_mark")
         _consume_force_new(project_id, "recon")
@@ -3396,7 +3439,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 has_source=fw.has_source,
                 sources=", ".join(sources) if sources else "（无）",
                 snippet=snippet,
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
             )
             user = _prompt_with_summary("worker", project_id, body, for_file=True)
             loop = AgentLoop(
@@ -3547,7 +3590,7 @@ def _run_fast_prepare(project_id: int) -> None:
                 "sink_triage.md",
                 batch_count=len(batch),
                 cards=cards,
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
             )
             user = _prompt_with_summary("sink-triage", project_id, body)
             loop = AgentLoop(
@@ -3701,7 +3744,7 @@ def _run_fast_worker_loop(project_id: int, worker_id: str) -> None:
                 check_ids=", ".join(card.get("check_ids") or []),
                 snippet=row.snippet or "",
                 nearby_sources=_nearby_sources(project_id, row.file_path),
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
             )
             user = _prompt_with_summary("fast-worker", project_id, body, for_file=True)
             prior = inject_fast_prior_block(project_id)
@@ -3845,7 +3888,7 @@ def _run_bypass_worker_loop(project_id: int, worker_id: str) -> None:
                 fix_status=row.fix_status or "",
                 source=row.source or "",
                 old_vuln_doc=doc,
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
             )
             user = _prompt_with_summary("bypass-worker", project_id, body, for_file=True)
             prior = inject_bypass_prior_block(project_id)
@@ -3903,7 +3946,7 @@ def _run_fix(project_id: int, vuln_id: int) -> None:
             title=title,
             reason=reason,
             report_path=report_path,
-            **_audit_mode_vars(project_id),
+            **_agent_prompt_vars(project_id),
         )
         user = _prompt_with_summary("fix", project_id, body)
         try:
@@ -3990,7 +4033,7 @@ def _run_reviewer_lab(project_id: int) -> None:
             project_id,
             _initial_prompt(
                 _lab_initial_prompt_doc(project_id),
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
                 **lab_naming(project_id),
             ),
         )
@@ -4152,7 +4195,7 @@ def _run_reviewer_lab_bringup(project_id: int) -> None:
             _initial_prompt(
                 "reviewer-lab-bringup.md",
                 bringup_error=last_err or "docker start 失败",
-                **_audit_mode_vars(project_id),
+                **_agent_prompt_vars(project_id),
                 **lab_naming(project_id),
             ),
         )
@@ -4267,7 +4310,7 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
         vuln_id=cp.vuln_id,
         lab_note=lab_note,
         debug_plan=json_dumps(debug_plan),
-        **_audit_mode_vars(cp.project_id),
+        **_agent_prompt_vars(cp.project_id),
     )
     messages.append({"role": "user", "content": body})
     cp.messages = messages
@@ -4378,7 +4421,7 @@ def _run_reviewer_once(project_id: int) -> None:
             payload=json_dumps(payload),
             lab_note=lab_note,
             debug_plan=json_dumps(debug_plan),
-            **_audit_mode_vars(project_id),
+            **_agent_prompt_vars(project_id),
         )
         user = body if force_static else _prompt_with_summary("reviewer", project_id, body)
         run_id = _new_phase_run(project_id, "reviewer", "reviewer", vuln_id=vuln_id)
@@ -4535,7 +4578,7 @@ def _run_verifier_once(project_id: int) -> None:
             fofa_query=fofa_query,
             fofa_alts=fofa_alts,
             fofa_shared=format_shared_fofa_hint(fofa_cache),
-            **_audit_mode_vars(project_id),
+            **_agent_prompt_vars(project_id),
         )
         user = _prompt_with_summary("verifier", project_id, body)
         run_id = _new_phase_run(project_id, "verifier", "verifier", vuln_id=vuln_id)
@@ -4667,7 +4710,7 @@ def _run_attack_chain_once(project_id: int) -> None:
             "attack_chain.md",
             confirmed_count=n_confirmed,
             catalog=json_dumps(catalog),
-            **_audit_mode_vars(project_id),
+            **_agent_prompt_vars(project_id),
         )
         user = _prompt_with_summary("attack_chain", project_id, body)
         run_id = _new_phase_run(project_id, "attack_chain", "attack_chain")

@@ -978,7 +978,7 @@ def register_recon_tools() -> None:
     registry.register(
         ToolSpec(
             name="MarkSource",
-            description="标记一个或多个用户可控入口（HTTP / WebSocket / RPC / MQ / 回调等，自动权重 100）。每确认一个入口就立即调用，不要等全部侦察完再批量标记，不要只标 HTTP",
+            description="标记一个或多个用户可控入口（HTTP / WebSocket / RPC / MQ / 回调，以及组件公开 API / 解析器参数入口，自动权重 100）。每确认一个入口就立即调用，不要等全部侦察完再批量标记，不要只标 HTTP",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1005,7 +1005,7 @@ def register_recon_tools() -> None:
         ToolSpec(
             name="MarkWeight",
             description=(
-                "为文件标记审计权重（0-100）。用户可控入口（HTTP / WebSocket / RPC / MQ / 回调）请用 MarkSource（自动 100）；"
+                "为文件标记审计权重（0-100）。用户可控入口（HTTP / WebSocket / RPC / MQ / 回调，以及组件公开 API / 解析入口）请用 MarkSource（自动 100）；"
                 "Service/过滤器 70–90；Mapper/模板/危险工具 40–60；DTO/常量/启动类 10–30。"
                 "同一类文件用 paths 一次标记，不要逐个调用"
             ),

@@ -137,6 +137,42 @@ export const AUDIT_MODE_OPTIONS = [
 
 export type AuditMode = (typeof AUDIT_MODE_OPTIONS)[number]['value']
 
+export const TARGET_KIND_OPTIONS = [
+  {
+    value: 'web' as const,
+    label: 'Web 应用',
+    short: 'HTTP / 非 HTTP 入口为主',
+    hint: '按可部署应用审计：HTTP 与 WebSocket / RPC / MQ 等入口为 source。',
+  },
+  {
+    value: 'library' as const,
+    label: '组件库',
+    short: 'Maven / pip / npm 等库',
+    hint: '按组件审计：公开 API / 解析器为调用方可控入口；创建时默认局部验证、关闭 Verifier。',
+  },
+  {
+    value: 'mixed' as const,
+    label: '混合',
+    short: '库核心 + demo 应用',
+    hint: '优先挖库核心；demo/sample/examples 降权。创建时默认局部验证、关闭 Verifier。',
+  },
+] as const
+
+export type TargetKind = (typeof TARGET_KIND_OPTIONS)[number]['value']
+
+export function formatTargetKind(value: string | null | undefined): string {
+  return TARGET_KIND_OPTIONS.find((o) => o.value === value)?.label ?? TARGET_KIND_OPTIONS[0].label
+}
+
+export function formatTargetKindHint(value: string | null | undefined): string {
+  return TARGET_KIND_OPTIONS.find((o) => o.value === value)?.hint ?? TARGET_KIND_OPTIONS[0].hint
+}
+
+export function normalizeTargetKind(value: string | null | undefined): TargetKind {
+  if (value === 'library' || value === 'mixed') return value
+  return 'web'
+}
+
 export const BOUNTY_SCOPE_ROWS = [
   { type: 'RCE', included: true, note: '命令注入、代码执行等' },
   { type: 'SSTI', included: true, note: '' },

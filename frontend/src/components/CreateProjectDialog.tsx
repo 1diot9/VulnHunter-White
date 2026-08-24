@@ -7,6 +7,7 @@ import { DynamicVerifyToggle, type DynamicVerifyMode } from './DynamicVerifyTogg
 import { ManualLabToggle } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
+import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { WorkerHintFields } from './WorkerHintFields'
 import { Button } from '@/components/ui/button'
@@ -19,7 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { AuditMode } from '@/lib/utils'
+import type { AuditMode, TargetKind } from '@/lib/utils'
 
 type Props = {
   open: boolean
@@ -30,6 +31,8 @@ type Props = {
 export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
   const [url, setUrl] = useState('')
   const [auditMode, setAuditMode] = useState<AuditMode>('bounty')
+  const [targetKind, setTargetKind] = useState<TargetKind>('web')
+  const [verifyTouched, setVerifyTouched] = useState(false)
   const [customModes, setCustomModes] = useState<CustomAuditMode[]>([])
   const [customModeId, setCustomModeId] = useState<number | null>(null)
   const [manualLab, setManualLab] = useState(false)
@@ -55,6 +58,19 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
     api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
   }, [open])
 
+  function onTargetKindChange(next: TargetKind) {
+    setTargetKind(next)
+    if (verifyTouched) return
+    if (next === 'library' || next === 'mixed') {
+      setDynamicVerifyMode('harness')
+      setVerifierEnabled(false)
+      setManualLab(false)
+    } else {
+      setDynamicVerifyMode('off')
+      setVerifierEnabled(false)
+    }
+  }
+
   const close = () => {
     if (busy) return
     onOpenChange(false)
@@ -62,6 +78,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
 
   function createOpts() {
     return {
+      target_kind: targetKind,
       custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
       manual_lab: labMode && manualLab,
       manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
@@ -132,12 +149,13 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择赏金/全量/自定义模式、挖掘路径、验证方式、项目模型与挖掘 Worker 提示。
+            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、验证方式、项目模型与挖掘 Worker 提示。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:items-start">
             <div className="space-y-3">
+              <TargetKindSelect value={targetKind} onValueChange={onTargetKindChange} />
               <AuditModeSelect
                 value={auditMode}
                 customModeId={customModeId}
@@ -160,7 +178,13 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
                   setBypassEnabled(nextB)
                 }}
               />
-              <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />
+              <DynamicVerifyToggle
+                mode={dynamicVerifyMode}
+                onModeChange={(mode) => {
+                  setVerifyTouched(true)
+                  setDynamicVerifyMode(mode)
+                }}
+              />
               {labMode ? (
                 <ManualLabToggle
                   enabled={manualLab}
@@ -169,7 +193,13 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
                   onPromptChange={setManualLabPrompt}
                 />
               ) : null}
-              <VerifierToggle enabled={verifierEnabled} onEnabledChange={setVerifierEnabled} />
+              <VerifierToggle
+                enabled={verifierEnabled}
+                onEnabledChange={(enabled) => {
+                  setVerifyTouched(true)
+                  setVerifierEnabled(enabled)
+                }}
+              />
               <AttackChainToggle enabled={attackChainEnabled} onEnabledChange={setAttackChainEnabled} />
             </div>
             <AuditFlowPreview

@@ -45,10 +45,20 @@ def _has_proxy_flag(text: str) -> bool:
     return bool(_PROXY_FLAG_RE.search(text))
 
 
-def poc_cli_block_reason(poc_code: str | None) -> str | None:
-    """Reject HTTP-looking PoCs that omit -u/--url, --proxy, or localhost force-proxy."""
+def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None) -> str | None:
+    """Reject HTTP-looking PoCs that omit -u/--url, --proxy, or localhost force-proxy.
+
+    For library/mixed component audits, library-style PoCs (no HTTP client) are allowed
+    without forcing -u/--url; HTTP-shaped scripts still follow the web CLI contract.
+    """
+    from ..target_kind import is_component_target
+
     text = poc_code or ""
-    if not text.strip() or not _HTTP_HINT_RE.search(text):
+    if not text.strip():
+        return None
+    if is_component_target(target_kind) and not _HTTP_HINT_RE.search(text):
+        return None
+    if not _HTTP_HINT_RE.search(text):
         return None
     if (
         _has_url_flag(text)
@@ -56,6 +66,10 @@ def poc_cli_block_reason(poc_code: str | None) -> str | None:
         and _FORCE_LOCAL_PROXY_RE.search(text)
         and _SSL_HANDLING_RE.search(text)
     ):
+        return None
+    if is_component_target(target_kind):
+        # Component audits may ship API-call PoCs that import requests only for
+        # optional demos; do not force full HTTP CLI when kind is library/mixed.
         return None
     return POC_CLI_ERROR
 

@@ -32,6 +32,16 @@ _NOISE_PATH_PARTS = (
     "/webjars/",
     "/ckeditor/",
 )
+# mixed 仓额外降权/过滤的示例与演示路径
+_MIXED_DEMO_PATH_PARTS = (
+    "/demo/",
+    "/demos/",
+    "/sample/",
+    "/samples/",
+    "/example/",
+    "/examples/",
+    "/webapp/",
+)
 _NOISE_NAME_MARKERS = (".spec.", ".test.", ".min.", ".generated.")
 _ROOT_SCRIPT_EXTS = frozenset({".py", ".sh", ".bat", ".cmd", ".ps1"})
 # Official pack hits that are crypto hygiene / CSRF / mapping nits, not backtraceable sinks.
@@ -90,6 +100,8 @@ class FilterContext:
     has_source: set[str] = field(default_factory=set)
     source_files: set[str] = field(default_factory=set)
     bounty: bool = False
+    # mixed target_kind: treat demo/sample/examples as noise for Sink queue
+    demote_mixed_demo: bool = False
 
 
 def normalize_path(path: str) -> str:
@@ -114,6 +126,12 @@ def is_noise_path(path: str) -> bool:
     if len(parts) == 1 and Path(parts[0]).suffix.lower() in _ROOT_SCRIPT_EXTS:
         return True
     return False
+
+
+def is_mixed_demo_path(path: str) -> bool:
+    """True for demo/sample/examples paths demoted under mixed target_kind."""
+    lowered = f"/{normalize_path(path).lower()}/"
+    return any(part in lowered for part in _MIXED_DEMO_PATH_PARTS)
 
 
 def is_noise_rule(check_id: str) -> bool:
@@ -210,6 +228,8 @@ def drop_reason(
         return "skipped"
     if is_noise_path(norm):
         return "noise_path"
+    if ctx.demote_mixed_demo and is_mixed_demo_path(norm):
+        return "mixed_demo"
     if is_noise_rule(check_id):
         return "noise_rule"
     category = finding_category(extra)
@@ -255,6 +275,8 @@ def score_sink(
     score = int(_SEV_SCORE.get(severity.upper(), 40))
     score += int(_CONF_SCORE.get(confidence.upper(), 10))
     score += int(_TYPE_BONUS.get(mapped, 0))
+    if ctx.demote_mixed_demo and is_mixed_demo_path(norm):
+        score = max(0, score - 40)
     if mapped != "other":
         weight = int(ctx.file_weights.get(norm) or 0)
         score += min(max(weight, 0), 100) * 3 // 10

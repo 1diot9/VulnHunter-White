@@ -1,4 +1,5 @@
 挖掘模式：${audit_mode_label}。${audit_mode_hint}
+审计对象：${target_kind_label}。${target_kind_hint}
 
 Bypass Worker=${worker_id} 轮次=${round_id}
 当前注入历史漏洞 #${bypass_id}

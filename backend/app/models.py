@@ -83,6 +83,8 @@ class Project(Base):
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # bounty | full | custom — set at create time; change only while paused or completed
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
+    # web | library | mixed — audit object profile; orthogonal to audit_mode / mining paths
+    target_kind: Mapped[str] = mapped_column(String(32), default="web")
     # custom 模式：绑定全局预设 id（删库校验）+ 切换时快照名称/正文
     custom_audit_mode_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     custom_audit_mode_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -423,6 +425,7 @@ def _ensure_columns() -> None:
         "phase_runs": {"file_path": "VARCHAR(1024)"},
         "projects": {
             "audit_mode": "VARCHAR(32) DEFAULT 'bounty'",
+            "target_kind": "VARCHAR(32) DEFAULT 'web'",
             "custom_audit_mode_id": "INTEGER",
             "custom_audit_mode_name": "VARCHAR(128)",
             "custom_audit_prompt": "TEXT",

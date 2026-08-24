@@ -29,6 +29,7 @@ from ..services.report import (
     write_advisory_md,
     write_report_md,
 )
+from ..target_kind import normalize_target_kind
 from ..vuln_types import (
     PENDING_SEVERITY,
     config_premise_label,
@@ -235,6 +236,12 @@ def _ensure_affected_section(report: str, args: dict[str, Any]) -> str:
     return report.rstrip() + "\n\n" + section
 
 
+def _project_target_kind(project_id: int) -> str:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return normalize_target_kind(getattr(proj, "target_kind", None) if proj else None)
+
+
 def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if ctx.role == "worker" and mining_complete(ctx.project_id):
         return {
@@ -244,7 +251,10 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     missing = [f for f in REQUIRED_SUBMIT_FIELDS if args.get(f) in (None, "")]
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
-    poc_blocked = poc_cli_block_reason(str(args.get("poc_code") or ""))
+    poc_blocked = poc_cli_block_reason(
+        str(args.get("poc_code") or ""),
+        target_kind=_project_target_kind(ctx.project_id),
+    )
     if poc_blocked:
         return {"ok": False, "error": poc_blocked}
     vtype = refine_vuln_type(
@@ -579,7 +589,10 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if vuln.status not in ("returned", "fixing"):
             return {"ok": False, "error": f"仅 status=returned/fixing 可 FinishFix，当前为 {vuln.status}"}
         if args.get("poc_code"):
-            poc_blocked = poc_cli_block_reason(str(args["poc_code"]))
+            poc_blocked = poc_cli_block_reason(
+                str(args["poc_code"]),
+                target_kind=_project_target_kind(ctx.project_id),
+            )
             if poc_blocked:
                 return {"ok": False, "error": poc_blocked}
         # optional field updates
@@ -621,7 +634,10 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("http_request"):
             (vuln_dir(ctx.project_id, vuln.id) / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
         if args.get("poc_code"):
-            poc_blocked = poc_cli_block_reason(str(args["poc_code"]))
+            poc_blocked = poc_cli_block_reason(
+                str(args["poc_code"]),
+                target_kind=_project_target_kind(ctx.project_id),
+            )
             if poc_blocked:
                 return {"ok": False, "error": poc_blocked}
             write_poc_code(ctx.project_id, vuln.id, str(args["poc_code"]))
@@ -679,15 +695,22 @@ def register_worker_tools() -> None:
                             "仅在此类开关下才成立的不要提交。"
                         ),
                     },
-                    "http_request": {"type": "string"},
+                    "http_request": {
+                        "type": "string",
+                        "description": (
+                            "HTTP 报文，或组件审计时的 API 调用配方（类/方法/参数）；"
+                            "无 HTTP 面时可写 API 配方，不要留空。"
+                        ),
+                    },
                     "poc_code": {
                         "type": "string",
                         "description": (
-                            "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
+                            "可运行 Python。有 HTTP 面时必须 argparse：-u/--url 为目标 origin；"
                             "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
                             "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
+                            "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
                         ),
                     },
                     "expected_evidence": {
@@ -843,15 +866,22 @@ def register_worker_tools() -> None:
                             "官方已警示的风险配置不算特定配置。"
                         ),
                     },
-                    "http_request": {"type": "string"},
+                    "http_request": {
+                        "type": "string",
+                        "description": (
+                            "HTTP 报文，或组件审计时的 API 调用配方（类/方法/参数）；"
+                            "无 HTTP 面时可写 API 配方，不要留空。"
+                        ),
+                    },
                     "poc_code": {
                         "type": "string",
                         "description": (
-                            "可运行 Python。必须 argparse：-u/--url 为目标 origin；"
+                            "可运行 Python。有 HTTP 面时必须 argparse：-u/--url 为目标 origin；"
                             "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
                             "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
+                            "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
                         ),
                     },
                     "expected_evidence": {

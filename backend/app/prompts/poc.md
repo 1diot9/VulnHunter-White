@@ -99,3 +99,9 @@ python poc.py -u https://real-domain.com --strict-ssl
 - **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI（含 `--proxy` / HTTPS 证书处理）、有代理却让 `127.0.0.1` 旁路、HTTPS 因证书校验失败直接中断、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
 - **debug MCP**：仅当 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。
 - **禁止**换一条利用链或换一个 sink 来让洞过关，也禁止改靶场替 Worker 圆谎。同一条链上的 payload 校准（编码、参数名、鉴权头）不算换链。
+
+## 组件库 / 混合审计对象
+当项目 `target_kind` 为 `library` 或 `mixed`：
+- 有 HTTP 利用面时，仍遵守上文 `-u/--url` + `--proxy` 合同。
+- **纯库洞**以 `harness.py`（`RunCode`）为证据主路径；`poc.py` 可为调用公开 API 的最小脚本（argparse 可用包路径/版本等参数，不强制 HTTP origin）。
+- SubmitVuln 的 `http_request` 可写 **API 调用配方**（类/方法/参数），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。

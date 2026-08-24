@@ -29,7 +29,14 @@ def _norm(path: str) -> str:
 
 
 def filter_context(project_id: int, *, bounty: bool) -> FilterContext:
+    from ..target_kind import TARGET_KIND_MIXED, normalize_target_kind
+
     with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        demote_mixed = (
+            normalize_target_kind(getattr(proj, "target_kind", None) if proj else None)
+            == TARGET_KIND_MIXED
+        )
         files = db.query(FileWeight).filter(FileWeight.project_id == project_id).all()
         sources = db.query(Source).filter(Source.project_id == project_id).all()
         skipped = {_norm(row.path) for row in files if row.skipped}
@@ -42,6 +49,7 @@ def filter_context(project_id: int, *, bounty: bool) -> FilterContext:
         has_source=has_source,
         source_files=source_files,
         bounty=bounty,
+        demote_mixed_demo=demote_mixed,
     )
 
 

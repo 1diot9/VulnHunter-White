@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { githubRepoHref } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTokenUsage } from '../lib/utils'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTargetKind, formatTokenUsage } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PAGE_SIZE = 5
@@ -218,6 +218,8 @@ export default function HomePage() {
                   </Link>
                 </CardTitle>
                 <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
+                  <span>{formatTargetKind(p.target_kind)}</span>
+                  <span>·</span>
                   <span>{formatAuditMode(p.audit_mode, p.custom_audit_mode_name)}</span>
                   <span>·</span>
                   <span>{p.llm_model || '全局模型'}</span>

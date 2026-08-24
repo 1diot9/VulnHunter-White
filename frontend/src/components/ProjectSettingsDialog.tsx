@@ -4,6 +4,7 @@ import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode
 import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
+import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { AttackChainToggle } from './AttackChainToggle'
 import { WorkerHintFields } from './WorkerHintFields'
@@ -18,6 +19,7 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { normalizeTargetKind, type TargetKind } from '@/lib/utils'
 
 export function ProjectSettingsButton({
   project,
@@ -28,6 +30,7 @@ export function ProjectSettingsButton({
 }) {
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
+  const [targetKind, setTargetKind] = useState<TargetKind>(normalizeTargetKind(project.target_kind))
   const [dynamicVerifyMode, setDynamicVerifyMode] = useState<DynamicVerifyMode>(
     normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled),
   )
@@ -41,10 +44,12 @@ export function ProjectSettingsButton({
   const [workerHint, setWorkerHint] = useState(project.worker_hint || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const canEditKind = project.status === 'paused' || project.status === 'completed'
 
   useEffect(() => {
     if (!open) return
     setPrompt(project.manual_lab_prompt || '')
+    setTargetKind(normalizeTargetKind(project.target_kind))
     setDynamicVerifyMode(normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled))
     setVerifier(Boolean(project.verifier_enabled))
     setAttackChain(Boolean(project.attack_chain_enabled))
@@ -58,6 +63,7 @@ export function ProjectSettingsButton({
   }, [
     open,
     project.manual_lab_prompt,
+    project.target_kind,
     project.dynamic_verify_mode,
     project.dynamic_verify_enabled,
     project.verifier_enabled,
@@ -89,6 +95,7 @@ export function ProjectSettingsButton({
         dynamic_verify_mode: dynamicVerifyMode,
         llm_model: llmModel.trim(),
         worker_hint: workerHint.trim(),
+        ...(canEditKind ? { target_kind: targetKind } : {}),
         ...(canEditPaths
           ? { heuristic_enabled: heuristicEnabled, heuristic_lite: heuristicLite, fast_enabled: fastEnabled, bypass_enabled: bypassEnabled }
           : {}),
@@ -118,10 +125,15 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、挖掘提示、验证方式与互联网验证。挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与挖掘提示对下一轮 Agent 生效。
+              审计运行中也可修改模型、挖掘提示、验证方式与互联网验证。审计对象与挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与挖掘提示对下一轮 Agent 生效。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <TargetKindSelect
+              value={targetKind}
+              onValueChange={setTargetKind}
+              disabled={!canEditKind}
+            />
             <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
             <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={saving} />
             <MiningPathSelect

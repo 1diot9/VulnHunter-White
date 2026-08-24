@@ -32,6 +32,18 @@ def test_poc_cli_rejects_hardcoded_http_target():
     bad = "import requests\nprint(requests.get('http://127.0.0.1:18080/exec?cmd=id').text)\n"
     assert poc_cli_block_reason(bad) == POC_CLI_ERROR
     assert poc_cli_block_reason("curl http://127.0.0.1:18080/x\n") is None
+    # library/mixed: HTTP-shaped scripts are not forced through web CLI gate
+    assert poc_cli_block_reason(bad, target_kind="library") is None
+    lib_api = """
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("--artifact", default="target.jar")
+args = p.parse_args()
+print("call PublicApi.parse(malicious)")
+"""
+    assert poc_cli_block_reason(lib_api, target_kind="library") is None
+    assert poc_cli_block_reason(lib_api, target_kind="mixed") is None
+
 
 
 def test_poc_cli_rejects_http_without_proxy_flag():

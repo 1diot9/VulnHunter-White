@@ -31,6 +31,14 @@ from ..mining_paths import (
     parse_heuristic_lite,
     parse_mining_paths,
 )
+from ..target_kind import (
+    TARGET_KIND_EDITABLE_STATUSES,
+    create_verify_defaults,
+    is_component_target,
+    normalize_target_kind,
+    parse_target_kind,
+    target_kind_label,
+)
 from ..models import (
     AppSettings,
     BypassTarget,
@@ -263,6 +271,7 @@ def _project_out(
         phase=p.phase,
         recon_done=p.recon_done,
         audit_mode=normalize_audit_mode(p.audit_mode),
+        target_kind=normalize_target_kind(getattr(p, "target_kind", None)),
         custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),
         custom_audit_mode_name=(getattr(p, "custom_audit_mode_name", None) or "").strip(),
         custom_audit_prompt=(getattr(p, "custom_audit_prompt", None) or "").strip(),
@@ -420,6 +429,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
     name = (body.name or "").strip() or body.source_url.strip().rstrip("/").split("/")[-1]
     try:
         audit_mode = parse_audit_mode(body.audit_mode)
+        target_kind = parse_target_kind(body.target_kind)
         manual_lab_prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
         worker_hint = normalize_worker_hint(body.worker_hint)
         heuristic_enabled, fast_enabled, bypass_enabled = parse_mining_paths(
@@ -428,8 +438,11 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             bypass_enabled=body.bypass_enabled,
         )
         heuristic_lite = parse_heuristic_lite(body.heuristic_lite)
+        verify_mode_arg = body.dynamic_verify_mode
+        if verify_mode_arg is None and is_component_target(target_kind):
+            verify_mode_arg = create_verify_defaults(target_kind)["dynamic_verify_mode"]
         verify_mode = resolve_verify_mode(
-            mode=body.dynamic_verify_mode,
+            mode=verify_mode_arg,
             enabled=body.dynamic_verify_enabled,
             manual_lab=body.manual_lab,
             manual_lab_prompt=manual_lab_prompt,
@@ -452,6 +465,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             status="pending",
             phase="pending",
             audit_mode=audit_mode,
+            target_kind=target_kind,
             manual_lab=bool(body.manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
             manual_lab_prompt=manual_lab_prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(body.verifier_enabled),
@@ -485,6 +499,7 @@ async def create_project_zip(
     file: UploadFile = File(...),
     name: str = Form(""),
     audit_mode: str = Form("bounty"),
+    target_kind: str = Form("web"),
     custom_audit_mode_id: str = Form(""),
     manual_lab: bool = Form(False),
     manual_lab_prompt: str = Form(""),
@@ -502,6 +517,7 @@ async def create_project_zip(
     raw_name = name.strip() or _upload_zip_stem(file.filename)
     try:
         mode = parse_audit_mode(audit_mode)
+        kind = parse_target_kind(target_kind)
         prompt = normalize_manual_lab_prompt(manual_lab_prompt)
         hint = normalize_worker_hint(worker_hint)
         heuristic_on, fast_on, bypass_on = parse_mining_paths(
@@ -510,8 +526,11 @@ async def create_project_zip(
             bypass_enabled=bypass_enabled,
         )
         lite_on = parse_heuristic_lite(heuristic_lite)
+        verify_mode_arg = dynamic_verify_mode or None
+        if verify_mode_arg is None and is_component_target(kind):
+            verify_mode_arg = create_verify_defaults(kind)["dynamic_verify_mode"]
         verify_mode = resolve_verify_mode(
-            mode=dynamic_verify_mode or None,
+            mode=verify_mode_arg,
             enabled=dynamic_verify_enabled,
             manual_lab=manual_lab,
             manual_lab_prompt=prompt,
@@ -538,6 +557,7 @@ async def create_project_zip(
             status="pending",
             phase="pending",
             audit_mode=mode,
+            target_kind=kind,
             manual_lab=bool(manual_lab) if verify_mode == VERIFY_MODE_LAB else False,
             manual_lab_prompt=prompt or None if verify_mode == VERIFY_MODE_LAB else None,
             verifier_enabled=bool(verifier_enabled),
@@ -572,6 +592,7 @@ async def create_project_zip(
 def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
     if (
         body.audit_mode is None
+        and body.target_kind is None
         and body.custom_audit_mode_id is None
         and body.manual_lab is None
         and body.manual_lab_prompt is None
@@ -588,11 +609,14 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
+    kind = None
     prompt = None
     hint = None
     try:
         if body.audit_mode is not None:
             mode = parse_audit_mode(body.audit_mode)
+        if body.target_kind is not None:
+            kind = parse_target_kind(body.target_kind)
         if body.manual_lab_prompt is not None:
             prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
         if body.worker_hint is not None:
@@ -608,6 +632,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         if not p:
             raise HTTPException(404, "项目不存在")
         old_mode = normalize_audit_mode(p.audit_mode)
+        old_kind = normalize_target_kind(getattr(p, "target_kind", None))
         old_custom_id = getattr(p, "custom_audit_mode_id", None)
         old_verifier = bool(p.verifier_enabled)
         old_attack_chain = bool(getattr(p, "attack_chain_enabled", False))
@@ -619,6 +644,10 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_bypass = bool(getattr(p, "bypass_enabled", False))
         old_llm_model = normalize_project_llm_model(getattr(p, "llm_model", None))
         old_worker_hint = (getattr(p, "worker_hint", None) or "").strip()
+        if kind is not None:
+            if p.status not in TARGET_KIND_EDITABLE_STATUSES:
+                raise HTTPException(400, "审计对象仅在项目暂停或完成后可更改")
+            p.target_kind = kind
         if (
             body.heuristic_enabled is not None
             or body.fast_enabled is not None
@@ -769,6 +798,11 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                     )
                 else:
                     live_log.system(project_id, "项目模型已改回全局默认，下一轮 Agent 生效")
+        if kind is not None and normalize_target_kind(out.target_kind) != old_kind:
+            live_log.system(
+                project_id,
+                f"审计对象已改为{target_kind_label(out.target_kind)}，下一轮 Agent 生效",
+            )
         if hint is not None and (hint or "") != old_worker_hint:
             if hint:
                 live_log.system(project_id, "挖掘 Worker 提示已更新，下一轮挖掘生效")
