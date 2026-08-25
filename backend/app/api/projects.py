@@ -500,6 +500,12 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
         pat = (settings_row.github_pat if settings_row else None) or None
         out = _project_out(db, p)
     ensure_project_dirs(pid)
+    try:
+        from ..services.github_discover import mark_candidate_imported
+
+        mark_candidate_imported(source_url=body.source_url.strip(), project_id=pid)
+    except Exception:  # noqa: BLE001
+        pass
     start_ingest_and_audit(pid, source_type="github", source_url=body.source_url.strip(), github_pat=pat)
     return out
 

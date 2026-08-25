@@ -1,0 +1,228 @@
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Loader2Icon, PlusIcon, RefreshCwIcon, StarIcon } from 'lucide-react'
+import { api, type GithubCandidate } from '../api'
+import { CreateProjectDialog } from '../components/CreateProjectDialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { formatDateTime, formatTargetKind, type TargetKind } from '@/lib/utils'
+
+const DEFAULT_LIMIT = 5
+
+function kindBadgeClass(kind: string): string {
+  if (kind === 'library') return 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+  if (kind === 'mixed') return 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+  return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+}
+
+export default function DiscoverPage() {
+  const [items, setItems] = useState<GithubCandidate[]>([])
+  const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(DEFAULT_LIMIT)
+  const [loading, setLoading] = useState(true)
+  const [searching, setSearching] = useState(false)
+  const [error, setError] = useState('')
+  const [warning, setWarning] = useState('')
+  const [lastAdded, setLastAdded] = useState<number | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [prefillUrl, setPrefillUrl] = useState('')
+  const [prefillKind, setPrefillKind] = useState<TargetKind | undefined>(undefined)
+
+  const load = useCallback((showLoading = false) => {
+    if (showLoading) setLoading(true)
+    return api
+      .listDiscoveries({ limit: 200, offset: 0 })
+      .then((data) => {
+        setItems(data.items)
+        setTotal(data.total)
+        setError('')
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => {
+        if (showLoading) setLoading(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    void load(true)
+  }, [load])
+
+  async function onSearch() {
+    setSearching(true)
+    setError('')
+    setWarning('')
+    setLastAdded(null)
+    try {
+      const n = Math.max(1, Math.min(20, Number(limit) || DEFAULT_LIMIT))
+      const result = await api.searchDiscoveries(n)
+      setLastAdded(result.added)
+      if (result.warning) setWarning(result.warning)
+      await load(false)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function openCreate(c: GithubCandidate) {
+    const kind = (c.target_kind || 'web') as TargetKind
+    setPrefillUrl(c.html_url || `https://github.com/${c.full_name}`)
+    setPrefillKind(kind)
+    setCreateOpen(true)
+  }
+
+  return (
+    <div className="w-full space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold">发现仓库</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            从公开 GitHub Advisory 中筛选近一年仍有提交、Star ≥ 1000 的仓库，并标注 Web 应用 / 组件库。搜索结果会累积保留，再次搜索只追加新仓库。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="discover-limit" className="text-xs text-muted-foreground">
+              每次搜索数量
+            </Label>
+            <Input
+              id="discover-limit"
+              type="number"
+              min={1}
+              max={20}
+              className="w-24"
+              value={limit}
+              disabled={searching}
+              onChange={(e) => setLimit(Number(e.target.value) || DEFAULT_LIMIT)}
+            />
+          </div>
+          <Button disabled={searching} onClick={() => void onSearch()} className="gap-2">
+            {searching ? <Loader2Icon className="size-4 animate-spin" /> : <RefreshCwIcon className="size-4" />}
+            {searching ? '搜索中…' : '搜索'}
+          </Button>
+        </div>
+      </div>
+
+      {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      {warning ? <p className="text-sm text-amber-200">{warning}</p> : null}
+      {lastAdded != null ? (
+        <p className="text-sm text-muted-foreground">
+          本次新增 <span className="font-medium text-foreground">{lastAdded}</span> 个仓库
+          {total > 0 ? `，累计可审计候选 ${total} 个` : null}
+        </p>
+      ) : null}
+
+      <CreateProjectDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        initialUrl={prefillUrl}
+        initialTargetKind={prefillKind}
+        onCreated={async () => {
+          await load(false)
+        }}
+      />
+
+      {loading ? (
+        <div className="flex min-h-[30vh] items-center justify-center text-sm text-muted-foreground">
+          <Loader2Icon className="mr-2 size-4 animate-spin" />
+          加载中…
+        </div>
+      ) : items.length === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">还没有发现结果</CardTitle>
+            <CardDescription>
+              点击「搜索」从最新公开 Advisory 中挑出默认 5 个 Star ≥ 1000 的活跃仓库。建议先在设置页配置 GitHub PAT。
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
+        <div className="grid gap-3">
+          {items.map((c) => {
+            const imported = c.status === 'imported' || c.project_id != null
+            return (
+              <Card key={c.id}>
+                <CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="truncate text-base">
+                      <a
+                        href={c.html_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hover:underline"
+                      >
+                        {c.full_name}
+                      </a>
+                    </CardTitle>
+                    <CardDescription className="line-clamp-2">
+                      {c.description || '无描述'}
+                    </CardDescription>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Badge variant="outline" className={kindBadgeClass(c.target_kind)}>
+                      {formatTargetKind(c.target_kind)}
+                    </Badge>
+                    {imported ? (
+                      <Badge variant="secondary">已创建</Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-border/60">
+                        可创建
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <StarIcon className="size-3.5" />
+                      {c.stars}
+                    </span>
+                    {c.language ? <span>{c.language}</span> : null}
+                    <span>最近推送 {formatDateTime(c.pushed_at)}</span>
+                    <span>发现于 {formatDateTime(c.discovered_at)}</span>
+                    {c.latest_ghsa_url ? (
+                      <a
+                        href={c.latest_ghsa_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sky-300 hover:underline"
+                      >
+                        {c.latest_ghsa_id || 'Advisory'}
+                      </a>
+                    ) : c.latest_ghsa_id ? (
+                      <span>{c.latest_ghsa_id}</span>
+                    ) : null}
+                    {c.target_kind_reason ? (
+                      <span className="max-w-xl truncate" title={c.target_kind_reason}>
+                        {c.target_kind_reason}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-2">
+                    {imported && c.project_id != null ? (
+                      <Link
+                        to={`/projects/${c.project_id}`}
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-[0.8rem] font-medium hover:bg-muted"
+                      >
+                        查看项目
+                      </Link>
+                    ) : (
+                      <Button size="sm" className="gap-1.5" onClick={() => openCreate(c)}>
+                        <PlusIcon className="size-4" />
+                        创建项目
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}

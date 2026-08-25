@@ -9,6 +9,7 @@ import { useAuth } from './AuthGate'
 
 const links = [
   { to: '/', label: '审计项目' },
+  { to: '/discover', label: '发现仓库' },
   { to: '/vulns', label: '漏洞产出' },
   { to: '/verifier-consent', label: '验证确认' },
   { to: '/containers', label: '容器管理' },

@@ -369,6 +369,33 @@ class TokenUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class GithubCandidate(Base):
+    """Repos discovered from public GHSA for potential audit projects."""
+
+    __tablename__ = "github_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    full_name: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)
+    html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stars: Mapped[int] = mapped_column(Integer, default=0)
+    pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    target_kind: Mapped[str] = mapped_column(String(32), default="web")
+    target_kind_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    advisory_count: Mapped[int] = mapped_column(Integer, default=1)
+    latest_ghsa_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latest_ghsa_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # eligible | skipped | imported
+    status: Mapped[str] = mapped_column(String(32), default="eligible", index=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 REQUIRED_TABLES = (
     "app_settings",
     "custom_audit_modes",
@@ -381,6 +408,7 @@ REQUIRED_TABLES = (
     "phase_runs",
     "tool_logs",
     "token_usages",
+    "github_candidates",
 )
 
 SQLITE_BUSY_TIMEOUT_MS = 30000

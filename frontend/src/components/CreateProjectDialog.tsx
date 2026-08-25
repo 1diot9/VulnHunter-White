@@ -26,9 +26,19 @@ type Props = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: () => void | Promise<void>
+  /** Prefill GitHub URL when opening from discovery. */
+  initialUrl?: string
+  /** Prefill audit target kind when opening from discovery. */
+  initialTargetKind?: TargetKind
 }
 
-export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
+export function CreateProjectDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  initialUrl = '',
+  initialTargetKind,
+}: Props) {
   const [url, setUrl] = useState('')
   const [auditMode, setAuditMode] = useState<AuditMode>('bounty')
   const [targetKind, setTargetKind] = useState<TargetKind>('web')
@@ -56,7 +66,21 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
     if (!open) return
     setError('')
     api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
-  }, [open])
+    const nextUrl = (initialUrl || '').trim()
+    if (nextUrl) setUrl(nextUrl)
+    if (initialTargetKind) {
+      setTargetKind(initialTargetKind)
+      setVerifyTouched(false)
+      if (initialTargetKind === 'library' || initialTargetKind === 'mixed') {
+        setDynamicVerifyMode('harness')
+        setVerifierEnabled(false)
+        setManualLab(false)
+      } else {
+        setDynamicVerifyMode('off')
+        setVerifierEnabled(false)
+      }
+    }
+  }, [open, initialUrl, initialTargetKind])
 
   function onTargetKindChange(next: TargetKind) {
     setTargetKind(next)

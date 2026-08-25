@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import auth, docker, projects, settings, vulns
+from .api import auth, discoveries, docker, projects, settings, vulns
 from .auth import AccessTokenMiddleware
 from .models import init_db
 from .services.shutdown import install_signal_bridge, reset as reset_shutdown
@@ -26,6 +26,7 @@ app.include_router(projects.router)
 app.include_router(vulns.router)
 app.include_router(settings.router)
 app.include_router(docker.router)
+app.include_router(discoveries.router)
 
 
 @app.on_event("startup")

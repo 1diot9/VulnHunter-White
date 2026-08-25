@@ -524,6 +524,47 @@ export type GithubTest = {
   error: string | null
 }
 
+export type GithubCandidate = {
+  id: number
+  full_name: string
+  html_url: string
+  description: string | null
+  language: string | null
+  stars: number
+  pushed_at: string | null
+  target_kind: 'web' | 'library' | 'mixed'
+  target_kind_reason: string | null
+  advisory_count: number
+  latest_ghsa_id: string | null
+  latest_ghsa_url: string | null
+  status: 'eligible' | 'skipped' | 'imported' | string
+  project_id: number | null
+  skip_reason: string | null
+  discovered_at: string
+  updated_at: string | null
+}
+
+export type GithubCandidateList = {
+  items: GithubCandidate[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type GithubDiscoverSearch = {
+  ok: boolean
+  error: string | null
+  added: number
+  items: GithubCandidate[]
+  scanned_advisories: number
+  scanned_repos: number
+  skipped_seen: number
+  pages: number
+  authenticated: boolean
+  warning: string | null
+  limit: number
+}
+
 const ACCESS_TOKEN_KEY = 'vulnhunter_access_token'
 
 type AuthListener = () => void
@@ -640,6 +681,19 @@ export const api = {
     return items
   },
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
+  listDiscoveries: (query?: { limit?: number; offset?: number }) => {
+    const params = new URLSearchParams()
+    if (query?.limit != null) params.set('limit', String(query.limit))
+    if (query?.offset != null) params.set('offset', String(query.offset))
+    const s = params.toString()
+    return request<GithubCandidateList>(`/api/discoveries${s ? `?${s}` : ''}`)
+  },
+  searchDiscoveries: (limit = 5) =>
+    request<GithubDiscoverSearch>('/api/discoveries/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit }),
+    }),
   createGithub: (
     source_url: string,
     name = '',

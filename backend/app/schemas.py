@@ -716,3 +716,48 @@ class DockerImagePruneResult(BaseModel):
     freed_bytes: int = 0
     freed_mb: float = 0.0
     errors: list[str] = Field(default_factory=list)
+
+
+class GithubCandidateOut(BaseModel):
+    id: int
+    full_name: str
+    html_url: str
+    description: str | None = None
+    language: str | None = None
+    stars: int = 0
+    pushed_at: datetime | None = None
+    target_kind: str = "web"
+    target_kind_reason: str | None = None
+    advisory_count: int = 0
+    latest_ghsa_id: str | None = None
+    latest_ghsa_url: str | None = None
+    status: str = "eligible"
+    project_id: int | None = None
+    skip_reason: str | None = None
+    discovered_at: datetime
+    updated_at: datetime | None = None
+
+
+class GithubCandidateListOut(BaseModel):
+    items: list[GithubCandidateOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class GithubDiscoverSearchIn(BaseModel):
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class GithubDiscoverSearchOut(BaseModel):
+    ok: bool = True
+    error: str | None = None
+    added: int = 0
+    items: list[GithubCandidateOut] = Field(default_factory=list)
+    scanned_advisories: int = 0
+    scanned_repos: int = 0
+    skipped_seen: int = 0
+    pages: int = 0
+    authenticated: bool = False
+    warning: str | None = None
+    limit: int = 5

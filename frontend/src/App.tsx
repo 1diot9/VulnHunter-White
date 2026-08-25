@@ -9,6 +9,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const VulnsPage = lazy(() => import('./pages/VulnsPage'))
 const VerifierConsentPage = lazy(() => import('./pages/VerifierConsentPage'))
 const ContainersPage = lazy(() => import('./pages/ContainersPage'))
+const DiscoverPage = lazy(() => import('./pages/DiscoverPage'))
 
 function RouteFallback() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
           <Routes>
             <Route element={<AppLayout />}>
               <Route path="/" element={<HomePage />} />
+              <Route path="/discover" element={<DiscoverPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
               <Route path="/vulns" element={<VulnsPage />} />
               <Route path="/vulns/:id" element={<VulnsPage />} />

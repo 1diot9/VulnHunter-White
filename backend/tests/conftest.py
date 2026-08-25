@@ -63,6 +63,8 @@ def tmp_env(tmp_path, monkeypatch):
     import app.tools.phase_attack_chain as phase_attack_chain
     import app.tools.phase_cve_record as phase_cve_record
     import app.tools.phase_worker as phase_worker
+    import app.api.discoveries as api_discoveries
+    import app.services.github_discover as github_discover
     import app.services.sink_queue as sink_queue
     import app.services.demo_seed as demo_seed
     import app.services.bypass_queue as bypass_queue
@@ -85,6 +87,7 @@ def tmp_env(tmp_path, monkeypatch):
         old_vuln_crawl,
         github_issues,
         github_probe,
+        github_discover,
         vuln_followup,
         ghsa_service,
         fofa_service,
@@ -103,6 +106,7 @@ def tmp_env(tmp_path, monkeypatch):
         api_settings,
         api_auth,
         api_docker,
+        api_discoveries,
     ):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
@@ -114,6 +118,7 @@ def tmp_env(tmp_path, monkeypatch):
     assert inspect(engine).has_table("bypass_targets")
     assert inspect(engine).has_table("attack_chains")
     assert inspect(engine).has_table("custom_audit_modes")
+    assert inspect(engine).has_table("github_candidates")
 
     with Session() as db:
         if db.query(models.AppSettings).first() is None:
