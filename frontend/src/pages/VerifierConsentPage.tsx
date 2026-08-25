@@ -88,13 +88,12 @@ export default function VerifierConsentPage() {
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="outline">待用户确认</Badge>
                       {item.vuln_type ? <Badge variant="secondary">{item.vuln_type}</Badge> : null}
-                      {formatSeverity(item.severity) ? (
-                        <Badge variant="outline">{formatSeverity(item.severity)}</Badge>
-                      ) : null}
                       {item.severity_score != null ? (
                         <Badge className={severityScoreBadgeClass(item.severity_score)}>
-                          {formatSeverityScore(item.severity_score)}
+                          {formatSeverityScore(item.severity_score, item.severity)}
                         </Badge>
+                      ) : formatSeverity(item.severity) ? (
+                        <Badge variant="outline">{formatSeverity(item.severity)}</Badge>
                       ) : null}
                     </div>
                   </div>

@@ -331,9 +331,14 @@ export function formatSeverity(value: string | null | undefined): string {
   }
 }
 
-export function formatSeverityScore(value: number | null | undefined): string | null {
+export function formatSeverityScore(
+  value: number | null | undefined,
+  severity?: string | null,
+): string | null {
   if (value == null || Number.isNaN(value)) return null
-  return `校准 ${value > 0 ? `+${value}` : value}`
+  const signed = value > 0 ? `+${value}` : String(value)
+  const label = formatSeverity(severity)
+  return label ? `${label}${signed}` : signed
 }
 
 export function severityScoreBadgeClass(value: number | null | undefined): string {

@@ -24,7 +24,7 @@ import {
 
 function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
-  const score = formatSeverityScore(v.severity_score)
+  const score = formatSeverityScore(v.severity_score, v.severity)
   const tier = formatSubmissionTier(v.submission_tier)
   const verifier = formatVerifierStatus(v.verifier_status)
   const miningPath = formatMiningPath(v.mining_path)
