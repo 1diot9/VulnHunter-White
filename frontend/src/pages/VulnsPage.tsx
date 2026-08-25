@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import ProjectFilterCombobox from '../components/ProjectFilterCombobox'
+import VulnCalendar from '../components/VulnCalendar'
 import VulnDetailDialog from '../components/VulnDetailDialog'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
@@ -166,7 +167,7 @@ export default function VulnsPage() {
         <div>
           <h1 className="text-2xl font-semibold">漏洞产出</h1>
           <p className="text-sm text-slate-400">
-            按项目、状态、价值分层与提交标记筛选；同根因报告折叠在危害最大的条目下。
+            按项目、状态、价值分层与提交标记筛选；同根因报告折叠在危害最大的条目下。上方日历按产出日汇总确认与误报。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -197,6 +198,12 @@ export default function VulnsPage() {
           <Button onClick={download}>批量下载</Button>
         </div>
       </div>
+
+      <VulnCalendar
+        projectId={projectId}
+        projectNameById={projectNameById}
+        onOpenVuln={(vid) => navigate(`/vulns/${vid}`)}
+      />
 
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />

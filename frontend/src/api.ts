@@ -155,6 +155,18 @@ export type ConversationAction = 'steer' | 'continue' | 'new'
 
 export type VulnTrackingStatus = 'none' | 'submitted' | 'ignored'
 
+export type VulnCalendarDay = {
+  date: string
+  confirmed: number
+  false_positive: number
+}
+
+export type VulnCalendar = {
+  year: number
+  month: number
+  days: VulnCalendarDay[]
+}
+
 export type Vuln = {
   id: number
   project_id: number
@@ -834,6 +846,7 @@ export const api = {
     submissionTier?: string,
     rootCauseKey?: string,
     trackingStatus?: string,
+    createdDate?: string,
   ) => {
     const q = new URLSearchParams()
     if (projectId != null) q.set('project_id', String(projectId))
@@ -842,8 +855,16 @@ export const api = {
     if (submissionTier) q.set('submission_tier', submissionTier)
     if (rootCauseKey) q.set('root_cause_key', rootCauseKey)
     if (trackingStatus) q.set('tracking_status', trackingStatus)
+    if (createdDate) q.set('created_date', createdDate)
     const s = q.toString()
     return request<Vuln[]>(`/api/vulns${s ? `?${s}` : ''}`)
+  },
+  getVulnCalendar: (year: number, month: number, projectId?: number) => {
+    const q = new URLSearchParams()
+    q.set('year', String(year))
+    q.set('month', String(month))
+    if (projectId != null) q.set('project_id', String(projectId))
+    return request<VulnCalendar>(`/api/vulns/calendar?${q.toString()}`)
   },
   getVuln: (id: number) => request<VulnDetail>(`/api/vulns/${id}`),
   listVerifierConsent: (projectId?: number) => {

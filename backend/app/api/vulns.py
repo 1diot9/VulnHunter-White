@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,6 +19,8 @@ from ..schemas import (
     VerifierConsentIn,
     VerifierConsentItem,
     VerifierConsentOut,
+    VulnCalendarDay,
+    VulnCalendarOut,
     VulnDetail,
     VulnFollowUpIn,
     VulnFollowUpThread,
@@ -49,14 +53,57 @@ from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, norm
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+_CREATED_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
 ALLOWED_REPORT_KINDS = frozenset({"report", "advisory", "cve"})
 REPORT_KIND_FILES = {"report": "report.md", "advisory": "advisory.md", "cve": "cve.json"}
+_CONFIRMED_STATUSES = frozenset({"confirmed", "static_only"})
+_CALENDAR_STATUSES = frozenset({"confirmed", "static_only", "false_positive"})
+_CST = timezone(timedelta(hours=8))
 
 
 def _tracking_status_out(value: str | None) -> str:
     raw = (value or "none").strip().lower()
     return raw if raw in ALLOWED_TRACKING_STATUSES else "none"
+
+
+def _ensure_aware_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _to_shanghai_date(dt: datetime) -> str:
+    return _ensure_aware_utc(dt).astimezone(_CST).strftime("%Y-%m-%d")
+
+
+def _parse_created_date(value: str) -> tuple[int, int, int]:
+    match = _CREATED_DATE_RE.fullmatch((value or "").strip())
+    if not match:
+        raise HTTPException(400, "created_date 须为 YYYY-MM-DD")
+    year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    try:
+        datetime(year, month, day, tzinfo=_CST)
+    except ValueError as exc:
+        raise HTTPException(400, "created_date 不是合法日期") from exc
+    return year, month, day
+
+
+def _shanghai_day_bounds(year: int, month: int, day: int) -> tuple[datetime, datetime]:
+    start_cst = datetime(year, month, day, tzinfo=_CST)
+    end_cst = start_cst + timedelta(days=1)
+    return start_cst.astimezone(timezone.utc), end_cst.astimezone(timezone.utc)
+
+
+def _shanghai_month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
+    if month < 1 or month > 12:
+        raise HTTPException(400, "month 须为 1–12")
+    start_cst = datetime(year, month, 1, tzinfo=_CST)
+    if month == 12:
+        end_cst = datetime(year + 1, 1, 1, tzinfo=_CST)
+    else:
+        end_cst = datetime(year, month + 1, 1, tzinfo=_CST)
+    return start_cst.astimezone(timezone.utc), end_cst.astimezone(timezone.utc)
 
 
 class DownloadBody(BaseModel):
@@ -129,6 +176,7 @@ def list_vulns(
     submission_tier: str | None = None,
     root_cause_key: str | None = None,
     tracking_status: str | None = None,
+    created_date: str | None = None,
 ) -> list[VulnOut]:
     with SessionLocal() as db:
         q = db.query(Vuln).options(joinedload(Vuln.project))
@@ -169,8 +217,43 @@ def list_vulns(
                     q = q.filter(Vuln.submission_tier == normalized)
         if root_cause_key:
             q = q.filter(Vuln.root_cause_key == root_cause_key)
+        if created_date:
+            y, m, d = _parse_created_date(created_date)
+            start_utc, end_utc = _shanghai_day_bounds(y, m, d)
+            q = q.filter(Vuln.created_at >= start_utc, Vuln.created_at < end_utc)
         rows = q.order_by(Vuln.id.desc()).all()
         return [_vuln_out(r) for r in rows]
+
+
+@router.get("/calendar", response_model=VulnCalendarOut)
+def vuln_calendar(
+    year: int,
+    month: int,
+    project_id: int | None = None,
+) -> VulnCalendarOut:
+    if year < 1970 or year > 2100:
+        raise HTTPException(400, "year 超出范围")
+    start_utc, end_utc = _shanghai_month_bounds(year, month)
+    tallies: dict[str, dict[str, int]] = defaultdict(lambda: {"confirmed": 0, "false_positive": 0})
+    with SessionLocal() as db:
+        q = db.query(Vuln).filter(
+            Vuln.status.in_(tuple(_CALENDAR_STATUSES)),
+            Vuln.created_at >= start_utc,
+            Vuln.created_at < end_utc,
+        )
+        if project_id is not None:
+            q = q.filter(Vuln.project_id == project_id)
+        for row in q.all():
+            day = _to_shanghai_date(row.created_at)
+            if row.status in _CONFIRMED_STATUSES:
+                tallies[day]["confirmed"] += 1
+            elif row.status == "false_positive":
+                tallies[day]["false_positive"] += 1
+    days = [
+        VulnCalendarDay(date=day, confirmed=counts["confirmed"], false_positive=counts["false_positive"])
+        for day, counts in sorted(tallies.items())
+    ]
+    return VulnCalendarOut(year=year, month=month, days=days)
 
 
 @router.get("/verifier-consent", response_model=list[VerifierConsentItem])

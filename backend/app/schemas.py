@@ -448,6 +448,18 @@ class VulnDetail(VulnOut):
     dynamic_verify_queued: bool = False
 
 
+class VulnCalendarDay(BaseModel):
+    date: str
+    confirmed: int = 0
+    false_positive: int = 0
+
+
+class VulnCalendarOut(BaseModel):
+    year: int
+    month: int
+    days: list[VulnCalendarDay] = Field(default_factory=list)
+
+
 class VerifierConsentItem(BaseModel):
     id: int
     project_id: int
