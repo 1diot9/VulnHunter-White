@@ -11,6 +11,7 @@ from typing import Any
 
 from ..config import settings
 from .lab import LAB_LABEL_KEY, LAB_LABEL_VALUE
+from .paths import data_tmp_dir
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ def execute_harness(
 
     client, _err = _connect()
     assert client is not None
-    work = tempfile.TemporaryDirectory(prefix="vh-sandbox-")
+    work = tempfile.TemporaryDirectory(prefix="vh-sandbox-", dir=str(data_tmp_dir("sandbox")))
     try:
         host_dir = Path(work.name)
         (host_dir / filename).write_text(code, encoding="utf-8")

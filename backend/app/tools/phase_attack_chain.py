@@ -445,6 +445,7 @@ def _run_chain_script(
         target_url=target_url,
         cwd=project_root(project_id),
         timeout=CHAIN_RUN_TIMEOUT,
+        project_id=project_id,
     )
     if not result.get("ok"):
         result = dict(result)

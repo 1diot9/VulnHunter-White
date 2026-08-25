@@ -12,13 +12,16 @@ from typing import Any
 
 from .asset_proof import lab_target_urls
 from .lab import load_env
-from .paths import project_root
+from .paths import project_root, project_runtime_dir
 from .poc_script import poc_lab_run_block_reason
 
 logger = logging.getLogger(__name__)
 
 POC_RUN_TIMEOUT = 90
 POC_RUN_MAX_OUTPUT = 8000
+# Not named poc.py: Windows AV heuristics (HEUR:HackTool/VulnScan) often
+# quarantine that filename when it is executed from a temp directory.
+POC_RUN_SCRIPT_NAME = "lab_verify.py"
 _PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"})
 
 POC_RUN_FAIL_HINT = (
@@ -119,17 +122,33 @@ def execute_poc_file(
     return out
 
 
+def _runtime_parent(cwd: Path, project_id: int | None = None) -> Path:
+    if project_id is not None:
+        return project_runtime_dir(project_id)
+    parent = Path(cwd) / "workspace" / ".run"
+    parent.mkdir(parents=True, exist_ok=True)
+    return parent
+
+
 def execute_poc_text(
     code: str,
     *,
     target_url: str,
     cwd: Path,
     timeout: int = POC_RUN_TIMEOUT,
+    project_id: int | None = None,
 ) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="vulnhunter-poc-") as tmp:
-        path = Path(tmp) / "poc.py"
+    parent = _runtime_parent(Path(cwd), project_id=project_id)
+    tmp = tempfile.TemporaryDirectory(prefix="lab-verify-", dir=str(parent))
+    try:
+        path = Path(tmp.name) / POC_RUN_SCRIPT_NAME
         path.write_text(code, encoding="utf-8")
         return execute_poc_file(path, target_url=target_url, cwd=cwd, timeout=timeout)
+    finally:
+        try:
+            tmp.cleanup()
+        except OSError as exc:
+            logger.warning("could not remove poc runtime dir %s: %s", tmp.name, exc)
 
 
 def verify_landed_poc(
@@ -152,4 +171,5 @@ def verify_landed_poc(
         target_url=target,
         cwd=project_root(project_id),
         timeout=timeout,
+        project_id=project_id,
     )

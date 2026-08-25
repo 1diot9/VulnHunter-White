@@ -137,8 +137,29 @@ def security_policy_rel_path(project_id: int) -> str | None:
     return "src/" + path.relative_to(root).as_posix()
 
 
+def data_tmp_dir(*parts: str) -> Path:
+    """Repo-local temp under ``data/tmp``, not the user TEMP directory."""
+    path = PROJECTS_DIR.parent / "tmp"
+    for part in parts:
+        path = path / part
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def workspace_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "workspace"
+
+
+def project_runtime_dir(project_id: int) -> Path:
+    """One-shot host scripts for ConfirmVuln / attack-chain lab runs.
+
+    Kept under the project workspace so Windows AV heuristics on
+    ``%TEMP%\\vulnhunter-poc-*\\poc.py`` do not quarantine the copy.
+    Dot-directory so Agent Glob / listing skip it.
+    """
+    path = workspace_dir(project_id) / ".run"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def checkpoints_dir(project_id: int) -> Path:
