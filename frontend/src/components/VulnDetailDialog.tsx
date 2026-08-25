@@ -17,7 +17,6 @@ import VulnFollowUpPanel from './VulnFollowUpPanel'
 import {
   formatAttackSurface,
   formatDateTime,
-  formatEvidenceLevel,
   formatConfigPremise,
   formatMiningPath,
   formatProjectRef,
@@ -27,6 +26,7 @@ import {
   formatTrackingStatus,
   formatVerifierStatus,
   formatVerifierTargetStatus,
+  formatVulnStatus,
   saveBlob,
   severityScoreBadgeClass,
 } from '../lib/utils'
@@ -93,16 +93,20 @@ export default function VulnDetailDialog({
     detail?.project_name ||
     (detail ? `项目 ${detail.project_id}` : '')
   const detailVerifyMode = normalizeDynamicVerifyMode(dynamicVerifyMode, dynamicVerifyEnabled)
+  const priorIsHarness = detail?.evidence_level === 'harness'
   const dynamicVerifyKind =
     detailVerifyMode === 'harness'
       ? '局部验证'
       : detailVerifyMode === 'lab'
         ? '靶场动态验证'
         : '靶场动态或局部验证'
+  const priorConclusion = priorIsHarness ? '局部验证' : '静态'
   const dynamicVerifyHint =
     detail?.dynamic_verify_queued || dynamicBusy
-      ? `已接续原审核轮次，正在静态结论上追加${dynamicVerifyKind}，不是互联网验证。`
-      : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
+      ? `已接续原审核轮次，正在${priorConclusion}结论上追加${dynamicVerifyKind}，不是互联网验证。`
+      : priorIsHarness
+        ? `对已局部验证确认的漏洞追加靶场动态验证，不是互联网验证。完成后证据等级会从局部验证更新为动态验证。项目须为靶场动态模式（可在项目设置中切换）。`
+        : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
 
   async function downloadReport(id: number, kind: 'report' | 'advisory' | 'cve' = 'report') {
     try {
@@ -231,16 +235,21 @@ export default function VulnDetailDialog({
                   </Badge>
                 ) : null}
                 <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
-                <Badge variant="info">{detail.status}</Badge>
+                <Badge
+                  variant={
+                    detail.status === 'confirmed' || detail.status === 'static_only'
+                      ? 'success'
+                      : detail.status === 'false_positive'
+                        ? 'destructive'
+                        : 'info'
+                  }
+                >
+                  {formatVulnStatus(detail.status, detail.evidence_level)}
+                </Badge>
                 {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
                 {detailConfigPremise ? <Badge variant="outline">{detailConfigPremise}</Badge> : null}
                 {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (
                   <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
-                ) : null}
-                {formatEvidenceLevel(detail.evidence_level) ? (
-                  <Badge variant={detail.evidence_level === 'harness' ? 'info' : 'outline'}>
-                    {formatEvidenceLevel(detail.evidence_level)}
-                  </Badge>
                 ) : null}
                 {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
                 {detailVerifier ? (
@@ -415,8 +424,9 @@ export default function VulnDetailDialog({
               ) : null}
               {detail.dynamic_verify_queued ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  已接续原审核轮次，正在静态结论上追加验证。完成后证据等级会从 static_only 更新为
-                  动态验证或局部验证。
+                  已接续原审核轮次，正在
+                  {detail.evidence_level === 'harness' ? '局部验证' : '静态'}
+                  结论上追加验证。完成后证据等级会更新为动态验证或局部验证。
                 </div>
               ) : null}
               {detail.submission_reason ? (

@@ -10,7 +10,6 @@ import {
   cn,
   formatAttackSurface,
   formatDateTime,
-  formatEvidenceLevel,
   formatConfigPremise,
   formatMiningPath,
   formatSeverity,
@@ -18,18 +17,10 @@ import {
   formatSubmissionTier,
   formatTrackingStatus,
   formatVerifierStatus,
+  formatVulnStatus,
   saveBlob,
   severityScoreBadgeClass,
 } from '../lib/utils'
-
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审',
-  confirmed: '已确认',
-  false_positive: '误报',
-  static_only: '仅静态',
-  returned: '已打回',
-  merged: '已并入',
-}
 
 function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
@@ -60,7 +51,7 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
                 : 'warning'
         }
       >
-        {STATUS_LABEL[v.status] || v.status}
+        {formatVulnStatus(v.status, v.evidence_level)}
       </Badge>
       {miningPath ? (
         <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
@@ -94,14 +85,6 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       >
         {tier}
       </Badge>
-      {formatEvidenceLevel(v.evidence_level) ? (
-        <Badge
-          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
-          variant={v.evidence_level === 'harness' ? 'info' : 'outline'}
-        >
-          {formatEvidenceLevel(v.evidence_level)}
-        </Badge>
-      ) : null}
       {surface ? (
         <span className={cn('text-xs text-slate-400', nested && 'text-[11px] text-slate-500')}>{surface}</span>
       ) : null}

@@ -57,6 +57,27 @@ export function formatEvidenceLevel(value: string | null | undefined): string | 
   }
 }
 
+const VULN_STATUS_LABEL: Record<string, string> = {
+  pending_review: '待审',
+  false_positive: '误报',
+  returned: '已打回',
+  merged: '已并入',
+  fixing: '修复中',
+}
+
+/** Confirmed vulns fold evidence into one badge: 已确认-仅静态 / 局部验证 / 动态验证. */
+export function formatVulnStatus(
+  status: string | null | undefined,
+  evidenceLevel?: string | null,
+): string {
+  const s = (status || '').trim()
+  if (s === 'confirmed' || s === 'static_only') {
+    const evidence = formatEvidenceLevel(evidenceLevel)
+    return evidence ? `已确认-${evidence}` : '已确认-仅静态'
+  }
+  return VULN_STATUS_LABEL[s] || s
+}
+
 export function formatMiningPath(value: string | null | undefined): string | null {
   switch ((value || '').trim().toLowerCase()) {
     case 'heuristic':

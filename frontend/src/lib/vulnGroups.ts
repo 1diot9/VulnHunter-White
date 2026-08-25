@@ -8,6 +8,7 @@ import {
   formatSubmissionTier,
   formatTrackingStatus,
   formatVerifierStatus,
+  formatVulnStatus,
 } from './utils'
 
 export type VulnGroup = {
@@ -254,15 +255,6 @@ export function groupVulnsByRootCause(vulns: Vuln[]): VulnGroup[] {
   return groups
 }
 
-const SEARCH_STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审',
-  confirmed: '已确认',
-  false_positive: '误报',
-  static_only: '仅静态',
-  returned: '已打回',
-  merged: '已并入',
-}
-
 export function vulnMatchesQuery(
   v: Vuln,
   query: string,
@@ -281,7 +273,7 @@ export function vulnMatchesQuery(
     v.severity,
     formatSeverity(v.severity),
     v.status,
-    SEARCH_STATUS_LABEL[v.status] || '',
+    formatVulnStatus(v.status, v.evidence_level),
     v.submission_tier,
     formatSubmissionTier(v.submission_tier),
     v.tracking_status,
@@ -297,6 +289,10 @@ export function vulnMatchesQuery(
     formatVerifierStatus(v.verifier_status),
     v.verifier_verified_url,
     projectName,
+    String(v.project_id),
+    `#${v.project_id}`,
+    `项目 ${v.project_id}`,
+    `项目 #${v.project_id}`,
     String(v.id),
     `#${v.id}`,
   ]
