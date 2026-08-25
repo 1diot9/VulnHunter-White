@@ -9,6 +9,7 @@ from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normali
 from ..config import settings
 from ..dynamic_verify import (
     EVIDENCE_DYNAMIC,
+    EVIDENCE_HARNESS,
     EVIDENCE_MCP,
     EVIDENCE_STATIC,
     VERIFY_MODE_LAB,
@@ -42,7 +43,7 @@ from ..services.lab import (
 from ..services.paths import vuln_dir
 from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
 from ..services.poc_script import poc_cli_block_reason, read_poc_code, write_harness_code, write_poc_code
-from ..services.report import upsert_report_section, write_advisory_md
+from ..services.report import harness_vuln_code_gap, upsert_report_section, write_advisory_md
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
     canonical_root_cause_key,
@@ -395,6 +396,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     stored_poc = ""
     verify_mode = VERIFY_MODE_OFF
     evidence = EVIDENCE_STATIC
+    prior_confirmed_harness = False
     if poc_code:
         kind = normalize_target_kind(None)
         with SessionLocal() as db:
@@ -416,6 +418,10 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             ctx.project_id
         ):
             verify_mode = VERIFY_MODE_OFF
+        prior_evidence = (vuln.evidence_level or "").strip().lower()
+        prior_confirmed_harness = (
+            prior_evidence == EVIDENCE_HARNESS and vuln.status == "confirmed"
+        )
         evidence = coerce_evidence_level(evidence_raw, mode=verify_mode)
         audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if audit_mode == AUDIT_MODE_BOUNTY:
@@ -485,6 +491,21 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 evidence = EVIDENCE_DYNAMIC
         elif evidence in (EVIDENCE_DYNAMIC, EVIDENCE_MCP):
             evidence = EVIDENCE_STATIC
+
+    # Lab follow-up from harness: do not silently downgrade when the target is unavailable.
+    if prior_confirmed_harness and evidence == EVIDENCE_STATIC:
+        evidence = EVIDENCE_HARNESS
+
+    if evidence == EVIDENCE_HARNESS:
+        report_path = vuln_dir(ctx.project_id, int(vuln_id)) / "report.md"
+        report_text = (
+            report_path.read_text(encoding="utf-8", errors="ignore")
+            if report_path.is_file()
+            else ""
+        )
+        code_gap = harness_vuln_code_gap(report_text, file_path=soft_file)
+        if code_gap:
+            return {"ok": False, "error": code_gap}
 
     proof = maybe_enrich_asset_proof(
         ctx.project_id,
@@ -782,7 +803,8 @@ def register_reviewer_tools() -> None:
                 "靶场可用时系统会执行即将落盘的 poc.py（python poc.py -u <target_url>），"
                 "退出码非 0 则拒绝确认；不要用 static_only 跳过。"
                 "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
-                "局部验证打通时标 harness，不要标 dynamic。"
+                "局部验证打通时标 harness，不要标 dynamic；"
+                "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
                 "核对 Worker 的 config_premise；错误则 Confirm 时传入纠正。"
@@ -809,7 +831,8 @@ def register_reviewer_tools() -> None:
                             "关闭时仅 static_only；靶场动态默认 dynamic（HTTP PoC）。"
                             "靶场可用时系统会跑落盘 poc.py，失败则拒绝确认。"
                             "mcp 仅在 debug MCP 改写/调试 PoC 后复现成功时使用；"
-                            "局部验证打通用 harness。"
+                            "局部验证打通用 harness；"
+                            "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
                         ),
                     },
                     "attack_surface": {

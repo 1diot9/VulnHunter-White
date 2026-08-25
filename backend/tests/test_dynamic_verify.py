@@ -12,6 +12,8 @@ from app.dynamic_verify import (
 )
 from app.models import Project, Vuln
 from app.services.poc_script import harness_path
+from app.services.paths import vuln_dir
+from app.services.report import harness_vuln_code_gap
 from app.services.sandbox_exec import execute_harness, prepare_run
 from app.services.verifier import enqueue_frontend_vuln, internet_test_block_reason_for_vuln
 from app.tools import ROLE_ACL, registry
@@ -40,6 +42,47 @@ def _set_verify_mode(project_id: int, mode: str) -> None:
         proj.dynamic_verify_mode = mode
         proj.dynamic_verify_enabled = mode != VERIFY_MODE_OFF
         db.commit()
+
+
+def _write_harness_vuln_code(project_id: int, vuln_id: int, file_path: str, code: str) -> None:
+    path = vuln_dir(project_id, vuln_id) / "report.md"
+    body = path.read_text(encoding="utf-8") if path.is_file() else "# t\n\n## 漏洞技术细节\n\n"
+    section = (
+        f"\n### 漏洞代码\n\n"
+        f"- 完整路径：`{file_path}`\n\n"
+        f"```java\n{code.rstrip()}\n```\n"
+    )
+    if "### 漏洞代码" in body:
+        return
+    if "### 完整 PoC 描述" in body:
+        body = body.replace("### 完整 PoC 描述", section + "\n### 完整 PoC 描述", 1)
+    elif "## 漏洞技术细节" in body:
+        body = body.replace("## 漏洞技术细节", "## 漏洞技术细节\n" + section, 1)
+    else:
+        body = body.rstrip() + "\n\n## 漏洞技术细节\n" + section
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_harness_vuln_code_gap_requires_path_and_fence():
+    assert harness_vuln_code_gap("") is not None
+    assert harness_vuln_code_gap("## 漏洞技术细节\n") is not None
+    bare = "### 漏洞代码\n\n- 完整路径：`Foo`\n\n```java\nint x = 1;\n```\n"
+    assert harness_vuln_code_gap(bare, file_path="app/Foo.java") is not None
+    ok = (
+        "### 漏洞代码\n\n"
+        "- 完整路径：`app/Main.java:12`\n\n"
+        "```java\nString q = \"SELECT \" + id;\n```\n"
+    )
+    assert harness_vuln_code_gap(ok, file_path="app/Main.java") is None
+    src_prefix = (
+        "### 漏洞代码\n\n"
+        "- 完整路径：`src/app/Main.java`\n\n"
+        "```java\nString q = \"SELECT \" + id;\n```\n"
+    )
+    assert harness_vuln_code_gap(src_prefix, file_path="app/Main.java") is None
+    no_code = "### 漏洞代码\n\n- 完整路径：`app/Main.java`\n\n说明一下即可\n"
+    assert harness_vuln_code_gap(no_code, file_path="app/Main.java") is not None
 
 
 def test_resolve_verify_mode_legacy_boolean():
@@ -342,6 +385,25 @@ def test_confirm_harness_when_mode_harness(tmp_env, project):
     }
     out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
     vuln_id = out["vuln_id"]
+    blocked = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "harness",
+            "attack_surface": "frontend",
+            "harness_code": "print('harness')\n",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert blocked["ok"] is False
+    assert "漏洞代码" in blocked["error"]
+    _write_harness_vuln_code(
+        project,
+        vuln_id,
+        "app/Main.java",
+        'String q = "SELECT * FROM users WHERE id=" + id;',
+    )
     conf = registry.dispatch(
         _ctx(project, "reviewer"),
         "ConfirmVuln",
@@ -458,6 +520,69 @@ def test_execute_harness_without_docker(monkeypatch):
     result = execute_harness("print(1)", language="python")
     assert result["ok"] is False
     assert "Docker" in result["error"]
+
+
+def test_confirm_lab_preserves_prior_harness_when_no_target(tmp_env, project):
+    from app.models import SessionLocal
+
+    _set_verify_mode(project, VERIFY_MODE_LAB)
+    vuln_id = _submit_sqli(project, _LAB_POC_OK)
+    _write_harness_vuln_code(
+        project,
+        vuln_id,
+        "a.java",
+        'String q = "SELECT * FROM t WHERE id=" + id;',
+    )
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        assert vuln is not None
+        vuln.status = "confirmed"
+        vuln.evidence_level = "harness"
+        db.commit()
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "dynamic",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True, conf
+    assert conf["evidence_level"] == "harness"
+    assert conf["status"] == "confirmed"
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        assert vuln is not None
+        assert vuln.evidence_level == "harness"
+        assert vuln.status == "confirmed"
+
+
+def test_can_append_dynamic_verify_harness_only_in_lab_mode(tmp_env, project):
+    from app.models import SessionLocal
+    from app.services.pipeline import can_append_dynamic_verify
+
+    with SessionLocal() as db:
+        vuln = Vuln(
+            project_id=project,
+            title="h",
+            vuln_type="sqli",
+            status="confirmed",
+            evidence_level="harness",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_HARNESS) is False
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_LAB) is True
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_OFF) is False
+        vuln.evidence_level = "dynamic"
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_LAB) is False
+        vuln.status = "static_only"
+        vuln.evidence_level = "static_only"
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_HARNESS) is True
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_LAB) is True
 
 
 def test_ensure_reviewer_skips_lab_when_harness(tmp_env, project, monkeypatch):

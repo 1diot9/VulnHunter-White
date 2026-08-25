@@ -340,6 +340,18 @@ def test_missing_report_headings_bypass_requires_patch_section():
     assert missing_report_headings(with_patch, bypass=True) == []
 
 
+def test_harness_vuln_code_gap_unit():
+    from app.services.report import harness_vuln_code_gap
+
+    assert "漏洞代码" in (harness_vuln_code_gap("# t\n") or "")
+    good = (
+        "## 漏洞技术细节\n\n### 漏洞代码\n\n"
+        "- 完整路径：`src/app/Db.java:3`\n\n"
+        "```java\nreturn jdbc.query(sql);\n```\n\n### 完整 PoC 描述\nx\n"
+    )
+    assert harness_vuln_code_gap(good, file_path="app/Db.java") is None
+
+
 def test_cve_record_initialize_and_fill(tmp_env, project):
     import json
 

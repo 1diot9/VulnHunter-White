@@ -365,7 +365,16 @@ REPORT_REQUIRED_H2: tuple[str, ...] = (
 )
 
 BYPASS_PATCH_BYPASS_HEADING = "### 补丁绕过简析"
+VULN_CODE_HEADING = "### 漏洞代码"
 ASSET_PROOF_HEADING_ALIASES = (ASSET_PROOF_HEADING, "## 应用搜索指纹")
+_VULN_CODE_HEADING_RE = re.compile(r"(?m)^###\s+漏洞代码\s*$")
+_NEXT_H23_RE = re.compile(r"(?m)^#{2,3}\s+")
+_CODE_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_BACKTICK_PATH_RE = re.compile(r"`([^`\n]+)`")
+_BARE_PATH_RE = re.compile(
+    r"(?m)(?:完整路径|文件路径|路径|文件)\s*[：:]\s*`?([^\s`\n]+)`?"
+)
+_MIN_HARNESS_CODE_CHARS = 8
 
 
 def _has_report_heading(text: str, heading: str) -> bool:
@@ -381,6 +390,89 @@ def missing_report_headings(text: str, *, bypass: bool = False) -> list[str]:
     if bypass and BYPASS_PATCH_BYPASS_HEADING not in body:
         missing.append(BYPASS_PATCH_BYPASS_HEADING)
     return missing
+
+
+def _extract_vuln_code_section(text: str) -> str | None:
+    match = _VULN_CODE_HEADING_RE.search(text or "")
+    if not match:
+        return None
+    rest = text[match.end() :]
+    nxt = _NEXT_H23_RE.search(rest)
+    return rest[: nxt.start()] if nxt else rest
+
+
+def _norm_report_path(raw: str) -> str:
+    value = str(raw or "").replace("\\", "/").strip().strip("`").strip()
+    if ":" in value:
+        # strip trailing :line or :line-line
+        head, _, tail = value.rpartition(":")
+        if tail.isdigit() or re.fullmatch(r"\d+-\d+", tail or ""):
+            value = head
+    return value.lstrip("./")
+
+
+def _section_path_candidates(section: str) -> list[str]:
+    found: list[str] = []
+    for raw in _BACKTICK_PATH_RE.findall(section):
+        norm = _norm_report_path(raw)
+        if norm:
+            found.append(norm)
+    for raw in _BARE_PATH_RE.findall(section):
+        norm = _norm_report_path(raw)
+        if norm:
+            found.append(norm)
+    return found
+
+
+def _path_covers_vuln(candidate: str, file_path: str | None) -> bool:
+    cand = _norm_report_path(candidate)
+    if not cand:
+        return False
+    # Alone class/method names are not "完整路径"
+    looks_complete = "/" in cand or re.search(r"\.[A-Za-z0-9]+$", cand) is not None
+    if not looks_complete:
+        return False
+    expected = _norm_report_path(file_path or "")
+    if not expected:
+        return True
+    if cand == expected or cand.endswith("/" + expected) or expected.endswith("/" + cand):
+        return True
+    # Allow src/ prefix differences: src/app/X.java vs app/X.java
+    for left, right in ((cand, expected), (expected, cand)):
+        if left.endswith("/" + right) or left == right:
+            return True
+        if left.startswith("src/") and left[4:] == right:
+            return True
+        if right.startswith("src/") and right[4:] == left:
+            return True
+    base = expected.rsplit("/", 1)[-1]
+    return bool(base) and (cand == base or cand.endswith("/" + base))
+
+
+def harness_vuln_code_gap(report_text: str, *, file_path: str | None = None) -> str | None:
+    """If harness Confirm lacks vuln code + full path in report.md, return error text."""
+    section = _extract_vuln_code_section(report_text or "")
+    if section is None:
+        return (
+            "局部验证（harness）确认前，报告须含「### 漏洞代码」章节："
+            "写明漏洞代码段对应的仓库内完整相对路径，并粘贴源码原文。"
+        )
+    fences = _CODE_FENCE_RE.findall(section)
+    code_ok = any(len((body or "").strip()) >= _MIN_HARNESS_CODE_CHARS for body in fences)
+    if not code_ok:
+        return (
+            "「### 漏洞代码」须含非空 fenced 代码段（源码原文，勿只写路径或一句话概述）。"
+            "请 Write 报告后再 ConfirmVuln(evidence_level=harness)。"
+        )
+    paths = _section_path_candidates(section)
+    if not any(_path_covers_vuln(p, file_path) for p in paths):
+        hint = f"（应对齐 `{_norm_report_path(file_path)}`）" if file_path else ""
+        return (
+            "「### 漏洞代码」须给出代码段对应的完整文件路径"
+            f"{hint}，不要只写类名/方法名。"
+            "请 Write 报告后再 ConfirmVuln(evidence_level=harness)。"
+        )
+    return None
 
 
 def upsert_report_section(path: Path, heading: str, body: str) -> None:

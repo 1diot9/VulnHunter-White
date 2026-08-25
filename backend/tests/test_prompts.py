@@ -164,6 +164,11 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "evidence_level=dynamic" in followup
     assert "不要从零重做静态分析" in followup
     assert "CollectLabFingerprints" in followup
+    assert "${prior_basis}" in followup
+    assert "${prior_conclusion}" in followup
+    harness_followup = load_prompt("initial/reviewer-harness-followup.md")
+    assert "${prior_basis}" in harness_followup
+    assert "追加局部验证" in harness_followup
     assert "fofa_fingerprint" in load_prompt("initial/reviewer.md")
     assert "默认可利用" in load_prompt("initial/reviewer.md")
     assert "默认密码" in load_prompt("initial/reviewer.md")
@@ -325,6 +330,11 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "局部验证" in text
     assert "evidence_level=harness" in text
     assert "RunCode" in text
+    assert "### 漏洞代码" in text
+    assert "完整相对路径" in text
+    followup = load_prompt("initial/reviewer-harness-followup.md")
+    assert "### 漏洞代码" in followup
+    assert "完整文件路径" in followup
     with SessionLocal() as db:
         p = db.get(Project, project)
         p.dynamic_verify_mode = "harness"
@@ -334,6 +344,7 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "局部验证" in overlay
     assert "RunCode" in overlay
     assert "evidence_level=harness" in overlay
+    assert "### 漏洞代码" in overlay
 
 
 def test_reviewer_debug_mcp_is_poc_rewrite_fallback():
