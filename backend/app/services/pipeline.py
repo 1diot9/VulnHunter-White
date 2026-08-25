@@ -44,6 +44,7 @@ from ..audit_mode import (
 )
 from ..config import settings
 from ..dynamic_verify import (
+    EVIDENCE_HARNESS,
     VERIFY_MODE_HARNESS,
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
@@ -428,6 +429,30 @@ def is_static_only_vuln(vuln: Vuln) -> bool:
     return vuln.status == "confirmed" and (vuln.evidence_level or "") == "static_only"
 
 
+def is_harness_confirmed_vuln(vuln: Vuln) -> bool:
+    """True when Reviewer already confirmed with local harness evidence."""
+    if vuln.status == "merged":
+        return False
+    return (vuln.evidence_level or "").strip().lower() == EVIDENCE_HARNESS and vuln.status == "confirmed"
+
+
+def can_append_dynamic_verify(vuln: Vuln, verify_mode: str) -> bool:
+    """Whether this vuln can queue a follow-up under the project's current verify mode.
+
+    - ``static_only`` → append lab or harness (whichever mode is on)
+    - harness-confirmed → append Docker lab only (upgrade evidence to dynamic/mcp)
+    """
+    if vuln.status == "merged":
+        return False
+    if not verify_mode_enabled(verify_mode):
+        return False
+    if is_static_only_vuln(vuln):
+        return True
+    if is_harness_confirmed_vuln(vuln) and is_lab_mode(verify_mode):
+        return True
+    return False
+
+
 def reviewer_run_active_for_vuln(project_id: int, vuln_id: int) -> bool:
     with SessionLocal() as db:
         row = (
@@ -450,17 +475,15 @@ def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple
         with SessionLocal() as db:
             proj = db.get(Project, vuln.project_id)
     can = bool(
-        is_static_only_vuln(vuln)
-        and proj is not None
-        and verify_mode_enabled(project_verify_mode(proj))
+        proj is not None
+        and can_append_dynamic_verify(vuln, project_verify_mode(proj))
         and proj.status not in ("cancelled", "error", "pending", "ingesting")
-        and vuln.status != "merged"
     )
     return can, queued
 
 
 def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
-    """Queue a Reviewer follow-up that continues the static round with dynamic verification."""
+    """Queue a Reviewer follow-up that continues the prior round with lab/harness verification."""
     with SessionLocal() as db:
         vuln = db.get(Vuln, vuln_id)
         if not vuln:
@@ -477,8 +500,14 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
         raise DynamicVerifyRequestError("请先在项目设置中开启靶场动态或局部验证")
     if vuln.status == "merged":
         raise DynamicVerifyRequestError("该漏洞已并入其他报告")
-    if not is_static_only_vuln(vuln):
-        raise DynamicVerifyRequestError("仅 static_only 的漏洞可追加验证")
+    if not can_append_dynamic_verify(vuln, verify_mode):
+        if is_harness_confirmed_vuln(vuln) and is_harness_mode(verify_mode):
+            raise DynamicVerifyRequestError(
+                "该漏洞已局部验证；请先在项目设置中切换为靶场动态后再追加"
+            )
+        if is_lab_mode(verify_mode):
+            raise DynamicVerifyRequestError("仅 static_only 或局部验证确认的漏洞可追加靶场动态验证")
+        raise DynamicVerifyRequestError("仅 static_only 的漏洞可追加局部验证")
     if reviewer_run_active_for_vuln(proj.id, vuln.id):
         raise DynamicVerifyRequestError("该漏洞已在追加验证中", status_code=409)
 
@@ -514,6 +543,7 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
                 "dynamic_followup_prompted": False,
                 "review_done": False,
                 "source_phase_run_id": source_run,
+                "prior_evidence_level": (vuln.evidence_level or "").strip().lower() or "static_only",
             },
             vuln_id=vuln.id,
             last_prompt_tokens=last_prompt_tokens,
@@ -1941,6 +1971,8 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     kwargs.setdefault("target_kind", "web")
     kwargs.setdefault("target_kind_label", target_kind_label("web"))
     kwargs.setdefault("target_kind_hint", target_kind_initial_hint("web"))
+    kwargs.setdefault("prior_basis", "static_only")
+    kwargs.setdefault("prior_conclusion", "静态结论")
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -4334,6 +4366,18 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
         messages.insert(0, {"role": "system", "content": system})
     lab_note = _reviewer_lab_note(cp.project_id)
     mode = _read_dynamic_verify_mode(cp.project_id)
+    prior_evidence = str(cp.state.get("prior_evidence_level") or "").strip().lower()
+    if not prior_evidence and cp.vuln_id is not None:
+        with SessionLocal() as db:
+            vuln = db.get(Vuln, cp.vuln_id)
+            if vuln:
+                prior_evidence = (vuln.evidence_level or "").strip().lower()
+    if prior_evidence == EVIDENCE_HARNESS:
+        prior_basis = "harness（局部验证）"
+        prior_conclusion = "局部验证结论"
+    else:
+        prior_basis = "static_only"
+        prior_conclusion = "静态结论"
     if mode == VERIFY_MODE_HARNESS:
         debug_plan = harness_debug_plan()
         followup = "reviewer-harness-followup.md"
@@ -4347,6 +4391,8 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
         vuln_id=cp.vuln_id,
         lab_note=lab_note,
         debug_plan=json_dumps(debug_plan),
+        prior_basis=prior_basis,
+        prior_conclusion=prior_conclusion,
         **_agent_prompt_vars(cp.project_id),
     )
     messages.append({"role": "user", "content": body})
@@ -4356,6 +4402,7 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
     cp.state["dynamic_followup"] = True
     cp.state["dynamic_followup_prompted"] = True
     cp.state["followup_label"] = extra_label
+    cp.state["prior_evidence_level"] = prior_evidence or "static_only"
 
 
 def _run_reviewer_once(project_id: int) -> None:

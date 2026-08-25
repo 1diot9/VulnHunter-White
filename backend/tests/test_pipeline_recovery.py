@@ -1194,6 +1194,7 @@ def test_reviewer_once_appends_dynamic_followup_without_interrupt(tmp_env, proje
     last = messages[-1]
     assert last["role"] == "user"
     assert "追加动态验证" in last["content"]
+    assert "静态结论" in last["content"] or "static_only" in last["content"]
     assert "静态结论：可利用" in "\n".join(str(m.get("content") or "") for m in messages)
     assert INTERRUPT_RESUME not in last["content"]
     assert "仅静态" not in str(captured["system"] or "")

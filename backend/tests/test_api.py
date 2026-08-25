@@ -1174,6 +1174,88 @@ def test_dynamic_verify_continues_archived_reviewer_round(tmp_env, project, monk
         assert detail.json()["can_dynamic_verify"] is True
 
 
+def test_harness_vuln_can_append_lab_dynamic_verify(tmp_env, project, monkeypatch):
+    from app.agent.checkpoint import LoopCheckpoint, load_checkpoint, save_checkpoint
+    from app.dynamic_verify import VERIFY_MODE_HARNESS, VERIFY_MODE_LAB
+    from app.main import app
+    from app.models import PhaseRun, Project, SessionLocal, Vuln
+    from app.services import pipeline
+    from app.services.paths import vuln_dir
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "_ensure_reviewer", lambda pid, cancel: None)
+
+    with SessionLocal() as db:
+        vuln = Vuln(
+            project_id=project,
+            title="Harness SQLI",
+            vuln_type="sqli",
+            severity="high",
+            status="confirmed",
+            evidence_level="harness",
+        )
+        db.add(vuln)
+        db.commit()
+        db.refresh(vuln)
+        run = PhaseRun(project_id=project, phase="reviewer", role="reviewer", vuln_id=vuln.id)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        vid = vuln.id
+        run_id = run.id
+        proj = db.get(Project, project)
+        proj.dynamic_verify_mode = VERIFY_MODE_HARNESS
+        proj.dynamic_verify_enabled = True
+        proj.status = "completed"
+        db.commit()
+
+    (vuln_dir(project, vid) / "report.md").write_text("# Harness SQLI\n\n局部已确认。\n", encoding="utf-8")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="reviewer",
+            phase="reviewer",
+            system_prompt="局部验证 Reviewer",
+            user_prompt="请审核漏洞",
+            messages=[
+                {"role": "system", "content": "局部验证 Reviewer"},
+                {"role": "user", "content": "请审核漏洞"},
+                {"role": "assistant", "content": "局部验证结论：默认可利用。"},
+            ],
+            state={"review_done": True, "review_verdict": "confirmed"},
+            vuln_id=vid,
+        )
+    )
+    pipeline._finish_phase_run(run_id, "completed")
+
+    with TestClient(app) as client:
+        still_harness = client.get(f"/api/vulns/{vid}")
+        assert still_harness.status_code == 200
+        assert still_harness.json()["can_dynamic_verify"] is False
+        blocked = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert blocked.status_code == 400
+        assert "靶场动态" in blocked.json()["detail"]
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project)
+            proj.dynamic_verify_mode = VERIFY_MODE_LAB
+            proj.dynamic_verify_enabled = True
+            db.commit()
+
+        ready = client.get(f"/api/vulns/{vid}")
+        assert ready.json()["can_dynamic_verify"] is True
+        queued = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert queued.status_code == 200
+        body = queued.json()
+        assert body["ok"] is True
+        cp = load_checkpoint(project, body["phase_run_id"])
+        assert cp is not None
+        assert cp.state["dynamic_followup"] is True
+        assert cp.state["prior_evidence_level"] == "harness"
+        assert any("局部验证结论：默认可利用" in str(m.get("content") or "") for m in cp.messages)
+
+
 def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
     from app.main import app
     from app.models import SessionLocal, Vuln
