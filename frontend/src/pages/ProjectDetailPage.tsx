@@ -12,6 +12,7 @@ import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
 import { ProjectSettingsButton } from '../components/ProjectSettingsDialog'
 import PhaseFlow from '../components/PhaseFlow'
 import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
+import VulnDetailDialog from '../components/VulnDetailDialog'
 import VulnGroupList from '../components/VulnGroupList'
 import { WeightExtBadges } from '../components/WeightExtBadges'
 import LlmThreadUsageBar from '../components/LlmThreadUsageBar'
@@ -106,6 +107,7 @@ export default function ProjectDetailPage() {
   const [events, setEvents] = useState<LogEvent[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
   const [vulnsLoading, setVulnsLoading] = useState(false)
+  const [detailVulnId, setDetailVulnId] = useState<number | null>(null)
   const [tab, setTab] = useState<'logs' | 'reports' | 'vulns'>('logs')
   const [phaseFilter, setPhaseFilter] = useState('recon')
   const [hasOlder, setHasOlder] = useState(false)
@@ -150,6 +152,7 @@ export default function ProjectDetailPage() {
     setStreamFrom(null)
     setEvents([])
     setVulns([])
+    setDetailVulnId(null)
     setHasOlder(false)
     setRevealLimit(LOG_PAGE)
     setLogSession(null)
@@ -653,12 +656,40 @@ export default function ProjectDetailPage() {
           </CardContent>
         </Card>
       ) : tab === 'vulns' ? (
-        <Card className="gap-0 divide-y divide-border py-0">
-          <VulnGroupList
-            vulns={vulns}
-            emptyText={vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
+        <>
+          <Card className="gap-0 divide-y divide-border py-0">
+            <VulnGroupList
+              vulns={vulns}
+              activeId={detailVulnId}
+              emptyText={vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
+              onSelectVuln={setDetailVulnId}
+            />
+          </Card>
+          <VulnDetailDialog
+            vulnId={detailVulnId}
+            onClose={() => setDetailVulnId(null)}
+            onSelectVuln={setDetailVulnId}
+            projectName={project.name}
+            dynamicVerifyMode={project.dynamic_verify_mode}
+            dynamicVerifyEnabled={project.dynamic_verify_enabled}
+            showProjectLink={false}
+            onUpdated={(detail) => {
+              setVulns((prev) =>
+                prev.map((v) =>
+                  v.id === detail.id
+                    ? {
+                        ...v,
+                        tracking_status: detail.tracking_status,
+                        evidence_level: detail.evidence_level,
+                        verifier_status: detail.verifier_status,
+                        verifier_verified_url: detail.verifier_verified_url,
+                      }
+                    : v,
+                ),
+              )
+            }}
           />
-        </Card>
+        </>
       ) : null}
     </div>
   )

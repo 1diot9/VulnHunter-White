@@ -45,6 +45,9 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
           子项
         </Badge>
       ) : null}
+      <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
+        项目 #{v.project_id}
+      </Badge>
       <Badge
         className={nested ? 'h-4 px-1.5 text-[10px] text-slate-400' : undefined}
         variant={
@@ -130,6 +133,7 @@ function VulnRow({
   projectName,
   selected,
   onToggleSelect,
+  onSelectVuln,
 }: {
   v: Vuln
   active: boolean
@@ -137,7 +141,36 @@ function VulnRow({
   projectName: string
   selected?: boolean
   onToggleSelect?: (id: number, checked: boolean) => void
+  onSelectVuln?: (id: number) => void
 }) {
+  const titleBlock = (
+    <>
+      <div
+        className={cn(
+          'break-words leading-snug',
+          nested ? 'text-[11px] font-normal leading-4 text-slate-400' : 'font-medium',
+        )}
+      >
+        {v.title}
+      </div>
+      <StatusBadges v={v} nested={nested} />
+      {v.verifier_status === 'verified' && v.verifier_verified_url ? (
+        <div
+          className={cn(
+            'mt-1 break-all text-xs text-emerald-300/90',
+            nested && 'mt-0.5 text-[10px] text-emerald-400/70',
+          )}
+        >
+          复现目标 {v.verifier_verified_url}
+        </div>
+      ) : null}
+      <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
+        #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
+        {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
+      </div>
+    </>
+  )
+
   return (
     <div
       className={cn(
@@ -163,31 +196,19 @@ function VulnRow({
           onCheckedChange={(checked) => onToggleSelect(v.id, checked === true)}
         />
       ) : null}
-      <Link to={`/vulns/${v.id}`} className="min-w-0 flex-1 hover:underline">
-        <div
-          className={cn(
-            'break-words leading-snug',
-            nested ? 'text-[11px] font-normal leading-4 text-slate-400' : 'font-medium',
-          )}
+      {onSelectVuln ? (
+        <button
+          type="button"
+          className="min-w-0 flex-1 cursor-pointer text-left hover:underline"
+          onClick={() => onSelectVuln(v.id)}
         >
-          {v.title}
-        </div>
-        <StatusBadges v={v} nested={nested} />
-        {v.verifier_status === 'verified' && v.verifier_verified_url ? (
-          <div
-            className={cn(
-              'mt-1 break-all text-xs text-emerald-300/90',
-              nested && 'mt-0.5 text-[10px] text-emerald-400/70',
-            )}
-          >
-            复现目标 {v.verifier_verified_url}
-          </div>
-        ) : null}
-        <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
-          #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
-          {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
-        </div>
-      </Link>
+          {titleBlock}
+        </button>
+      ) : (
+        <Link to={`/vulns/${v.id}`} className="min-w-0 flex-1 hover:underline">
+          {titleBlock}
+        </Link>
+      )}
       <Button
         type="button"
         variant="ghost"
@@ -209,6 +230,7 @@ export default function VulnGroupList({
   activeId,
   selectedIds,
   onToggleSelect,
+  onSelectVuln,
   projectNameById,
   tierFilter = 'all',
   emptyText = '暂无数据',
@@ -218,6 +240,7 @@ export default function VulnGroupList({
   activeId?: number | null
   selectedIds?: number[]
   onToggleSelect?: (id: number, checked: boolean) => void
+  onSelectVuln?: (id: number) => void
   projectNameById?: Map<number, string>
   tierFilter?: VulnTierFilter
   emptyText?: string
@@ -296,6 +319,7 @@ export default function VulnGroupList({
                   projectName={projectName}
                   selected={selectedSet.has(group.primary.id)}
                   onToggleSelect={onToggleSelect}
+                  onSelectVuln={onSelectVuln}
                 />
                 {hasOthers ? (
                   <button
@@ -327,6 +351,7 @@ export default function VulnGroupList({
                     projectName={v.project_name || projectNameById?.get(v.project_id) || projectName}
                     selected={selectedSet.has(v.id)}
                     onToggleSelect={onToggleSelect}
+                    onSelectVuln={onSelectVuln}
                   />
                 ))}
               </div>

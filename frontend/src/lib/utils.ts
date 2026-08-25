@@ -81,6 +81,14 @@ export function formatConfigPremise(value: string | null | undefined): string | 
   }
 }
 
+export function formatProjectRef(projectId: number, projectName?: string | null): string {
+  const name = (projectName || '').trim()
+  if (!name || name === `项目 ${projectId}` || name === `项目 #${projectId}`) {
+    return `项目 #${projectId}`
+  }
+  return `项目 #${projectId} ${name}`
+}
+
 export function formatVerifierStatus(value: string | null | undefined): string | null {
   switch (value) {
     case 'pending':
