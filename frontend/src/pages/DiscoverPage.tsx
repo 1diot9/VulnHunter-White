@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Loader2Icon, PlusIcon, RefreshCwIcon, StarIcon } from 'lucide-react'
+import { Loader2Icon, PlusIcon, RefreshCwIcon, StarIcon, Trash2Icon } from 'lucide-react'
 import { api, type GithubCandidate } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +24,7 @@ export default function DiscoverPage() {
   const [limit, setLimit] = useState(DEFAULT_LIMIT)
   const [loading, setLoading] = useState(true)
   const [searching, setSearching] = useState(false)
+  const [dismissingId, setDismissingId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
   const [lastAdded, setLastAdded] = useState<number | null>(null)
@@ -75,13 +76,27 @@ export default function DiscoverPage() {
     setCreateOpen(true)
   }
 
+  async function onDismiss(c: GithubCandidate) {
+    if (dismissingId != null) return
+    setDismissingId(c.id)
+    setError('')
+    try {
+      await api.dismissDiscovery(c.id)
+      await load(false)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setDismissingId(null)
+    }
+  }
+
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold">发现仓库</h1>
           <p className="mt-1 text-sm text-slate-400">
-            从公开 GitHub Advisory 中筛选近一年仍有提交、Star ≥ 1000 的仓库，并标注 Web 应用 / 组件库。搜索结果会累积保留，再次搜索只追加新仓库。
+            从公开 GitHub Advisory 中筛选近一年仍有提交、Star ≥ 1000 的仓库，并标注 Web 应用 / 组件库。搜索结果会累积保留，再次搜索只追加新仓库；移除后不会再进入候选。
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
@@ -144,6 +159,7 @@ export default function DiscoverPage() {
         <div className="grid gap-3">
           {items.map((c) => {
             const imported = c.status === 'imported' || c.project_id != null
+            const busy = dismissingId === c.id
             return (
               <Card key={c.id}>
                 <CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -211,11 +227,22 @@ export default function DiscoverPage() {
                         查看项目
                       </Link>
                     ) : (
-                      <Button size="sm" className="gap-1.5" onClick={() => openCreate(c)}>
+                      <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => openCreate(c)}>
                         <PlusIcon className="size-4" />
                         创建项目
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 text-muted-foreground hover:text-destructive"
+                      disabled={busy || searching}
+                      title="从候选列表移除，后续搜索不再加入"
+                      onClick={() => void onDismiss(c)}
+                    >
+                      {busy ? <Loader2Icon className="size-4 animate-spin" /> : <Trash2Icon className="size-4" />}
+                      移除
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

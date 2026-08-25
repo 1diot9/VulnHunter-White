@@ -537,7 +537,7 @@ export type GithubCandidate = {
   advisory_count: number
   latest_ghsa_id: string | null
   latest_ghsa_url: string | null
-  status: 'eligible' | 'skipped' | 'imported' | string
+  status: 'eligible' | 'skipped' | 'imported' | 'dismissed' | string
   project_id: number | null
   skip_reason: string | null
   discovered_at: string
@@ -694,6 +694,8 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ limit }),
     }),
+  dismissDiscovery: (id: number) =>
+    request<GithubCandidate>(`/api/discoveries/${id}`, { method: 'DELETE' }),
   createGithub: (
     source_url: string,
     name = '',

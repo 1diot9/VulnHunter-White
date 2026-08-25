@@ -37,6 +37,7 @@ MIN_STARS = 1000
 STATUS_ELIGIBLE = "eligible"
 STATUS_SKIPPED = "skipped"
 STATUS_IMPORTED = "imported"
+STATUS_DISMISSED = "dismissed"
 LISTABLE_STATUSES = (STATUS_ELIGIBLE, STATUS_IMPORTED)
 
 _OWNER_REPO_RE = re.compile(
@@ -744,3 +745,20 @@ def list_candidates(
             "limit": limit,
             "offset": offset,
         }
+
+
+def dismiss_candidate(candidate_id: int) -> dict[str, Any] | None:
+    """Remove a candidate from the list permanently; future searches skip it."""
+    with SessionLocal() as db:
+        row = db.query(GithubCandidate).filter(GithubCandidate.id == int(candidate_id)).first()
+        if row is None:
+            return None
+        if row.status == STATUS_DISMISSED:
+            return candidate_to_dict(row)
+        row.status = STATUS_DISMISSED
+        row.skip_reason = "dismissed"
+        row.project_id = None
+        row.updated_at = utcnow()
+        db.commit()
+        db.refresh(row)
+        return candidate_to_dict(row)

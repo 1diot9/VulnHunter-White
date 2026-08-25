@@ -362,3 +362,100 @@ def test_list_discoveries_api(tmp_env):
     assert body["total"] == 1
     assert body["items"][0]["full_name"] == "acme/show"
     assert body["items"][0]["target_kind"] == "library"
+
+
+def test_dismiss_candidate_stays_out_of_queue(tmp_env, monkeypatch):
+    Session = tmp_env["Session"]
+    models = tmp_env["models"]
+    recent = _iso(_now() - timedelta(days=5))
+
+    with Session() as db:
+        row = models.GithubCandidate(
+            full_name="acme/gone",
+            html_url="https://github.com/acme/gone",
+            description="CMS",
+            status="eligible",
+            target_kind="web",
+            stars=2000,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        cid = row.id
+
+    client = TestClient(app)
+    resp = client.delete(f"/api/discoveries/{cid}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "dismissed"
+
+    listed = client.get("/api/discoveries").json()
+    assert listed["total"] == 0
+    assert all(i["full_name"] != "acme/gone" for i in listed["items"])
+
+    advisories = [
+        {
+            "ghsa_id": "GHSA-gone",
+            "html_url": "https://github.com/advisories/GHSA-gone",
+            "repository_advisory_url": "https://api.github.com/repos/acme/gone/security-advisories/GHSA-gone",
+        },
+        {
+            "ghsa_id": "GHSA-new",
+            "html_url": "https://github.com/advisories/GHSA-new",
+            "repository_advisory_url": "https://api.github.com/repos/acme/fresh/security-advisories/GHSA-new",
+        },
+    ]
+    repos = {
+        "acme/gone": {
+            "full_name": "acme/gone",
+            "html_url": "https://github.com/acme/gone",
+            "description": "CMS",
+            "language": "Go",
+            "stargazers_count": 5000,
+            "pushed_at": recent,
+            "private": False,
+            "archived": False,
+            "fork": False,
+            "topics": ["cms"],
+        },
+        "acme/fresh": {
+            "full_name": "acme/fresh",
+            "html_url": "https://github.com/acme/fresh",
+            "description": "CMS",
+            "language": "Go",
+            "stargazers_count": 4000,
+            "pushed_at": recent,
+            "private": False,
+            "archived": False,
+            "fork": False,
+            "topics": ["cms"],
+        },
+    }
+
+    def fake_github_get(url, *, params=None, client=None, limiter=None):
+        if "api.github.com/advisories" in url:
+            return _resp(200, advisories)
+        if url.endswith("/topics"):
+            return _resp(200, {"names": []})
+        if "/repos/" in url:
+            full = url.split("/repos/")[1]
+            return _resp(200, repos[full])
+        return _resp(404, {})
+
+    monkeypatch.setattr(discover, "github_get", fake_github_get)
+    monkeypatch.setattr(discover, "_has_github_token", lambda: True)
+    monkeypatch.setattr(
+        discover,
+        "http_client",
+        lambda timeout=45.0: MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False),
+    )
+
+    result = discover.search_candidates(limit=5)
+    assert result["ok"] is True
+    names = [i["full_name"] for i in result["items"]]
+    assert "acme/gone" not in names
+    assert "acme/fresh" in names
+
+    with Session() as db:
+        gone = db.query(models.GithubCandidate).filter_by(full_name="acme/gone").one()
+        assert gone.status == "dismissed"
+        assert gone.skip_reason == "dismissed"

@@ -52,3 +52,11 @@ def search_discoveries(body: GithubDiscoverSearchIn | None = None) -> GithubDisc
         warning=result.get("warning"),
         limit=int(result.get("limit") or limit),
     )
+
+
+@router.delete("/{candidate_id}", response_model=GithubCandidateOut)
+def dismiss_discovery(candidate_id: int) -> GithubCandidateOut:
+    row = discover.dismiss_candidate(candidate_id)
+    if row is None:
+        raise HTTPException(404, "候选不存在")
+    return GithubCandidateOut.model_validate(row)

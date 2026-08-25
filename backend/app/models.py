@@ -386,7 +386,7 @@ class GithubCandidate(Base):
     advisory_count: Mapped[int] = mapped_column(Integer, default=1)
     latest_ghsa_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     latest_ghsa_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    # eligible | skipped | imported
+    # eligible | skipped | imported | dismissed
     status: Mapped[str] = mapped_column(String(32), default="eligible", index=True)
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     skip_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
