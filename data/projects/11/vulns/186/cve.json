@@ -1,0 +1,114 @@
+{
+  "dataType": "CVE_RECORD",
+  "dataVersion": "5.2",
+  "cveMetadata": {
+    "cveId": "VULNHUNTER_PENDING",
+    "assignerOrgId": "d745fec1-a142-45ad-8db6-5b688e786db6",
+    "requesterUserId": "00000000-0000-4000-9000-000000000000",
+    "serial": 1,
+    "state": "PUBLISHED"
+  },
+  "containers": {
+    "cna": {
+      "x_theConversation": [
+        {
+          "authorRole": "CNA-LR",
+          "visibility": "public"
+        }
+      ],
+      "x_Read_Landing": {
+        "x_Acknowledge": "NO"
+      },
+      "x_Other_CNA": {
+        "x_CNA_Contact": "IN-CNA-LR-SCOPE"
+      },
+      "x_Request_Type": {
+        "x_Publication_Request": "NO"
+      },
+      "providerMetadata": {
+        "orgId": "d745fec1-a142-45ad-8db6-5b688e786db6"
+      },
+      "problemTypes": [
+        {
+          "descriptions": [
+            {
+              "lang": "en",
+              "description": "CWE-639 Authorization Bypass Through User-Controlled Key",
+              "type": "CWE"
+            }
+          ]
+        }
+      ],
+      "affected": [
+        {
+          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "versions": [
+            {
+              "status": "affected",
+              "version": "0.5.0"
+            }
+          ],
+          "defaultStatus": "unaffected"
+        }
+      ],
+      "descriptions": [
+        {
+          "lang": "en",
+          "value": "MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.\nIt is affected by insecure direct object reference (CWE-639) because src/app.py api_note() reads the X-User header but never checks note ownership, skipping the intended author-only read control.\nAttack chain: an unauthenticated GET to /api/notes/<id> (source: note_id path parameter; X-User is unused) reaches the sink get_note() in src/board/store.py which SELECTs by id only and returns the full row on the default deployment.\nVulnerable code in src/app.py:\n@app.get(\"/api/notes/<int:note_id>\")\ndef api_note(note_id: int):\n    \"\"\"Fetch one memo. X-User is the logged-in identity.\n\n    Intended rule: only the author may read their own note.\n    Bug: ownership is never checked — any id is returned (IDOR).\n    \"\"\"\n    _current = (request.headers.get(\"X-User\") or \"\").strip()\n    row = get_note(note_id)\n    if not row:\n        abort(404)\n    return jsonify(row)\nHTTP PoC:\nGET /api/notes/2 HTTP/1.1\nHost: TARGET:5000\nX-User: alice\nAccept: application/json\nConnection: close\nImpact: a remote unauthenticated attacker can enumerate note ids and read other users' private memos, including confidential salary text in seed data. Remaining control: none; the unused X-User header is not an access check.\n",
+          "supportingMedia": [
+            {
+              "type": "text/html",
+              "base64": false,
+              "value": "<p>MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.</p><p>It is affected by insecure direct object reference (CWE-639) because src/app.py api_note() reads the X-User header but never checks note ownership, skipping the intended author-only read control.</p><p>Attack chain: an unauthenticated GET to /api/notes/&lt;id&gt; (source: note_id path parameter; X-User is unused) reaches the sink get_note() in src/board/store.py which SELECTs by id only and returns the full row on the default deployment.</p><p>Vulnerable code in <code>src/app.py</code>:</p><pre>@app.get(\"/api/notes/&lt;int:note_id&gt;\")\ndef api_note(note_id: int):\n    \"\"\"Fetch one memo. X-User is the logged-in identity.\n\n    Intended rule: only the author may read their own note.\n    Bug: ownership is never checked — any id is returned (IDOR).\n    \"\"\"\n    _current = (request.headers.get(\"X-User\") or \"\").strip()\n    row = get_note(note_id)\n    if not row:\n        abort(404)\n    return jsonify(row)</pre><pre>GET /api/notes/2 HTTP/1.1\nHost: TARGET:5000\nX-User: alice\nAccept: application/json\nConnection: close</pre><p>Impact: a remote unauthenticated attacker can enumerate note ids and read other users' private memos, including confidential salary text in seed data. Remaining control: none; the unused X-User header is not an access check.</p>"
+            }
+          ]
+        }
+      ],
+      "references": [
+        {
+          "url": "https://github.com/1diot9/VulnHunter-White/blob/main/data/projects/11/src/SECURITY.md"
+        }
+      ],
+      "metrics": [
+        {
+          "format": "CVSS",
+          "scenarios": [
+            {
+              "lang": "en",
+              "value": "GENERAL"
+            }
+          ],
+          "cvssV4_0": {
+            "version": "4.0",
+            "attackVector": "NETWORK",
+            "attackComplexity": "LOW",
+            "attackRequirements": "NONE",
+            "privilegesRequired": "NONE",
+            "userInteraction": "NONE",
+            "vulnConfidentialityImpact": "HIGH",
+            "subConfidentialityImpact": "NONE",
+            "vulnIntegrityImpact": "NONE",
+            "subIntegrityImpact": "NONE",
+            "vulnAvailabilityImpact": "NONE",
+            "subAvailabilityImpact": "NONE",
+            "Safety": "NOT_DEFINED",
+            "Automatable": "NOT_DEFINED",
+            "Recovery": "NOT_DEFINED",
+            "valueDensity": "NOT_DEFINED",
+            "vulnerabilityResponseEffort": "NOT_DEFINED",
+            "providerUrgency": "NOT_DEFINED",
+            "baseSeverity": "HIGH",
+            "baseScore": 8.7,
+            "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        }
+      ],
+      "source": {
+        "discovery": "UNKNOWN"
+      },
+      "x_generator": {
+        "engine": "CVE-Request-form 0.0.1"
+      }
+    }
+  }
+}

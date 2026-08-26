@@ -1,0 +1,114 @@
+{
+  "dataType": "CVE_RECORD",
+  "dataVersion": "5.2",
+  "cveMetadata": {
+    "cveId": "VULNHUNTER_PENDING",
+    "assignerOrgId": "d745fec1-a142-45ad-8db6-5b688e786db6",
+    "requesterUserId": "00000000-0000-4000-9000-000000000000",
+    "serial": 1,
+    "state": "PUBLISHED"
+  },
+  "containers": {
+    "cna": {
+      "x_theConversation": [
+        {
+          "authorRole": "CNA-LR",
+          "visibility": "public"
+        }
+      ],
+      "x_Read_Landing": {
+        "x_Acknowledge": "NO"
+      },
+      "x_Other_CNA": {
+        "x_CNA_Contact": "IN-CNA-LR-SCOPE"
+      },
+      "x_Request_Type": {
+        "x_Publication_Request": "NO"
+      },
+      "providerMetadata": {
+        "orgId": "d745fec1-a142-45ad-8db6-5b688e786db6"
+      },
+      "problemTypes": [
+        {
+          "descriptions": [
+            {
+              "lang": "en",
+              "description": "CWE-79 Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+              "type": "CWE"
+            }
+          ]
+        }
+      ],
+      "affected": [
+        {
+          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "versions": [
+            {
+              "status": "affected",
+              "version": "0.5.0"
+            }
+          ],
+          "defaultStatus": "unaffected"
+        }
+      ],
+      "descriptions": [
+        {
+          "lang": "en",
+          "value": "MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.\nIt is affected by stored cross-site scripting (CWE-79) because src/templates/notes.html renders note body with the Jinja2 | safe filter, skipping the intended HTML auto-escape control.\nAttack chain: an unauthenticated POST to /api/notes (source: JSON body parameter) stores the payload; GET /notes then reaches the sink {{ n.body | safe }} so every visitor executes the script on the default deployment.\nVulnerable code in src/templates/notes.html:\n<div class=\"body\">{{ n.body | safe }}</div>\nHTTP PoC:\nPOST /api/notes HTTP/1.1\nHost: TARGET:5000\nContent-Type: application/json\nConnection: close\n\n{\"title\":\"test\",\"body\":\"<script>alert(document.cookie)</script>\",\"author\":\"anonymous\"}\nImpact: a remote unauthenticated attacker can persist JavaScript that runs in visitors' browsers, including administrators, and can steal Flask session cookies. Remaining control: the victim must load GET /notes (passive user interaction). This does not execute code on the server by itself.\n",
+          "supportingMedia": [
+            {
+              "type": "text/html",
+              "base64": false,
+              "value": "<p>MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.</p><p>It is affected by stored cross-site scripting (CWE-79) because src/templates/notes.html renders note body with the Jinja2 | safe filter, skipping the intended HTML auto-escape control.</p><p>Attack chain: an unauthenticated POST to /api/notes (source: JSON body parameter) stores the payload; GET /notes then reaches the sink {{ n.body | safe }} so every visitor executes the script on the default deployment.</p><p>Vulnerable code in <code>src/templates/notes.html</code>:</p><pre>&lt;div class=\"body\"&gt;{{ n.body | safe }}&lt;/div&gt;</pre><pre>POST /api/notes HTTP/1.1\nHost: TARGET:5000\nContent-Type: application/json\nConnection: close\n\n{\"title\":\"test\",\"body\":\"&lt;script&gt;alert(document.cookie)&lt;/script&gt;\",\"author\":\"anonymous\"}</pre><p>Impact: a remote unauthenticated attacker can persist JavaScript that runs in visitors' browsers, including administrators, and can steal Flask session cookies. Remaining control: the victim must load GET /notes (passive user interaction). This does not execute code on the server by itself.</p>"
+            }
+          ]
+        }
+      ],
+      "references": [
+        {
+          "url": "https://github.com/1diot9/VulnHunter-White/blob/main/data/projects/11/src/SECURITY.md"
+        }
+      ],
+      "metrics": [
+        {
+          "format": "CVSS",
+          "scenarios": [
+            {
+              "lang": "en",
+              "value": "GENERAL"
+            }
+          ],
+          "cvssV4_0": {
+            "version": "4.0",
+            "attackVector": "NETWORK",
+            "attackComplexity": "LOW",
+            "attackRequirements": "NONE",
+            "privilegesRequired": "NONE",
+            "userInteraction": "PASSIVE",
+            "vulnConfidentialityImpact": "HIGH",
+            "subConfidentialityImpact": "NONE",
+            "vulnIntegrityImpact": "LOW",
+            "subIntegrityImpact": "NONE",
+            "vulnAvailabilityImpact": "NONE",
+            "subAvailabilityImpact": "NONE",
+            "Safety": "NOT_DEFINED",
+            "Automatable": "NOT_DEFINED",
+            "Recovery": "NOT_DEFINED",
+            "valueDensity": "NOT_DEFINED",
+            "vulnerabilityResponseEffort": "NOT_DEFINED",
+            "providerUrgency": "NOT_DEFINED",
+            "baseSeverity": "HIGH",
+            "baseScore": 7.1,
+            "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N"
+          }
+        }
+      ],
+      "source": {
+        "discovery": "UNKNOWN"
+      },
+      "x_generator": {
+        "engine": "CVE-Request-form 0.0.1"
+      }
+    }
+  }
+}

@@ -68,6 +68,16 @@ def ping_host(host: str) -> str:
 
 `host` 参数直接拼入 f-string shell 命令，通过 `subprocess.getoutput` 在 shell 中执行。`getoutput` 底层使用 `subprocess.run` + `shell=True`，支持 shell 元字符注入。
 
+### 漏洞代码
+
+- 完整路径：`src/board/engine.py:77`
+
+```python
+def ping_host(host: str) -> str:
+    # Host is interpolated into a shell command and the output is returned.
+    return subprocess.getoutput(f"echo MEMO-PING {host}")
+```
+
 ### 攻击路径
 
 1. （可选）利用 SQLi 漏洞 `GET /api/users?name=' OR 1=1 --` 获取 admin 密码

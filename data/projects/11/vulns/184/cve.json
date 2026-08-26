@@ -1,0 +1,114 @@
+{
+  "dataType": "CVE_RECORD",
+  "dataVersion": "5.2",
+  "cveMetadata": {
+    "cveId": "VULNHUNTER_PENDING",
+    "assignerOrgId": "d745fec1-a142-45ad-8db6-5b688e786db6",
+    "requesterUserId": "00000000-0000-4000-9000-000000000000",
+    "serial": 1,
+    "state": "PUBLISHED"
+  },
+  "containers": {
+    "cna": {
+      "x_theConversation": [
+        {
+          "authorRole": "CNA-LR",
+          "visibility": "public"
+        }
+      ],
+      "x_Read_Landing": {
+        "x_Acknowledge": "NO"
+      },
+      "x_Other_CNA": {
+        "x_CNA_Contact": "IN-CNA-LR-SCOPE"
+      },
+      "x_Request_Type": {
+        "x_Publication_Request": "NO"
+      },
+      "providerMetadata": {
+        "orgId": "d745fec1-a142-45ad-8db6-5b688e786db6"
+      },
+      "problemTypes": [
+        {
+          "descriptions": [
+            {
+              "lang": "en",
+              "description": "CWE-78 Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+              "type": "CWE"
+            }
+          ]
+        }
+      ],
+      "affected": [
+        {
+          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "versions": [
+            {
+              "status": "affected",
+              "version": "0.5.0"
+            }
+          ],
+          "defaultStatus": "unaffected"
+        }
+      ],
+      "descriptions": [
+        {
+          "lang": "en",
+          "value": "MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.\nIt is affected by OS command injection (CWE-78) because src/board/engine.py ping_host() interpolates the host argument into a shell string passed to subprocess.getoutput, skipping the intended argv/shell=False execution.\nAttack chain: an admin session calls GET /api/tools/ping (source: query parameter host in src/app.py api_ping; endpoint requires role=admin) which reaches the sink subprocess.getoutput on the default deployment.\nVulnerable code in src/board/engine.py:\ndef ping_host(host: str) -> str:\n    # Host is interpolated into a shell command and the output is returned.\n    return subprocess.getoutput(f\"echo MEMO-PING {host}\")\nHTTP PoC:\nGET /api/tools/ping?host=;id HTTP/1.1\nHost: TARGET:5000\nCookie: session=<admin_session_cookie>\nConnection: close\nImpact: an attacker with an administrator session can execute arbitrary OS commands and read the output in the HTTP body. Remaining control: non-admin sessions receive 401/403. Obtaining the admin session via seed credentials or a separate SQL injection is out of scope for this record.\n",
+          "supportingMedia": [
+            {
+              "type": "text/html",
+              "base64": false,
+              "value": "<p>MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.</p><p>It is affected by OS command injection (CWE-78) because src/board/engine.py ping_host() interpolates the host argument into a shell string passed to subprocess.getoutput, skipping the intended argv/shell=False execution.</p><p>Attack chain: an admin session calls GET /api/tools/ping (source: query parameter host in src/app.py api_ping; endpoint requires role=admin) which reaches the sink subprocess.getoutput on the default deployment.</p><p>Vulnerable code in <code>src/board/engine.py</code>:</p><pre>def ping_host(host: str) -&gt; str:\n    # Host is interpolated into a shell command and the output is returned.\n    return subprocess.getoutput(f\"echo MEMO-PING {host}\")</pre><pre>GET /api/tools/ping?host=;id HTTP/1.1\nHost: TARGET:5000\nCookie: session=&lt;admin_session_cookie&gt;\nConnection: close</pre><p>Impact: an attacker with an administrator session can execute arbitrary OS commands and read the output in the HTTP body. Remaining control: non-admin sessions receive 401/403. Obtaining the admin session via seed credentials or a separate SQL injection is out of scope for this record.</p>"
+            }
+          ]
+        }
+      ],
+      "references": [
+        {
+          "url": "https://github.com/1diot9/VulnHunter-White/blob/main/data/projects/11/src/SECURITY.md"
+        }
+      ],
+      "metrics": [
+        {
+          "format": "CVSS",
+          "scenarios": [
+            {
+              "lang": "en",
+              "value": "GENERAL"
+            }
+          ],
+          "cvssV4_0": {
+            "version": "4.0",
+            "attackVector": "NETWORK",
+            "attackComplexity": "LOW",
+            "attackRequirements": "NONE",
+            "privilegesRequired": "HIGH",
+            "userInteraction": "NONE",
+            "vulnConfidentialityImpact": "HIGH",
+            "subConfidentialityImpact": "NONE",
+            "vulnIntegrityImpact": "HIGH",
+            "subIntegrityImpact": "NONE",
+            "vulnAvailabilityImpact": "HIGH",
+            "subAvailabilityImpact": "NONE",
+            "Safety": "NOT_DEFINED",
+            "Automatable": "NOT_DEFINED",
+            "Recovery": "NOT_DEFINED",
+            "valueDensity": "NOT_DEFINED",
+            "vulnerabilityResponseEffort": "NOT_DEFINED",
+            "providerUrgency": "NOT_DEFINED",
+            "baseSeverity": "HIGH",
+            "baseScore": 8.6,
+            "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:H/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        }
+      ],
+      "source": {
+        "discovery": "UNKNOWN"
+      },
+      "x_generator": {
+        "engine": "CVE-Request-form 0.0.1"
+      }
+    }
+  }
+}

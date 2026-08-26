@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -123,6 +124,41 @@ def test_demo_vuln_report_readable(tmp_env):
         assert detail.status_code == 200
         body = detail.json()
         assert "fixture report" in (body.get("report_md") or "")
+
+
+def test_bundled_showcase_has_current_advisory_and_cve():
+    from app.services.cve_record import list_fillable_fields
+    from app.services.report import harness_vuln_code_gap
+
+    root = Path(__file__).resolve().parents[2] / "data" / "projects" / "11" / "vulns"
+    files = {
+        183: "src/board/engine.py",
+        184: "src/board/engine.py",
+        185: "src/templates/notes.html",
+        186: "src/app.py",
+    }
+    advisory_need = (
+        "## Title",
+        "### Summary",
+        "### Details",
+        "### Vulnerable code",
+        "### PoC",
+        "### Impact",
+        "## Affected products",
+        "**CVSS 3.1:**",
+        "**CVSS 4.0:**",
+        "```http",
+    )
+    for vid, file_path in files.items():
+        d = root / str(vid)
+        report = (d / "report.md").read_text(encoding="utf-8")
+        advisory = (d / "advisory.md").read_text(encoding="utf-8")
+        record = json.loads((d / "cve.json").read_text(encoding="utf-8"))
+        assert harness_vuln_code_gap(report, file_path=file_path) is None
+        missing = [h for h in advisory_need if h not in advisory]
+        assert not missing, f"vuln {vid} advisory missing {missing}"
+        pending = [f["path"] for f in list_fillable_fields(record) if f["required"] and f["needs_fill"]]
+        assert not pending, f"vuln {vid} cve.json pending {pending}"
 
 
 def test_seed_respects_demo_seed_setting(tmp_env, monkeypatch):

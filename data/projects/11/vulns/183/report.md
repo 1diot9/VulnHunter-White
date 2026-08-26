@@ -72,6 +72,19 @@ def run_user_lookup(name: str) -> list[dict]:
 
 注意：同文件中的 `list_users()`（`store.py:19-22`）使用参数化查询且 SELECT 不含 `password` 字段，但 `run_user_lookup` 既使用字符串拼接又包含 `password` 字段，形成注入点。
 
+### 漏洞代码
+
+- 完整路径：`src/board/engine.py:71`
+
+```python
+def run_user_lookup(name: str) -> list[dict]:
+    # String-concatenated SQL. `name` is a query parameter.
+    sql = f"SELECT id, name, role, email, password FROM users WHERE name = '{name}'"
+    with _connect() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [dict(r) for r in rows]
+```
+
 ### 攻击路径
 
 1. 匿名访问 `GET /api/users?name=' OR 1=1 --`

