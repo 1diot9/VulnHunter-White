@@ -412,6 +412,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["dynamic_verify_enabled"] is False
         assert created.json()["llm_model"] == ""
         assert created.json()["worker_hint"] == ""
+        assert created.json()["max_token_usage"] == 0
         full = client.post(
             "/api/projects",
             json={

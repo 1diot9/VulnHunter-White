@@ -115,6 +115,8 @@ class Project(Base):
     llm_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 挖掘 Worker 额外人工提示：注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息
     worker_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 项目 Token 上限（输入+输出合计）；0 = 不限制，到达后自动暂停
+    max_token_usage: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -476,6 +478,7 @@ def _ensure_columns() -> None:
             "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
             "llm_model": "VARCHAR(256)",
             "worker_hint": "TEXT",
+            "max_token_usage": "INTEGER DEFAULT 0",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

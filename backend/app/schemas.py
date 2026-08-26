@@ -320,6 +320,7 @@ class ProjectCreate(BaseModel):
     bypass_enabled: bool = False
     llm_model: str = Field(default="", max_length=256)
     worker_hint: str = Field(default="", max_length=WORKER_HINT_MAX)
+    max_token_usage: int = Field(default=0, ge=0, le=1_000_000_000_000)
 
 
 class ProjectUpdate(BaseModel):
@@ -338,6 +339,7 @@ class ProjectUpdate(BaseModel):
     bypass_enabled: bool | None = None
     llm_model: str | None = Field(default=None, max_length=256)
     worker_hint: str | None = Field(default=None, max_length=WORKER_HINT_MAX)
+    max_token_usage: int | None = Field(default=None, ge=0, le=1_000_000_000_000)
 
 
 class WeightExtOut(BaseModel):
@@ -375,6 +377,7 @@ class ProjectOut(BaseModel):
     bypass_queue_frozen: bool = False
     llm_model: str = ""
     worker_hint: str = ""
+    max_token_usage: int = 0
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime

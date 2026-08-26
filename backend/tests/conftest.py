@@ -52,6 +52,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.github_issues as github_issues
     import app.services.github_probe as github_probe
     import app.services.pipeline as pipeline
+    import app.services.token_budget as token_budget
     import app.services.verifier as verifier_service
     import app.services.vuln_followup as vuln_followup
     import app.tools as tools
@@ -95,6 +96,7 @@ def tmp_env(tmp_path, monkeypatch):
         verifier_service,
         asset_proof,
         pipeline,
+        token_budget,
         sink_queue,
         bypass_queue,
         conversation_service,

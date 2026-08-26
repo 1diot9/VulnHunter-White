@@ -29,6 +29,7 @@ import {
   formatTargetKindHint,
   formatTokens,
   projectStatusBadgeVariant,
+  tokenBudgetReached,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
@@ -117,6 +118,7 @@ export default function ProjectDetailPage() {
   const [logSession, setLogSession] = useState<number | null>(null)
   const [displaySession, setDisplaySession] = useState(1)
   const [sessionCount, setSessionCount] = useState(1)
+  const [actionError, setActionError] = useState('')
   const oldestRef = useRef(0)
   const fileEndRef = useRef(0)
   const phaseRef = useRef(phaseFilter)
@@ -423,19 +425,40 @@ export default function ProjectDetailPage() {
             />
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-end gap-2">
           <LlmThreadUsageBar />
           <div className="flex flex-wrap justify-end gap-2">
-            <ProjectSettingsButton project={project} onSaved={setProject} />
+            <ProjectSettingsButton
+              project={project}
+              onSaved={(next) => {
+                setProject(next)
+                setActionError('')
+              }}
+            />
             <Button
               variant="outline"
               disabled={project.status === 'completed'}
               title={project.status === 'completed' ? '已完成项目不可暂停' : undefined}
-              onClick={() => api.pause(projectId)}
+              onClick={() => {
+                setActionError('')
+                void api.pause(projectId).catch((e) => setActionError(String(e)))
+              }}
             >
               全部暂停
             </Button>
-            <Button variant="outline" onClick={() => api.resume(projectId)}>
+            <Button
+              variant="outline"
+              disabled={tokenBudgetReached(project)}
+              title={
+                tokenBudgetReached(project)
+                  ? '已达到 Token 上限，请在项目配置中提高上限后再续跑'
+                  : undefined
+              }
+              onClick={() => {
+                setActionError('')
+                void api.resume(projectId).catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+              }}
+            >
               全部续跑
             </Button>
             <ResetProgressButton project={project} onReset={setProject} />
@@ -450,6 +473,7 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       </div>
+      {actionError ? <p className="text-sm text-red-300">{actionError}</p> : null}
 
       {normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled) ===
         'lab' && <LabControlPanel project={project} />}
@@ -514,7 +538,10 @@ export default function ProjectDetailPage() {
           <Badge variant="outline" title={project.llm_model ? '项目模型' : '使用设置页全局模型'}>
             {project.llm_model || '全局模型'}
           </Badge>
-          <span>tokens {formatTokens(project.tokens_total)}</span>
+          <span>
+            tokens {formatTokens(project.tokens_input + project.tokens_output)}
+            {project.max_token_usage > 0 ? ` / 上限 ${formatTokens(project.max_token_usage)}` : ''}
+          </span>
           <span>{formatMiningProgress(project)}</span>
           <span>
             洞 确认{project.vuln_confirmed} / 待审{project.vuln_pending} / 误报{project.vuln_false_positive}

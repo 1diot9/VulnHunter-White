@@ -447,11 +447,25 @@ export function formatTokenUsage(p: {
   tokens_input?: number | null
   tokens_output?: number | null
   tokens_cached?: number | null
+  max_token_usage?: number | null
 }): string {
   const input = p.tokens_input ?? 0
   const output = p.tokens_output ?? 0
   const cached = p.tokens_cached ?? 0
-  return `输入 ${formatTokens(input)} / 输出 ${formatTokens(output)} / 缓存率 ${formatCacheRate(cached, input)}`
+  const cap = p.max_token_usage ?? 0
+  const used = `输入 ${formatTokens(input)} / 输出 ${formatTokens(output)} / 缓存率 ${formatCacheRate(cached, input)}`
+  if (cap > 0) return `${used} / 上限 ${formatTokens(cap)}`
+  return used
+}
+
+export function tokenBudgetReached(p: {
+  tokens_input?: number | null
+  tokens_output?: number | null
+  max_token_usage?: number | null
+}): boolean {
+  const cap = p.max_token_usage ?? 0
+  if (cap <= 0) return false
+  return (p.tokens_input ?? 0) + (p.tokens_output ?? 0) >= cap
 }
 
 export function saveBlob(blob: Blob, filename: string) {

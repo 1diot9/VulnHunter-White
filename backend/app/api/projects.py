@@ -85,6 +85,7 @@ from ..services.lab import (
 )
 from ..services.live_log import live_log
 from ..services.llm_settings import normalize_project_llm_model
+from ..services.token_budget import maybe_pause_for_token_budget, parse_max_token_usage
 from ..services import custom_audit_modes as cam
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
 from ..services.phase_reports import read_phase_report, reports_by_phase
@@ -300,6 +301,7 @@ def _project_out(
         bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
         llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
         worker_hint=(getattr(p, "worker_hint", None) or "").strip(),
+        max_token_usage=int(getattr(p, "max_token_usage", 0) or 0),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -442,6 +444,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
         target_kind = parse_target_kind(body.target_kind)
         manual_lab_prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
         worker_hint = normalize_worker_hint(body.worker_hint)
+        max_token_usage = parse_max_token_usage(body.max_token_usage)
         heuristic_enabled, fast_enabled, bypass_enabled = parse_mining_paths(
             heuristic_enabled=body.heuristic_enabled,
             fast_enabled=body.fast_enabled,
@@ -486,6 +489,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             bypass_enabled=bypass_enabled,
             llm_model=normalize_project_llm_model(body.llm_model),
             worker_hint=worker_hint or None,
+            max_token_usage=max_token_usage,
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -529,6 +533,7 @@ async def create_project_zip(
     bypass_enabled: str = Form("false"),
     llm_model: str = Form(""),
     worker_hint: str = Form(""),
+    max_token_usage: str = Form("0"),
 ) -> ProjectOut:
     raw_name = name.strip() or _upload_zip_stem(file.filename)
     try:
@@ -536,6 +541,7 @@ async def create_project_zip(
         kind = parse_target_kind(target_kind)
         prompt = normalize_manual_lab_prompt(manual_lab_prompt)
         hint = normalize_worker_hint(worker_hint)
+        token_cap = parse_max_token_usage(max_token_usage)
         heuristic_on, fast_on, bypass_on = parse_mining_paths(
             heuristic_enabled=heuristic_enabled,
             fast_enabled=fast_enabled,
@@ -584,6 +590,7 @@ async def create_project_zip(
             bypass_enabled=bypass_on,
             llm_model=normalize_project_llm_model(llm_model),
             worker_hint=hint or None,
+            max_token_usage=token_cap,
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -622,12 +629,14 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.bypass_enabled is None
         and body.llm_model is None
         and body.worker_hint is None
+        and body.max_token_usage is None
     ):
         raise HTTPException(400, "没有需要更新的字段")
     mode = None
     kind = None
     prompt = None
     hint = None
+    token_cap = None
     try:
         if body.audit_mode is not None:
             mode = parse_audit_mode(body.audit_mode)
@@ -637,6 +646,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             prompt = normalize_manual_lab_prompt(body.manual_lab_prompt)
         if body.worker_hint is not None:
             hint = normalize_worker_hint(body.worker_hint)
+        if body.max_token_usage is not None:
+            token_cap = parse_max_token_usage(body.max_token_usage)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     paths_changed = False
@@ -660,6 +671,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_bypass = bool(getattr(p, "bypass_enabled", False))
         old_llm_model = normalize_project_llm_model(getattr(p, "llm_model", None))
         old_worker_hint = (getattr(p, "worker_hint", None) or "").strip()
+        old_max_token_usage = int(getattr(p, "max_token_usage", 0) or 0)
         if kind is not None:
             if p.status not in TARGET_KIND_EDITABLE_STATUSES:
                 raise HTTPException(400, "审计对象仅在项目暂停或完成后可更改")
@@ -747,6 +759,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.llm_model = normalize_project_llm_model(body.llm_model)
         if hint is not None:
             p.worker_hint = hint or None
+        if token_cap is not None:
+            p.max_token_usage = token_cap
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
@@ -824,6 +838,17 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 live_log.system(project_id, "挖掘 Worker 提示已更新，下一轮挖掘生效")
             else:
                 live_log.system(project_id, "挖掘 Worker 提示已清空，下一轮挖掘不再注入")
+        if token_cap is not None and token_cap != old_max_token_usage:
+            if token_cap:
+                live_log.system(
+                    project_id,
+                    f"Token 上限已改为 {token_cap}（输入+输出），到达后将自动暂停",
+                )
+            else:
+                live_log.system(project_id, "已取消 Token 上限")
+            maybe_pause_for_token_budget(project_id)
+            db.refresh(p)
+            out = _project_out(db, p)
     if audit_mode_changed:
         note_audit_mode_changed(project_id, new_mode_for_note, custom_name=custom_name_for_note)
     if paths_changed:
@@ -881,7 +906,10 @@ def pause_project(project_id: int) -> dict:
 
 @router.post("/{project_id}/resume")
 def resume_project(project_id: int) -> dict:
-    request_resume(project_id)
+    try:
+        request_resume(project_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {"ok": True, **get_phase_states(project_id)}
 
 

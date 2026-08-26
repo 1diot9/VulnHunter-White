@@ -480,6 +480,8 @@ class AgentLoop:
                 deadline += time.time() - paused_at
                 self._persist(messages, status="running")
                 continue
+            if self._enforce_token_budget():
+                continue
             remaining = deadline - time.time()
             if remaining <= 0:
                 result.timed_out = True
@@ -608,6 +610,7 @@ class AgentLoop:
 
             self._transient_retries = 0
             self._accumulate_tokens(result, usage)
+            self._enforce_token_budget()
             self._last_prompt_tokens = usage.get("prompt_tokens", 0)
             self._live.tokens(
                 self.project_id,
@@ -1197,6 +1200,14 @@ class AgentLoop:
         finally:
             first_payload.set()
             stop_hb.set()
+
+    def _enforce_token_budget(self) -> bool:
+        """Pause the project when input+output spend hits the configured cap."""
+        if self.silent or not self.project_id:
+            return False
+        from ..services.token_budget import maybe_pause_for_token_budget
+
+        return maybe_pause_for_token_budget(self.project_id)
 
     def _accumulate_tokens(self, result: LoopResult, usage: dict[str, int]) -> None:
         result.tokens_input += usage.get("prompt_tokens", 0)

@@ -333,7 +333,7 @@ def request_cancel(project_id: int) -> None:
     live_log.system(project_id, "用户取消审计")
 
 
-def request_pause(project_id: int) -> None:
+def request_pause(project_id: int, *, reason: str | None = None) -> None:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if proj and proj.status == "completed":
@@ -346,7 +346,7 @@ def request_pause(project_id: int) -> None:
         if proj and proj.status != "completed":
             proj.status = "paused"
             db.commit()
-    live_log.system(project_id, "用户暂停全部阶段")
+    live_log.system(project_id, reason or "用户暂停全部阶段")
 
 
 def note_mining_paths_changed(
@@ -579,6 +579,11 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
 
 
 def request_resume(project_id: int) -> None:
+    from .token_budget import token_budget_block_reason
+
+    blocked = token_budget_block_reason(project_id)
+    if blocked:
+        raise ValueError(blocked)
     _pause_event(project_id).clear()
     for phase in CONTROL_PHASES:
         _phase_pause_event(project_id, phase).clear()

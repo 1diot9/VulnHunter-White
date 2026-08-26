@@ -7,6 +7,7 @@ import { DynamicVerifyToggle, type DynamicVerifyMode } from './DynamicVerifyTogg
 import { ManualLabToggle } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
+import { MaxTokenUsageField, parseMaxTokenUsageInput } from './MaxTokenUsageField'
 import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { WorkerHintFields } from './WorkerHintFields'
@@ -56,6 +57,7 @@ export function CreateProjectDialog({
   const [bypassEnabled, setBypassEnabled] = useState(false)
   const [llmModel, setLlmModel] = useState('')
   const [workerHint, setWorkerHint] = useState('')
+  const [maxTokenUsage, setMaxTokenUsage] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
@@ -116,6 +118,7 @@ export function CreateProjectDialog({
       bypass_enabled: bypassEnabled,
       llm_model: llmModel,
       worker_hint: workerHint,
+      max_token_usage: parseMaxTokenUsageInput(maxTokenUsage),
     }
   }
 
@@ -125,10 +128,17 @@ export function CreateProjectDialog({
       setError('请先选择自定义审计模式（可在设置页创建）')
       return
     }
+    let opts
+    try {
+      opts = createOpts()
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      await api.createGithub(url.trim(), '', auditMode, createOpts())
+      await api.createGithub(url.trim(), '', auditMode, opts)
       setUrl('')
       onOpenChange(false)
       await onCreated()
@@ -145,10 +155,17 @@ export function CreateProjectDialog({
       setError('请先选择自定义审计模式（可在设置页创建）')
       return
     }
+    let opts
+    try {
+      opts = createOpts()
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      await api.uploadZip(file, '', auditMode, createOpts())
+      await api.uploadZip(file, '', auditMode, opts)
       onOpenChange(false)
       await onCreated()
     } catch (e) {
@@ -173,7 +190,7 @@ export function CreateProjectDialog({
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、验证方式、项目模型与挖掘 Worker 提示。
+            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、验证方式、项目模型、Token 上限与挖掘 Worker 提示。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -189,6 +206,7 @@ export function CreateProjectDialog({
                 onCustomModeIdChange={setCustomModeId}
               />
               <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
+              <MaxTokenUsageField value={maxTokenUsage} onChange={setMaxTokenUsage} disabled={busy} />
               <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={busy} />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
