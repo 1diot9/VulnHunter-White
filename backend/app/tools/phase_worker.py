@@ -748,8 +748,9 @@ def register_worker_tools() -> None:
                         "type": "string",
                         "description": (
                             "英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
-                            "含 Title、Description（Summary/Details/PoC/Impact）、"
-                            "Affected products、Severity/CWE（含 CVSS 3.1 与 CVSS 4.0）。不要写中文报告。"
+                            "含 Title、Description（Summary/Details/Vulnerable code/PoC/Impact）、"
+                            "Affected products、Severity/CWE（含 CVSS 3.1 与 CVSS 4.0）。"
+                            "Vulnerable code 须含完整相对路径与源码原文。不要写中文报告。"
                         ),
                     },
                 },

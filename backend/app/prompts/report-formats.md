@@ -13,7 +13,8 @@
 
 ## 英文 GitHub Advisory（advisory_md / advisory.md）
 
-- 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`（含 **CVSS 3.1** 与 **CVSS 4.0**：基础分、严重度标签与向量字符串；不确定时留空由 Reviewer 填）。
+- 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### Vulnerable code` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`（含 **CVSS 3.1** 与 **CVSS 4.0**：基础分、严重度标签与向量字符串；不确定时留空由 Reviewer 填）。
+- `### Vulnerable code` 须写明漏洞代码段对应的仓库内**完整相对路径**（不要只写类名/方法名），并粘贴源码原文到 fenced 代码块，与中文报告 `### 漏洞代码` 同级证据，不要省略。
 - `### PoC` 须含 `http` 代码块形式的完整 HTTP 请求包；请求包内长字符串（约 80+ 字符）用描述性占位符（如 `<BASE64_PAYLOAD>`）替代。
 - 不要把中文报告粘进去；Title、Description、Impact 等章节正文一律英文；章节标题保持模板英文。用户指令即使是中文，也不要把 Advisory 改成中文。Description 按 GitHub 表单可直接粘贴。
 
@@ -25,7 +26,8 @@
   1. **产品**：厂商/单位、产品名称、受影响版本。
   2. **根因**：漏洞类型（CWE）、缺失或被绕过的控制、关键文件/函数。
   3. **漏洞链路**：入口（端点/参数/鉴权前提）→ 中间处理 → sink；写明默认部署下为何能打通。
-  4. **PoC**：有 HTTP 面时写完整原始 HTTP 请求包（方法、路径、必要头、body；`Host` 用 `TARGET`）；约 80+ 字符的长串用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符。无 HTTP 面（组件库/公开 API）时写可复现的 API/调用链或 harness 调用，不要留空。
-  5. **危害**：成功利用后攻击者能做什么；剩余控制条件如实写，不要夸大。
-- `supportingMedia[0].value` 是同一内容的 HTML：段落用 `<p>`，HTTP/API PoC 放在 `<pre>` 中。不要只复制一句纯文本。
+  4. **漏洞代码**：仓库内完整相对路径（如 `src/.../File.ext` 或 `app/utils/backup.py:42`）+ 对应源码原文；不要只写类名/方法名或一句话概述。
+  5. **PoC**：有 HTTP 面时写完整原始 HTTP 请求包（方法、路径、必要头、body；`Host` 用 `TARGET`）；约 80+ 字符的长串用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符。无 HTTP 面（组件库/公开 API）时写可复现的 API/调用链或 harness 调用，不要留空。
+  6. **危害**：成功利用后攻击者能做什么；剩余控制条件如实写，不要夸大。
+- `supportingMedia[0].value` 是同一内容的 HTML：段落用 `<p>`，**漏洞代码与 HTTP/API PoC 均放在 `<pre>` 中**（各用一块，不要挤进同一段纯文本）。不要只复制一句纯文本。
 - `problemTypes[0].descriptions[0].description` 仍只填 CWE 弱点英文名，不是整段漏洞描述。

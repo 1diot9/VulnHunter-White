@@ -90,7 +90,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 - 漏洞参数也走 CLI：RCE / 命令注入必须支持 `-c/--cmd` 执行自定义命令，**有回显则把命令输出打印到 stdout**；文件读 `-f/--file`、SSRF `--ssrf-url`（有回显打印目标正文，仅差别则打印通/不通对照）、需登录 `--cookie`/`--token` 等同理，并给安全默认值，使只传 `-u` 也能打出代表证据。
 - http_request 为完整 HTTP 请求包。
 - PoC 必须按静态分析证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。
-- 中文 `report_md`、英文 `advisory_md`、CVE JSON 的章节、语言与占位符见系统附加的**报告格式专章**（对齐 `templates/vuln-report.md`、`templates/vuln-advisory.md`、`templates/cve.json`）。提交后用 `ReadCveRecord` / `SetCveRecordField` 填写 CVE JSON：`descriptions[0].value` 须为英文详述（产品/版本、根因、入口→sink 链路、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），不要一句话摘要。`## 互联网资产证明` 复用 `docs/app-fingerprints.json`（不要每条漏洞重新识别；测绘语句不允许出现「或」）。「基础环境搭建」只引用 `docs/lab.md`。
+- 中文 `report_md`、英文 `advisory_md`、CVE JSON 的章节、语言与占位符见系统附加的**报告格式专章**（对齐 `templates/vuln-report.md`、`templates/vuln-advisory.md`、`templates/cve.json`）。提交后用 `ReadCveRecord` / `SetCveRecordField` 填写 CVE JSON：`descriptions[0].value` 须为英文详述（产品/版本、根因、入口→sink 链路、漏洞代码完整路径与源码原文、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），不要一句话摘要。`advisory_md` 的 `### Vulnerable code` 同样须贴路径与源码。`## 互联网资产证明` 复用 `docs/app-fingerprints.json`（不要每条漏洞重新识别；测绘语句不允许出现「或」）。「基础环境搭建」只引用 `docs/lab.md`。
 
 ## 互联网资产证明规则
 - 指纹是**项目级应用指纹**，不是漏洞入口，也不是每条报告各采一次。以 `docs/app-fingerprints.json` 为准；没有该文件时系统会采集一次并复用。

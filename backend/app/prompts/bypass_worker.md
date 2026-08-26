@@ -19,7 +19,7 @@ source→sink 可达只是候选，不是漏洞。
 - poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），并必须提供 `--proxy`（空则直连）且接到全部 HTTP 请求；有 `--proxy` 时访问 `127.0.0.1`/`localhost` 也必须强制走代理。不要写死靶场地址或代理。
 - RCE / 命令注入必须支持 `-c/--cmd` 并有回显时打印命令输出；SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。
 - http_request 为完整 HTTP 请求包。
-- 中文 `report_md`、英文 `advisory_md`、CVE JSON 见系统附加的**报告格式专章**。提交后用 `ReadCveRecord` / `SetCveRecordField` 填写 CVE 描述（须含入口→sink 链路与 HTTP/API PoC，不要一句话摘要）。绕过路径的中文报告还须对齐 `templates/vuln-report-bypass.md`：`## 漏洞技术细节` 下第一节为 `### 补丁绕过简析`。
+- 中文 `report_md`、英文 `advisory_md`、CVE JSON 见系统附加的**报告格式专章**。提交后用 `ReadCveRecord` / `SetCveRecordField` 填写 CVE 描述（须含入口→sink 链路、漏洞代码完整路径与源码原文、HTTP/API PoC，不要一句话摘要）。`advisory_md` 须含 `### Vulnerable code`。绕过路径的中文报告还须对齐 `templates/vuln-report-bypass.md`：`## 漏洞技术细节` 下第一节为 `### 补丁绕过简析`。
 
 ## 禁止
 - 不要 FinishFile / FinishRound / FinishSink。

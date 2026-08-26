@@ -14,8 +14,12 @@ from app.services.report import (
 from app.services.paths import vuln_dir
 from app.tools import ToolContext, registry
 
-_DETAILED_CVE_DESC = """ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because Db.java query() concatenates the id parameter into a JDBC statement without parameterization.
+_DETAILED_CVE_DESC = """ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because app/Db.java query() concatenates the id parameter into a JDBC statement without parameterization.
 Attack chain: an unauthenticated GET to /api/item (source: query parameter id) reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.
+Vulnerable code in app/Db.java:
+public Result query(String id) {
+    return stmt.execute("SELECT * FROM items WHERE id=" + id);
+}
 HTTP PoC:
 GET /api/item?id=1%20OR%201=1 HTTP/1.1
 Host: TARGET
@@ -25,13 +29,25 @@ Impact: a remote unauthenticated attacker can read or modify database rows. Rema
 
 _DETAILED_CVE_HTML = (
     "<p>ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because "
-    "Db.java query() concatenates the id parameter into a JDBC statement without parameterization.</p>"
+    "app/Db.java query() concatenates the id parameter into a JDBC statement without parameterization.</p>"
     "<p>Attack chain: an unauthenticated GET to /api/item (source: query parameter id) "
     "reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.</p>"
+    "<p>Vulnerable code in <code>app/Db.java</code>:</p>"
+    "<pre>public Result query(String id) {\n"
+    "    return stmt.execute(\"SELECT * FROM items WHERE id=\" + id);\n}</pre>"
     "<pre>GET /api/item?id=1%20OR%201=1 HTTP/1.1\nHost: TARGET</pre>"
     "<p>Impact: a remote unauthenticated attacker can read or modify database rows. "
     "Remaining control: none on the default install.</p>"
 )
+
+_CHAIN_POC_NO_SOURCE_DESC = """ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because Db.java query() concatenates the id parameter into a JDBC statement without parameterization.
+Attack chain: an unauthenticated GET to /api/item (source: query parameter id) reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.
+HTTP PoC:
+GET /api/item?id=1%20OR%201=1 HTTP/1.1
+Host: TARGET
+
+Impact: a remote unauthenticated attacker can read or modify database rows. Remaining control: none on the default install.
+"""
 
 
 def test_stamp_after_h1():
@@ -91,6 +107,7 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
     assert advisory.startswith("# GitHub Security Advisory")
     assert "## Title" in advisory
     assert "### Summary" in advisory
+    assert "### Vulnerable code" in advisory
     assert "**产出时间**" not in advisory
 
 
@@ -246,9 +263,11 @@ def test_write_advisory_md_no_produced_at(tmp_path):
 def test_default_advisory_md_includes_cvss_fields():
     from app.services.report import default_advisory_md
 
-    text = default_advisory_md({"title": "demo", "cwe": "CWE-89"})
+    text = default_advisory_md({"title": "demo", "cwe": "CWE-89", "file_path": "app/Db.java"})
     assert "**CVSS 3.1:**" in text
     assert "**CVSS 4.0:**" in text
+    assert "### Vulnerable code" in text
+    assert "app/Db.java" in text
 
 
 def test_ensure_search_fingerprint_section_inserts_before_poc():
@@ -469,8 +488,28 @@ def test_cve_description_detail_issues():
     assert any("pre" in item for item in html_plain)
     assert not description_detail_issues(_DETAILED_CVE_HTML, html=True)
 
-    lib_desc = """ExampleCorp WidgetLib through 2.1.0 is affected by path traversal because Parser.parse() concatenates the caller-supplied name into a filesystem path.
+    missing_code = description_detail_issues(_CHAIN_POC_NO_SOURCE_DESC)
+    assert any("路径" in item or "源码" in item for item in missing_code)
+
+    html_http_only = (
+        "<p>ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because "
+        "app/Db.java query() concatenates the id parameter into a JDBC statement without parameterization.</p>"
+        "<p>Attack chain: an unauthenticated GET to /api/item (source: query parameter id) "
+        "reaches the sink in Db.query() and executes attacker-controlled SQL on the default deployment.</p>"
+        "<p>Vulnerable code is in app/Db.java query() which concatenates id into SQL.</p>"
+        "<pre>GET /api/item?id=1%20OR%201=1 HTTP/1.1\nHost: TARGET</pre>"
+        "<p>Impact: a remote unauthenticated attacker can read or modify database rows. "
+        "Remaining control: none on the default install.</p>"
+    )
+    html_missing = description_detail_issues(html_http_only, html=True)
+    assert any("源码" in item or "pre" in item for item in html_missing)
+
+    lib_desc = """ExampleCorp WidgetLib through 2.1.0 is affected by path traversal because src/parser/Parser.java parse() concatenates the caller-supplied name into a filesystem path.
 Attack chain: a public API call Parser.parse(name) (source: name argument) reaches the sink FileInputStream without normalizing against the intended base directory.
+Vulnerable code in src/parser/Parser.java:
+public InputStream parse(String name) {
+    return new FileInputStream(baseDir + name);
+}
 PoC via public API / harness: invoke Parser.parse("../secrets/key.pem") from a trusted caller on a default install.
 Impact: a local caller can read files outside the intended directory. Remaining control: none if the library is used as documented.
 """

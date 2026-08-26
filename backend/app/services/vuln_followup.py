@@ -42,7 +42,8 @@ def _revision_format_rules(kind: str, *, bypass: bool) -> str:
             "（详情页改写输出整份文档，不调用 ReadCveRecord / SetCveRecordField）；"
             "未知字段继续使用 VULNHUNTER_PENDING。"
             " descriptions[0].value 须为英文详述（产品/版本、根因、入口→sink 链路、"
-            "完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），supportingMedia 用 HTML。"
+            "漏洞代码完整路径与源码原文、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），"
+            "supportingMedia 用 HTML。"
             "不要改成中文报告或 Advisory。"
         )
     elif kind == "advisory":

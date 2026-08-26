@@ -26,6 +26,16 @@ Copy from the next `### Summary` through the end of Impact.
 
 (Root cause, file/function, the intended control that was skipped, auth preconditions, same-root-cause siblings, and a concrete suggested fix.)
 
+### Vulnerable code
+
+(Required. Give the full in-repo relative path of the vulnerable snippet, not just a class or method name, and paste the source verbatim in a fenced block. Optional line number, e.g. `src/.../File.ext:42`.)
+
+- Path: `src/.../File.ext`
+
+```text
+
+```
+
 ### PoC
 
 Requires a running instance you are authorized to test. Do not include real secrets.

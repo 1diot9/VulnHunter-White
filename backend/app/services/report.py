@@ -308,6 +308,16 @@ Reviewer should replace this skeleton with the root cause, the intended control 
 
 Expected evidence: {evidence}
 
+### Vulnerable code
+
+Paste the vulnerable source and the full in-repo relative path (not just a class or method name). Align with `templates/vuln-advisory.md`.
+
+- Path: {loc}
+
+```text
+
+```
+
 ### PoC
 
 Requires a running instance you are authorized to test. Do not include real secrets.

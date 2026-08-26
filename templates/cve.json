@@ -54,12 +54,12 @@
       "descriptions": [
         {
           "lang": "en",
-          "value": "[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control. Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization. HTTP PoC:\n\nGET /path HTTP/1.1\nHost: TARGET\n\nImpact: a remote attacker can cause the stated impact on a default deployment.",
+          "value": "[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control. Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization. Vulnerable code in src/path/File.ext:\n\npublic ReturnType method(String param) {\n    sink(param);\n}\n\nHTTP PoC:\n\nGET /path HTTP/1.1\nHost: TARGET\n\nImpact: a remote attacker can cause the stated impact on a default deployment.",
           "supportingMedia": [
             {
               "type": "text/html",
               "base64": false,
-              "value": "<p>[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control.</p><p>Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization.</p><pre>GET /path HTTP/1.1\nHost: TARGET</pre><p>Impact: a remote attacker can cause the stated impact on a default deployment.</p>"
+              "value": "<p>[EXAMPLE DESCRIPTION] Supplier Product through version is affected by vulnerability type because file/function fails to enforce the intended control.</p><p>Attack chain: a caller sends parameter to endpoint (source), which reaches sink without sanitization.</p><p>Vulnerable code in <code>src/path/File.ext</code>:</p><pre>public ReturnType method(String param) {\n    sink(param);\n}</pre><pre>GET /path HTTP/1.1\nHost: TARGET</pre><p>Impact: a remote attacker can cause the stated impact on a default deployment.</p>"
             }
           ]
         }

@@ -6,6 +6,7 @@ import copy
 import json
 import re
 from dataclasses import dataclass
+from html import unescape as unescape_html
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,18 @@ _CHAIN_RE = re.compile(
     r"(?i)(source\s*(?:→|->|to)\s*sink|attack (?:path|chain)|call chain|"
     r"entrypoint|end ?point|parameter|controller|sink\b)"
 )
+_REL_FILE_RE = re.compile(
+    r"(?:[\w.+-]+/){1,}[\w.+-]+\.[A-Za-z][A-Za-z0-9]{0,8}(?::\d+)?"
+)
+_PRE_BLOCK_RE = re.compile(r"(?is)<pre[^>]*>(.*?)</pre>")
+_FENCE_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_SOURCE_HINT_RE = re.compile(
+    r"(?i)(\{|\};|;\s*$|"
+    r"\b(?:public|private|protected|static|final|def|function|func|fn|class|"
+    r"return|import|package|const|let|var)\b)"
+)
 _DESC_MIN_CHARS = 400
+_MIN_SOURCE_CHARS = 8
 _PLAIN_DESC_PATH = "containers.cna.descriptions[0].value"
 _HTML_DESC_PATH = "containers.cna.descriptions[0].supportingMedia[0].value"
 _DETAIL_DESC_PATHS = frozenset({_PLAIN_DESC_PATH, _HTML_DESC_PATH})
@@ -53,12 +65,13 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
     ),
     FillableField(
         "containers.cna.descriptions[0].value",
-        "漏洞英文详述（纯文本）：产品与版本、根因、入口→sink 链路、完整 HTTP 请求包"
-        "（无 HTTP 面则写 API/调用链）、危害；长串用占位符。不要一句话摘要。",
+        "漏洞英文详述（纯文本）：产品与版本、根因、入口→sink 链路、漏洞代码"
+        "（完整相对路径 + 源码原文）、完整 HTTP 请求包（无 HTTP 面则写 API/调用链）、"
+        "危害；长串用占位符。不要一句话摘要。",
     ),
     FillableField(
         "containers.cna.descriptions[0].supportingMedia[0].value",
-        "同上内容的 HTML：段落用 <p>，HTTP/API PoC 放在 <pre> 中。",
+        "同上内容的 HTML：段落用 <p>，漏洞代码与 HTTP/API PoC 均放在 <pre> 中。",
     ),
     FillableField(
         "containers.cna.references[0].url",
@@ -165,6 +178,46 @@ def _plain_text(value: Any, *, html: bool) -> str:
     return " ".join(text.split()).strip()
 
 
+def _looks_like_source(text: str) -> bool:
+    body = str(text or "").strip()
+    if len(body) < _MIN_SOURCE_CHARS:
+        return False
+    if _HTTP_REQ_RE.search(body):
+        return False
+    return bool(_SOURCE_HINT_RE.search(body))
+
+
+def _code_blocks(raw: str, *, html: bool) -> list[str]:
+    blocks: list[str] = []
+    if html:
+        for inner in _PRE_BLOCK_RE.findall(raw):
+            blocks.append(unescape_html(_HTML_TAG_RE.sub("", inner)))
+    for inner in _FENCE_BLOCK_RE.findall(raw):
+        blocks.append(inner)
+    return blocks
+
+
+def _has_rel_file_path(text: str) -> bool:
+    return bool(_REL_FILE_RE.search(str(text or "").replace("\\", "/")))
+
+
+def _has_vuln_source(raw: str, *, html: bool) -> tuple[bool, bool]:
+    """Return (has_source_snippet, source_is_in_pre_when_html)."""
+    in_block = False
+    for block in _code_blocks(raw, html=html):
+        if _looks_like_source(block):
+            in_block = True
+            break
+    if in_block:
+        return True, True
+    remainder = _PRE_BLOCK_RE.sub(" ", raw) if html else raw
+    remainder = _FENCE_BLOCK_RE.sub(" ", remainder)
+    remainder = _HTTP_REQ_RE.sub(" ", remainder)
+    if html:
+        remainder = _HTML_TAG_RE.sub(" ", remainder)
+    return _looks_like_source(remainder), False
+
+
 def description_detail_issues(value: Any, *, html: bool = False) -> list[str]:
     """Return reasons a CVE description is too thin for CNA review."""
     if is_unfilled_value(value):
@@ -173,17 +226,25 @@ def description_detail_issues(value: Any, *, html: bool = False) -> list[str]:
     plain = _plain_text(raw, html=html)
     issues: list[str] = []
     if len(plain) < _DESC_MIN_CHARS:
-        issues.append("描述过短，须写清产品/版本、根因、入口→sink 链路、PoC 与危害")
+        issues.append("描述过短，须写清产品/版本、根因、入口→sink 链路、漏洞代码、PoC 与危害")
     has_http = bool(_HTTP_REQ_RE.search(raw))
     has_lib = bool(_LIB_POC_RE.search(raw))
     if not has_http and not has_lib:
         issues.append("须含完整 HTTP 请求包，或无 HTTP 面时写清 API/调用链 PoC")
     if not _CHAIN_RE.search(raw):
         issues.append("须写明入口→sink 漏洞链路（端点/参数/文件或 sink）")
+    path_ok = _has_rel_file_path(raw) or _has_rel_file_path(plain)
+    has_source, source_in_block = _has_vuln_source(raw, html=html)
+    if not path_ok:
+        issues.append("须给出漏洞代码对应的仓库内完整相对路径（不要只写类名/方法名）")
+    if not has_source:
+        issues.append("须粘贴漏洞相关源码原文（路径对应的代码段，不要只概述）")
     if html and not re.search(r"(?i)<(p|pre|br|div)\b", raw):
-        issues.append("supportingMedia 须为 HTML（段落用 <p>，PoC 放 <pre>）")
+        issues.append("supportingMedia 须为 HTML（段落用 <p>，漏洞代码与 PoC 放 <pre>）")
     if html and has_http and "<pre" not in raw.lower():
         issues.append("HTML 描述中的 HTTP 请求包须放在 <pre> 中")
+    if html and has_source and not source_in_block:
+        issues.append("HTML 描述中的漏洞代码须放在 <pre> 中")
     return issues
 
 

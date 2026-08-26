@@ -494,6 +494,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "## Title" in advisory_text
     assert "### Summary" in advisory_text
     assert "### Details" in advisory_text
+    assert "### Vulnerable code" in advisory_text
     assert "### PoC" in advisory_text
     assert "### Impact" in advisory_text
     assert "## Affected products" in advisory_text
@@ -504,6 +505,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "<BASE64_PAYLOAD>" in advisory_text
     assert "Write all fill-in content in English" in advisory_text
     assert "Do not use Chinese" in advisory_text
+    assert "full in-repo relative path" in advisory_text
 
 
 def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, project):
@@ -517,6 +519,8 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     assert "英文详述" in text
     assert "完整 HTTP 请求包" in text
     assert "漏洞链路" in text
+    assert "### Vulnerable code" in text
+    assert "漏洞代码" in text
     assert "<pre>" in text
     assert "报告格式专章" in load_prompt("worker.md")
     assert "报告格式专章" in load_prompt("bypass_worker.md")

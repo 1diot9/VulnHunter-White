@@ -931,6 +931,7 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "可选。英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
                             "Severity/CWE 须含 CVSS 3.1 与 CVSS 4.0（基础分、严重度标签与向量字符串）。"
+                            "须含 ### Vulnerable code（完整相对路径 + 源码原文）。"
                             "系统会回写 vulns/{id}/advisory.md。也可本轮 Write 该文件后 Confirm。"
                         ),
                     },
