@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
+AGENTS.md
 data/*
 !data/projects/
 data/projects/*
