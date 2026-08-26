@@ -122,6 +122,7 @@ class AuthLoginOut(BaseModel):
 class LlmProbeIn(BaseModel):
     """Unsaved form values for listing models / connectivity test."""
 
+    endpoint_id: str | None = None
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None

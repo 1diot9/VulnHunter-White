@@ -84,6 +84,88 @@ def test_list_models_uses_saved_key(tmp_env, monkeypatch):
     assert r.json()["models"] == ["local-a", "local-b"]
 
 
+def _save_two_pool_endpoints(client: TestClient) -> None:
+    saved = client.put(
+        "/api/settings",
+        json={
+            "default_model": "fallback-model",
+            "llm_endpoints": [
+                {
+                    "id": "ep-1",
+                    "base_url": "https://pool-a.example/v1",
+                    "api_key": "sk-a",
+                    "model": "model-a",
+                },
+                {
+                    "id": "ep-2",
+                    "base_url": "https://pool-b.example/v1",
+                    "api_key": "sk-b",
+                    "model": "model-b",
+                },
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+
+def test_resolve_probe_target_uses_matching_pool_endpoint(tmp_env):
+    from app.main import app
+    from app.services.llm_settings import resolve_probe_target
+
+    with TestClient(app) as client:
+        _save_two_pool_endpoints(client)
+
+    url, key, model, _wire = resolve_probe_target(
+        endpoint_id="ep-2",
+        base_url="https://pool-b.example/v1",
+        model="model-b",
+    )
+    assert url == "https://pool-b.example/v1"
+    assert key == "sk-b"
+    assert model == "model-b"
+
+    url, key, model, _wire = resolve_probe_target(base_url="https://pool-b.example/v1")
+    assert url == "https://pool-b.example/v1"
+    assert key == "sk-b"
+    assert model == "model-b"
+
+    url, key, _model, _wire = resolve_probe_target(
+        endpoint_id="ep-2",
+        base_url="https://pool-b.example/v1",
+        api_key="sk-form",
+    )
+    assert url == "https://pool-b.example/v1"
+    assert key == "sk-form"
+
+
+def test_connectivity_uses_saved_pool_endpoint_key(tmp_env, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization", "")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        _save_two_pool_endpoints(client)
+        r = client.post(
+            "/api/settings/llm/test",
+            json={
+                "endpoint_id": "ep-2",
+                "base_url": "https://pool-b.example/v1",
+                "model": "model-b",
+            },
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert seen["auth"] == "Bearer sk-b"
+    assert seen["url"].startswith("https://pool-b.example/v1/")
+
+
 def test_list_models_401(tmp_env, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="invalid api key")

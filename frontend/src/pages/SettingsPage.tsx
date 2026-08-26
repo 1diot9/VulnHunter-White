@@ -237,9 +237,16 @@ export default function SettingsPage() {
   function probeBody(endpointId?: string) {
     const ep =
       (endpointId ? endpoints.find((e) => e.id === endpointId) : null) || endpoints[0]
-    const body: { base_url?: string; api_key?: string; model?: string; wire_api?: string } = {
+    const body: {
+      endpoint_id?: string
+      base_url?: string
+      api_key?: string
+      model?: string
+      wire_api?: string
+    } = {
       wire_api: wireApi,
     }
+    if (ep?.id) body.endpoint_id = ep.id
     if (ep?.base_url.trim()) body.base_url = ep.base_url.trim()
     if (ep?.api_key.trim()) body.api_key = ep.api_key.trim()
     const model = (ep?.model || defaultModel).trim()

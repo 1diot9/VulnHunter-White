@@ -426,6 +426,7 @@ export type LlmThreadUsage = {
 }
 
 export type LlmProbeBody = {
+  endpoint_id?: string | null
   base_url?: string | null
   api_key?: string | null
   model?: string | null

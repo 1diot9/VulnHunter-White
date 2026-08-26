@@ -129,6 +129,7 @@ def list_models(body: LlmProbeIn) -> LlmModelListOut:
             api_key=body.api_key,
             model=body.model,
             wire_api=body.wire_api,
+            endpoint_id=body.endpoint_id,
         )
     except ValueError as e:
         return LlmModelListOut(ok=False, error=str(e))
@@ -170,6 +171,7 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
             api_key=body.api_key,
             model=body.model,
             wire_api=body.wire_api,
+            endpoint_id=body.endpoint_id,
         )
     except ValueError as e:
         return LlmTestOut(ok=False, error=str(e))

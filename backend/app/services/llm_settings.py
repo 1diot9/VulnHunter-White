@@ -691,12 +691,33 @@ def _saved_provider(row: AppSettings | None) -> dict[str, Any] | None:
     return providers[0]
 
 
+def _match_pool_endpoint(
+    pool: list[dict[str, Any]],
+    *,
+    endpoint_id: str | None = None,
+    base_url: str | None = None,
+) -> dict[str, Any] | None:
+    """Pick a saved pool endpoint by id, then by normalized Base URL."""
+    eid = (endpoint_id or "").strip()
+    if eid:
+        for ep in pool:
+            if str(ep.get("id") or "").strip() == eid:
+                return ep
+    url = normalize_llm_base_url(base_url)
+    if url:
+        for ep in pool:
+            if normalize_llm_base_url(str(ep.get("base_url") or "")) == url:
+                return ep
+    return None
+
+
 def resolve_probe_target(
     *,
     base_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
     wire_api: str | None = None,
+    endpoint_id: str | None = None,
 ) -> tuple[str, str, str, str]:
     """Resolve Base URL / API key / model / wire_api from form overrides, then saved settings."""
     row = get_settings_row()
@@ -705,6 +726,7 @@ def resolve_probe_target(
     saved_model = (row.default_model or "").strip()
     saved_wire = "chat"
     provider = _saved_provider(row)
+    pool = load_pool_endpoints_raw(row)
     if provider:
         saved_wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
         if not saved_url:
@@ -715,13 +737,25 @@ def resolve_probe_target(
                 env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
                 saved_key = (os.environ.get(env_key) or "").strip()
         # Prefer first pool endpoint key/url when present
-        for ep in endpoints_from_provider(provider, fallback_url=saved_url, fallback_key=saved_key):
+        for ep in pool:
             if not saved_url and ep.get("base_url"):
                 saved_url = normalize_llm_base_url(str(ep.get("base_url") or ""))
             if not saved_key and ep.get("api_key"):
                 saved_key = str(ep.get("api_key") or "").strip()
             if saved_url and saved_key:
                 break
+
+    matched = _match_pool_endpoint(pool, endpoint_id=endpoint_id, base_url=base_url)
+    if matched is not None:
+        ep_url = normalize_llm_base_url(str(matched.get("base_url") or ""))
+        ep_key = str(matched.get("api_key") or "").strip()
+        ep_model = str(matched.get("model") or "").strip()
+        if ep_url:
+            saved_url = ep_url
+        if ep_key:
+            saved_key = ep_key
+        if ep_model:
+            saved_model = ep_model
 
     wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
     default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
