@@ -10,7 +10,14 @@ from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from ..models import AppSettings, Project, SessionLocal
-from ..schemas import LlmProviderIn, LlmProviderOut, LlmRoleAssignment, SettingsOut
+from ..schemas import (
+    LlmPoolEndpointIn,
+    LlmPoolEndpointOut,
+    LlmProviderIn,
+    LlmProviderOut,
+    LlmRoleAssignment,
+    SettingsOut,
+)
 from .access_token import is_access_token_configured
 
 LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
@@ -20,6 +27,7 @@ _RECON_AGENT_ROLES = frozenset(
 )
 _WIRE = frozenset({"chat", "responses", "anthropic"})
 _WIRE_ALIASES = {"messages": "anthropic", "claude": "anthropic"}
+DEFAULT_ENDPOINT_INFLIGHT = 6
 _METADATA_HOSTS = frozenset(
     {
         "metadata.google.internal",
@@ -122,6 +130,15 @@ class ResolvedLlm:
     model: str
     api_key: str
     source: str
+    endpoint_id: str = ""
+
+
+@dataclass(frozen=True)
+class PoolEndpoint:
+    id: str
+    base_url: str
+    api_key: str
+    max_inflight: int = DEFAULT_ENDPOINT_INFLIGHT
 
 
 def _parse_json(raw: str | None, default: Any) -> Any:
@@ -148,13 +165,261 @@ def load_roles_raw(row: AppSettings | None) -> dict[str, Any]:
     return data
 
 
+def _clamp_inflight(value: Any, *, default: int = DEFAULT_ENDPOINT_INFLIGHT) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(1, n)
+
+
+def _new_endpoint_id(used: set[str], index: int) -> str:
+    for i in range(index, index + 1000):
+        eid = f"ep-{i}"
+        if eid not in used:
+            return eid
+    return f"ep-{index}-{len(used)}"
+
+
+def _normalize_endpoint_dicts(
+    raw_list: list[Any],
+    *,
+    fallback_url: str = "",
+    fallback_key: str = "",
+    fallback_inflight: int = DEFAULT_ENDPOINT_INFLIGHT,
+) -> list[dict[str, Any]]:
+    """Normalize endpoint dicts; synthesize one from legacy fields when empty."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(raw_list or []):
+        if not isinstance(item, dict):
+            continue
+        eid = str(item.get("id") or "").strip() or _new_endpoint_id(seen, idx + 1)
+        if eid in seen:
+            eid = _new_endpoint_id(seen, idx + 1)
+        seen.add(eid)
+        url = normalize_llm_base_url(str(item.get("base_url") or ""))
+        key = str(item.get("api_key") or "").strip()
+        out.append(
+            {
+                "id": eid,
+                "base_url": url,
+                "api_key": key,
+                "max_inflight": _clamp_inflight(item.get("max_inflight")),
+            }
+        )
+    if out:
+        return out
+    url = normalize_llm_base_url(fallback_url)
+    if not url and not fallback_key:
+        return [
+            {
+                "id": "ep-1",
+                "base_url": "",
+                "api_key": "",
+                "max_inflight": _clamp_inflight(fallback_inflight),
+            }
+        ]
+    return [
+        {
+            "id": "ep-1",
+            "base_url": url,
+            "api_key": (fallback_key or "").strip(),
+            "max_inflight": _clamp_inflight(fallback_inflight),
+        }
+    ]
+
+
+def endpoints_from_provider(
+    provider: dict[str, Any] | None,
+    *,
+    fallback_url: str = "",
+    fallback_key: str = "",
+    fallback_inflight: int = DEFAULT_ENDPOINT_INFLIGHT,
+) -> list[dict[str, Any]]:
+    raw = (provider or {}).get("endpoints") if provider else None
+    raw_list = raw if isinstance(raw, list) else []
+    base_url = str((provider or {}).get("base_url") or "") or fallback_url
+    api_key = str((provider or {}).get("api_key") or "") or fallback_key
+    return _normalize_endpoint_dicts(
+        raw_list,
+        fallback_url=base_url,
+        fallback_key=api_key,
+        fallback_inflight=fallback_inflight,
+    )
+
+
+def load_pool_endpoints_raw(row: AppSettings | None) -> list[dict[str, Any]]:
+    """Load endpoint pool from default provider, synthesizing from legacy fields."""
+    provider = _saved_provider(row)
+    thread_limit = max(1, int(getattr(row, "llm_thread_limit", None) or DEFAULT_ENDPOINT_INFLIGHT)) if row else DEFAULT_ENDPOINT_INFLIGHT
+    fallback_url = normalize_llm_base_url(getattr(row, "default_base_url", None) if row else "")
+    fallback_key = ((getattr(row, "default_api_key", None) if row else "") or "").strip()
+    return endpoints_from_provider(
+        provider,
+        fallback_url=fallback_url,
+        fallback_key=fallback_key,
+        fallback_inflight=thread_limit,
+    )
+
+
+def endpoints_for_api(row: AppSettings | None) -> list[LlmPoolEndpointOut]:
+    return [
+        LlmPoolEndpointOut(
+            id=str(ep.get("id") or ""),
+            base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
+            api_key_set=bool(str(ep.get("api_key") or "").strip()),
+            max_inflight=_clamp_inflight(ep.get("max_inflight")),
+        )
+        for ep in load_pool_endpoints_raw(row)
+    ]
+
+
+def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint]:
+    """Runtime pool: resolved keys with env fallback for empty endpoint keys."""
+    if row is None:
+        row = get_settings_row()
+    provider = _saved_provider(row)
+    wire = normalize_wire_api(str((provider or {}).get("wire_api") or "chat"))
+    env_key = str((provider or {}).get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
+    pool_fallback = ""
+    for ep in load_pool_endpoints_raw(row):
+        key = str(ep.get("api_key") or "").strip()
+        if key:
+            pool_fallback = key
+            break
+    if not pool_fallback:
+        pool_fallback = ((getattr(row, "default_api_key", None) or "") or "").strip()
+    if not pool_fallback:
+        pool_fallback = (os.environ.get(env_key) or "").strip()
+    if not pool_fallback and wire == "anthropic":
+        pool_fallback = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+    out: list[PoolEndpoint] = []
+    for ep in load_pool_endpoints_raw(row):
+        url = normalize_llm_base_url(str(ep.get("base_url") or ""))
+        if not url:
+            continue
+        key = str(ep.get("api_key") or "").strip() or pool_fallback
+        out.append(
+            PoolEndpoint(
+                id=str(ep.get("id") or ""),
+                base_url=url,
+                api_key=key,
+                max_inflight=_clamp_inflight(ep.get("max_inflight")),
+            )
+        )
+    return out
+
+
+def merge_endpoints_update(
+    existing: list[dict[str, Any]],
+    incoming: list[LlmPoolEndpointIn],
+) -> list[dict[str, Any]]:
+    old_by_id = {
+        str(ep.get("id") or "").strip(): ep
+        for ep in existing
+        if str(ep.get("id") or "").strip()
+    }
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(incoming):
+        eid = (item.id or "").strip() or _new_endpoint_id(seen, idx + 1)
+        if eid in seen:
+            raise ValueError(f"重复的端点 id: {eid}")
+        seen.add(eid)
+        prev = old_by_id.get(eid) or {}
+        if item.api_key is None:
+            api_key = str(prev.get("api_key") or "")
+        else:
+            api_key = item.api_key.strip()
+        url = assert_safe_llm_base_url(item.base_url)
+        if not url:
+            raise ValueError(f"端点 {eid}: Base URL 不能为空")
+        merged.append(
+            {
+                "id": eid,
+                "base_url": url,
+                "api_key": api_key,
+                "max_inflight": _clamp_inflight(item.max_inflight),
+            }
+        )
+    if not merged:
+        raise ValueError("至少保留一个 Base URL 端点")
+    return merged
+
+
+def apply_endpoints_to_settings_row(
+    row: AppSettings,
+    endpoints: list[dict[str, Any]],
+    *,
+    wire_api: str | None = None,
+) -> None:
+    """Write endpoints into default provider + sync legacy default_* / thread limit."""
+    providers = load_providers_raw(row)
+    provider = None
+    for p in providers:
+        if str(p.get("id") or "").strip() == "default":
+            provider = p
+            break
+    if provider is None and providers:
+        provider = providers[0]
+    if provider is None:
+        provider = {
+            "id": "default",
+            "name": "Default",
+            "base_url": "",
+            "wire_api": "chat",
+            "env_key": "OPENAI_API_KEY",
+            "api_key": "",
+        }
+        providers = [provider]
+    elif provider not in providers:
+        providers = [provider] + [p for p in providers if p is not provider]
+
+    wire = normalize_wire_api(wire_api or str(provider.get("wire_api") or "chat"))
+    first = endpoints[0]
+    provider["base_url"] = str(first.get("base_url") or "")
+    provider["api_key"] = str(first.get("api_key") or "")
+    provider["wire_api"] = wire
+    provider["env_key"] = str(provider.get("env_key") or "").strip() or (
+        "ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"
+    )
+    provider["endpoints"] = endpoints
+    # Keep default provider first
+    others = [p for p in providers if str(p.get("id") or "").strip() != str(provider.get("id") or "")]
+    row.llm_providers = json.dumps([provider] + others, ensure_ascii=False)
+    row.default_base_url = str(first.get("base_url") or "") or None
+    first_key = str(first.get("api_key") or "").strip()
+    if first_key:
+        row.default_api_key = first_key
+    row.llm_thread_limit = max(1, sum(_clamp_inflight(ep.get("max_inflight")) for ep in endpoints))
+
+
+def scale_single_endpoint_inflight(row: AppSettings, thread_limit: int) -> bool:
+    """If pool has a single endpoint, update its max_inflight from legacy llm_thread_limit."""
+    endpoints = load_pool_endpoints_raw(row)
+    if len(endpoints) != 1:
+        return False
+    endpoints[0]["max_inflight"] = _clamp_inflight(thread_limit)
+    apply_endpoints_to_settings_row(row, endpoints)
+    return True
+
+
 def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
     out: list[LlmProviderOut] = []
+    thread_limit = max(1, int(getattr(row, "llm_thread_limit", None) or DEFAULT_ENDPOINT_INFLIGHT)) if row else DEFAULT_ENDPOINT_INFLIGHT
     for p in load_providers_raw(row):
         pid = str(p.get("id") or "").strip()
         if not pid:
             continue
         wire = normalize_wire_api(str(p.get("wire_api") or "chat"))
+        eps = endpoints_from_provider(
+            p,
+            fallback_url=str(p.get("base_url") or ""),
+            fallback_key=str(p.get("api_key") or ""),
+            fallback_inflight=thread_limit if pid == "default" else DEFAULT_ENDPOINT_INFLIGHT,
+        )
         out.append(
             LlmProviderOut(
                 id=pid,
@@ -162,7 +427,17 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
                 base_url=normalize_llm_base_url(str(p.get("base_url") or "")),
                 wire_api=wire,
                 env_key=str(p.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY",
-                api_key_set=bool(str(p.get("api_key") or "").strip()),
+                api_key_set=bool(str(p.get("api_key") or "").strip())
+                or any(bool(str(ep.get("api_key") or "").strip()) for ep in eps),
+                endpoints=[
+                    LlmPoolEndpointOut(
+                        id=str(ep.get("id") or ""),
+                        base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
+                        api_key_set=bool(str(ep.get("api_key") or "").strip()),
+                        max_inflight=_clamp_inflight(ep.get("max_inflight")),
+                    )
+                    for ep in eps
+                ],
             )
         )
     return out
@@ -198,16 +473,23 @@ def _proxy_for_api(row: AppSettings, field: str, *env_attrs: str) -> str:
 
 
 def settings_out_from_row(row: AppSettings) -> SettingsOut:
+    endpoints = endpoints_for_api(row)
+    thread_limit = max(1, sum(ep.max_inflight for ep in endpoints)) if endpoints else max(
+        1, int(getattr(row, "llm_thread_limit", None) or 6)
+    )
     return SettingsOut(
         llm_providers=providers_for_api(row),
         llm_roles=roles_for_api(row),
-        llm_thread_limit=max(1, int(getattr(row, "llm_thread_limit", None) or 6)),
+        llm_endpoints=endpoints,
+        llm_thread_limit=thread_limit,
         github_pat_set=bool((row.github_pat or "").strip()),
         fofa_key_set=bool((getattr(row, "fofa_key", None) or "").strip()),
         fofa_base_url=(getattr(row, "fofa_base_url", None) or "").strip() or "https://fofa.info",
         default_model=(row.default_model or "").strip(),
-        default_base_url=normalize_llm_base_url(row.default_base_url),
-        default_api_key_set=bool((row.default_api_key or "").strip()),
+        default_base_url=normalize_llm_base_url(row.default_base_url)
+        or (endpoints[0].base_url if endpoints else ""),
+        default_api_key_set=bool((row.default_api_key or "").strip())
+        or any(ep.api_key_set for ep in endpoints),
         context_window=int(row.context_window or 128000),
         http_proxy=_proxy_for_api(row, "http_proxy", "https_proxy", "http_proxy"),
         chat_proxy=_proxy_for_api(row, "chat_proxy", "chat_proxy"),
@@ -243,17 +525,29 @@ def merge_providers_update(
             api_key = str(prev.get("api_key") or "")
         else:
             api_key = item.api_key.strip()
-        merged.append(
-            {
-                "id": pid,
-                "name": (item.name or "").strip() or pid,
-                "base_url": assert_safe_llm_base_url(item.base_url),
-                "wire_api": wire,
-                "env_key": (item.env_key or "").strip()
-                or ("ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"),
-                "api_key": api_key,
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": pid,
+            "name": (item.name or "").strip() or pid,
+            "base_url": assert_safe_llm_base_url(item.base_url),
+            "wire_api": wire,
+            "env_key": (item.env_key or "").strip()
+            or ("ANTHROPIC_API_KEY" if wire == "anthropic" else "OPENAI_API_KEY"),
+            "api_key": api_key,
+        }
+        if item.endpoints is not None:
+            prev_eps = endpoints_from_provider(prev, fallback_url=str(prev.get("base_url") or ""), fallback_key=str(prev.get("api_key") or ""))
+            entry["endpoints"] = merge_endpoints_update(prev_eps, item.endpoints)
+            if entry["endpoints"]:
+                entry["base_url"] = str(entry["endpoints"][0].get("base_url") or entry["base_url"])
+                if not entry["api_key"]:
+                    entry["api_key"] = str(entry["endpoints"][0].get("api_key") or "")
+        elif isinstance(prev.get("endpoints"), list) and prev.get("endpoints"):
+            entry["endpoints"] = _normalize_endpoint_dicts(
+                prev["endpoints"],
+                fallback_url=entry["base_url"],
+                fallback_key=entry["api_key"],
+            )
+        merged.append(entry)
     return merged
 
 
@@ -301,18 +595,29 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
                 provider = p
                 break
 
+    pool = pool_endpoints_resolved(row)
     if provider:
+        wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
+        if not model:
+            model = (row.default_model if row else "") or "gpt-4o"
+        default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
+        if pool:
+            first = pool[0]
+            return ResolvedLlm(
+                base_url=first.base_url,
+                wire_api=wire,
+                model=model,
+                api_key=first.api_key,
+                source=f"provider:{provider_id}" + ("+project" if project_model else ""),
+                endpoint_id=first.id,
+            )
         base_url = assert_safe_llm_base_url(str(provider.get("base_url") or ""))
         api_key = str(provider.get("api_key") or "").strip()
         env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip()
         if not api_key:
             api_key = (os.environ.get(env_key) or "").strip()
-        wire = normalize_wire_api(str(provider.get("wire_api") or "chat"))
         if not api_key and wire == "anthropic":
             api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-        if not model:
-            model = (row.default_model if row else "") or "gpt-4o"
-        default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
         return ResolvedLlm(
             base_url=base_url.rstrip("/") or default_url,
             wire_api=wire,
@@ -322,6 +627,17 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         )
 
     # Fallback defaults
+    if pool:
+        first = pool[0]
+        model = model or ((row.default_model if row else "") or "").strip() or "gpt-4o"
+        return ResolvedLlm(
+            base_url=first.base_url,
+            wire_api="chat",
+            model=model,
+            api_key=first.api_key,
+            source="default" + ("+project" if project_model else ""),
+            endpoint_id=first.id,
+        )
     base_url = (
         assert_safe_llm_base_url((row.default_base_url if row else "") or "")
         or "https://api.openai.com/v1"
@@ -334,6 +650,17 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         model=model,
         api_key=api_key,
         source="default" + ("+project" if project_model else ""),
+    )
+
+
+def bind_llm_to_endpoint(llm: ResolvedLlm, endpoint: PoolEndpoint) -> ResolvedLlm:
+    return ResolvedLlm(
+        base_url=endpoint.base_url,
+        wire_api=llm.wire_api,
+        model=llm.model,
+        api_key=endpoint.api_key,
+        source=llm.source,
+        endpoint_id=endpoint.id,
     )
 
 
@@ -370,6 +697,14 @@ def resolve_probe_target(
             if not saved_key:
                 env_key = str(provider.get("env_key") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
                 saved_key = (os.environ.get(env_key) or "").strip()
+        # Prefer first pool endpoint key/url when present
+        for ep in endpoints_from_provider(provider, fallback_url=saved_url, fallback_key=saved_key):
+            if not saved_url and ep.get("base_url"):
+                saved_url = normalize_llm_base_url(str(ep.get("base_url") or ""))
+            if not saved_key and ep.get("api_key"):
+                saved_key = str(ep.get("api_key") or "").strip()
+            if saved_url and saved_key:
+                break
 
     wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
     default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"

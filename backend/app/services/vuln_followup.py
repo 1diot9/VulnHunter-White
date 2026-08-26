@@ -601,7 +601,16 @@ def _parse_revision_response(answer: str) -> tuple[str, str]:
 
 
 def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
+    from ..services.llm_settings import bind_llm_to_endpoint, pool_endpoints_resolved
+    from ..services.llm_thread import llm_thread_limiter
+
     llm = resolve_llm("reviewer", project_id=project_id)
+    eid = llm_thread_limiter.pick_idle_endpoint()
+    if eid:
+        for ep in pool_endpoints_resolved():
+            if ep.id == eid:
+                llm = bind_llm_to_endpoint(llm, ep)
+                break
     if is_anthropic_wire(llm.wire_api):
         url = anthropic_url(llm.base_url)
         headers = anthropic_headers(llm.api_key)

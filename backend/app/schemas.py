@@ -13,6 +13,7 @@ class LlmProviderIn(BaseModel):
     wire_api: str = "chat"
     env_key: str = "OPENAI_API_KEY"
     api_key: str | None = None
+    endpoints: list["LlmPoolEndpointIn"] | None = None
 
 
 class LlmProviderOut(BaseModel):
@@ -22,6 +23,21 @@ class LlmProviderOut(BaseModel):
     wire_api: str
     env_key: str
     api_key_set: bool = False
+    endpoints: list["LlmPoolEndpointOut"] = Field(default_factory=list)
+
+
+class LlmPoolEndpointIn(BaseModel):
+    id: str = ""
+    base_url: str = ""
+    api_key: str | None = None
+    max_inflight: int = 6
+
+
+class LlmPoolEndpointOut(BaseModel):
+    id: str
+    base_url: str
+    api_key_set: bool = False
+    max_inflight: int = 6
 
 
 class LlmRoleAssignment(BaseModel):
@@ -33,6 +49,7 @@ class LlmRoleAssignment(BaseModel):
 class SettingsOut(BaseModel):
     llm_providers: list[LlmProviderOut] = Field(default_factory=list)
     llm_roles: dict[str, LlmRoleAssignment] = Field(default_factory=dict)
+    llm_endpoints: list[LlmPoolEndpointOut] = Field(default_factory=list)
     llm_thread_limit: int = 6
     github_pat_set: bool = False
     fofa_key_set: bool = False
@@ -47,15 +64,27 @@ class SettingsOut(BaseModel):
     access_token_set: bool = False
 
 
+class LlmEndpointUsageOut(BaseModel):
+    id: str
+    base_url: str = ""
+    used: int = 0
+    limit: int = 6
+    cooldown_sec: float = 0.0
+    last_error: str = ""
+    disabled: bool = False
+
+
 class LlmThreadUsageOut(BaseModel):
     used: int = 0
     limit: int = 6
     waiting: int = 0
+    endpoints: list[LlmEndpointUsageOut] = Field(default_factory=list)
 
 
 class SettingsUpdate(BaseModel):
     llm_providers: list[LlmProviderIn] | None = None
     llm_roles: dict[str, LlmRoleAssignment] | None = None
+    llm_endpoints: list[LlmPoolEndpointIn] | None = None
     llm_thread_limit: int | None = None
     github_pat: str | None = None
     fofa_key: str | None = None

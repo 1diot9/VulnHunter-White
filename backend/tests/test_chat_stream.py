@@ -534,4 +534,4 @@ def test_chat_retries_incomplete_chunked_read(monkeypatch):
     assert data["choices"][0]["message"]["content"] == "ok"
     assert client.n == 2
     assert any("incomplete chunked read" in t for t in logs)
-    assert any("正在重新请求模型（2/3）" in t for t in logs)
+    assert any("正在重新请求模型（2/" in t for t in logs)

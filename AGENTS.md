@@ -74,7 +74,7 @@ pytest
 - 每个项目可单独设置 `llm_model`（创建时或项目配置中）；空则使用设置页全局 `default_model`。解析在 `resolve_llm(..., project_id=)`，对下一轮 Agent 生效。
 - 每个项目可配置 `worker_hint`（创建时或项目配置中粘贴文本 / 上传 `.txt` `.md`）：作为额外人工提示注入启发式 / 快速扫描 / 历史漏洞绕过每轮挖掘的用户消息；空则不注入。运行中可改，下一轮 Worker 生效。
 - 模型商协议由 Provider 的 `wire_api` 决定：`chat` 为 OpenAI Chat Completions（默认），`anthropic` 为 Anthropic Messages（`POST /v1/messages`，system 独立、工具为 tool_use / tool_result）。检查点内部仍保存 Chat Completions 形状的消息。
-- 全局 LLM 线程上限（设置页「总线程数」，默认 6）约束所有运行中项目的侦察 / 挖掘 / 审核 / 修复 / 验证 / 攻击链会话；每个与 LLM 交互的 Agent 会话占 1 个名额，超出的工作按到达顺序排队放行。
+- 设置页可配置模型商池：同一模型下多个 Base URL（各自 API Key 与并发上限）。全局 LLM 线程上限 = 各端点并发之和（单端点默认 6）；每个与 LLM 交互的 Agent 会话占 1 个名额并粘滞到所选端点，超出按到达顺序排队。某端点 429 / 额度用尽 / 5xx 只冷却该端点并立刻换路，不拖垮全池。
 - 设置页可手动清理 X 天前的 SSE 实时日志（`live-events` / `live.events.jsonl`），实现集中在 `live_log.purge_older_than`。
 - 历史漏洞阶段只收集、不读源码。先跑 GHSA / GitHub Issues 爬虫并把结果交给 Agent 落盘（第一阶段禁止 WebSearch）；完成后再由 Agent 用 WebSearch 补漏。公开 CVE/公告标 `patched`；未修复洞只从本仓库未关闭 GitHub Issues 收集，默认 `unpatched`。来源含爬虫（GHSA、本仓库 GitHub Issues）与 WebSearch 补漏。只收本项目自身历史洞；依赖 / 框架 CVE 清单 / 安全政策帖写进索引 `note`，不要一条一文。爬虫额外包只取本仓库 Maven/npm 坐标，不查 Spring 等依赖。
 - 工具实现放在 `backend/app/tools`，新增工具后确认会被 `register_all_tools()` 注册，并补充工具 ACL、阶段门闩或相关测试。

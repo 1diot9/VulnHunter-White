@@ -523,18 +523,20 @@ def test_direct_client_still_raises_when_origin_down():
 def test_llm_gate_rate_limit_sets_cooldown(monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_sleep_sec", 90)
     gate = LlmRequestGate()
-    before = gate._cooldown_until
-    gate.note_rate_limit(12)
-    assert gate._cooldown_until >= before + 11
-    assert gate.cooldown_remaining() > 0
+    gate.note_rate_limit(12, endpoint_id="ep-x")
+    assert gate.cooldown_remaining("ep-x") > 0
+    assert gate.cooldown_remaining("ep-y") == 0
+    assert not gate.is_available("ep-x")
+    assert gate.is_available("ep-y")
 
 
 def test_llm_gate_acquire_does_not_serialize():
-    gate = LlmRequestGate()
-    assert gate.acquire() is True
-    assert gate.acquire() is True
-    gate.release()
-    gate.release()
+    from app.services.llm_gate import llm_slot
+
+    with llm_slot() as a:
+        with llm_slot() as b:
+            assert a is True
+            assert b is True
 
 
 def test_content_and_reasoning_text():

@@ -14,8 +14,14 @@ from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
 from ..services.http_client import chat_http_client, chat_http_timeout, conclude_http_timeout
 from ..services.live_log import live_log
 from ..services.llm_gate import llm_gate, llm_slot
-from ..services.llm_thread import llm_thread_slot
-from ..services.llm_settings import ResolvedLlm, llm_role_for_agent, resolve_llm
+from ..services.llm_thread import SlotHandle, llm_thread_limiter, llm_thread_slot
+from ..services.llm_settings import (
+    ResolvedLlm,
+    bind_llm_to_endpoint,
+    llm_role_for_agent,
+    pool_endpoints_resolved,
+    resolve_llm,
+)
 from ..tools import ToolContext, registry
 from ..tools.common import load_todos
 from .checkpoint import LoopCheckpoint, save_checkpoint
@@ -170,6 +176,19 @@ def _looks_like_rate_limit(text: str) -> bool:
     return False
 
 
+def _looks_like_quota_exhausted(text: str) -> bool:
+    t = (text or "").lower()
+    if not t:
+        return False
+    if "insufficient_quota" in t or "exceeded your current quota" in t:
+        return True
+    if "quota" in t and ("exceed" in t or "exhaust" in t or "用尽" in t or "不足" in t):
+        return True
+    if "余额不足" in (text or "") or "额度用尽" in (text or "") or "欠费" in (text or ""):
+        return True
+    return False
+
+
 def _is_rate_limit_response(status_code: int, text: str) -> bool:
     """Only HTTP 429, or other 4xx whose body is clearly a rate-limit error.
 
@@ -178,7 +197,15 @@ def _is_rate_limit_response(status_code: int, text: str) -> bool:
     if status_code == 429:
         return True
     if 400 <= status_code < 500:
-        return _looks_like_rate_limit(text)
+        return _looks_like_rate_limit(text) and not _looks_like_quota_exhausted(text)
+    return False
+
+
+def _is_quota_response(status_code: int, text: str) -> bool:
+    if status_code == 402:
+        return True
+    if 400 <= status_code < 500:
+        return _looks_like_quota_exhausted(text)
     return False
 
 
@@ -243,7 +270,9 @@ class AgentLoop:
         self.timeout_sec = timeout_sec or settings.timeout_worker_round
         self.context_window = context_window or settings.default_context_window
         self.stop_when = stop_when
+        self._llm_injected = llm is not None
         self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id or None)
+        self._slot_handle: SlotHandle | None = None
         self.state: dict[str, Any] = {}
         self.watchdog = AgentWatchdog(phase=phase)
         self._last_prompt_tokens = 0
@@ -258,6 +287,33 @@ class AgentLoop:
             self._live = file_event_log(self.log_path)
         else:
             self._live = live_log
+
+    def _bind_slot_endpoint(self, handle: SlotHandle) -> None:
+        """Apply acquired pool endpoint credentials onto self.llm."""
+        self._slot_handle = handle
+        if self._llm_injected and not handle.endpoint_id.startswith("ep-"):
+            # Test / anonymous override bucket — keep injected ResolvedLlm as-is
+            if handle.endpoint_id == "_anon":
+                return
+        url, key = llm_thread_limiter.endpoint_creds(handle.endpoint_id)
+        if not url:
+            # Fall back to resolved pool entry
+            for ep in pool_endpoints_resolved():
+                if ep.id == handle.endpoint_id:
+                    self.llm = bind_llm_to_endpoint(self.llm, ep)
+                    return
+            return
+        from ..services.llm_settings import PoolEndpoint
+
+        self.llm = bind_llm_to_endpoint(
+            self.llm,
+            PoolEndpoint(
+                id=handle.endpoint_id,
+                base_url=url,
+                api_key=key or self.llm.api_key,
+                max_inflight=1,
+            ),
+        )
 
     @classmethod
     def from_checkpoint(
@@ -356,17 +412,23 @@ class AgentLoop:
             pass
 
     def run(self) -> LoopResult:
+        prefer = self.llm.endpoint_id if (self.llm.endpoint_id and not self._llm_injected) else None
         with llm_thread_slot(
             self.cancel_event,
             project_id=self.project_id,
             phase=self.phase,
             role=self.role,
-        ) as got_slot:
-            if not got_slot:
+            prefer_endpoint=prefer,
+        ) as handle:
+            if handle is None:
                 result = LoopResult(ok=False, state=self.state)
                 result.cancelled = True
                 result.stop_reason = "cancelled"
                 return result
+            if not self._llm_injected:
+                self._bind_slot_endpoint(handle)
+            else:
+                self._slot_handle = handle
             return self._run_loop()
 
     def _run_loop(self) -> LoopResult:
@@ -449,13 +511,42 @@ class AgentLoop:
             try:
                 resp, usage, retry_after = self._chat(messages, tools, remaining)
             except AuthError as e:
+                eid = self.llm.endpoint_id or (self._slot_handle.endpoint_id if self._slot_handle else "")
+                llm_gate.note_error(eid, "auth", message=str(e))
+                # Try another endpoint before giving up
+                if self._slot_handle is not None and not self._llm_injected:
+                    rebound = llm_thread_limiter.rebind(
+                        self._slot_handle,
+                        cancel_event=self.cancel_event,
+                        project_id=self.project_id,
+                        phase=self.phase,
+                        role=self.role,
+                        reason="401 密钥无效",
+                    )
+                    if rebound is not None and rebound.endpoint_id != self._slot_handle.endpoint_id:
+                        self._bind_slot_endpoint(rebound)
+                        self._live.system(
+                            self.project_id,
+                            f"端点密钥无效，已切换到 {rebound.endpoint_id}",
+                            phase=self.phase,
+                            role=self.role,
+                        )
+                        self._persist(messages)
+                        continue
                 result.error = str(e)
                 result.stop_reason = "auth_error"
                 self._live.error(self.project_id, str(e), phase=self.phase)
                 self._persist(messages, status="paused")
                 return result
             except RateLimitError as e:
-                llm_gate.note_rate_limit(e.retry_after)
+                eid = self.llm.endpoint_id or (self._slot_handle.endpoint_id if self._slot_handle else "")
+                kind = "quota" if getattr(e, "quota", False) else "rate_limit"
+                llm_gate.note_error(
+                    eid,
+                    kind,
+                    retry_after=e.retry_after,
+                    message=str(e),
+                )
                 if self._rate_limit_retries >= settings.rate_limit_max_retries:
                     result.rate_limited_exhausted = True
                     result.error = str(e)
@@ -463,10 +554,28 @@ class AgentLoop:
                     self._rescue_conclude(messages)
                     return result
                 self._rate_limit_retries += 1
+                # Prefer immediate failover to another healthy endpoint
+                if self._slot_handle is not None and not self._llm_injected:
+                    rebound = llm_thread_limiter.rebind(
+                        self._slot_handle,
+                        cancel_event=self.cancel_event,
+                        project_id=self.project_id,
+                        phase=self.phase,
+                        role=self.role,
+                        reason="额度用尽" if kind == "quota" else "429 限流",
+                    )
+                    if rebound is not None:
+                        if rebound.endpoint_id != eid:
+                            self._bind_slot_endpoint(rebound)
+                        self._persist(messages)
+                        continue
                 sleep_sec = e.retry_after or settings.rate_limit_sleep_sec
+                if kind == "quota":
+                    sleep_sec = min(float(sleep_sec), 60.0)
                 self._live.system(
                     self.project_id,
-                    f"检测到 API 429，休眠 {sleep_sec}s 后继续（{self._rate_limit_retries}/{settings.rate_limit_max_retries}）",
+                    f"检测到 API {'额度' if kind == 'quota' else '429'}，休眠 {sleep_sec:.0f}s 后继续"
+                    f"（{self._rate_limit_retries}/{settings.rate_limit_max_retries}）",
                     phase=self.phase,
                 )
                 slept = _interruptible_sleep(float(sleep_sec), self.cancel_event)
@@ -779,12 +888,17 @@ class AgentLoop:
                     messages.append({"role": "user", "content": warn})
                     self._persist(messages)
 
-    def _chat(
+    def _chat_endpoint_label(self) -> str:
+        eid = self.llm.endpoint_id or (
+            self._slot_handle.endpoint_id if self._slot_handle else ""
+        )
+        return eid or "default"
+
+    def _rebuild_chat_request(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        remaining: float,
-    ) -> tuple[dict[str, Any], dict[str, int], float | None]:
+    ) -> tuple[bool, str, dict[str, str], dict[str, Any], Any]:
         anthropic = is_anthropic_wire(self.llm.wire_api)
         if anthropic:
             url = anthropic_url(self.llm.base_url)
@@ -796,42 +910,80 @@ class AgentLoop:
                 stream=True,
                 temperature=sampling_temperature(self.llm.model, settings.temperature),
             )
-            consume = consume_anthropic_stream
-        else:
-            url = self.llm.base_url.rstrip("/") + "/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.llm.api_key}",
-                "Content-Type": "application/json",
-            }
-            body = {
-                "model": self.llm.model,
-                "messages": _sanitize_chat_messages(messages, model=self.llm.model),
-                "tools": tools,
-                "tool_choice": "auto",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-            }
-            prepare_chat_body(body, self.llm.model, temperature=settings.temperature)
-            consume = consume_chat_stream
+            return True, url, headers, body, consume_anthropic_stream
+        url = self.llm.base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.llm.api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": self.llm.model,
+            "messages": _sanitize_chat_messages(messages, model=self.llm.model),
+            "tools": tools,
+            "tool_choice": "auto",
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        prepare_chat_body(body, self.llm.model, temperature=settings.temperature)
+        return False, url, headers, body, consume_chat_stream
+
+    def _try_rebind_endpoint(self, reason: str) -> bool:
+        """Cool current endpoint already noted; switch slot to another if possible."""
+        if self._slot_handle is None or self._llm_injected:
+            return False
+        old_id = self._slot_handle.endpoint_id
+        rebound = llm_thread_limiter.rebind(
+            self._slot_handle,
+            cancel_event=self.cancel_event,
+            project_id=self.project_id,
+            phase=self.phase,
+            role=self.role,
+            reason=reason,
+        )
+        if rebound is None:
+            return False
+        if rebound.endpoint_id != old_id:
+            self._bind_slot_endpoint(rebound)
+        # Same endpoint after cooldown wait: still retry the request
+        return True
+
+    def _chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        remaining: float,
+    ) -> tuple[dict[str, Any], dict[str, int], float | None]:
         last_err: Exception | None = None
         est_tokens = estimate_tokens(messages, tools)
-        for attempt in range(settings.request_backoff_retries):
+        # Allow extra attempts when failing over across endpoints
+        max_attempts = max(
+            settings.request_backoff_retries,
+            settings.request_backoff_retries + max(0, len(pool_endpoints_resolved()) - 1),
+        )
+        for attempt in range(max_attempts):
             if self._cancelled():
                 raise TransientError("cancelled")
+            _anthropic, url, headers, body, consume = self._rebuild_chat_request(messages, tools)
+            for drop_key in list(self.state.get("_chat_drop_keys") or []):
+                body.pop(drop_key, None)
+            eid = self._chat_endpoint_label()
             try:
                 timeout = chat_http_timeout(remaining, est_tokens)
-                cooldown = llm_gate.cooldown_remaining()
-                if cooldown > 0:
+                cd = llm_gate.cooldown_remaining(eid)
+                if cd > 0 and cd != float("inf"):
+                    # Prefer failover over waiting when another endpoint is free
+                    if self._try_rebind_endpoint("当前端点冷却中"):
+                        continue
                     self._live.system(
                         self.project_id,
-                        f"全局 429 冷却中，约 {cooldown:.0f}s 后请求模型",
+                        f"端点 {eid} 冷却中，约 {cd:.0f}s 后请求模型",
                         phase=self.phase,
                         role=self.role,
                     )
                 if attempt > 0:
                     self._live.system(
                         self.project_id,
-                        f"正在重新请求模型（{attempt + 1}/{settings.request_backoff_retries}）",
+                        f"正在重新请求模型（{attempt + 1}/{max_attempts}，端点 {eid}）",
                         phase=self.phase,
                         role=self.role,
                     )
@@ -839,7 +991,7 @@ class AgentLoop:
                 if self._announce_next_chat:
                     self._live.system(
                         self.project_id,
-                        f"正在请求模型（流式，估计 {est_tokens} token，读超时 {timeout.read:.0f}s）",
+                        f"正在请求模型（流式，端点 {eid}，估计 {est_tokens} token，读超时 {timeout.read:.0f}s）",
                         phase=self.phase,
                         role=self.role,
                     )
@@ -852,8 +1004,22 @@ class AgentLoop:
                             client, url, headers, body, est_tokens, consume=consume
                         )
                 if status == 401:
+                    llm_gate.note_error(eid, "auth", message=(err_text or "")[:240])
+                    if self._try_rebind_endpoint("401 密钥无效"):
+                        continue
                     raise AuthError("401 密钥无效，请检查设置页模型配置")
-                if _is_rate_limit_response(status, err_text):
+                if _is_quota_response(status, err_text or ""):
+                    self._live.system(
+                        self.project_id,
+                        f"LLM HTTP {status} 额度用尽：{(err_text or '')[:240]}",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                    llm_gate.note_error(eid, "quota", message=(err_text or "")[:240])
+                    if self._try_rebind_endpoint("额度用尽"):
+                        continue
+                    raise RateLimitError("quota exhausted", quota=True)
+                if _is_rate_limit_response(status, err_text or ""):
                     retry_after = None
                     ra = header_map.get("retry-after") or header_map.get("Retry-After")
                     if ra:
@@ -867,25 +1033,40 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
-                    llm_gate.note_rate_limit(retry_after)
+                    llm_gate.note_error(
+                        eid, "rate_limit", retry_after=retry_after, message=(err_text or "")[:240]
+                    )
+                    if self._try_rebind_endpoint("429 限流"):
+                        continue
                     raise RateLimitError("429 rate limited", retry_after=retry_after)
                 if status >= 500:
+                    llm_gate.note_error(
+                        eid, "transient", message=f"HTTP {status}: {(err_text or '')[:200]}"
+                    )
+                    if self._try_rebind_endpoint(f"HTTP {status}"):
+                        continue
                     raise TransientError(f"HTTP {status}: {(err_text or '')[:300]}")
                 if status == 400:
                     drop_key = param_to_drop(body, err_text)
                     if drop_key:
-                        body = {k: v for k, v in body.items() if k != drop_key}
+                        # Mutate for next rebuild — prepare_chat_body may re-add; strip after rebuild
                         self._live.system(
                             self.project_id,
                             f"HTTP 400，去掉 {drop_key} 后重试：{(err_text or '')[:180]}",
                             phase=self.phase,
                             role=self.role,
                         )
+                        # Retry same endpoint with stripped field via body patch on next loop:
+                        # apply strip after rebuild by stashing
+                        self.state.setdefault("_chat_drop_keys", [])
+                        if drop_key not in self.state["_chat_drop_keys"]:
+                            self.state["_chat_drop_keys"].append(drop_key)
                         continue
                 if status >= 400:
                     raise TransientError(f"HTTP {status}: {(err_text or '')[:300]}")
                 if not data:
                     raise TransientError(err_text or "empty chat response")
+                llm_gate.note_success(eid)
                 usage_raw = data.get("usage") or {}
                 cached = 0
                 details = usage_raw.get("prompt_tokens_details") or {}
@@ -906,6 +1087,11 @@ class AgentLoop:
                 raise TransientError("cancelled")
             except ChatStreamProviderError as e:
                 text = str(e)
+                if _looks_like_quota_exhausted(text):
+                    llm_gate.note_error(eid, "quota", message=text[:240])
+                    if self._try_rebind_endpoint("额度用尽"):
+                        continue
+                    raise RateLimitError("quota exhausted", quota=True) from e
                 if _looks_like_rate_limit(text):
                     self._live.system(
                         self.project_id,
@@ -913,23 +1099,28 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
-                    llm_gate.note_rate_limit(None)
+                    llm_gate.note_error(eid, "rate_limit", message=text[:240])
+                    if self._try_rebind_endpoint("429 限流"):
+                        continue
                     raise RateLimitError("429 rate limited") from e
+                llm_gate.note_error(eid, "transient", message=text[:240])
+                if self._try_rebind_endpoint("流式错误"):
+                    continue
                 last_err = e
-                backoff = 1 * (4 ** attempt)
+                backoff = 1 * (4 ** min(attempt, 3))
                 self._live.system(
                     self.project_id,
-                    f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
+                    f"请求失败，{backoff}s 后重试（{attempt + 1}/{max_attempts}）: {e}",
                     phase=self.phase,
                     role=self.role,
                 )
                 _interruptible_sleep(float(backoff), self.cancel_event)
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                backoff = 1 * (4 ** attempt)
+                backoff = 1 * (4 ** min(attempt, 3))
                 self._live.system(
                     self.project_id,
-                    f"请求失败，{backoff}s 后重试（{attempt + 1}/{settings.request_backoff_retries}）: {e}",
+                    f"请求失败，{backoff}s 后重试（{attempt + 1}/{max_attempts}）: {e}",
                     phase=self.phase,
                     role=self.role,
                 )
@@ -1195,9 +1386,16 @@ class AuthError(Exception):
 
 
 class RateLimitError(Exception):
-    def __init__(self, msg: str, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        msg: str,
+        retry_after: float | None = None,
+        *,
+        quota: bool = False,
+    ) -> None:
         super().__init__(msg)
         self.retry_after = retry_after
+        self.quota = quota
 
 
 class TransientError(Exception):

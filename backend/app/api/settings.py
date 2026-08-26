@@ -17,6 +17,7 @@ from ..schemas import (
     GithubTestOut,
     LiveLogPurgeIn,
     LiveLogPurgeOut,
+    LlmEndpointUsageOut,
     LlmModelListOut,
     LlmProbeIn,
     LlmTestOut,
@@ -30,9 +31,13 @@ from ..services.github_probe import test_connectivity as test_github_connectivit
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.access_token import update_access_token_hash
 from ..services.llm_settings import (
-    load_providers_raw,
-    merge_providers_update,
+    apply_endpoints_to_settings_row,
     assert_safe_llm_base_url,
+    load_pool_endpoints_raw,
+    load_providers_raw,
+    merge_endpoints_update,
+    merge_providers_update,
+    scale_single_endpoint_inflight,
     settings_out_from_row,
 )
 
@@ -60,11 +65,34 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             db.add(row)
             db.flush()
         try:
-            if body.llm_providers is not None:
+            if body.llm_endpoints is not None:
+                existing = load_pool_endpoints_raw(row)
+                merged_eps = merge_endpoints_update(existing, body.llm_endpoints)
+                wire = None
+                if body.llm_providers:
+                    for p in body.llm_providers:
+                        if (p.id or "").strip() == "default":
+                            wire = p.wire_api
+                            break
+                apply_endpoints_to_settings_row(row, merged_eps, wire_api=wire)
+            elif body.llm_providers is not None:
                 merged = merge_providers_update(load_providers_raw(row), body.llm_providers)
                 row.llm_providers = json.dumps(merged, ensure_ascii=False)
-            if body.default_base_url is not None:
+                # Sync thread limit from default provider endpoints when present
+                for p in merged:
+                    if str(p.get("id") or "").strip() != "default":
+                        continue
+                    eps = p.get("endpoints")
+                    if isinstance(eps, list) and eps:
+                        apply_endpoints_to_settings_row(row, eps, wire_api=str(p.get("wire_api") or "chat"))
+                    break
+            if body.default_base_url is not None and body.llm_endpoints is None:
                 row.default_base_url = assert_safe_llm_base_url(body.default_base_url)
+                # Keep single-endpoint pool URL in sync when only legacy field is updated
+                eps = load_pool_endpoints_raw(row)
+                if len(eps) == 1 and body.default_base_url is not None:
+                    eps[0]["base_url"] = assert_safe_llm_base_url(body.default_base_url)
+                    apply_endpoints_to_settings_row(row, eps)
         except ValueError as exc:
             db.rollback()
             raise HTTPException(400, str(exc)) from exc
@@ -73,8 +101,10 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
                 {k: v.model_dump() for k, v in body.llm_roles.items()},
                 ensure_ascii=False,
             )
-        if body.llm_thread_limit is not None:
-            row.llm_thread_limit = max(1, int(body.llm_thread_limit))
+        if body.llm_thread_limit is not None and body.llm_endpoints is None:
+            limit = max(1, int(body.llm_thread_limit))
+            row.llm_thread_limit = limit
+            scale_single_endpoint_inflight(row, limit)
         if body.github_pat is not None:
             row.github_pat = body.github_pat
         if body.fofa_key is not None:
@@ -85,6 +115,11 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.default_model = body.default_model
         if body.default_api_key is not None:
             row.default_api_key = body.default_api_key
+            if body.llm_endpoints is None:
+                eps = load_pool_endpoints_raw(row)
+                if len(eps) == 1 and body.default_api_key.strip():
+                    eps[0]["api_key"] = body.default_api_key.strip()
+                    apply_endpoints_to_settings_row(row, eps)
         if body.context_window is not None:
             row.context_window = int(body.context_window)
         if body.http_proxy is not None:
@@ -98,7 +133,7 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
         out = settings_out_from_row(row)
     from ..services.llm_thread import llm_thread_limiter
 
-    llm_thread_limiter.refresh_limit(out.llm_thread_limit)
+    llm_thread_limiter.refresh_pool(out.llm_endpoints)
     return out
 
 
@@ -126,8 +161,13 @@ def update_access_token(body: AccessTokenUpdate) -> SettingsOut:
 def get_llm_threads() -> LlmThreadUsageOut:
     from ..services.llm_thread import llm_thread_limiter
 
-    used, limit, waiting = llm_thread_limiter.snapshot()
-    return LlmThreadUsageOut(used=used, limit=limit, waiting=waiting)
+    snap = llm_thread_limiter.detailed_snapshot()
+    return LlmThreadUsageOut(
+        used=snap["used"],
+        limit=snap["limit"],
+        waiting=snap["waiting"],
+        endpoints=[LlmEndpointUsageOut(**ep) for ep in snap["endpoints"]],
+    )
 
 
 @router.get("/builtin-audit-modes", response_model=list[BuiltinAuditModeOut])

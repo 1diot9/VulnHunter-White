@@ -12,6 +12,7 @@ def test_health_and_settings(tmp_env):
         assert s.status_code == 200
         body = s.json()
         assert "llm_providers" in body
+        assert "llm_endpoints" in body
         assert "worker_concurrency" not in body
         assert "fix_concurrency" not in body
         assert "llm_thread_limit" in body
@@ -43,9 +44,88 @@ def test_health_and_settings(tmp_env):
         assert usage.json()["limit"] == 8
         assert usage.json()["used"] == 0
         assert usage.json()["waiting"] == 0
+        assert "endpoints" in usage.json()
         cleared = client.put("/api/settings", json={"http_proxy": "", "chat_proxy": ""})
         assert cleared.json()["http_proxy"] == ""
         assert cleared.json()["chat_proxy"] == ""
+
+
+def test_llm_endpoints_pool_save_and_read(tmp_env):
+    from app.main import app
+    from app.services.llm_thread import llm_thread_limiter
+
+    with TestClient(app) as client:
+        upd = client.put(
+            "/api/settings",
+            json={
+                "default_model": "gpt-pool",
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": "sk-a",
+                        "max_inflight": 2,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": "sk-b",
+                        "max_inflight": 4,
+                    },
+                ],
+                "llm_providers": [
+                    {
+                        "id": "default",
+                        "name": "Default",
+                        "base_url": "https://pool-a.example/v1",
+                        "wire_api": "chat",
+                        "env_key": "OPENAI_API_KEY",
+                        "api_key": "sk-a",
+                    }
+                ],
+                "llm_roles": {
+                    "recon": {"provider_id": "default", "model": "gpt-pool", "reasoning_effort": ""},
+                    "worker": {"provider_id": "default", "model": "gpt-pool", "reasoning_effort": ""},
+                    "reviewer": {"provider_id": "default", "model": "gpt-pool", "reasoning_effort": ""},
+                    "verifier": {"provider_id": "default", "model": "gpt-pool", "reasoning_effort": ""},
+                },
+            },
+        )
+        assert upd.status_code == 200, upd.text
+        body = upd.json()
+        assert body["llm_thread_limit"] == 6
+        assert len(body["llm_endpoints"]) == 2
+        assert body["llm_endpoints"][0]["base_url"] == "https://pool-a.example/v1"
+        assert body["llm_endpoints"][0]["api_key_set"] is True
+        assert body["llm_endpoints"][0]["max_inflight"] == 2
+        assert body["llm_endpoints"][1]["max_inflight"] == 4
+        assert body["default_base_url"] == "https://pool-a.example/v1"
+        assert llm_thread_limiter.current_limit() == 6
+
+        # Blank api_key keeps previous
+        keep = client.put(
+            "/api/settings",
+            json={
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": None,
+                        "max_inflight": 2,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": None,
+                        "max_inflight": 3,
+                    },
+                ],
+            },
+        )
+        assert keep.status_code == 200
+        assert keep.json()["llm_thread_limit"] == 5
+        assert keep.json()["llm_endpoints"][0]["api_key_set"] is True
+        assert keep.json()["llm_endpoints"][1]["max_inflight"] == 3
 
 
 def test_llm_thread_usage_api(tmp_env):
@@ -58,9 +138,11 @@ def test_llm_thread_usage_api(tmp_env):
     llm_thread_limiter.reset()
     cancel = threading.Event()
     t: threading.Thread | None = None
+    handle = None
     try:
         llm_thread_limiter.set_limit_override(1)
-        assert llm_thread_limiter.acquire() is True
+        handle = llm_thread_limiter.acquire()
+        assert handle is not None
 
         queued = threading.Event()
 
@@ -88,7 +170,8 @@ def test_llm_thread_usage_api(tmp_env):
         cancel.set()
         if t is not None:
             t.join(timeout=3)
-        llm_thread_limiter.release()
+        if handle is not None:
+            llm_thread_limiter.release(handle)
         llm_thread_limiter.reset()
 
 

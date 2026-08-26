@@ -5,11 +5,16 @@ import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
-const EMPTY: LlmThreadUsage = { used: 0, limit: 6, waiting: 0 }
+const EMPTY: LlmThreadUsage = { used: 0, limit: 6, waiting: 0, endpoints: [] }
 
 function clampPct(used: number, limit: number): number {
   if (limit <= 0) return 0
   return Math.max(0, Math.min(100, (used / limit) * 100))
+}
+
+function shortUrl(url: string): string {
+  const t = (url || '').replace(/^https?:\/\//, '')
+  return t.length > 36 ? `${t.slice(0, 34)}…` : t || '(未配置)'
 }
 
 export default function LlmThreadUsageBar({ className }: { className?: string }) {
@@ -26,7 +31,7 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
     [],
   )
 
-  const { used, limit, waiting } = usage
+  const { used, limit, waiting, endpoints = [] } = usage
   const pct = clampPct(used, limit)
   const full = used >= limit
   const barClass = full
@@ -72,8 +77,34 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
             />
           </div>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-xs text-left leading-relaxed whitespace-normal">
-          所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。超出上限的工作按到达顺序排队。可在设置页改总线程数。
+        <TooltipContent side="bottom" className="max-w-sm text-left leading-relaxed whitespace-normal">
+          <p>
+            所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL
+            并发之和；超出按到达顺序排队。可在设置页管理模型商池。
+          </p>
+          {endpoints.length > 0 ? (
+            <ul className="mt-2 space-y-1 border-t border-foreground/10 pt-2 text-[11px]">
+              {endpoints.map((ep) => (
+                <li key={ep.id} className="tabular-nums">
+                  <span className="font-medium">{ep.id}</span>
+                  <span className="text-muted-foreground"> · {shortUrl(ep.base_url)}</span>
+                  <span className="ml-1">
+                    {ep.used}/{ep.limit}
+                  </span>
+                  {ep.disabled ? (
+                    <span className="ml-1 text-red-300">已禁用</span>
+                  ) : ep.cooldown_sec > 0 ? (
+                    <span className="ml-1 text-amber-200">冷却 {Math.ceil(ep.cooldown_sec)}s</span>
+                  ) : null}
+                  {ep.last_error ? (
+                    <span className="mt-0.5 block truncate text-muted-foreground" title={ep.last_error}>
+                      {ep.last_error}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

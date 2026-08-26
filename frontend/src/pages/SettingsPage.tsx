@@ -139,13 +139,13 @@ const anthropicEndpointHints = [
 export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
-  const [defaultBaseUrl, setDefaultBaseUrl] = useState('')
-  const [defaultApiKey, setDefaultApiKey] = useState('')
+  const [endpoints, setEndpoints] = useState<
+    Array<{ id: string; base_url: string; api_key: string; api_key_set: boolean; max_inflight: number }>
+  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, max_inflight: 6 }])
   const [wireApi, setWireApi] = useState<'chat' | 'anthropic'>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
-  const [llmThreadLimit, setLlmThreadLimit] = useState(6)
   const [contextWindow, setContextWindow] = useState(128000)
   const [httpProxy, setHttpProxy] = useState('')
   const [chatProxy, setChatProxy] = useState('')
@@ -157,6 +157,7 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false)
   const [probeOk, setProbeOk] = useState<boolean | null>(null)
   const [probeMsg, setProbeMsg] = useState('')
+  const [probeEndpointId, setProbeEndpointId] = useState<string | null>(null)
   const [fofaTesting, setFofaTesting] = useState(false)
   const [fofaOk, setFofaOk] = useState<boolean | null>(null)
   const [fofaMsg, setFofaMsg] = useState('')
@@ -180,10 +181,28 @@ export default function SettingsPage() {
     api.getSettings().then((x) => {
       setS(x)
       setDefaultModel(x.default_model || '')
-      setDefaultBaseUrl(x.default_base_url || '')
       const provider = x.llm_providers?.find((p) => p.id === 'default') || x.llm_providers?.[0]
       setWireApi(provider?.wire_api === 'anthropic' ? 'anthropic' : 'chat')
-      setLlmThreadLimit(x.llm_thread_limit || 6)
+      const eps =
+        x.llm_endpoints?.length > 0
+          ? x.llm_endpoints
+          : [
+              {
+                id: 'ep-1',
+                base_url: x.default_base_url || '',
+                api_key_set: x.default_api_key_set,
+                max_inflight: x.llm_thread_limit || 6,
+              },
+            ]
+      setEndpoints(
+        eps.map((ep, i) => ({
+          id: ep.id || `ep-${i + 1}`,
+          base_url: ep.base_url || '',
+          api_key: '',
+          api_key_set: !!ep.api_key_set,
+          max_inflight: Math.max(1, ep.max_inflight || 6),
+        })),
+      )
       setContextWindow(x.context_window || 128000)
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
       setHttpProxy(x.http_proxy || '')
@@ -198,22 +217,53 @@ export default function SettingsPage() {
     return models.filter((m) => m.toLowerCase().includes(q))
   }, [models, modelFilter])
 
-  function probeBody() {
+  const totalThreadLimit = useMemo(
+    () => endpoints.reduce((sum, ep) => sum + Math.max(1, ep.max_inflight || 1), 0),
+    [endpoints],
+  )
+
+  function probeBody(endpointId?: string) {
+    const ep =
+      (endpointId ? endpoints.find((e) => e.id === endpointId) : null) || endpoints[0]
     const body: { base_url?: string; api_key?: string; model?: string; wire_api?: string } = {
       wire_api: wireApi,
     }
-    if (defaultBaseUrl.trim()) body.base_url = defaultBaseUrl.trim()
-    if (defaultApiKey.trim()) body.api_key = defaultApiKey.trim()
+    if (ep?.base_url.trim()) body.base_url = ep.base_url.trim()
+    if (ep?.api_key.trim()) body.api_key = ep.api_key.trim()
     if (defaultModel.trim()) body.model = defaultModel.trim()
     return body
   }
 
-  async function fetchModels() {
+  function updateEndpoint(
+    id: string,
+    patch: Partial<{ base_url: string; api_key: string; max_inflight: number }>,
+  ) {
+    setEndpoints((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)))
+  }
+
+  function addEndpoint() {
+    setEndpoints((prev) => {
+      const used = new Set(prev.map((e) => e.id))
+      let n = prev.length + 1
+      while (used.has(`ep-${n}`)) n += 1
+      return [
+        ...prev,
+        { id: `ep-${n}`, base_url: '', api_key: '', api_key_set: false, max_inflight: 6 },
+      ]
+    })
+  }
+
+  function removeEndpoint(id: string) {
+    setEndpoints((prev) => (prev.length <= 1 ? prev : prev.filter((ep) => ep.id !== id)))
+  }
+
+  async function fetchModels(endpointId?: string) {
     setListing(true)
     setProbeOk(null)
     setProbeMsg('')
+    setProbeEndpointId(endpointId || endpoints[0]?.id || null)
     try {
-      const out = await api.listLlmModels(probeBody())
+      const out = await api.listLlmModels(probeBody(endpointId))
       if (!out.ok) {
         setModels([])
         setProbeOk(false)
@@ -237,12 +287,13 @@ export default function SettingsPage() {
     }
   }
 
-  async function testConn() {
+  async function testConn(endpointId?: string) {
     setTesting(true)
     setProbeOk(null)
     setProbeMsg('')
+    setProbeEndpointId(endpointId || endpoints[0]?.id || null)
     try {
-      const out = await api.testLlm(probeBody())
+      const out = await api.testLlm(probeBody(endpointId))
       if (!out.ok) {
         setProbeOk(false)
         setProbeMsg(out.error || '连通失败')
@@ -324,41 +375,69 @@ export default function SettingsPage() {
   async function save() {
     setMsg('')
     try {
+      const first = endpoints[0]
       const body: Record<string, unknown> = {
         default_model: defaultModel,
-        default_base_url: defaultBaseUrl,
-        llm_thread_limit: llmThreadLimit,
+        default_base_url: first?.base_url?.trim() || '',
+        llm_thread_limit: totalThreadLimit,
         context_window: contextWindow,
         http_proxy: httpProxy.trim(),
         chat_proxy: chatProxy.trim(),
         cli_tools_dir: cliToolsDir.trim() || 'tools/cli',
+        llm_endpoints: endpoints.map((ep) => ({
+          id: ep.id,
+          base_url: ep.base_url.trim(),
+          api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
+          max_inflight: Math.max(1, ep.max_inflight || 1),
+        })),
       }
-      if (defaultApiKey.trim()) body.default_api_key = defaultApiKey.trim()
       if (githubPat.trim()) body.github_pat = githubPat.trim()
       if (fofaKey.trim()) body.fofa_key = fofaKey.trim()
       if (fofaBaseUrl.trim()) body.fofa_base_url = fofaBaseUrl.trim()
-      // ensure a default provider for chat completions if base_url set
-      if (defaultBaseUrl.trim()) {
-        body.llm_providers = [
-          {
-            id: 'default',
-            name: 'Default',
-            base_url: defaultBaseUrl.trim(),
-            wire_api: wireApi,
-            env_key: wireApi === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY',
-            api_key: defaultApiKey.trim() || null,
-          },
-        ]
-        body.llm_roles = {
-          recon: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-          worker: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-          reviewer: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-          verifier: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-        }
+      body.llm_providers = [
+        {
+          id: 'default',
+          name: 'Default',
+          base_url: first?.base_url?.trim() || '',
+          wire_api: wireApi,
+          env_key: wireApi === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY',
+          api_key: first?.api_key?.trim() || null,
+          endpoints: endpoints.map((ep) => ({
+            id: ep.id,
+            base_url: ep.base_url.trim(),
+            api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
+            max_inflight: Math.max(1, ep.max_inflight || 1),
+          })),
+        },
+      ]
+      body.llm_roles = {
+        recon: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
+        worker: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
+        reviewer: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
+        verifier: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
       }
       const next = await api.putSettings(body)
       setS(next)
-      setDefaultApiKey('')
+      const nextEps =
+        next.llm_endpoints?.length > 0
+          ? next.llm_endpoints
+          : [
+              {
+                id: 'ep-1',
+                base_url: next.default_base_url || '',
+                api_key_set: next.default_api_key_set,
+                max_inflight: next.llm_thread_limit || 6,
+              },
+            ]
+      setEndpoints(
+        nextEps.map((ep, i) => ({
+          id: ep.id || `ep-${i + 1}`,
+          base_url: ep.base_url || '',
+          api_key: '',
+          api_key_set: !!ep.api_key_set,
+          max_inflight: Math.max(1, ep.max_inflight || 6),
+        })),
+      )
       setGithubPat('')
       setFofaKey('')
       setMsg('已保存')
@@ -531,33 +610,94 @@ export default function SettingsPage() {
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <Label>API Base URL</Label>
+            <Label>模型商池（Base URL）</Label>
             <Button type="button" variant="ghost" size="sm" onClick={() => setEndpointHelpOpen(true)}>
               {wireApi === 'anthropic' ? 'Anthropic 端点' : '国产模型端点'}
             </Button>
           </div>
-          <Input
-            value={defaultBaseUrl}
-            onChange={(e) => setDefaultBaseUrl(e.target.value)}
-            placeholder={wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'}
-          />
+          <div className="text-xs text-slate-500">
+            可添加多个 Base URL 扩展并行线程。会话粘滞到同一 URL；429 / 额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
+          </div>
+          <div className="space-y-3">
+            {endpoints.map((ep, index) => (
+              <div
+                key={ep.id}
+                className="space-y-2 rounded-lg border border-foreground/10 bg-muted/20 p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    端点 {index + 1}
+                    <span className="ml-1.5 tabular-nums opacity-70">{ep.id}</span>
+                  </span>
+                  {endpoints.length > 1 ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => removeEndpoint(ep.id)}>
+                      删除
+                    </Button>
+                  ) : null}
+                </div>
+                <Input
+                  value={ep.base_url}
+                  onChange={(e) => updateEndpoint(ep.id, { base_url: e.target.value })}
+                  placeholder={
+                    wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'
+                  }
+                />
+                <div className="grid gap-2 sm:grid-cols-[1fr_7rem]">
+                  <Input
+                    type="password"
+                    value={ep.api_key}
+                    onChange={(e) => updateEndpoint(ep.id, { api_key: e.target.value })}
+                    placeholder={ep.api_key_set ? '已配置，留空不改' : 'sk-...'}
+                  />
+                  <Input
+                    type="number"
+                    min={1}
+                    value={ep.max_inflight}
+                    onChange={(e) =>
+                      updateEndpoint(ep.id, {
+                        max_inflight: Math.max(1, Number(e.target.value) || 1),
+                      })
+                    }
+                    title="该端点最大并发"
+                    placeholder="并发"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={listing || testing}
+                    onClick={() => void fetchModels(ep.id)}
+                  >
+                    {listing && probeEndpointId === ep.id ? '拉取中…' : '拉取模型'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={listing || testing}
+                    onClick={() => void testConn(ep.id)}
+                  >
+                    {testing && probeEndpointId === ep.id ? '测试中…' : '连通测试'}
+                  </Button>
+                  <span className="text-xs text-slate-500">并发 {ep.max_inflight}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={addEndpoint}>
+              添加 Base URL
+            </Button>
+            <span className="text-xs text-slate-400">合计线程上限 {totalThreadLimit}</span>
+          </div>
           {wireApi === 'chat' ? (
             <div className="text-xs text-slate-500">
               智谱 BigModel 通用端点填 https://open.bigmodel.cn/api/paas/v4；GLM Coding Plan 填
               https://open.bigmodel.cn/api/coding/paas/v4，不要填 /api/v1。
             </div>
           ) : null}
-        </div>
-        <div className="space-y-1.5">
-          <Label>
-            API Key {s.default_api_key_set ? '（已配置，留空不改）' : ''}
-          </Label>
-          <Input
-            type="password"
-            value={defaultApiKey}
-            onChange={(e) => setDefaultApiKey(e.target.value)}
-            placeholder="sk-..."
-          />
         </div>
         <div className="space-y-1.5">
           <Label>默认模型</Label>
@@ -601,38 +741,21 @@ export default function SettingsPage() {
                 </Select>
               </>
             ) : null}
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" disabled={listing || testing} onClick={fetchModels}>
-                {listing ? '拉取中…' : '拉取模型清单'}
-              </Button>
-              <Button type="button" variant="outline" disabled={listing || testing} onClick={testConn}>
-                {testing ? '测试中…' : '连通测试'}
-              </Button>
-            </div>
             {probeMsg ? (
               <div className="flex items-start gap-2 text-sm">
                 {probeOk != null ? <Badge variant={probeOk ? 'success' : 'destructive'}>{probeOk ? '成功' : '失败'}</Badge> : null}
-                <span className={probeOk === false ? 'text-red-300' : 'text-slate-300'}>{probeMsg}</span>
+                <span className={probeOk === false ? 'text-red-300' : 'text-slate-300'}>
+                  {probeEndpointId ? `[${probeEndpointId}] ` : ''}
+                  {probeMsg}
+                </span>
               </div>
             ) : (
               <div className="text-xs text-slate-500">
                 {wireApi === 'anthropic'
-                  ? '拉取走 GET /models，连通测试发一条极短 POST /messages。均使用当前表单值，不会自动保存。Base URL 须包含 /v1。'
-                  : '拉取走 GET /models，连通测试发一条极短 chat/completions。均使用当前表单值，不会自动保存。'}
+                  ? '各端点可单独拉取 / 连通测试。拉取走 GET /models，连通测试发一条极短 POST /messages。均使用当前表单值，不会自动保存。'
+                  : '各端点可单独拉取 / 连通测试。拉取走 GET /models，连通测试发一条极短 chat/completions。均使用当前表单值，不会自动保存。'}
               </div>
             )}
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label>总线程数</Label>
-          <Input
-            type="number"
-            min={1}
-            value={llmThreadLimit}
-            onChange={(e) => setLlmThreadLimit(Math.max(1, Number(e.target.value) || 6))}
-          />
-          <div className="text-xs text-slate-500">
-            所有运行中项目的侦察、挖掘、审核等 LLM 线程合计上限。超出的工作按到达顺序排队放行。默认 6。
           </div>
         </div>
         <div className="space-y-1.5">
@@ -827,7 +950,24 @@ export default function SettingsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      setDefaultBaseUrl(item.endpoint)
+                      setEndpoints((prev) => {
+                        if (!prev.length) {
+                          return [
+                            {
+                              id: 'ep-1',
+                              base_url: item.endpoint,
+                              api_key: '',
+                              api_key_set: false,
+                              max_inflight: 6,
+                            },
+                          ]
+                        }
+                        const emptyIdx = prev.findIndex((ep) => !ep.base_url.trim())
+                        const idx = emptyIdx >= 0 ? emptyIdx : 0
+                        return prev.map((ep, i) =>
+                          i === idx ? { ...ep, base_url: item.endpoint } : ep,
+                        )
+                      })
                       setEndpointHelpOpen(false)
                     }}
                   >

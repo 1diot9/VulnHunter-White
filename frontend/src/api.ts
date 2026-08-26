@@ -374,6 +374,13 @@ export type PhaseReportDetail = PhaseReport & {
   content: string
 }
 
+export type LlmPoolEndpoint = {
+  id: string
+  base_url: string
+  api_key_set: boolean
+  max_inflight: number
+}
+
 export type Settings = {
   llm_providers: Array<{
     id: string
@@ -382,8 +389,10 @@ export type Settings = {
     wire_api: string
     env_key: string
     api_key_set: boolean
+    endpoints?: LlmPoolEndpoint[]
   }>
   llm_roles: Record<string, { provider_id: string; model: string; reasoning_effort: string }>
+  llm_endpoints: LlmPoolEndpoint[]
   llm_thread_limit: number
   github_pat_set: boolean
   fofa_key_set: boolean
@@ -398,10 +407,21 @@ export type Settings = {
   access_token_set: boolean
 }
 
+export type LlmEndpointUsage = {
+  id: string
+  base_url: string
+  used: number
+  limit: number
+  cooldown_sec: number
+  last_error: string
+  disabled: boolean
+}
+
 export type LlmThreadUsage = {
   used: number
   limit: number
   waiting: number
+  endpoints?: LlmEndpointUsage[]
 }
 
 export type LlmProbeBody = {
