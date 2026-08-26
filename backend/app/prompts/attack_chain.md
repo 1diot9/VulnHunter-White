@@ -38,7 +38,7 @@
 
 ### 有靶场时
 1. **无用户交互**的详文链（纯 HTTP/脚本可打通，如 SQLi→登录→RCE）：必须编写 `chain_script`（独立 Python 3 脚本），在 `SubmitAttackChain` 时传入。
-   - CLI 与单洞 `poc.py` 一致：必填 `-u/--url`、`--proxy`（空=直连）；有代理时本机地址也须强制走代理；HTTPS 默认跳过证书校验。
+   - CLI 与单洞 `poc.py` 一致：必填 `-u/--url`、`--proxy`（空=直连）；有代理时本机地址也须强制走代理；HTTPS 默认跳过证书校验；脚本自身打印与注释用英语。
    - 脚本内按利用顺序完成整条链（可复用各洞 PoC 思路，但要串成一次运行）。
    - 打通预期冲击时退出码 0，否则非 0。系统会对靶场执行该脚本，非 0 则拒绝提交。
    - 可用 Write 落到 `docs/attack-chains/` 或 workspace 后调试，再把定稿代码放进 `chain_script`。

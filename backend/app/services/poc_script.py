@@ -27,7 +27,7 @@ POC_CLI_ERROR = (
     "不要写死地址或代理；有 --proxy 时 127.0.0.1/localhost 也必须强制走代理"
     "（覆盖 urllib.request.proxy_bypass，勿让本机地址旁路）；"
     "HTTPS 须默认跳过证书校验并在 https:// 目标打印告警（--strict-ssl 可选恢复校验）；"
-    "RCE 另须支持 -c/--cmd，有回显须打印命令输出。"
+    "RCE 另须支持 -c/--cmd，有回显须打印命令输出；脚本自身打印与注释须用英语。"
 )
 
 POC_LAB_RUN_ERROR = (

@@ -117,7 +117,7 @@ def main() -> int:
     lines = body.strip().split("\n")
     if len(lines) > 1 or (args.cmd and args.cmd.split()[0] in body):
         cmd_output = "\n".join(lines[1:]) if len(lines) > 1 else body
-        print(f"\n命令输出:")
+        print(f"\nCommand output:")
         print(cmd_output)
         print("\n[+] SUCCESS: Command executed via ping command injection (RCE).")
         return 0

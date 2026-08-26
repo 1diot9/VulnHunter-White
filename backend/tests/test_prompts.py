@@ -219,15 +219,17 @@ def test_poc_prompt_requires_cli_parameters():
     assert "强制走代理" in poc
     assert "proxy_bypass" in poc
     assert "-c/--cmd" in poc
+    assert "Command output" in poc
+    assert "SSRF echo" in poc
+    assert "脚本与注释一律英语" in poc
     assert "argparse" in poc
-    assert "命令输出" in poc
-    assert "SSRF 回显" in poc
     assert "通/不通" in poc
     assert "不要写死" in poc
     assert "退出码 0" in poc
     assert "系统再执行" in poc
     assert "--strict-ssl" in poc
-    assert "跳过 TLS 证书校验" in poc
+    assert "默认跳过证书校验" in poc
+    assert "skips TLS certificate verification" in poc
     reviewer = load_prompt("reviewer.md")
     assert "poc_code" in reviewer
     assert "-c/--cmd" in reviewer
@@ -332,6 +334,7 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "RunCode" in text
     assert "### 漏洞代码" in text
     assert "完整相对路径" in text
+    assert "必须用英语" in text
     followup = load_prompt("initial/reviewer-harness-followup.md")
     assert "### 漏洞代码" in followup
     assert "完整文件路径" in followup
@@ -345,6 +348,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "RunCode" in overlay
     assert "evidence_level=harness" in overlay
     assert "### 漏洞代码" in overlay
+    assert "必须用英语" in overlay
+    assert "脚本与注释一律英语" in overlay
 
 
 def test_reviewer_debug_mcp_is_poc_rewrite_fallback():

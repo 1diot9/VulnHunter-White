@@ -922,7 +922,8 @@ def register_reviewer_tools() -> None:
                         "type": "string",
                         "description": (
                             "可选。本轮改写后的完整 poc.py（CLI 形态，须含 --proxy；"
-                            "有代理时 127.0.0.1 也须强制走代理；以及同链上的 payload 校准），"
+                            "有代理时 127.0.0.1 也须强制走代理；以及同链上的 payload 校准；"
+                            "脚本自身打印与注释须用英语），"
                             "系统会回写 vulns/{id}/poc.py。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。"
                         ),
                     },
@@ -939,7 +940,7 @@ def register_reviewer_tools() -> None:
                         "type": "string",
                         "description": (
                             "可选。局部验证的 mock/harness 源码，写入 vulns/{id}/harness.*，"
-                            "不要放进 poc.py。"
+                            "不要放进 poc.py。脚本自身打印与注释须用英语。"
                         ),
                     },
                     "harness_language": {

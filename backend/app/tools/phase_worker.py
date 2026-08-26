@@ -710,6 +710,7 @@ def register_worker_tools() -> None:
                             "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
+                            "脚本自身打印与注释（标签、状态、告警、判定、--help、docstring）必须用英语；目标回显原文不要翻译。"
                             "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
                         ),
                     },
@@ -882,6 +883,7 @@ def register_worker_tools() -> None:
                             "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
                             "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
                             "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
+                            "脚本自身打印与注释（标签、状态、告警、判定、--help、docstring）必须用英语；目标回显原文不要翻译。"
                             "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
                         ),
                     },

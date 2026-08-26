@@ -46,6 +46,7 @@ def register_run_code_tool() -> None:
             description=(
                 "在隔离沙箱中执行你编写的局部验证 harness（Python/PHP/JS/Ruby/Go/Java/Bash）。"
                 "仅局部验证模式可用。抽出目标函数、mock 依赖、用多种 payload 观察 stdout/stderr/退出码。"
+                "脚本自身打印（标签、步骤、判定）与注释必须用英语；源码/payload/回显原文不要翻译。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"
                 "沙箱无网、跑完即删。失败（无 Docker、缺镜像、编译错误）不要据此误报。"
             ),

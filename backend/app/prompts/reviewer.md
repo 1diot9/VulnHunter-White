@@ -100,7 +100,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 情况 | 动作 |
 | --- | --- |
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令 | MarkFalsePositive |
-| PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理）、缺打印、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
+| PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理）、缺打印、脚本输出或注释用了中文、同链 payload 细节（编码、参数名、鉴权头） | 本轮 Write `poc.py`，ConfirmVuln 传 `poc_code` |
 | 指纹占位、`lab.md` 引用、报告缺段、危害写过头（如 SSRF 回显 vs 仅探测）；局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm |
 | 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1/4.0、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 的基础分、严重度标签与向量字符串，与 ConfirmVuln 严重度校准一致；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述过短、缺漏洞代码（完整路径 + 源码）、缺 HTTP/API PoC 或未写入口→sink 链路、版本/参考链接 | `ReadCveRecord` 查看字段与 `quality_issues`，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`；`descriptions[0].value` 须为英文详述，含漏洞代码路径与原文；supportingMedia 用 HTML 且漏洞代码与 PoC 放 `<pre>`）；不要 Write 整份 `cve.json` |
@@ -111,7 +111,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 
 ## 规则
 - 不要换一条利用链或换一个 sink 来把洞「救活」，也不要改靶场（写文件、改配置、种模板）替 Worker 圆谎；那是误报，不是打回。
-- **同一条链上的 PoC 校准归你**：CLI 参数化（含 `--proxy`）、补 header/编码/参数名、按动态证据改 payload。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。
+- **同一条链上的 PoC 校准归你**：CLI 参数化（含 `--proxy`）、补 header/编码/参数名、按动态证据改 payload、把脚本输出与注释改成英语。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。
 - 需要额外写原语或非默认目录才能出冲击时，复杂度应标 `specific_environment`，并通常直接误报；不要用 `multi_step` 把 -2 变成 0，也不要把种文件后的 SSTI 写成已有 `sensitive_data_or_privilege`。
 - 不要把低危害难利用项标成 `cve_candidate`。
 - 不要把同根因同危害拆成的多份报告标成 `false_positive` 或打回「合并」；用 `MergeIntoVuln`。

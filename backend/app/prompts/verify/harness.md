@@ -4,7 +4,7 @@
 
 1. 先 Read 报告、`poc.py` 和源码，确认 `file_path` 与代码片段真实存在。文件不存在或代码对不上 → 误报。
 2. 按**目标语言**自己设计验证：抽出可疑函数或最小可编译片段，mock 数据库 / HTTP / 文件系统 / 框架依赖，用多种 payload 打 sink。
-3. 用 `RunCode` 在一次性沙箱里执行（Python / PHP / JS / Ruby / Go / Java / Bash 均可）。不要在本机 Bash/PowerShell 里跑 harness。
+3. 用 `RunCode` 在一次性沙箱里执行（Python / PHP / JS / Ruby / Go / Java / Bash 均可）。不要在本机 Bash/PowerShell 里跑 harness。**脚本自己打印的 stdout/stderr（标签、步骤、判定）以及注释 / docstring 必须用英语**；源码片段、payload、目标回显原文不要翻译。
 4. **禁止**用另一种语言复述源码逻辑再标 `harness`（例如用 Python 重写 Java Controller）。跑的必须是目标语言代码，或与源码同语义的可编译片段。
 5. **报告闸门（harness Confirm 前必做）**：Write `vulns/{id}/report.md`，在 `## 漏洞技术细节` 下补齐 `### 漏洞代码`：
    - 写明漏洞代码段对应的**仓库内完整相对路径**（如 `src/main/java/com/foo/Bar.java` 或 `app/utils/backup.py:42`），不要只写类名/方法名。
