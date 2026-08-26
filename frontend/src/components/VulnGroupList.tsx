@@ -197,7 +197,7 @@ function VulnRow({
         variant="ghost"
         size={nested ? 'icon-xs' : 'icon-sm'}
         className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-100"
-        aria-label={`下载 #${v.id} 报告`}
+        aria-label={`下载 #${v.id} 报告与 PoC`}
         onClick={() => {
           void downloadReport(v.id)
         }}

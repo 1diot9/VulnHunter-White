@@ -1008,13 +1008,20 @@ export const api = {
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     return res.blob()
   },
-  downloadVulnReport: async (id: number, kind: 'report' | 'advisory' | 'cve' = 'report') => {
-    const res = await apiFetch(`/api/vulns/${id}/download?kind=${kind}`)
+  downloadVulnReport: async (id: number, kind?: 'report' | 'advisory' | 'cve') => {
+    const qs = kind ? `?kind=${kind}` : ''
+    const res = await apiFetch(`/api/vulns/${id}/download${qs}`)
     if (res.status === 401) setAccessToken('')
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     const blob = await res.blob()
     const fallback =
-      kind === 'advisory' ? `vuln-${id}-advisory.md` : kind === 'cve' ? `vuln-${id}-cve.json` : `vuln-${id}.md`
+      kind === 'advisory'
+        ? `vuln-${id}-advisory.md`
+        : kind === 'cve'
+          ? `vuln-${id}-cve.json`
+          : kind === 'report'
+            ? `vuln-${id}.md`
+            : `vuln-${id}.zip`
     const filename = filenameFromDisposition(res.headers.get('Content-Disposition'), fallback)
     return { blob, filename }
   },

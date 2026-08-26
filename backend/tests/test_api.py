@@ -923,14 +923,25 @@ def test_vulns_list_and_download(tmp_env, project):
         assert f"vuln-{vid}/report.md" in names
         assert f"vuln-{vid}/advisory.md" in names
         assert f"vuln-{vid}/cve.json" in names
+        assert f"vuln-{vid}/poc.py" in names
+        assert f"vuln-{vid}/request.http" in names
         one = client.get(f"/api/vulns/{vid}/download")
         assert one.status_code == 200
-        assert one.headers["content-type"].startswith("text/markdown")
-        disposition = one.headers["content-disposition"]
+        assert one.headers["content-type"].startswith("application/zip")
+        one_disp = one.headers["content-disposition"]
+        assert "attachment" in one_disp
+        assert f'filename="vuln-{vid}.zip"' in one_disp
+        assert f"vuln-{vid}-RCE%20demo.zip" in one_disp
+        one_names = zipfile.ZipFile(io.BytesIO(one.content)).namelist()
+        assert one_names == names
+        report = client.get(f"/api/vulns/{vid}/download?kind=report")
+        assert report.status_code == 200
+        assert report.headers["content-type"].startswith("text/markdown")
+        disposition = report.headers["content-disposition"]
         assert "attachment" in disposition
         assert f'filename="vuln-{vid}.md"' in disposition
         assert f"vuln-{vid}-RCE%20demo.md" in disposition
-        assert "**产出时间**：" in one.text
+        assert "**产出时间**：" in report.text
         advisory = client.get(f"/api/vulns/{vid}/download?kind=advisory")
         assert advisory.status_code == 200
         assert "GitHub Security Advisory" in advisory.text
@@ -951,6 +962,7 @@ def test_download_single_vuln_report_missing_file(tmp_env, project):
 
     assert _report_download_filename(3, 'a/b:c*?"<>|') == "vuln-3-a_b_c.md"
     assert _report_download_filename(3, "  ..  ") == "vuln-3.md"
+    assert _report_download_filename(3, "RCE demo", "zip") == "vuln-3-RCE demo.zip"
 
     with SessionLocal() as db:
         v = Vuln(project_id=project, title="No report", vuln_type="xss", severity="low", status="pending_review")
@@ -959,9 +971,12 @@ def test_download_single_vuln_report_missing_file(tmp_env, project):
         vid = v.id
 
     with TestClient(app) as client:
-        missing = client.get(f"/api/vulns/{vid}/download")
+        missing = client.get(f"/api/vulns/{vid}/download?kind=report")
         assert missing.status_code == 404
         assert "报告不存在" in missing.text
+        bundle = client.get(f"/api/vulns/{vid}/download")
+        assert bundle.status_code == 200
+        assert bundle.headers["content-type"].startswith("application/zip")
 
 
 def test_vuln_tracking_status_mark_and_filter(tmp_env, project):

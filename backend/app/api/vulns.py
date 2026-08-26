@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
@@ -142,9 +142,54 @@ def _report_download_filename(vuln_id: int, title: str | None, kind: str = "repo
     if len(slug) > 80:
         slug = slug[:80].rstrip(" ._")
     suffix = "-advisory" if kind == "advisory" else "-cve" if kind == "cve" else ""
+    if kind in {"zip", "bundle"}:
+        ext = ".zip"
+    elif kind == "cve":
+        ext = ".json"
+    else:
+        ext = ".md"
     if slug:
-        return f"vuln-{vuln_id}-{slug}{suffix}.md" if kind != "cve" else f"vuln-{vuln_id}-{slug}{suffix}.json"
-    return f"vuln-{vuln_id}{suffix}.md" if kind != "cve" else f"vuln-{vuln_id}{suffix}.json"
+        return f"vuln-{vuln_id}-{slug}{suffix}{ext}"
+    return f"vuln-{vuln_id}{suffix}{ext}"
+
+
+def _write_vuln_bundle(zf: zipfile.ZipFile, v: Vuln) -> None:
+    """Pack the same files as bulk download: reports, CVE JSON, PoC, and sibling artifacts."""
+    vdir = vuln_dir(v.project_id, v.id)
+    report = _read_report_md(v)
+    if report is not None:
+        zf.writestr(f"vuln-{v.id}/report.md", report)
+    advisory = _read_advisory_md(v)
+    if advisory is not None:
+        zf.writestr(f"vuln-{v.id}/advisory.md", advisory)
+    cve_json = _read_cve_json(v)
+    if cve_json is not None:
+        zf.writestr(f"vuln-{v.id}/cve.json", cve_json)
+    for fp in vdir.glob("*"):
+        if not fp.is_file() or fp.name in REPORT_KIND_FILES.values():
+            continue
+        zf.write(fp, arcname=f"vuln-{v.id}/{fp.name}")
+
+
+def _vuln_bundle_bytes(vulns: list[Vuln]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for v in vulns:
+            _write_vuln_bundle(zf, v)
+    return buf.getvalue()
+
+
+def _zip_attachment(data: bytes, *, ascii_name: str, filename: str) -> Response:
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+        },
+    )
 
 
 def _report_score(v: Vuln) -> int | None:
@@ -353,13 +398,20 @@ def get_vuln(vuln_id: int) -> VulnDetail:
 
 
 @router.get("/{vuln_id}/download")
-def download_vuln_report(vuln_id: int, kind: str = "report") -> Response:
-    if kind not in ALLOWED_REPORT_KINDS:
+def download_vuln_report(vuln_id: int, kind: str | None = None) -> Response:
+    bundle = kind in (None, "", "zip", "bundle")
+    if not bundle and kind not in ALLOWED_REPORT_KINDS:
         raise HTTPException(400, "kind 须为 report|advisory|cve")
     with SessionLocal() as db:
         v = db.get(Vuln, vuln_id)
         if not v:
             raise HTTPException(404, "漏洞不存在")
+        if bundle:
+            return _zip_attachment(
+                _vuln_bundle_bytes([v]),
+                ascii_name=f"vuln-{v.id}.zip",
+                filename=_report_download_filename(v.id, v.title, "zip"),
+            )
         if kind == "advisory":
             text = _read_advisory_md(v)
             media_type = "text/markdown; charset=utf-8"
@@ -374,7 +426,7 @@ def download_vuln_report(vuln_id: int, kind: str = "report") -> Response:
             ascii_name = f"vuln-{v.id}.md"
         if text is None:
             raise HTTPException(404, "报告不存在")
-        filename = _report_download_filename(v.id, v.title, kind)
+        filename = _report_download_filename(v.id, v.title, kind or "report")
         return Response(
             content=text.encode("utf-8"),
             media_type=media_type,
@@ -479,31 +531,19 @@ def mark_vulns(body: VulnTrackingBatchIn) -> list[VulnOut]:
 
 
 @router.post("/download")
-def download_vulns(body: DownloadBody) -> StreamingResponse:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        with SessionLocal() as db:
-            for vid in body.ids:
-                v = db.get(Vuln, vid)
-                if not v:
-                    continue
-                vdir = vuln_dir(v.project_id, v.id)
-                report = _read_report_md(v)
-                if report is not None:
-                    zf.writestr(f"vuln-{v.id}/report.md", report)
-                advisory = _read_advisory_md(v)
-                if advisory is not None:
-                    zf.writestr(f"vuln-{v.id}/advisory.md", advisory)
-                cve_json = _read_cve_json(v)
-                if cve_json is not None:
-                    zf.writestr(f"vuln-{v.id}/cve.json", cve_json)
-                for fp in vdir.glob("*"):
-                    if not fp.is_file() or fp.name in REPORT_KIND_FILES.values():
-                        continue
-                    zf.write(fp, arcname=f"vuln-{v.id}/{fp.name}")
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=vulns.zip"},
-    )
+def download_vulns(body: DownloadBody) -> Response:
+    with SessionLocal() as db:
+        vulns: list[Vuln] = []
+        for vid in body.ids:
+            v = db.get(Vuln, vid)
+            if v:
+                vulns.append(v)
+        data = _vuln_bundle_bytes(vulns)
+        if len(vulns) == 1:
+            v = vulns[0]
+            return _zip_attachment(
+                data,
+                ascii_name=f"vuln-{v.id}.zip",
+                filename=_report_download_filename(v.id, v.title, "zip"),
+            )
+    return _zip_attachment(data, ascii_name="vulns.zip", filename="vulns.zip")
