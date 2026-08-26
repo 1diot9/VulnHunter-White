@@ -138,6 +138,7 @@ class PoolEndpoint:
     id: str
     base_url: str
     api_key: str
+    model: str = ""
     max_inflight: int = DEFAULT_ENDPOINT_INFLIGHT
 
 
@@ -200,11 +201,13 @@ def _normalize_endpoint_dicts(
         seen.add(eid)
         url = normalize_llm_base_url(str(item.get("base_url") or ""))
         key = str(item.get("api_key") or "").strip()
+        model = str(item.get("model") or "").strip()
         out.append(
             {
                 "id": eid,
                 "base_url": url,
                 "api_key": key,
+                "model": model,
                 "max_inflight": _clamp_inflight(item.get("max_inflight")),
             }
         )
@@ -217,6 +220,7 @@ def _normalize_endpoint_dicts(
                 "id": "ep-1",
                 "base_url": "",
                 "api_key": "",
+                "model": "",
                 "max_inflight": _clamp_inflight(fallback_inflight),
             }
         ]
@@ -225,6 +229,7 @@ def _normalize_endpoint_dicts(
             "id": "ep-1",
             "base_url": url,
             "api_key": (fallback_key or "").strip(),
+            "model": "",
             "max_inflight": _clamp_inflight(fallback_inflight),
         }
     ]
@@ -269,6 +274,7 @@ def endpoints_for_api(row: AppSettings | None) -> list[LlmPoolEndpointOut]:
             id=str(ep.get("id") or ""),
             base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
             api_key_set=bool(str(ep.get("api_key") or "").strip()),
+            model=str(ep.get("model") or "").strip(),
             max_inflight=_clamp_inflight(ep.get("max_inflight")),
         )
         for ep in load_pool_endpoints_raw(row)
@@ -306,6 +312,7 @@ def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint
                 id=str(ep.get("id") or ""),
                 base_url=url,
                 api_key=key,
+                model=str(ep.get("model") or "").strip(),
                 max_inflight=_clamp_inflight(ep.get("max_inflight")),
             )
         )
@@ -341,6 +348,7 @@ def merge_endpoints_update(
                 "id": eid,
                 "base_url": url,
                 "api_key": api_key,
+                "model": (item.model or "").strip(),
                 "max_inflight": _clamp_inflight(item.max_inflight),
             }
         )
@@ -393,6 +401,9 @@ def apply_endpoints_to_settings_row(
     first_key = str(first.get("api_key") or "").strip()
     if first_key:
         row.default_api_key = first_key
+    first_model = str(first.get("model") or "").strip()
+    if first_model and not (row.default_model or "").strip():
+        row.default_model = first_model
     row.llm_thread_limit = max(1, sum(_clamp_inflight(ep.get("max_inflight")) for ep in endpoints))
 
 
@@ -434,6 +445,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
                         id=str(ep.get("id") or ""),
                         base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
                         api_key_set=bool(str(ep.get("api_key") or "").strip()),
+                        model=str(ep.get("model") or "").strip(),
                         max_inflight=_clamp_inflight(ep.get("max_inflight")),
                     )
                     for ep in eps
@@ -654,10 +666,15 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
 
 
 def bind_llm_to_endpoint(llm: ResolvedLlm, endpoint: PoolEndpoint) -> ResolvedLlm:
+    """Apply endpoint URL/key/model. Project-level model (+project) wins over endpoint model."""
+    if "+project" in (llm.source or ""):
+        model = llm.model
+    else:
+        model = (endpoint.model or "").strip() or llm.model
     return ResolvedLlm(
         base_url=endpoint.base_url,
         wire_api=llm.wire_api,
-        model=llm.model,
+        model=model,
         api_key=endpoint.api_key,
         source=llm.source,
         endpoint_id=endpoint.id,

@@ -295,7 +295,7 @@ class AgentLoop:
             # Test / anonymous override bucket — keep injected ResolvedLlm as-is
             if handle.endpoint_id == "_anon":
                 return
-        url, key = llm_thread_limiter.endpoint_creds(handle.endpoint_id)
+        url, key, model = llm_thread_limiter.endpoint_creds(handle.endpoint_id)
         if not url:
             # Fall back to resolved pool entry
             for ep in pool_endpoints_resolved():
@@ -311,6 +311,7 @@ class AgentLoop:
                 id=handle.endpoint_id,
                 base_url=url,
                 api_key=key or self.llm.api_key,
+                model=model,
                 max_inflight=1,
             ),
         )

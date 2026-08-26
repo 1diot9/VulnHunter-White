@@ -30,6 +30,7 @@ class LlmPoolEndpointIn(BaseModel):
     id: str = ""
     base_url: str = ""
     api_key: str | None = None
+    model: str = ""
     max_inflight: int = 6
 
 
@@ -37,6 +38,7 @@ class LlmPoolEndpointOut(BaseModel):
     id: str
     base_url: str
     api_key_set: bool = False
+    model: str = ""
     max_inflight: int = 6
 
 

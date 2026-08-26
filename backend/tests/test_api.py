@@ -102,6 +102,61 @@ def test_llm_endpoints_pool_save_and_read(tmp_env):
         assert body["default_base_url"] == "https://pool-a.example/v1"
         assert llm_thread_limiter.current_limit() == 6
 
+        with_models = client.put(
+            "/api/settings",
+            json={
+                "default_model": "fallback-model",
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": None,
+                        "model": "model-a",
+                        "max_inflight": 2,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": None,
+                        "model": "model-b",
+                        "max_inflight": 4,
+                    },
+                ],
+            },
+        )
+        assert with_models.status_code == 200
+        models_body = with_models.json()["llm_endpoints"]
+        assert models_body[0]["model"] == "model-a"
+        assert models_body[1]["model"] == "model-b"
+
+        from app.services.llm_settings import (
+            PoolEndpoint,
+            ResolvedLlm,
+            bind_llm_to_endpoint,
+            pool_endpoints_resolved,
+        )
+
+        pool = pool_endpoints_resolved()
+        by_id = {ep.id: ep for ep in pool}
+        assert by_id["ep-1"].model == "model-a"
+        assert by_id["ep-2"].model == "model-b"
+        base = ResolvedLlm(
+            base_url="https://x",
+            wire_api="chat",
+            model="fallback-model",
+            api_key="k",
+            source="provider:default",
+        )
+        assert bind_llm_to_endpoint(base, by_id["ep-2"]).model == "model-b"
+        project_llm = ResolvedLlm(
+            base_url="https://x",
+            wire_api="chat",
+            model="project-model",
+            api_key="k",
+            source="provider:default+project",
+        )
+        assert bind_llm_to_endpoint(project_llm, by_id["ep-2"]).model == "project-model"
+
         # Blank api_key keeps previous
         keep = client.put(
             "/api/settings",
@@ -111,12 +166,14 @@ def test_llm_endpoints_pool_save_and_read(tmp_env):
                         "id": "ep-1",
                         "base_url": "https://pool-a.example/v1",
                         "api_key": None,
+                        "model": "model-a",
                         "max_inflight": 2,
                     },
                     {
                         "id": "ep-2",
                         "base_url": "https://pool-b.example/v1",
                         "api_key": None,
+                        "model": "model-b",
                         "max_inflight": 3,
                     },
                 ],

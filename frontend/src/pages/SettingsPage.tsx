@@ -140,8 +140,15 @@ export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
   const [endpoints, setEndpoints] = useState<
-    Array<{ id: string; base_url: string; api_key: string; api_key_set: boolean; max_inflight: number }>
-  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, max_inflight: 6 }])
+    Array<{
+      id: string
+      base_url: string
+      api_key: string
+      api_key_set: boolean
+      model: string
+      max_inflight: number
+    }>
+  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, model: '', max_inflight: 6 }])
   const [wireApi, setWireApi] = useState<'chat' | 'anthropic'>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
@@ -191,6 +198,7 @@ export default function SettingsPage() {
                 id: 'ep-1',
                 base_url: x.default_base_url || '',
                 api_key_set: x.default_api_key_set,
+                model: x.default_model || '',
                 max_inflight: x.llm_thread_limit || 6,
               },
             ]
@@ -200,9 +208,13 @@ export default function SettingsPage() {
           base_url: ep.base_url || '',
           api_key: '',
           api_key_set: !!ep.api_key_set,
+          model: ep.model || '',
           max_inflight: Math.max(1, ep.max_inflight || 6),
         })),
       )
+      if (!x.default_model && eps[0]?.model) {
+        setDefaultModel(eps[0].model)
+      }
       setContextWindow(x.context_window || 128000)
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
       setHttpProxy(x.http_proxy || '')
@@ -230,13 +242,14 @@ export default function SettingsPage() {
     }
     if (ep?.base_url.trim()) body.base_url = ep.base_url.trim()
     if (ep?.api_key.trim()) body.api_key = ep.api_key.trim()
-    if (defaultModel.trim()) body.model = defaultModel.trim()
+    const model = (ep?.model || defaultModel).trim()
+    if (model) body.model = model
     return body
   }
 
   function updateEndpoint(
     id: string,
-    patch: Partial<{ base_url: string; api_key: string; max_inflight: number }>,
+    patch: Partial<{ base_url: string; api_key: string; model: string; max_inflight: number }>,
   ) {
     setEndpoints((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)))
   }
@@ -248,7 +261,14 @@ export default function SettingsPage() {
       while (used.has(`ep-${n}`)) n += 1
       return [
         ...prev,
-        { id: `ep-${n}`, base_url: '', api_key: '', api_key_set: false, max_inflight: 6 },
+        {
+          id: `ep-${n}`,
+          base_url: '',
+          api_key: '',
+          api_key_set: false,
+          model: defaultModel.trim(),
+          max_inflight: 6,
+        },
       ]
     })
   }
@@ -272,6 +292,10 @@ export default function SettingsPage() {
       }
       setModels(out.models)
       setModelFilter('')
+      const targetId = endpointId || endpoints[0]?.id
+      if (targetId && !endpoints.find((e) => e.id === targetId)?.model.trim() && out.models.length === 1) {
+        updateEndpoint(targetId, { model: out.models[0] })
+      }
       if (!defaultModel.trim() && out.models.length === 1) {
         setDefaultModel(out.models[0])
       }
@@ -388,6 +412,7 @@ export default function SettingsPage() {
           id: ep.id,
           base_url: ep.base_url.trim(),
           api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
+          model: ep.model.trim(),
           max_inflight: Math.max(1, ep.max_inflight || 1),
         })),
       }
@@ -406,15 +431,17 @@ export default function SettingsPage() {
             id: ep.id,
             base_url: ep.base_url.trim(),
             api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
+            model: ep.model.trim(),
             max_inflight: Math.max(1, ep.max_inflight || 1),
           })),
         },
       ]
+      const roleModel = defaultModel.trim() || first?.model?.trim() || ''
       body.llm_roles = {
-        recon: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-        worker: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-        reviewer: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
-        verifier: { provider_id: 'default', model: defaultModel, reasoning_effort: '' },
+        recon: { provider_id: 'default', model: roleModel, reasoning_effort: '' },
+        worker: { provider_id: 'default', model: roleModel, reasoning_effort: '' },
+        reviewer: { provider_id: 'default', model: roleModel, reasoning_effort: '' },
+        verifier: { provider_id: 'default', model: roleModel, reasoning_effort: '' },
       }
       const next = await api.putSettings(body)
       setS(next)
@@ -426,6 +453,7 @@ export default function SettingsPage() {
                 id: 'ep-1',
                 base_url: next.default_base_url || '',
                 api_key_set: next.default_api_key_set,
+                model: next.default_model || '',
                 max_inflight: next.llm_thread_limit || 6,
               },
             ]
@@ -435,9 +463,11 @@ export default function SettingsPage() {
           base_url: ep.base_url || '',
           api_key: '',
           api_key_set: !!ep.api_key_set,
+          model: ep.model || '',
           max_inflight: Math.max(1, ep.max_inflight || 6),
         })),
       )
+      if (next.default_model) setDefaultModel(next.default_model)
       setGithubPat('')
       setFofaKey('')
       setMsg('已保存')
@@ -616,7 +646,8 @@ export default function SettingsPage() {
             </Button>
           </div>
           <div className="text-xs text-slate-500">
-            可添加多个 Base URL 扩展并行线程。会话粘滞到同一 URL；429 / 额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
+            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。会话粘滞到同一 URL；429 /
+            额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
           </div>
           <div className="space-y-3">
             {endpoints.map((ep, index) => (
@@ -642,12 +673,18 @@ export default function SettingsPage() {
                     wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'
                   }
                 />
-                <div className="grid gap-2 sm:grid-cols-[1fr_7rem]">
+                <div className="grid gap-2 sm:grid-cols-[1fr_minmax(8rem,1fr)_7rem]">
                   <Input
                     type="password"
                     value={ep.api_key}
                     onChange={(e) => updateEndpoint(ep.id, { api_key: e.target.value })}
                     placeholder={ep.api_key_set ? '已配置，留空不改' : 'sk-...'}
+                  />
+                  <Input
+                    value={ep.model}
+                    onChange={(e) => updateEndpoint(ep.id, { model: e.target.value })}
+                    placeholder={defaultModel.trim() || '模型名'}
+                    title="该端点使用的模型；留空则用下方回退模型"
                   />
                   <Input
                     type="number"
@@ -662,6 +699,42 @@ export default function SettingsPage() {
                     placeholder="并发"
                   />
                 </div>
+                {models.length > 0 && probeEndpointId === ep.id ? (
+                  <>
+                    {models.length > 20 ? (
+                      <Input
+                        value={modelFilter}
+                        onChange={(e) => setModelFilter(e.target.value)}
+                        placeholder={`筛选 ${models.length} 个模型…`}
+                      />
+                    ) : null}
+                    <Select
+                      value={models.includes(ep.model) ? ep.model : '__none__'}
+                      onValueChange={(value) => {
+                        if (value == null || value === '__none__') return
+                        updateEndpoint(ep.id, { model: value })
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue>
+                          {models.includes(ep.model)
+                            ? ep.model
+                            : `从清单选择（${filteredModels.length}/${models.length}）…`}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false} align="start" className="max-h-72 w-(--anchor-width)">
+                        <SelectItem value="__none__">
+                          从清单选择（{filteredModels.length}/{models.length}）…
+                        </SelectItem>
+                        {filteredModels.map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
@@ -681,7 +754,9 @@ export default function SettingsPage() {
                   >
                     {testing && probeEndpointId === ep.id ? '测试中…' : '连通测试'}
                   </Button>
-                  <span className="text-xs text-slate-500">并发 {ep.max_inflight}</span>
+                  <span className="text-xs text-slate-500">
+                    {ep.model.trim() || defaultModel.trim() || '未指定模型'} · 并发 {ep.max_inflight}
+                  </span>
                 </div>
               </div>
             ))}
@@ -700,47 +775,16 @@ export default function SettingsPage() {
           ) : null}
         </div>
         <div className="space-y-1.5">
-          <Label>默认模型</Label>
+          <Label>回退模型</Label>
           <div className="space-y-2">
             <Input
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
               placeholder="gpt-4o"
             />
-            {models.length > 0 ? (
-              <>
-                {models.length > 20 ? (
-                  <Input
-                    value={modelFilter}
-                    onChange={(e) => setModelFilter(e.target.value)}
-                    placeholder={`筛选 ${models.length} 个模型…`}
-                  />
-                ) : null}
-                <Select
-                  value={models.includes(defaultModel) ? defaultModel : '__none__'}
-                  onValueChange={(value) => {
-                    if (value == null) return
-                    setDefaultModel(value === '__none__' ? '' : value)
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>
-                      {models.includes(defaultModel)
-                        ? defaultModel
-                        : `从清单选择（${filteredModels.length}/${models.length}）…`}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false} align="start" className="max-h-72 w-(--anchor-width)">
-                  <SelectItem value="__none__">从清单选择（{filteredModels.length}/{models.length}）…</SelectItem>
-                  {filteredModels.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                  </SelectContent>
-                </Select>
-              </>
-            ) : null}
+            <div className="text-xs text-slate-500">
+              端点未填模型时使用；项目级模型仍优先于端点与回退模型。
+            </div>
             {probeMsg ? (
               <div className="flex items-start gap-2 text-sm">
                 {probeOk != null ? <Badge variant={probeOk ? 'success' : 'destructive'}>{probeOk ? '成功' : '失败'}</Badge> : null}
@@ -752,8 +796,8 @@ export default function SettingsPage() {
             ) : (
               <div className="text-xs text-slate-500">
                 {wireApi === 'anthropic'
-                  ? '各端点可单独拉取 / 连通测试。拉取走 GET /models，连通测试发一条极短 POST /messages。均使用当前表单值，不会自动保存。'
-                  : '各端点可单独拉取 / 连通测试。拉取走 GET /models，连通测试发一条极短 chat/completions。均使用当前表单值，不会自动保存。'}
+                  ? '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /messages。'
+                  : '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 chat/completions。'}
               </div>
             )}
           </div>
@@ -958,6 +1002,7 @@ export default function SettingsPage() {
                               base_url: item.endpoint,
                               api_key: '',
                               api_key_set: false,
+                              model: defaultModel.trim(),
                               max_inflight: 6,
                             },
                           ]

@@ -34,6 +34,7 @@ class _EndpointBucket:
     api_key: str
     cap: int
     used: int = 0
+    model: str = ""
 
 
 def _read_pool_from_settings() -> list[dict[str, Any]]:
@@ -47,6 +48,7 @@ def _read_pool_from_settings() -> list[dict[str, Any]]:
                     "id": ep.id,
                     "base_url": ep.base_url,
                     "api_key": ep.api_key,
+                    "model": ep.model,
                     "max_inflight": ep.max_inflight,
                 }
                 for ep in pool
@@ -61,7 +63,16 @@ def _read_pool_from_settings() -> list[dict[str, Any]]:
         limit = max(1, int(n)) if n is not None else DEFAULT_LLM_THREAD_LIMIT
         url = (getattr(row, "default_base_url", None) or "").strip() or "https://api.openai.com/v1"
         key = (getattr(row, "default_api_key", None) or "").strip()
-        return [{"id": "ep-1", "base_url": url, "api_key": key, "max_inflight": limit}]
+        model = (getattr(row, "default_model", None) or "").strip()
+        return [
+            {
+                "id": "ep-1",
+                "base_url": url,
+                "api_key": key,
+                "model": model,
+                "max_inflight": limit,
+            }
+        ]
     except Exception:  # noqa: BLE001
         pass
     return [
@@ -69,6 +80,7 @@ def _read_pool_from_settings() -> list[dict[str, Any]]:
             "id": "ep-1",
             "base_url": "https://api.openai.com/v1",
             "api_key": "",
+            "model": "",
             "max_inflight": max(
                 1, int(getattr(settings, "llm_thread_limit", None) or DEFAULT_LLM_THREAD_LIMIT)
             ),
@@ -172,6 +184,7 @@ class LlmThreadLimiter:
                             "id": str(getattr(ep, "id", "") or ""),
                             "base_url": str(getattr(ep, "base_url", "") or ""),
                             "api_key": "",
+                            "model": str(getattr(ep, "model", "") or ""),
                             "max_inflight": int(getattr(ep, "max_inflight", DEFAULT_LLM_THREAD_LIMIT) or DEFAULT_LLM_THREAD_LIMIT),
                         }
                     )
@@ -189,10 +202,11 @@ class LlmThreadLimiter:
                 if not eid:
                     continue
                 cap = max(1, int(item.get("max_inflight") or DEFAULT_LLM_THREAD_LIMIT))
-                # Preserve api_key/base_url from resolved pool when available
+                # Preserve api_key/base_url/model from resolved pool when available
                 key = str(item.get("api_key") or "")
                 url = str(item.get("base_url") or "")
-                if not key or not url:
+                model = str(item.get("model") or "").strip()
+                if not key or not url or not model:
                     try:
                         from .llm_settings import pool_endpoints_resolved
 
@@ -200,12 +214,13 @@ class LlmThreadLimiter:
                             if pe.id == eid:
                                 key = key or pe.api_key
                                 url = url or pe.base_url
+                                model = model or pe.model
                                 break
                     except Exception:  # noqa: BLE001
                         pass
                 used = min(old_used.get(eid, 0), cap)
                 new_buckets[eid] = _EndpointBucket(
-                    id=eid, base_url=url, api_key=key, cap=cap, used=used
+                    id=eid, base_url=url, api_key=key, cap=cap, used=used, model=model
                 )
                 new_order.append(eid)
             if not new_buckets:
@@ -279,14 +294,14 @@ class LlmThreadLimiter:
                 "endpoints": endpoints,
             }
 
-    def endpoint_creds(self, endpoint_id: str) -> tuple[str, str]:
-        """Return (base_url, api_key) for a bound endpoint."""
+    def endpoint_creds(self, endpoint_id: str) -> tuple[str, str, str]:
+        """Return (base_url, api_key, model) for a bound endpoint."""
         self._ensure_loaded()
         with self._lock:
             b = self._buckets.get(endpoint_id)
             if b is None:
-                return "", ""
-            return b.base_url, b.api_key
+                return "", "", ""
+            return b.base_url, b.api_key, b.model
 
     def get_endpoint(self, endpoint_id: str) -> _EndpointBucket | None:
         self._ensure_loaded()

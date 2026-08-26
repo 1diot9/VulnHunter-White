@@ -378,6 +378,7 @@ export type LlmPoolEndpoint = {
   id: string
   base_url: string
   api_key_set: boolean
+  model: string
   max_inflight: number
 }
 
