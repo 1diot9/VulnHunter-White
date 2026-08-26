@@ -14,5 +14,6 @@
 
 ### 提交与验证
 - `http_request` 可写 **API 调用配方**（类/方法/参数/依赖版本），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
-- 证据以 **harness / 本地最小复现** 为主；有 HTTP 面时仍可写 CLI `poc.py`（`-u/--proxy`）。
+- 局部验证证据只进 **`harness.py`**（抽出函数 + mock）。`poc.py` 仅当安装真实包后能调用公开 API 时才写，不要加未使用的 `-u/--proxy`，不要复制 harness 测试。无 HTTP 面且无安装面时省略 `poc_code`。
+- 有 HTTP 利用面时仍写 CLI `poc.py`（`-u/--proxy`）。
 - 不要为纯库强行编造站点 FOFA 语法；复现步骤写清受影响 API 与前置依赖版本。

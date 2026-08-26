@@ -8,7 +8,7 @@
 - 沙箱不可用或 mock 失败 → 不要误报；静态仍能证明默认部署可利用则 ConfirmVuln(`evidence_level=static_only`)。
 - 局部验证证明默认可利用不成立（打不中、需种文件等）→ MarkFalsePositive(reason=...)。不要为此打回 Worker。
 - 不要 MergeIntoVuln，不要为「再做一遍静态」打回 Worker。
-- 不要 CollectLabFingerprints。不要把 harness 写进 `poc.py`。
+- 不要 CollectLabFingerprints。不要把 harness 的内联/mock 或同一套 TEST 矩阵写进 `poc.py`。纯库洞无 HTTP/安装面时不要为兼容性补假 `-u/--proxy`。
 
 漏洞 ID=${vuln_id}
 ${lab_note}

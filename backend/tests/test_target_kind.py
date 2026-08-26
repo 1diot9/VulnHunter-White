@@ -106,6 +106,8 @@ def test_phase_system_prompt_includes_target_kind(tmp_env, project):
     overlay = pipeline._phase_system_prompt(project, "worker.md")
     assert "组件库" in overlay
     assert "公开 API" in overlay
+    assert "harness.py" in overlay
+    assert "不要加未使用" in overlay
     vars_ = pipeline._agent_prompt_vars(project)
     assert vars_["target_kind"] == "library"
     assert vars_["target_kind_label"] == "组件库"

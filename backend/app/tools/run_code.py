@@ -49,6 +49,7 @@ def register_run_code_tool() -> None:
                 "脚本自身打印（标签、步骤、判定）与注释必须用英语；源码/payload/回显原文不要翻译。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"
                 "沙箱无网、跑完即删。失败（无 Docker、缺镜像、编译错误）不要据此误报。"
+                "脚本写入 harness.py，不要把同一份 mock 写进 poc.py。"
             ),
             parameters={
                 "type": "object",

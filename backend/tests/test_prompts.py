@@ -227,6 +227,9 @@ def test_poc_prompt_requires_cli_parameters():
     assert "不要写死" in poc
     assert "退出码 0" in poc
     assert "系统再执行" in poc
+    assert "职责边界" in poc
+    assert "加未使用" in poc
+    assert "不要落盘" in poc
     assert "--strict-ssl" in poc
     assert "默认跳过证书校验" in poc
     assert "skips TLS certificate verification" in poc

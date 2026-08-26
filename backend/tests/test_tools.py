@@ -295,6 +295,116 @@ def test_submit_vuln_rejects_http_poc_without_proxy(tmp_env, project):
     assert "--proxy" in out["error"]
 
 
+def _set_target_kind(project_id: int, kind: str) -> None:
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        assert proj is not None
+        proj.target_kind = kind
+        db.commit()
+
+
+def _library_submit_payload(**overrides):
+    body = {
+        "title": "Policy bypass via list-form agents",
+        "vuln_type": "auth_bypass",
+        "cwe": "CWE-284",
+        "file_path": "src/pkg/core.py",
+        "line_no": 980,
+        "source_sink": "workflow.yaml agents list -> _check_tool_policy",
+        "auth_premise": "调用方构造 recipe",
+        "config_premise": "default",
+        "http_request": "RecipeConfig(path=recipe_dir); _check_tool_policy(cfg)",
+        "expected_evidence": "list-form agents bypass denied-tool policy",
+        "root_cause_key": "auth_bypass:collect_workflow_declared_tools",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_submit_library_vuln_omits_poc_file(tmp_env, project):
+    from app.services.paths import vuln_dir
+
+    _set_target_kind(project, "library")
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", _library_submit_payload())
+    assert out["ok"] is True
+    assert not (vuln_dir(project, out["vuln_id"]) / "poc.py").exists()
+    report = (vuln_dir(project, out["vuln_id"]) / "report.md").read_text(encoding="utf-8")
+    assert "无独立" in report or "harness.py" in report
+
+
+def test_submit_library_vuln_rejects_dummy_http_cli(tmp_env, project):
+    _set_target_kind(project, "library")
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        _library_submit_payload(
+            poc_code=(
+                "import argparse\n"
+                "from pkg.api import parse\n"
+                "p=argparse.ArgumentParser()\n"
+                "p.add_argument('-u','--url',default='')\n"
+                "p.add_argument('--proxy',default='')\n"
+                "print(parse('../etc/passwd'))\n"
+            ),
+        ),
+    )
+    assert out["ok"] is False
+    assert "未使用" in out["error"]
+
+
+def test_submit_library_vuln_rejects_harness_copy(tmp_env, project):
+    _set_target_kind(project, "library")
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        _library_submit_payload(
+            poc_code=(
+                "# Inlined from src/pkg/core.py; sandbox lacks yaml\n"
+                "_MOCK_YAML_DATA = {}\n"
+                "print('bypass')\n"
+            ),
+        ),
+    )
+    assert out["ok"] is False
+    assert "harness" in out["error"]
+
+
+def test_submit_library_vuln_allows_installed_package_poc(tmp_env, project):
+    from app.services.paths import vuln_dir
+
+    _set_target_kind(project, "library")
+    poc = (
+        "import argparse\n"
+        "from pkg.api import parse\n"
+        "p=argparse.ArgumentParser()\n"
+        "p.add_argument('--artifact', default='target.jar')\n"
+        "print(parse(p.parse_args().artifact))\n"
+    )
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        _library_submit_payload(poc_code=poc),
+    )
+    assert out["ok"] is True
+    saved = (vuln_dir(project, out["vuln_id"]) / "poc.py").read_text(encoding="utf-8")
+    assert "from pkg.api import parse" in saved
+    assert "--url" not in saved
+
+
+def test_submit_library_http_surface_still_requires_poc(tmp_env, project):
+    _set_target_kind(project, "library")
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        _library_submit_payload(http_request="GET /api/x HTTP/1.1\nHost: x\n"),
+    )
+    assert out["ok"] is False
+    assert "poc_code" in out["error"]
+
+
+
 def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):
     from app.services.poc_script import read_poc_code
     from app.services.paths import vuln_dir

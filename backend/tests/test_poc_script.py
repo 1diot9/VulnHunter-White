@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from app.services.poc_script import (
+    LIBRARY_POC_FAKE_HTTP_CLI_ERROR,
     POC_CLI_ERROR,
+    POC_HARNESS_SHAPE_ERROR,
     POC_LAB_RUN_ERROR,
     poc_cli_block_reason,
     poc_lab_run_block_reason,
+    poc_required_for_submit,
     read_poc_code,
     write_poc_code,
 )
@@ -32,14 +35,15 @@ def test_poc_cli_rejects_hardcoded_http_target():
     bad = "import requests\nprint(requests.get('http://127.0.0.1:18080/exec?cmd=id').text)\n"
     assert poc_cli_block_reason(bad) == POC_CLI_ERROR
     assert poc_cli_block_reason("curl http://127.0.0.1:18080/x\n") is None
-    # library/mixed: HTTP-shaped scripts are not forced through web CLI gate
-    assert poc_cli_block_reason(bad, target_kind="library") is None
+    # library/mixed with an HTTP client still follows the web CLI contract
+    assert poc_cli_block_reason(bad, target_kind="library") == POC_CLI_ERROR
     lib_api = """
 import argparse
+from pkg.api import parse
 p = argparse.ArgumentParser()
 p.add_argument("--artifact", default="target.jar")
 args = p.parse_args()
-print("call PublicApi.parse(malicious)")
+print(parse(args.artifact))
 """
     assert poc_cli_block_reason(lib_api, target_kind="library") is None
     assert poc_cli_block_reason(lib_api, target_kind="mixed") is None
@@ -113,3 +117,47 @@ args = p.parse_args()
 print(args.url)
 """
     assert poc_lab_run_block_reason(ok) is None
+
+
+def test_library_poc_rejects_unused_http_cli():
+    dummy = """
+import argparse
+from pkg.api import parse
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", default="", help="Accepted for CLI compatibility")
+p.add_argument("--proxy", default="", help="Accepted for CLI compatibility")
+print(parse("../etc/passwd"))
+"""
+    assert poc_cli_block_reason(dummy, target_kind="library") == LIBRARY_POC_FAKE_HTTP_CLI_ERROR
+    assert poc_cli_block_reason(dummy, target_kind="mixed") == LIBRARY_POC_FAKE_HTTP_CLI_ERROR
+    assert poc_cli_block_reason(dummy) is None
+
+
+def test_poc_rejects_harness_shaped_copy():
+    harnessy = '''
+"""Inlined from src/pkg/core.py. The sandbox lacks yaml so _load_yaml_file is mocked."""
+_MOCK_YAML_DATA = {}
+def _load_yaml_file(path):
+    return _MOCK_YAML_DATA.get(path.name, {})
+print("bypass")
+'''
+    assert poc_cli_block_reason(harnessy) == POC_HARNESS_SHAPE_ERROR
+    assert poc_cli_block_reason(harnessy, target_kind="library") == POC_HARNESS_SHAPE_ERROR
+
+
+def test_poc_required_for_submit_library_without_http():
+    assert poc_required_for_submit(target_kind="web", http_request="Parser.parse(x)") is True
+    assert poc_required_for_submit(
+        target_kind="library",
+        http_request="RecipeConfig.parse(path, tools=['execute_command'])",
+    ) is False
+    assert poc_required_for_submit(
+        target_kind="library",
+        http_request="GET /x HTTP/1.1\nHost: x\n",
+    ) is True
+    assert poc_required_for_submit(
+        target_kind="mixed",
+        http_request="API: Parser.parse(untrusted)",
+        poc_code="import urllib.request\nprint(1)\n",
+    ) is True
+

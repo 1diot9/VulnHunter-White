@@ -20,7 +20,12 @@ from ..services.affected_locations import (
 )
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.paths import vuln_dir
-from ..services.poc_script import poc_cli_block_reason, write_poc_code
+from ..services.poc_script import (
+    POC_CODE_TOOL_DESCRIPTION,
+    poc_cli_block_reason,
+    poc_required_for_submit,
+    write_poc_code,
+)
 from ..services.cve_record import initialize_cve_record
 from ..services.report import (
     default_advisory_md,
@@ -248,13 +253,19 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "error": "挖掘阶段已完成（入口均已审计且无打回），禁止再 SubmitVuln；修复请走 Fix 流程",
         }
-    missing = [f for f in REQUIRED_SUBMIT_FIELDS if args.get(f) in (None, "")]
+    kind = _project_target_kind(ctx.project_id)
+    poc_text = str(args.get("poc_code") or "")
+    required = list(REQUIRED_SUBMIT_FIELDS)
+    if not poc_required_for_submit(
+        target_kind=kind,
+        http_request=str(args.get("http_request") or ""),
+        poc_code=poc_text,
+    ):
+        required = [f for f in required if f != "poc_code"]
+    missing = [f for f in required if args.get(f) in (None, "")]
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
-    poc_blocked = poc_cli_block_reason(
-        str(args.get("poc_code") or ""),
-        target_kind=_project_target_kind(ctx.project_id),
-    )
+    poc_blocked = poc_cli_block_reason(poc_text, target_kind=kind)
     if poc_blocked:
         return {"ok": False, "error": poc_blocked}
     vtype = refine_vuln_type(
@@ -320,7 +331,7 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             auth_premise=str(args["auth_premise"]),
             config_premise=config_premise,
             http_request=str(args["http_request"]),
-            poc_code=str(args["poc_code"]),
+            poc_code=poc_text,
             expected_evidence=str(args["expected_evidence"]),
             intended_behavior=intended,
             root_cause_key=root_key,
@@ -361,7 +372,8 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         write_advisory_md(vdir / "advisory.md", str(args.get("advisory_md") or default_advisory_md(args)))
         initialize_cve_record(ctx.project_id, vuln_id)
         (vdir / "request.http").write_text(str(args["http_request"]), encoding="utf-8")
-        write_poc_code(ctx.project_id, vuln_id, str(args["poc_code"]))
+        if poc_text.strip():
+            write_poc_code(ctx.project_id, vuln_id, poc_text)
         vuln.report_path = f"vulns/{vuln_id}/report.md"
         db.commit()
 
@@ -478,7 +490,7 @@ summary: {args.get('source_sink', '')[:200]}
 {args.get('source_sink')}
 
 ### 完整 PoC 描述
-可运行脚本见同目录 `poc.py`（`python poc.py -u <目标>`；`--proxy` 设 HTTP 代理，空则直连；RCE 加 `-c/--cmd`）。
+{("可运行脚本见同目录 `poc.py`（有 HTTP 面时 `python poc.py -u <目标>`；纯库洞为已安装包的公开 API 调用，不要与 `harness.py` 重复）。" if str(args.get("poc_code") or "").strip() else "无独立 `poc.py`：纯库洞无 HTTP/安装面时以 API 调用配方为准；局部验证证据在 `harness.py`。")}
 
 ```http
 {args.get('http_request')}
@@ -704,15 +716,7 @@ def register_worker_tools() -> None:
                     },
                     "poc_code": {
                         "type": "string",
-                        "description": (
-                            "可运行 Python。有 HTTP 面时必须 argparse：-u/--url 为目标 origin；"
-                            "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
-                            "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
-                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
-                            "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
-                            "脚本自身打印与注释（标签、状态、告警、判定、--help、docstring）必须用英语；目标回显原文不要翻译。"
-                            "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
-                        ),
+                        "description": POC_CODE_TOOL_DESCRIPTION,
                     },
                     "expected_evidence": {
                         "type": "string",
@@ -877,15 +881,7 @@ def register_worker_tools() -> None:
                     },
                     "poc_code": {
                         "type": "string",
-                        "description": (
-                            "可运行 Python。有 HTTP 面时必须 argparse：-u/--url 为目标 origin；"
-                            "必须 --proxy 设 HTTP 代理（空则直连）并接到全部 HTTP 请求；"
-                            "有代理时 127.0.0.1/localhost 也必须强制走代理（覆盖 proxy_bypass）；"
-                            "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
-                            "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
-                            "脚本自身打印与注释（标签、状态、告警、判定、--help、docstring）必须用英语；目标回显原文不要翻译。"
-                            "组件库纯 API 洞可用库调用型脚本（不强制 -u）；证据主路径可为 harness。"
-                        ),
+                        "description": POC_CODE_TOOL_DESCRIPTION,
                     },
                     "expected_evidence": {
                         "type": "string",

@@ -27,7 +27,7 @@
   2. **根因**：漏洞类型（CWE）、缺失或被绕过的控制、关键文件/函数。
   3. **漏洞链路**：入口（端点/参数/鉴权前提）→ 中间处理 → sink；写明默认部署下为何能打通。
   4. **漏洞代码**：仓库内完整相对路径（如 `src/.../File.ext` 或 `app/utils/backup.py:42`）+ 对应源码原文；不要只写类名/方法名或一句话概述。
-  5. **PoC**：有 HTTP 面时写完整原始 HTTP 请求包（方法、路径、必要头、body；`Host` 用 `TARGET`）；约 80+ 字符的长串用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符。无 HTTP 面（组件库/公开 API）时写可复现的 API/调用链或 harness 调用，不要留空。
+  5. **PoC**：有 HTTP 面时写完整原始 HTTP 请求包（方法、路径、必要头、body；`Host` 用 `TARGET`）；约 80+ 字符的长串用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符。无 HTTP 面（组件库/公开 API）时写可复现的 API/调用链，不要留空；不要把 `harness.py` 的内联/mock 抄进 `poc.py`。无 HTTP 且无安装面时可不落盘 `poc.py`。
   6. **危害**：成功利用后攻击者能做什么；剩余控制条件如实写，不要夸大。
 - `supportingMedia[0].value` 是同一内容的 HTML：段落用 `<p>`，**漏洞代码与 HTTP/API PoC 均放在 `<pre>` 中**（各用一块，不要挤进同一段纯文本）。不要只复制一句纯文本。
 - `problemTypes[0].descriptions[0].description` 仍只填 CWE 弱点英文名，不是整段漏洞描述。

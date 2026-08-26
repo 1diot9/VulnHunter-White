@@ -1465,7 +1465,8 @@ _HARNESS_REVIEW_NOTE = (
     "本项目为局部验证：不要搭建 Docker 靶场，不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
     "用 RunCode 按目标语言写 mock/harness；打通且成立性满足时 evidence_level=harness。"
     "沙箱不可用或 mock 失败不要误报，静态已能证明默认可利用则 static_only。"
-    "不要把 harness 写进 poc.py。应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"
+    "不要把 harness 的内联/mock 或同一套测试写进 poc.py；纯库洞无 HTTP/安装面时不要补假 -u/--proxy。"
+    "应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"
 )
 
 _BRINGUP_FAILED_NOTE = (

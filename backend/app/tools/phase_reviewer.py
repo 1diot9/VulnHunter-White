@@ -42,7 +42,13 @@ from ..services.lab import (
 )
 from ..services.paths import vuln_dir
 from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
-from ..services.poc_script import poc_cli_block_reason, read_poc_code, write_harness_code, write_poc_code
+from ..services.poc_script import (
+    POC_CODE_TOOL_DESCRIPTION,
+    poc_cli_block_reason,
+    read_poc_code,
+    write_harness_code,
+    write_poc_code,
+)
 from ..services.report import harness_vuln_code_gap, upsert_report_section, write_advisory_md
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
@@ -921,10 +927,8 @@ def register_reviewer_tools() -> None:
                     "poc_code": {
                         "type": "string",
                         "description": (
-                            "可选。本轮改写后的完整 poc.py（CLI 形态，须含 --proxy；"
-                            "有代理时 127.0.0.1 也须强制走代理；以及同链上的 payload 校准；"
-                            "脚本自身打印与注释须用英语），"
-                            "系统会回写 vulns/{id}/poc.py。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。"
+                            "可选。" + POC_CODE_TOOL_DESCRIPTION
+                            + "系统会回写 vulns/{id}/poc.py。PoC 由 Reviewer 收口，不要打回 Worker 改 PoC。"
                         ),
                     },
                     "advisory_md": {
@@ -939,8 +943,9 @@ def register_reviewer_tools() -> None:
                     "harness_code": {
                         "type": "string",
                         "description": (
-                            "可选。局部验证的 mock/harness 源码，写入 vulns/{id}/harness.*，"
-                            "不要放进 poc.py。脚本自身打印与注释须用英语。"
+                            "可选。局部验证的 mock/harness 源码，写入 vulns/{id}/harness.*。"
+                            "不要把内联/mock 脚本放进 poc.py，也不要复制同一套测试矩阵。"
+                            "脚本自身打印与注释须用英语。"
                         ),
                     },
                     "harness_language": {

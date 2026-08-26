@@ -148,7 +148,7 @@ function buildNodes({
               {
                 id: 'harness',
                 label: '沙箱 harness',
-                hint: 'RunCode 在一次性 sibling 容器执行；脚本写入 harness.py，不覆盖 poc.py。',
+                hint: 'RunCode 在一次性 sibling 容器执行；脚本写入 harness.py。不要把 mock 抄进 poc.py；纯库洞无安装面可不交 poc.py。',
               },
             ]
           : [{ id: 'static', label: 'static_only', hint: '不搭靶场；静态证据充分即可确认入库。' }],

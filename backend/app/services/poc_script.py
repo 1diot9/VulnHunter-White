@@ -21,6 +21,22 @@ _HTTP_HINT_RE = re.compile(
     r"requests\.|httpx\.|urllib|aiohttp|http\.client",
     re.I,
 )
+_HTTP_REQUEST_RE = re.compile(
+    r"(?im)^\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)\s+\S+"
+    r"|^\s*HTTP/\d"
+)
+_HARNESS_SHAPED_RE = re.compile(
+    r"(?is)("
+    r"inlined\s+(?:from|verbatim)"
+    r"|sandbox\s+(?:lacks|has no)"
+    r"|extracts the exact vulnerable"
+    r"|exact copy of the vulnerable"
+    r"|_MOCK_"
+    r"|mock _load"
+    r"|don't depend on host files"
+    r"|不要依赖宿主机"
+    r")"
+)
 
 POC_CLI_ERROR = (
     "poc_code 必须用 argparse 接收目标（-u/--url）和 HTTP 代理（--proxy，空则直连），"
@@ -35,6 +51,30 @@ POC_LAB_RUN_ERROR = (
     "ConfirmVuln 会执行 python poc.py -u <target_url>，打出预期冲击须退出码 0。"
 )
 
+POC_HARNESS_SHAPE_ERROR = (
+    "poc.py 不能写成沙箱 harness：不要内联源码、不要 mock 依赖、不要复制 harness 测试矩阵。"
+    "局部验证证据只写入 harness.py（RunCode）。"
+    "poc.py 仅在能对已安装包做最小公开 API 复现、或对任意 HTTP origin 复测时才写。"
+)
+
+LIBRARY_POC_FAKE_HTTP_CLI_ERROR = (
+    "纯库洞 poc.py 不要加未使用的 -u/--url 或 --proxy。"
+    "有 HTTP 利用面才写完整 HTTP CLI（-u/--url、--proxy、本机强制走代理、HTTPS 证书处理）；"
+    "否则 poc.py 必须 import 已安装的真实包并调用公开 API，不要把 harness 的内联/mock 测试抄进去。"
+    "没有安装面也没有 HTTP 面时不要交 poc.py，报告与 http_request 写 API 调用配方即可。"
+)
+
+POC_CODE_TOOL_DESCRIPTION = (
+    "有 HTTP 利用面时必填：argparse -u/--url 为目标 origin；"
+    "必须 --proxy（空则直连）并接到全部 HTTP 请求；有代理时 127.0.0.1/localhost 也必须强制走代理；"
+    "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
+    "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
+    "脚本自身打印与注释必须用英语；目标回显原文不要翻译。"
+    "纯库洞：不要交未使用的 -u/--proxy，不要把 harness 内联/mock 抄进 poc.py。"
+    "仅当安装真实包后能 import 公开 API 并打出冲击时才写 poc.py；"
+    "无 HTTP 面且无安装面时留空，http_request 写 API 调用配方。局部验证证据只进 harness.py。"
+)
+
 
 def _has_url_flag(text: str) -> bool:
     lower = text.lower()
@@ -45,20 +85,51 @@ def _has_proxy_flag(text: str) -> bool:
     return bool(_PROXY_FLAG_RE.search(text))
 
 
-def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None) -> str | None:
-    """Reject HTTP-looking PoCs that omit -u/--url, --proxy, or localhost force-proxy.
+def looks_like_http_request(text: str | None) -> bool:
+    """True when http_request looks like a raw HTTP message rather than an API recipe."""
+    return bool(_HTTP_REQUEST_RE.search(text or ""))
 
-    For library/mixed component audits, library-style PoCs (no HTTP client) are allowed
-    without forcing -u/--url; HTTP-shaped scripts still follow the web CLI contract.
+
+def looks_like_http_poc(text: str | None) -> bool:
+    return bool(_HTTP_HINT_RE.search(text or ""))
+
+
+def poc_required_for_submit(
+    *,
+    target_kind: str | None,
+    http_request: str = "",
+    poc_code: str = "",
+) -> bool:
+    """Web always needs a poc_code draft. Component audits need one only with an HTTP surface."""
+    from ..target_kind import is_component_target
+
+    if looks_like_http_request(http_request) or looks_like_http_poc(poc_code):
+        return True
+    return not is_component_target(target_kind)
+
+
+def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None) -> str | None:
+    """Reject HTTP PoCs that omit the web CLI contract, dummy library CLIs, and harness copies.
+
+    Empty poc_code is allowed here; SubmitVuln decides whether the field is required.
+    HTTP-shaped scripts (including library/mixed with an HTTP client) follow the web CLI
+    contract. Pure library API scripts must import the real package — no unused -u/--proxy
+    and no inlined/mocked harness copies.
     """
     from ..target_kind import is_component_target
 
     text = poc_code or ""
     if not text.strip():
         return None
-    if is_component_target(target_kind) and not _HTTP_HINT_RE.search(text):
+    if _HARNESS_SHAPED_RE.search(text):
+        return POC_HARNESS_SHAPE_ERROR
+    http = bool(_HTTP_HINT_RE.search(text))
+    component = is_component_target(target_kind)
+    if component and not http:
+        if _URL_FLAG_RE.search(text) or _PROXY_FLAG_RE.search(text):
+            return LIBRARY_POC_FAKE_HTTP_CLI_ERROR
         return None
-    if not _HTTP_HINT_RE.search(text):
+    if not http:
         return None
     if (
         _has_url_flag(text)
@@ -66,10 +137,6 @@ def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None
         and _FORCE_LOCAL_PROXY_RE.search(text)
         and _SSL_HANDLING_RE.search(text)
     ):
-        return None
-    if is_component_target(target_kind):
-        # Component audits may ship API-call PoCs that import requests only for
-        # optional demos; do not force full HTTP CLI when kind is library/mixed.
         return None
     return POC_CLI_ERROR
 

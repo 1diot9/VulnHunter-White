@@ -315,7 +315,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 
 #### 4.6.3 局部验证（harness）
 
-在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，思路类似「抽出可疑函数 + mock 驱动 payload」，成本低但无法证明完整 HTTP 链路与 classpath 复杂场景。确认后 `evidence_level=harness`。
+在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，思路类似「抽出可疑函数 + mock 驱动 payload」，成本低但无法证明完整 HTTP 链路与 classpath 复杂场景。确认后 `evidence_level=harness`。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。
 
 #### 4.6.4 静态验证
 

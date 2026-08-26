@@ -2,7 +2,22 @@
 
 `poc_code` / `vulns/{id}/poc.py` 必须是可独立运行的 Python 3 脚本，给人工、Reviewer 和 Verifier 换目标复测。不要写成只打本次 lab 的一次性片段。
 
-## 必做
+## 与 harness.py 的职责边界
+
+两份脚本不要做同一件事。
+
+| 文件 | 职责 | 何时写 |
+| --- | --- | --- |
+| `poc.py` | 对**真实运行面**复测：Web / HTTP 面打任意 origin；纯库洞则 `import` 已安装包并调用公开 API | 有 HTTP 利用面，或安装真实包后能复现 |
+| `harness.py` | 局部验证沙箱证据：抽出函数 + mock 依赖，由 `RunCode` 落盘 | 仅局部验证模式 |
+
+- **禁止**把 harness 的内联源码、mock、TEST 矩阵抄进 `poc.py`。
+- **禁止**给纯库洞加未使用的 `-u/--url` / `--proxy`「仅为 CLI 兼容」。
+- 无 HTTP 面且无法对已安装包复现时：**不要落盘 `poc.py`**，`http_request` 与报告写 API 调用配方即可。SubmitVuln 此时可省略 `poc_code`。
+
+## 必做（有 HTTP 利用面时）
+下列条款适用于 Web 洞以及组件库/混合仓里**确有 HTTP 利用面**的 `poc.py`。纯库洞、无 HTTP 面的脚本见文首「职责边界」与文末「组件库」节，不要套用 `-u/--url`。
+
 1. **目标一律 CLI 传入**：用 `argparse`，必填 `-u/--url`（站点 origin，如 `http://1.2.3.4:8080`）。不要写死 `127.0.0.1`、lab 端口或某个 FOFA 主机。
 2. **HTTP 代理一律 CLI 传入**：每个 `poc.py` 都必须提供 `--proxy`（可选，默认空字符串=直连），例如 `http://127.0.0.1:8080`。发给目标的全部 HTTP/HTTPS 请求都必须走该参数（`urllib` 用 `ProxyHandler`，`requests`/`httpx` 用 `proxies=`）。不要写死代理地址，也不要只声明参数却不接到客户端。
    - **有 `--proxy` 时，访问 `127.0.0.1` / `localhost` / `::1` 也必须强制走代理。** Python 与 Windows 默认会把本机地址列入代理旁路（`proxy_bypass` / `NO_PROXY` /「对本地地址不使用代理」），只写 `ProxyHandler` 或 `proxies=` 不够。必须覆盖 `urllib.request.proxy_bypass`（及 registry/environment 变体）为永不旁路；若用 `requests`，再把 `requests.utils.should_bypass_proxies` 置为恒 `False` 且 `session.trust_env=False`；若用 `httpx`，用显式 `proxy=` 且 `trust_env=False`。
@@ -103,6 +118,8 @@ python poc.py -u https://real-domain.com --strict-ssl
 
 ## 组件库 / 混合审计对象
 当项目 `target_kind` 为 `library` 或 `mixed`：
-- 有 HTTP 利用面时，仍遵守上文 `-u/--url` + `--proxy` 合同。
-- **纯库洞**以 `harness.py`（`RunCode`）为证据主路径；`poc.py` 可为调用公开 API 的最小脚本（argparse 可用包路径/版本等参数，不强制 HTTP origin）。harness 自身打印与注释同样必须用英语。
+- 有 HTTP 利用面时，仍遵守上文 `-u/--url` + `--proxy` 合同，且 `poc_code` 必填。
+- **纯库洞**以 `harness.py`（`RunCode`）为局部验证证据主路径。`poc.py` **仅当**安装真实包（pip/npm/maven 等）后能 `import` 公开 API 并打出冲击时才写：最小调用脚本，argparse 可用包路径/版本等参数，**不要** `-u/--url`。不要复制 harness 的内联/mock 测试。
+- 无 HTTP 面、也无法对已安装包复现：省略 `poc_code`，不要交空壳或假 HTTP CLI。
 - SubmitVuln 的 `http_request` 可写 **API 调用配方**（类/方法/参数），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
+- harness 自身打印与注释同样必须用英语。
