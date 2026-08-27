@@ -257,6 +257,7 @@ Unix：`backend/.venv/bin/pip install -e tools/mcp/python-debug`。
 # VULNHUNTER_ACCESS_TOKEN=
 # VULNHUNTER_PORT=16780
 # VULNHUNTER_FRONTEND_PORT=15173
+# VULNHUNTER_HOST=127.0.0.1
 VULNHUNTER_HTTP_PROXY=
 VULNHUNTER_HTTPS_PROXY=
 VULNHUNTER_CHAT_PROXY=
@@ -264,7 +265,7 @@ VULNHUNTER_FOFA_KEY=
 GITHUB_TOKEN=
 ```
 
-`VULNHUNTER_ACCESS_TOKEN` 为全局访问令牌：配置后打开前端需先输入才能查看数据或调用功能；也可在设置页用当前令牌修改（修改后以设置为准）。未配置则不启用入口闸门。`OPENAI_API_KEY` 也可作回退，日常请在设置页填写。
+`VULNHUNTER_ACCESS_TOKEN` 为全局访问令牌：配置后打开前端需先输入才能查看数据或调用功能；也可在设置页用当前令牌修改（修改后以设置为准）。未配置则不启用入口闸门。`OPENAI_API_KEY` 也可作回退，日常请在设置页填写。`VULNHUNTER_HOST` 默认 `127.0.0.1`（仅本机）；局域网访问设 `0.0.0.0` 或启动时加 `--lan`。
 
 ## 一键启停
 
@@ -282,7 +283,8 @@ sh start.sh
 
 若已 `chmod +x start.sh`，也可 `./start.sh`。脚本是 POSIX `sh`，macOS 自带 `/bin/sh` 即可，不必装 bash。
 
-- 启动后端 `http://127.0.0.1:16780` 与前端 `http://127.0.0.1:15173`（避开常见的 8000 / Vite 5173）
+- 启动后端 `http://127.0.0.1:16780` 与前端 `http://127.0.0.1:15173`（避开常见的 8000 / Vite 5173）；默认只绑本机
+- 局域网访问：`start.cmd --lan` 或 `start.cmd --host 0.0.0.0`（Unix：`sh start.sh --lan`），也可设环境变量 `VULNHUNTER_HOST=0.0.0.0`
 - 可用 `start.cmd --backend-port 19000 --frontend-port 19001`（Unix：`sh start.sh --backend-port 19000 --frontend-port 19001`）或环境变量 `VULNHUNTER_PORT` / `VULNHUNTER_FRONTEND_PORT` 换端口
 - 首次自动建 `backend/.venv`、安装 Python 依赖、在 `frontend` 执行 `npm install`
 - 默认不热更新；改后端代码时用 `start.cmd --reload` 或 `sh start.sh --reload`

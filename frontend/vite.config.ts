@@ -10,6 +10,8 @@ function envPort(name: string, fallback: number): number {
 
 const backendPort = envPort('VULNHUNTER_PORT', 16780)
 const frontendPort = envPort('VULNHUNTER_FRONTEND_PORT', 15173)
+const listenHost = (process.env.VULNHUNTER_HOST || '127.0.0.1').trim() || '127.0.0.1'
+const publicListen = listenHost === '0.0.0.0' || listenHost === '::'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -64,8 +66,10 @@ export default defineConfig({
     },
   },
   server: {
+    host: listenHost,
     port: frontendPort,
     strictPort: true,
+    ...(publicListen ? { allowedHosts: true as const } : {}),
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${backendPort}`,
