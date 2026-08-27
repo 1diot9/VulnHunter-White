@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -10,11 +11,14 @@ from typing import Any
 import httpx
 
 from ..models import GithubCandidate, Project, SessionLocal, utcnow
+from ..prompts import load_prompt
 from ..target_kind import (
     DEFAULT_TARGET_KIND,
+    TARGET_KIND_LABELS,
     TARGET_KIND_LIBRARY,
     TARGET_KIND_MIXED,
     TARGET_KIND_WEB,
+    try_parse_target_kind,
 )
 from .ghsa_service import (
     GHSA_ADVISORIES,
@@ -156,6 +160,11 @@ _LIBRARY_TOPICS = frozenset(
         "api-client",
     }
 )
+_LLM_CLASSIFY_TIMEOUT = 45.0
+_LLM_CLASSIFY_MAX_TOKENS = 256
+_REASON_MAX = 500
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
+_KIND_JSON_RE = re.compile(r"\{[^{}]*\"target_kind\"[^{}]*\}", re.I | re.S)
 
 
 def clamp_search_limit(raw: Any) -> int:
@@ -194,14 +203,24 @@ def full_name_from_advisory(adv: dict[str, Any]) -> str | None:
     )
 
 
-def classify_target_kind(
+def _uniq_hits(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _keyword_target_kind_hits(
     *,
     description: str | None = None,
     topics: list[str] | None = None,
     full_name: str = "",
     language: str | None = None,
-) -> tuple[str, str]:
-    """Heuristic Web vs library classification without reading source."""
+) -> tuple[list[str], list[str]]:
     blob_parts = [
         full_name.lower(),
         (description or "").lower(),
@@ -223,29 +242,235 @@ def classify_target_kind(
         web_hits.append(f"topic:{t}")
     for t in topic_set & _LIBRARY_TOPICS:
         lib_hits.append(f"topic:{t}")
+    return _uniq_hits(web_hits), _uniq_hits(lib_hits)
 
-    # Deduplicate while preserving order
-    def _uniq(items: list[str]) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
-        for item in items:
-            if item in seen:
-                continue
-            seen.add(item)
-            out.append(item)
-        return out
 
-    web_hits = _uniq(web_hits)
-    lib_hits = _uniq(lib_hits)
-
+def classify_target_kind(
+    *,
+    description: str | None = None,
+    topics: list[str] | None = None,
+    full_name: str = "",
+    language: str | None = None,
+) -> tuple[str, str]:
+    """Keyword-only Web vs library vs mixed classification (no source, no LLM)."""
+    web_hits, lib_hits = _keyword_target_kind_hits(
+        description=description,
+        topics=topics,
+        full_name=full_name,
+        language=language,
+    )
     if web_hits and lib_hits:
         reason = f"同时命中 Web（{', '.join(web_hits[:3])}）与组件（{', '.join(lib_hits[:3])}）"
-        return TARGET_KIND_MIXED, reason[:500]
+        return TARGET_KIND_MIXED, reason[:_REASON_MAX]
     if web_hits:
-        return TARGET_KIND_WEB, f"命中 Web 特征：{', '.join(web_hits[:4])}"[:500]
+        return TARGET_KIND_WEB, f"命中 Web 特征：{', '.join(web_hits[:4])}"[:_REASON_MAX]
     if lib_hits:
-        return TARGET_KIND_LIBRARY, f"命中组件特征：{', '.join(lib_hits[:4])}"[:500]
+        return TARGET_KIND_LIBRARY, f"命中组件特征：{', '.join(lib_hits[:4])}"[:_REASON_MAX]
     return DEFAULT_TARGET_KIND, "信息不足，默认 Web 应用"
+
+
+def _clip_reason(text: str) -> str:
+    return (text or "").strip()[:_REASON_MAX]
+
+
+def _parse_target_kind_llm_payload(raw: str | None) -> dict[str, Any] | None:
+    body = (raw or "").strip()
+    if not body:
+        return None
+    body = _JSON_FENCE_RE.sub("", body).strip()
+    candidates = [body]
+    match = _KIND_JSON_RE.search(body)
+    if match:
+        candidates.append(match.group(0))
+    for chunk in candidates:
+        try:
+            data = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("target_kind") is not None:
+            return data
+    return None
+
+
+def _choice_content(data: dict[str, Any]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message") or {}
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+        content = "".join(parts)
+    if content is None:
+        content = first.get("text") or ""
+    return str(content or "").strip()
+
+
+def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
+    """One-shot JSON classification. Returns model text or None on skip/failure."""
+    from ..agent.anthropic_compat import (
+        anthropic_headers,
+        anthropic_message_to_openai,
+        anthropic_url,
+        build_anthropic_body,
+        is_anthropic_wire,
+    )
+    from ..agent.llm_compat import param_to_drop, prepare_chat_body, sampling_temperature
+    from ..config import settings
+    from ..services.http_client import chat_http_client, chat_http_timeout
+    from ..services.llm_settings import bind_llm_to_endpoint, pool_endpoints_resolved, resolve_llm
+    from ..services.llm_thread import llm_thread_slot
+
+    try:
+        llm = resolve_llm("worker")
+    except Exception:  # noqa: BLE001
+        logger.warning("discover target-kind LLM resolve failed", exc_info=True)
+        return None
+    if not (llm.api_key or "").strip() or not (llm.model or "").strip():
+        return None
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    timeout = chat_http_timeout(_LLM_CLASSIFY_TIMEOUT, 0)
+    try:
+        with llm_thread_slot(phase="discover", role="worker") as handle:
+            if handle is None:
+                return None
+            if handle.endpoint_id:
+                for ep in pool_endpoints_resolved():
+                    if ep.id == handle.endpoint_id:
+                        llm = bind_llm_to_endpoint(llm, ep)
+                        break
+            if is_anthropic_wire(llm.wire_api):
+                url = anthropic_url(llm.base_url)
+                headers = anthropic_headers(llm.api_key)
+                body: dict[str, Any] = build_anthropic_body(
+                    model=llm.model,
+                    messages=list(messages),
+                    temperature=sampling_temperature(llm.model, settings.temperature),
+                    max_tokens=_LLM_CLASSIFY_MAX_TOKENS,
+                )
+            else:
+                url = llm.base_url.rstrip("/") + "/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {llm.api_key}",
+                    "Content-Type": "application/json",
+                }
+                body = {
+                    "model": llm.model,
+                    "messages": messages,
+                    "max_tokens": _LLM_CLASSIFY_MAX_TOKENS,
+                }
+                prepare_chat_body(body, llm.model, temperature=settings.temperature)
+
+            with chat_http_client(timeout=timeout) as client:
+                for _attempt in range(2):
+                    res = client.post(url, headers=headers, json=body)
+                    if res.status_code == 400:
+                        drop_key = param_to_drop(body, res.text)
+                        if drop_key:
+                            body.pop(drop_key, None)
+                            continue
+                    if res.status_code >= 400:
+                        logger.warning(
+                            "discover target-kind LLM HTTP %s: %s",
+                            res.status_code,
+                            (res.text or "")[:240],
+                        )
+                        return None
+                    try:
+                        data = res.json()
+                    except (ValueError, json.JSONDecodeError):
+                        logger.warning("discover target-kind LLM response is not JSON")
+                        return None
+                    if not isinstance(data, dict):
+                        return None
+                    if is_anthropic_wire(llm.wire_api) or data.get("type") == "message":
+                        data = anthropic_message_to_openai(data)
+                    return _choice_content(data) or None
+    except Exception:  # noqa: BLE001
+        logger.warning("discover target-kind LLM call failed", exc_info=True)
+        return None
+    return None
+
+
+def refine_target_kind_with_llm(
+    *,
+    description: str | None = None,
+    topics: list[str] | None = None,
+    full_name: str = "",
+    language: str | None = None,
+    keyword_kind: str,
+    keyword_reason: str,
+) -> tuple[str, str]:
+    """LLM reclassification after keyword match; falls back to keyword result."""
+    topic_list = [str(t) for t in (topics or []) if str(t).strip()]
+    user = "\n".join(
+        [
+            f"仓库：{full_name or '未知'}",
+            f"描述：{(description or '').strip() or '无'}",
+            f"语言：{(language or '').strip() or '未知'}",
+            f"Topics：{', '.join(topic_list) if topic_list else '无'}",
+            f"关键词粗分：{keyword_kind}（{TARGET_KIND_LABELS.get(keyword_kind, keyword_kind)}）",
+            f"关键词依据：{keyword_reason}",
+        ]
+    )
+    try:
+        system = load_prompt("discover-target-kind.md").strip()
+    except FileNotFoundError:
+        return keyword_kind, keyword_reason
+
+    raw = _ask_target_kind_llm(system=system, user=user)
+    payload = _parse_target_kind_llm_payload(raw)
+    if payload is None:
+        return keyword_kind, keyword_reason
+    kind = try_parse_target_kind(payload.get("target_kind"))
+    if kind is None:
+        return keyword_kind, keyword_reason
+    llm_reason = str(payload.get("reason") or "").strip()
+    label = TARGET_KIND_LABELS.get(kind, kind)
+    if kind == keyword_kind:
+        detail = llm_reason or keyword_reason
+        return kind, _clip_reason(f"LLM 确认为「{label}」（{detail}）")
+    kw_label = TARGET_KIND_LABELS.get(keyword_kind, keyword_kind)
+    detail = llm_reason or f"关键词曾判 {kw_label}"
+    return kind, _clip_reason(
+        f"LLM 判定为「{label}」（{detail}；关键词：{keyword_reason}）"
+    )
+
+
+def resolve_discovered_target_kind(
+    *,
+    description: str | None = None,
+    topics: list[str] | None = None,
+    full_name: str = "",
+    language: str | None = None,
+) -> tuple[str, str]:
+    """Keyword match first, then LLM reclassification."""
+    kind, reason = classify_target_kind(
+        description=description,
+        topics=topics,
+        full_name=full_name,
+        language=language,
+    )
+    return refine_target_kind_with_llm(
+        description=description,
+        topics=topics,
+        full_name=full_name,
+        language=language,
+        keyword_kind=kind,
+        keyword_reason=reason,
+    )
 
 
 def _parse_github_datetime(raw: Any) -> datetime | None:
@@ -627,7 +852,7 @@ def search_candidates(*, limit: int = DEFAULT_SEARCH_LIMIT) -> dict[str, Any]:
                             topics = _fetch_topics(client, limiter, full_name)
                         description = str(repo.get("description") or "") or None
                         language = str(repo.get("language") or "") or None
-                        kind, reason = classify_target_kind(
+                        kind, reason = resolve_discovered_target_kind(
                             description=description,
                             topics=[str(t) for t in (topics or [])],
                             full_name=full_name,

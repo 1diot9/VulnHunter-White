@@ -13,6 +13,7 @@ from app.target_kind import (
     normalize_target_kind,
     parse_target_kind,
     target_kind_label,
+    try_parse_target_kind,
 )
 
 
@@ -29,6 +30,9 @@ def test_normalize_and_parse_target_kind():
     assert "公开 API" in initial_hint("library")
     assert create_verify_defaults("library")["dynamic_verify_mode"] == "harness"
     assert create_verify_defaults("web")["dynamic_verify_mode"] == "off"
+    assert try_parse_target_kind("组件库") == TARGET_KIND_LIBRARY
+    assert try_parse_target_kind("desktop") is None
+    assert try_parse_target_kind("") is None
 
 
 def test_create_library_defaults_harness(tmp_env, monkeypatch):

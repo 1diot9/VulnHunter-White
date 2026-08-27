@@ -13,6 +13,12 @@ from app.main import app
 from app.services import github_discover as discover
 
 
+@pytest.fixture(autouse=True)
+def _skip_target_kind_llm(monkeypatch):
+    """Search tests stay offline; dedicated LLM tests override this stub."""
+    monkeypatch.setattr(discover, "_ask_target_kind_llm", lambda **kwargs: None)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -69,6 +75,118 @@ def test_classify_web_vs_library():
         full_name="acme/mixed",
     )
     assert kind == "mixed"
+
+
+def test_llm_overrides_keyword_classification(monkeypatch):
+    monkeypatch.setattr(
+        discover,
+        "_ask_target_kind_llm",
+        lambda **kwargs: '{"target_kind":"library","reason":"公开 API 的 JSON SDK，不是可部署站点"}',
+    )
+    kind, reason = discover.resolve_discovered_target_kind(
+        description="A self-hosted CMS dashboard",
+        topics=["cms", "web"],
+        full_name="acme/cms-sdk",
+    )
+    assert kind == "library"
+    assert "LLM 判定为「组件库」" in reason
+    assert "关键词" in reason
+
+
+def test_llm_confirms_keyword_classification(monkeypatch):
+    monkeypatch.setattr(
+        discover,
+        "_ask_target_kind_llm",
+        lambda **kwargs: "```json\n{\"target_kind\":\"web\",\"reason\":\"自托管 CMS\"}\n```",
+    )
+    kind, reason = discover.resolve_discovered_target_kind(
+        description="A self-hosted CMS dashboard",
+        topics=["cms", "web"],
+        full_name="acme/cms",
+    )
+    assert kind == "web"
+    assert "LLM 确认为「Web 应用」" in reason
+
+
+def test_llm_invalid_payload_keeps_keyword(monkeypatch):
+    monkeypatch.setattr(discover, "_ask_target_kind_llm", lambda **kwargs: "not json")
+    kind, reason = discover.resolve_discovered_target_kind(
+        description="JSON parser SDK for Maven",
+        topics=["library", "parser"],
+        full_name="acme/json-parser",
+    )
+    assert kind == "library"
+    assert reason.startswith("命中组件特征")
+
+
+def test_llm_unknown_kind_keeps_keyword(monkeypatch):
+    monkeypatch.setattr(
+        discover,
+        "_ask_target_kind_llm",
+        lambda **kwargs: '{"target_kind":"desktop","reason":"gui"}',
+    )
+    kind, _ = discover.resolve_discovered_target_kind(
+        description="JSON parser SDK for Maven",
+        topics=["library", "parser"],
+        full_name="acme/json-parser",
+    )
+    assert kind == "library"
+
+
+def test_search_uses_llm_reclassification(tmp_env, monkeypatch):
+    recent = _iso(_now() - timedelta(days=10))
+    repos = {
+        "acme/webapp": {
+            "full_name": "acme/webapp",
+            "html_url": "https://github.com/acme/webapp",
+            "description": "Spring Boot CMS web application",
+            "language": "Java",
+            "stargazers_count": 2500,
+            "pushed_at": recent,
+            "private": False,
+            "archived": False,
+            "fork": False,
+            "topics": ["cms", "spring-boot"],
+        }
+    }
+    advisories = [
+        {
+            "ghsa_id": "GHSA-acme-webapp",
+            "html_url": "https://github.com/advisories/GHSA-acme-webapp",
+            "repository_advisory_url": "https://api.github.com/repos/acme/webapp/security-advisories/GHSA-x",
+            "source_code_location": "https://github.com/acme/webapp",
+        }
+    ]
+
+    def fake_github_get(url, *, params=None, client=None, limiter=None):
+        if "api.github.com/advisories" in url:
+            return _resp(200, advisories)
+        if url.endswith("/topics"):
+            return _resp(200, {"names": repos["acme/webapp"]["topics"]})
+        if "/repos/" in url:
+            return _resp(200, repos["acme/webapp"])
+        return _resp(404, {"message": "Not Found"})
+
+    monkeypatch.setattr(discover, "github_get", fake_github_get)
+    monkeypatch.setattr(discover, "_has_github_token", lambda: True)
+    monkeypatch.setattr(
+        discover,
+        "http_client",
+        lambda timeout=45.0: MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False),
+    )
+    monkeypatch.setattr(
+        discover,
+        "_ask_target_kind_llm",
+        lambda **kwargs: '{"target_kind":"mixed","reason":"核心是库，附带管理后台"}',
+    )
+
+    result = discover.search_candidates(limit=1)
+    assert result["ok"] is True
+    assert result["added"] == 1
+    item = result["items"][0]
+    assert item["full_name"] == "acme/webapp"
+    assert item["target_kind"] == "mixed"
+    assert "LLM 判定为「混合」" in (item["target_kind_reason"] or "")
 
 
 def test_search_limit_default_five_and_filters(tmp_env, monkeypatch):

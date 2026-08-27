@@ -708,3 +708,12 @@ def test_old_vuln_prompt_persist_is_not_completion():
     assert "补漏" in ghsa_initial
     assert "WriteOldVuln(done=true" in ghsa_initial
     assert "不要收录依赖" in ghsa_initial
+
+
+def test_discover_target_kind_prompt_exists():
+    text = load_prompt("discover-target-kind.md")
+    assert "web" in text
+    assert "library" in text
+    assert "mixed" in text
+    assert "target_kind" in text
+    assert "关键词" in text

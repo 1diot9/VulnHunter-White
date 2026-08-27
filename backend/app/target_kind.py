@@ -69,11 +69,13 @@ def normalize_target_kind(raw: Any, *, default: str = DEFAULT_TARGET_KIND) -> st
     )
 
 
-def parse_target_kind(raw: Any) -> str:
-    """Raise if the caller provided an invalid explicit kind."""
-    if raw is None or str(raw).strip() == "":
-        return DEFAULT_TARGET_KIND
+def try_parse_target_kind(raw: Any) -> str | None:
+    """Return a valid kind or None. Does not fall back to the default."""
+    if raw is None:
+        return None
     s = str(raw).strip()
+    if not s:
+        return None
     key = s.lower().replace("-", "_")
     compact = "".join(s.split())
     if key in ALLOWED_TARGET_KINDS:
@@ -84,6 +86,14 @@ def parse_target_kind(raw: Any) -> str:
         or _TARGET_KIND_ALIASES.get(compact)
         or _TARGET_KIND_ALIASES.get(compact.lower())
     )
+    return found if found in ALLOWED_TARGET_KINDS else None
+
+
+def parse_target_kind(raw: Any) -> str:
+    """Raise if the caller provided an invalid explicit kind."""
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_TARGET_KIND
+    found = try_parse_target_kind(raw)
     if found in ALLOWED_TARGET_KINDS:
         return found
     allowed = "、".join(
