@@ -52,6 +52,7 @@ from ..dynamic_verify import (
     is_lab_mode,
     project_verify_mode,
     review_timeouts_before_static,
+    review_timeouts_exhausted,
     static_after_review_timeouts,
     verify_mode_enabled,
 )
@@ -1467,6 +1468,23 @@ _STATIC_REVIEW_NOTE = (
     "不要每条漏洞重新识别，Confirm 会写入报告。不要编造 hash。"
 )
 
+_LAB_VERIFY_GATE = (
+    "动态验证先跑当前 poc.py；靶场可用时 ConfirmVuln 会系统再跑一遍落盘脚本，"
+    "退出码非 0 则拒绝确认，不要用 static_only 跳过。"
+    "缺失/跑不通且需改写时才用 debug MCP 动态调试，不要一上来就挂 MCP。"
+)
+_STATIC_VERIFY_GATE = (
+    "本轮仅静态审核：不要对靶场发请求、不要运行 poc.py、不要 debug MCP。"
+    "ConfirmVuln 必须 evidence_level=static_only。"
+    "静态已能证明默认可利用则立即 Confirm 或误报收口，不要再排查认证、路由或环境，"
+    "也不要重复通读报告。"
+)
+_HARNESS_VERIFY_GATE = (
+    "本轮局部验证：不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
+    "用 RunCode 写 harness；打通后 evidence_level=harness。"
+    "沙箱不可用或 mock 失败不要因此误报，静态已能证明则 static_only。"
+)
+
 _HARNESS_REVIEW_NOTE = (
     "本项目为局部验证：不要搭建 Docker 靶场，不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
     "用 RunCode 按目标语言写 mock/harness；打通且成立性满足时 evidence_level=harness。"
@@ -1660,15 +1678,50 @@ def _phase_system_prompt(
     return "\n\n".join(p for p in parts if p) + "\n"
 
 
+def _reviewer_verify_gate(*, force_static: bool, mode: str) -> str:
+    if force_static or mode == VERIFY_MODE_OFF:
+        return _STATIC_VERIFY_GATE
+    if mode == VERIFY_MODE_HARNESS:
+        return _HARNESS_VERIFY_GATE
+    return _LAB_VERIFY_GATE
+
+
 def _timeout_forced_static_note(streak: int) -> str:
     threshold = review_timeouts_before_static()
     return (
-        f"本条漏洞已连续超时 {streak} 轮（阈值 {threshold}），系统已强制本轮仅静态审核。"
+        f"本条漏洞已连续超时 {streak} 轮（阈值 {threshold}），系统已强制本轮仅静态审核；"
+        "失败后仅此一轮重试，须本轮立刻 ConfirmVuln(evidence_level=static_only) 或 MarkFalsePositive 收口。"
         "忽略上一轮未完成的动态环境、认证或路由排查。"
+        "不要重复读报告，也不要再查登录/路由/容器。"
         "若 Docker 靶场假就绪（容器在跑但业务入口 404/无法登录等），"
         "调用 RequestLabRebuild 交回搭建，不要空转修容器。"
         f"\n{_STATIC_REVIEW_NOTE}"
     )
+
+
+def _give_up_exhausted_review(project_id: int, vuln_id: int | None) -> bool:
+    """If this pending vuln already used its timeout retry, mark FP and return True."""
+    if vuln_id is None:
+        return False
+    from ..tools.phase_reviewer import mark_timeout_give_up
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != project_id:
+            return False
+        if vuln.status != "pending_review":
+            return False
+        streak = int(vuln.review_timeout_streak or 0)
+        if not review_timeouts_exhausted(streak):
+            return False
+        mark_timeout_give_up(vuln, streak)
+        db.commit()
+    live_log.system(
+        project_id,
+        f"漏洞 #{vuln_id} 审核超时已重试一轮仍未收口，已标误报",
+        phase="reviewer",
+    )
+    return True
 
 
 def _reviewer_round_verify(
@@ -1724,12 +1777,24 @@ def _note_reviewer_round_end(project_id: int, vuln_id: int | None, result: Any) 
             return
         streak = int(vuln.review_timeout_streak or 0) + 1
         vuln.review_timeout_streak = streak
+        abandoned = False
+        if review_timeouts_exhausted(streak) and vuln.status == "pending_review":
+            from ..tools.phase_reviewer import mark_timeout_give_up
+
+            mark_timeout_give_up(vuln, streak)
+            abandoned = True
         db.commit()
     threshold = review_timeouts_before_static()
-    if streak >= threshold:
+    if abandoned:
         live_log.system(
             project_id,
-            f"漏洞 #{vuln_id} 已连续超时 {streak} 轮，下一轮强制仅静态审核",
+            f"漏洞 #{vuln_id} 审核超时已重试一轮仍未收口，已标误报",
+            phase="reviewer",
+        )
+    elif streak >= threshold:
+        live_log.system(
+            project_id,
+            f"漏洞 #{vuln_id} 已连续超时 {streak} 轮，下一轮强制仅静态审核（仅此一轮重试）",
             phase="reviewer",
         )
     else:
@@ -1998,6 +2063,7 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     kwargs.setdefault("target_kind_hint", target_kind_initial_hint("web"))
     kwargs.setdefault("prior_basis", "static_only")
     kwargs.setdefault("prior_conclusion", "静态结论")
+    kwargs.setdefault("verify_gate", _LAB_VERIFY_GATE)
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -4435,6 +4501,14 @@ def _run_reviewer_once(project_id: int) -> None:
     try:
         cp = _adopt_resumable(project_id, "reviewer")
         if cp and cp.vuln_id is not None:
+            if _give_up_exhausted_review(project_id, cp.vuln_id):
+                try:
+                    _finish_phase_run(
+                        cp.phase_run_id, "failed", "review timeout retries exhausted"
+                    )
+                finally:
+                    _release_adopted(project_id, cp.phase_run_id)
+                return
             first_followup = bool(cp.state.get("dynamic_followup")) and not bool(
                 cp.state.get("dynamic_followup_prompted")
             )
@@ -4507,6 +4581,9 @@ def _run_reviewer_once(project_id: int) -> None:
                 "source_sink": vuln.source_sink,
             }
 
+        if _give_up_exhausted_review(project_id, vuln_id):
+            return
+
         lab_note, debug_plan, system, force_static = _reviewer_round_verify(
             project_id, timeout_streak=timeout_streak
         )
@@ -4530,6 +4607,10 @@ def _run_reviewer_once(project_id: int) -> None:
             payload=json_dumps(payload),
             lab_note=lab_note,
             debug_plan=json_dumps(debug_plan),
+            verify_gate=_reviewer_verify_gate(
+                force_static=force_static,
+                mode=VERIFY_MODE_OFF if force_static else _read_dynamic_verify_mode(project_id),
+            ),
             **_agent_prompt_vars(project_id),
         )
         user = body if force_static else _prompt_with_summary("reviewer", project_id, body)

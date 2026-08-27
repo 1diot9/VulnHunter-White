@@ -163,6 +163,19 @@ def _append_false_positive_reason(project_id: int, vuln_id: int, reason: str) ->
     upsert_report_section(vuln_dir(project_id, vuln_id) / "report.md", _FP_HEADING, reason.strip())
 
 
+def mark_timeout_give_up(vuln: Vuln, streak: int) -> str:
+    """Stop retrying a pending review after the static timeout retry also failed."""
+    reason = (
+        f"审核连续超时 {int(streak)} 轮（失败后已重试一轮仍未 ConfirmVuln / MarkFalsePositive），"
+        "系统停止重试并标为误报"
+    )
+    vuln.status = "false_positive"
+    vuln.return_reason = reason
+    vuln.review_timeout_streak = int(streak)
+    _append_false_positive_reason(vuln.project_id, int(vuln.id), reason)
+    return reason
+
+
 def _commit_false_positive(ctx, db, vuln: Vuln, vuln_id: int, reason: str, message: str) -> dict[str, Any]:
     vuln.status = "false_positive"
     vuln.return_reason = reason
@@ -852,8 +865,9 @@ def register_reviewer_tools() -> None:
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp|harness。"
-                "关闭时必须 static_only；靶场动态默认 dynamic。"
-                "靶场可用时系统会执行即将落盘的 poc.py（python poc.py -u <target_url>），"
+                "关闭动态验证、或本条已因连续超时/搭建失败被强制仅静态时必须 static_only；"
+                "靶场动态且未强制静态时默认 dynamic。"
+                "靶场可用且未强制静态时系统会执行即将落盘的 poc.py（python poc.py -u <target_url>），"
                 "退出码非 0 则拒绝确认；不要用 static_only 跳过。"
                 "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
                 "局部验证打通时标 harness，不要标 dynamic；"
@@ -882,8 +896,8 @@ def register_reviewer_tools() -> None:
                         "type": "string",
                         "description": (
                             "static_only | dynamic | mcp | harness。"
-                            "关闭时仅 static_only；靶场动态默认 dynamic（HTTP PoC）。"
-                            "靶场可用时系统会跑落盘 poc.py，失败则拒绝确认。"
+                            "关闭或强制仅静态时必须 static_only；靶场动态且未强制静态时默认 dynamic。"
+                            "靶场可用且未强制静态时系统会跑落盘 poc.py，失败则拒绝确认。"
                             "mcp 仅在 debug MCP 改写/调试 PoC 后复现成功时使用；"
                             "局部验证打通用 harness；"
                             "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）；"

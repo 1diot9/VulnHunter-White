@@ -100,6 +100,9 @@ def test_block_unbounded_listing(project, cmd):
         'findstr /i login src\\app\\Main.java',
         'find "login" src\\app\\Main.java',
         'grep TODO src/app/Main.java',
+        "# Find site ID for admin workspace\nWrite-Host ok",
+        'Write-Output "Could not find CSRF token in login page"',
+        "$tokenMatch = [regex]::Match($loginPage, 'name=\"token\"')",
     ],
 )
 def test_allow_shallow_listing_and_search(project, cmd):

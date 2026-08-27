@@ -378,7 +378,8 @@ def test_reviewer_debug_mcp_is_poc_rewrite_fallback():
     assert "debug MCP 只用于改 PoC 时的动态调试" in reviewer
     assert "先普通动态" in reviewer
     assert "debug MCP 不是首选" in followup
-    assert "才用 debug MCP 动态调试" in initial
+    assert "${verify_gate}" in initial
+    assert "才用 debug MCP 动态调试" in pipeline._LAB_VERIFY_GATE
     assert "不是首选验证方式" in poc
 
 

@@ -99,12 +99,15 @@ def test_resolve_verify_mode_legacy_boolean():
 
 
 def test_static_after_review_timeouts_threshold():
-    from app.dynamic_verify import static_after_review_timeouts
+    from app.dynamic_verify import review_timeouts_exhausted, static_after_review_timeouts
 
     assert static_after_review_timeouts(0) is False
-    assert static_after_review_timeouts(1) is False
+    assert static_after_review_timeouts(1) is True
     assert static_after_review_timeouts(2) is True
-    assert static_after_review_timeouts(3) is True
+    assert review_timeouts_exhausted(0) is False
+    assert review_timeouts_exhausted(1) is False
+    assert review_timeouts_exhausted(2) is True
+    assert review_timeouts_exhausted(3) is True
 
 
 def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
@@ -131,7 +134,7 @@ def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
     with SessionLocal() as db:
         vuln = db.get(Vuln, out["vuln_id"])
         assert vuln is not None
-        vuln.review_timeout_streak = 2
+        vuln.review_timeout_streak = 1
         db.commit()
     conf = registry.dispatch(
         _ctx(project, "reviewer"),
@@ -279,7 +282,7 @@ def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
             title="t",
             vuln_type="sqli",
             status="pending_review",
-            review_timeout_streak=2,
+            review_timeout_streak=1,
         )
         db.add(v)
         db.commit()

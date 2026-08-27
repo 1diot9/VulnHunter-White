@@ -269,7 +269,7 @@ class Vuln(Base):
     merged_into_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # status=merged 时指向主报告 id
     review_rounds: Mapped[int] = mapped_column(Integer, default=0)
-    # Consecutive Reviewer timeouts on this pending vuln; >= review_timeouts_before_static forces static.
+    # Consecutive Reviewer timeouts; >= before_static forces static retry; >= before_static+1 give up as FP.
     review_timeout_streak: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)

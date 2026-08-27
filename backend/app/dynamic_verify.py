@@ -206,7 +206,12 @@ def default_evidence_for_mode(mode: str) -> str:
 def review_timeouts_before_static() -> int:
     from .config import settings
 
-    return max(1, int(getattr(settings, "review_timeouts_before_static", 2) or 2))
+    return max(1, int(getattr(settings, "review_timeouts_before_static", 1) or 1))
+
+
+def review_timeouts_give_up() -> int:
+    """Consecutive timeouts at/above this: stop retrying and mark false_positive."""
+    return review_timeouts_before_static() + 1
 
 
 def static_after_review_timeouts(streak: Any) -> bool:
@@ -216,6 +221,15 @@ def static_after_review_timeouts(streak: Any) -> bool:
     except (TypeError, ValueError):
         n = 0
     return n >= review_timeouts_before_static()
+
+
+def review_timeouts_exhausted(streak: Any) -> bool:
+    """True when the static retry after timeout has also failed."""
+    try:
+        n = int(streak or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n >= review_timeouts_give_up()
 
 
 def vuln_forces_static_review(*, project_id: int | None, vuln_id: int | None) -> bool:

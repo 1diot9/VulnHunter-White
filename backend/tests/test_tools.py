@@ -1693,6 +1693,31 @@ def test_glob_and_grep_skip_node_modules(tmp_env, project):
     assert all("node_modules" not in h["path"].replace("\\", "/") for h in grepped.get("hits") or [])
 
 
+def test_grep_path_glob_matches_nested_java(tmp_env, project):
+    nested = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "class Main", "glob": "**/*.java", "root": "src"},
+    )
+    assert nested["ok"] is True
+    paths = [h["path"].replace("\\", "/") for h in nested.get("hits") or []]
+    assert any(p.endswith("app/Main.java") or p.endswith("Main.java") for p in paths)
+    by_ext = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "class Main", "glob": "*.java", "root": "src"},
+    )
+    assert by_ext["ok"] is True
+    assert by_ext.get("hits")
+    py_only = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "class Main", "glob": "**/*.py", "root": "src"},
+    )
+    assert py_only["ok"] is True
+    assert not py_only.get("hits")
+
+
 def test_shell_timeout_kills_process(tmp_env, project):
     tool = native_shell_tool()
     command = "Start-Sleep -Seconds 30" if tool == "PowerShell" else "sleep 30"

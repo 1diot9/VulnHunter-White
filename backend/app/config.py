@@ -62,8 +62,9 @@ class Settings(BaseSettings):
     fix_concurrency: int = 1
     llm_thread_limit: int = 6
     max_review_rejects: int = 1
-    # Same pending vuln: after this many consecutive reviewer timeouts, next round is static-only.
-    review_timeouts_before_static: int = 2
+    # Same pending vuln: after this many consecutive reviewer timeouts, the one retry is static-only.
+    # One more timeout after that marks false_positive so the queue is not blocked.
+    review_timeouts_before_static: int = 1
     # Review-time Docker bring-up agent: max model turns after code start fails (wall clock still timeout_docker).
     lab_bringup_max_turns: int = 50
     file_inject_max_bytes: int = 80 * 1024

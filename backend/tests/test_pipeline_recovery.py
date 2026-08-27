@@ -962,9 +962,7 @@ def test_reviewer_timeout_streak_forces_static_then_resets(tmp_env, project, mon
     pipeline._run_reviewer_once(project)
     with Session() as db:
         assert db.get(models.Vuln, vid).review_timeout_streak == 1
-    pipeline._run_reviewer_once(project)
-    with Session() as db:
-        assert db.get(models.Vuln, vid).review_timeout_streak == 2
+        assert db.get(models.Vuln, vid).status == "pending_review"
 
     captured: dict[str, object] = {}
 
@@ -980,13 +978,96 @@ def test_reviewer_timeout_streak_forces_static_then_resets(tmp_env, project, mon
     pipeline._run_reviewer_once(project)
     prompt = str(captured["user_prompt"])
     system = str(captured["system_prompt"])
-    assert "已连续超时 2 轮" in prompt
+    assert "已连续超时 1 轮" in prompt
+    assert "仅此一轮重试" in prompt
     assert "本项目仅静态验证" in prompt
     assert "consecutive_review_timeouts" in prompt
     assert "优先使用用户提供的人工靶场" not in prompt
     assert "仅静态" in system
     with Session() as db:
         assert db.get(models.Vuln, vid).review_timeout_streak == 0
+
+
+def test_reviewer_timeout_retry_then_false_positive(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+
+    _enable_dynamic_verify(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        v = models.Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+
+    class TimeoutLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            pass
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, stop_reason="timeout", timed_out=True, state={})
+
+    monkeypatch.setattr(pipeline, "AgentLoop", TimeoutLoop)
+    pipeline._run_reviewer_once(project)
+    pipeline._run_reviewer_once(project)
+    with Session() as db:
+        row = db.get(models.Vuln, vid)
+        assert row.status == "false_positive"
+        assert row.review_timeout_streak == 2
+        assert "已重试一轮" in (row.return_reason or "")
+
+    called = {"n": 0}
+
+    class MustNotRun:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            called["n"] += 1
+
+        def run(self) -> LoopResult:
+            raise AssertionError("exhausted review must not start another round")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", MustNotRun)
+    pipeline._run_reviewer_once(project)
+    assert called["n"] == 0
+
+
+def test_reviewer_gives_up_already_exhausted_timeout_streak(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        v = models.Vuln(
+            project_id=project,
+            title="t",
+            vuln_type="sqli",
+            status="pending_review",
+            review_timeout_streak=6,
+        )
+        db.add(v)
+        db.commit()
+        vid = v.id
+
+    called = {"n": 0}
+
+    class MustNotRun:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            called["n"] += 1
+
+        def run(self) -> LoopResult:
+            raise AssertionError("exhausted review must not start another round")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", MustNotRun)
+    pipeline._run_reviewer_once(project)
+    assert called["n"] == 0
+    with Session() as db:
+        row = db.get(models.Vuln, vid)
+        assert row.status == "false_positive"
+        assert "已重试一轮" in (row.return_reason or "")
 
 
 def test_reviewer_non_timeout_failure_does_not_increment_streak(tmp_env, project, monkeypatch):
@@ -1329,3 +1410,31 @@ def test_reviewer_round_verify_force_static_after_bringup_failed(tmp_env, projec
     assert "强制仅静态" in lab_note
     assert "compose up failed" in lab_note
     assert "仅静态" in system
+
+
+def test_reviewer_force_static_prompt_requires_static_only_close(tmp_env, project):
+    _enable_dynamic_verify(project)
+    lab_note, debug_plan, system, force_static = pipeline._reviewer_round_verify(
+        project, timeout_streak=1
+    )
+    assert force_static is True
+    assert debug_plan["reason"] == "consecutive_review_timeouts"
+    assert "立刻 ConfirmVuln(evidence_level=static_only)" in lab_note
+    assert "不要用 static_only 跳过" not in lab_note
+    assert "必须 `evidence_level=static_only`" in system or "evidence_level=static_only" in system
+    gate = pipeline._reviewer_verify_gate(force_static=True, mode="lab")
+    assert "必须 evidence_level=static_only" in gate
+    assert "不要用 static_only 跳过" not in gate
+    rendered = pipeline._initial_prompt(
+        "reviewer.md",
+        vuln_id=1,
+        payload="{}",
+        lab_note=lab_note,
+        debug_plan="{}",
+        verify_gate=gate,
+    )
+    assert "必须 evidence_level=static_only" in rendered
+    assert "不要用 static_only 跳过" not in rendered
+    lab_gate = pipeline._reviewer_verify_gate(force_static=False, mode="lab")
+    assert "不要用 static_only 跳过" in lab_gate
+    assert "才用 debug MCP 动态调试" in lab_gate

@@ -171,7 +171,7 @@ VulnHunter-White 的特点：
 
 #### 审核与验证闸门
 
-12. 同一条待审漏洞连续超时 2 轮后，下一轮强制仅静态审核，并隐藏 Shell、`RunCode`、`CollectLabFingerprints`。打回上限为 1，超过直接标误报。
+12. 同一条待审漏洞超时后最多再跑一轮（该轮强制仅静态，隐藏 Shell、`RunCode`、`CollectLabFingerprints`）；再超时则标误报，不再重试。打回上限为 1，超过直接标误报。
 13. `SubmitVuln` / `ConfirmVuln` 碰到同文件同类型或同根因时先软提醒；本会话被提醒过一次后，再带 `confirm_not_duplicate` 才放行。
 14. 局部验证沙箱不可用或 mock 失败不因此误报，静态已能证明则可 `static_only` 确认。Verifier 遇到破坏性复测会 `AskUser` 挂起，在「验证确认」页等待指示，不阻塞项目完成。
 

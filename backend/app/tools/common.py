@@ -336,11 +336,35 @@ def _ignored_dir(name: str) -> bool:
     return name in IGNORE_DIR_NAMES or (name.startswith(".") and name not in (".", ".."))
 
 
+def _glob_is_path_pattern(glob_pat: str) -> bool:
+    pat = str(glob_pat or "*").replace("\\", "/")
+    return "/" in pat or "**" in pat
+
+
+def _file_matches_glob(full: Path, *, io_root: Path, glob_pat: str, rx: re.Pattern[str] | None) -> bool:
+    name = full.name
+    if rx is None:
+        return fnmatch.fnmatch(name, glob_pat)
+    leaf = glob_pat.rsplit("/", 1)[-1]
+    if leaf and "**" not in leaf and not fnmatch.fnmatch(name, leaf):
+        return False
+    try:
+        rel = full.relative_to(io_root).as_posix()
+    except ValueError:
+        rel = name
+    return bool(rx.match(rel) or rx.match(name))
+
+
 def _iter_files(root: Path, name_glob: str = "*"):
-    """Walk files under root, pruning node_modules/target and other ignore dirs."""
+    """Walk files under root, pruning node_modules/target and other ignore dirs.
+
+    ``glob`` matches the filename (``*.java``) or a relative path (``**/*.java``).
+    """
     io_root = windows_long_path(root)
+    glob_pat = str(name_glob or "*").replace("\\", "/")
+    rx = _glob_to_regex(glob_pat) if _glob_is_path_pattern(glob_pat) else None
     if io_root.is_file():
-        if fnmatch.fnmatch(io_root.name, name_glob):
+        if _file_matches_glob(io_root, io_root=io_root.parent, glob_pat=glob_pat, rx=rx):
             yield strip_windows_long_path(io_root)
         return
     if not io_root.exists():
@@ -348,8 +372,9 @@ def _iter_files(root: Path, name_glob: str = "*"):
     for dirpath, dirnames, filenames in os.walk(io_root):
         dirnames[:] = [d for d in dirnames if not _ignored_dir(d)]
         for fn in filenames:
-            if fnmatch.fnmatch(fn, name_glob):
-                yield strip_windows_long_path(Path(dirpath) / fn)
+            full = Path(dirpath) / fn
+            if _file_matches_glob(full, io_root=io_root, glob_pat=glob_pat, rx=rx):
+                yield strip_windows_long_path(full)
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
@@ -1162,7 +1187,10 @@ def register_common_tools() -> None:
                 "properties": {
                     "pattern": {"type": "string"},
                     "root": {"type": "string"},
-                    "glob": {"type": "string"},
+                    "glob": {
+                        "type": "string",
+                        "description": "文件名或相对路径 glob，如 *.java 或 **/*.java；默认 *",
+                    },
                     "i": {"type": "boolean"},
                     "limit": {"type": "integer"},
                 },

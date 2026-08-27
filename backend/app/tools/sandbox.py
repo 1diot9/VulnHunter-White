@@ -160,7 +160,20 @@ _LS_DASH_R = re.compile(
     re.I,
 )
 _TREE_CMD = re.compile(r"(?:^|[\s;&(|])tree(?:\.com|\.exe)?\b", re.I)
-_UNIX_FIND = re.compile(r'(?:^|[\s;&(|])find(?:\.exe)?\s+(?!["\'/])', re.I)
+_LINE_COMMENT = re.compile(r"(?m)^\s*#.*?$")
+# Unix find walking a tree: find -name / find . / find /opt / find src -type.
+# Do not match Windows `find "needle" file`, English prose ("Could not find CSRF"),
+# or PowerShell comments ("# Find site ID").
+_UNIX_FIND = re.compile(
+    r"(?:^|[\s;&(|])find(?:\.exe)?\s+"
+    r"(?:"
+    r"-[A-Za-z]|"
+    r"\.(?:[\s/]|$)|"
+    r"/|"
+    r"[^\s\"']+\s+-"
+    r")",
+    re.I | re.M,
+)
 _FINDSTR_S = re.compile(r"(?:^|[\s;&(|])findstr\b[\s\S]{0,300}/[sS]\b", re.I)
 _GREP_R = re.compile(
     r"(?:^|[\s;&(|])(?:e?grep|ggrep)\b[\s\S]{0,200}\s-[A-Za-z]*[rR][A-Za-z]*\b"
@@ -182,7 +195,7 @@ _UNBOUNDED_LISTING_HINT = (
 
 def unbounded_listing_reason(command: str) -> str | None:
     """Return a short label if the command would recursively walk the tree."""
-    text = command or ""
+    text = _LINE_COMMENT.sub(" ", command or "")
     if _TREE_CMD.search(text):
         return "tree"
     if _UNIX_FIND.search(text):

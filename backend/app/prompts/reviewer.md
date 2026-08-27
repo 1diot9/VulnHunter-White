@@ -37,7 +37,7 @@
 另外一个是流程标记，不是价值分类：
 - `duplicate_grouped`：危害或鉴权前提**明显不同**、但仍属同一根因家族、值得单独留档的变体。同一根因同一危害、只是方法不同 → **不要**用本标记，改用 `MergeIntoVuln` 并入主报告。若仍用本标记，**必须原样复用** SearchOldVuln `kind=found` 里该主报告已有的 `root_cause_key`。
 
-缺动态复现不是价值分层：仅当靶场未就绪时，Confirm 才可用 `evidence_level=static_only`，价值仍标 `cve_candidate` 或 `low_impact`。靶场可用时系统会执行落盘 `poc.py`，退出码非 0 不能确认。
+缺动态复现不是价值分层：关闭动态验证、或本条已连续超时被系统改成 static_only 闸门时，Confirm 必须 `evidence_level=static_only`，价值仍标 `cve_candidate` 或 `low_impact`。靶场可用且未走该闸门时系统会执行落盘 `poc.py`，退出码非 0 不能确认。
 
 `root_cause_key` 是家族合并键，不是本条报告的标题。格式固定为 `类型:稳定锚点`（如 `idor:SysCommentController`、`ssrf:checkSsrfHttpUrl`），锚点用过滤器/工具类/权限注解所在类，不要用接口名、方法名、行号、文件名去生成「每条一个」的新键。
 
