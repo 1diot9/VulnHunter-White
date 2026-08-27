@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { api } from '../api'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { useAuth } from './AuthGate'
+import BrandLogo from './BrandLogo'
 
 const links = [
   { to: '/', label: '审计项目' },
@@ -35,8 +36,8 @@ export default function AppLayout() {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="sticky top-0 z-40 shrink-0 border-b border-border bg-background/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
-          <Link to="/" className="text-lg font-semibold tracking-tight">
-            VulnHunter
+          <Link to="/" className="shrink-0 text-lg font-semibold tracking-tight">
+            <BrandLogo />
           </Link>
           <nav className="flex gap-1">
             {links.map((l) => (

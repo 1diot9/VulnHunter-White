@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import BrandLogo from './BrandLogo'
 
 type AuthState = {
   required: boolean
@@ -113,6 +114,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
         <Card className="w-full max-w-md">
           <CardContent className="space-y-4 p-6">
+            <BrandLogo className="text-lg font-semibold tracking-tight" />
             <div className="flex items-center gap-2">
               <LockIcon className="size-5 text-muted-foreground" />
               <h1 className="text-lg font-semibold">访问令牌</h1>

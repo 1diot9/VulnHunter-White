@@ -9,7 +9,7 @@ from .models import init_db
 from .services.shutdown import install_signal_bridge, reset as reset_shutdown
 from .tools import register_all_tools
 
-app = FastAPI(title="VulnHunter", version="0.1.0")
+app = FastAPI(title="VulnHunter-White", version="0.1.0")
 
 # Token gate must sit inside CORS so 401 responses still get CORS headers.
 app.add_middleware(AccessTokenMiddleware)
@@ -45,4 +45,4 @@ def on_startup() -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "service": "VulnHunter"}
+    return {"ok": True, "service": "VulnHunter-White"}
