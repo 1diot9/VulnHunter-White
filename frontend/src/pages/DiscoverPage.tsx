@@ -54,7 +54,33 @@ function CandidateCard({
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-wrap items-center justify-between gap-3">
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-2">
+          {imported && c.project_id != null ? (
+            <Link
+              to={`/projects/${c.project_id}`}
+              className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-[0.8rem] font-medium hover:bg-muted"
+            >
+              查看项目
+            </Link>
+          ) : (
+            <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onCreate(c)}>
+              <PlusIcon className="size-4" />
+              创建项目
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-muted-foreground hover:text-destructive"
+            disabled={busy || searching}
+            title="从候选列表移除，后续搜索不再加入"
+            onClick={() => onDismiss(c)}
+          >
+            {busy ? <Loader2Icon className="size-4 animate-spin" /> : <Trash2Icon className="size-4" />}
+            移除
+          </Button>
+        </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <StarIcon className="size-3.5" />
@@ -80,32 +106,6 @@ function CandidateCard({
               {c.target_kind_reason}
             </span>
           ) : null}
-        </div>
-        <div className="flex gap-2">
-          {imported && c.project_id != null ? (
-            <Link
-              to={`/projects/${c.project_id}`}
-              className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-[0.8rem] font-medium hover:bg-muted"
-            >
-              查看项目
-            </Link>
-          ) : (
-            <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onCreate(c)}>
-              <PlusIcon className="size-4" />
-              创建项目
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-1.5 text-muted-foreground hover:text-destructive"
-            disabled={busy || searching}
-            title="从候选列表移除，后续搜索不再加入"
-            onClick={() => onDismiss(c)}
-          >
-            {busy ? <Loader2Icon className="size-4 animate-spin" /> : <Trash2Icon className="size-4" />}
-            移除
-          </Button>
         </div>
       </CardContent>
     </Card>

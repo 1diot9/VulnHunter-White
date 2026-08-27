@@ -21,6 +21,9 @@ _DROP_ON_400 = (
     "frequency_penalty",
     "stream_options",
     "reasoning_effort",
+    "enable_thinking",
+    "chat_template_kwargs",
+    "thinking",
     "max_tokens",
     "max_completion_tokens",
     "parallel_tool_calls",
@@ -124,6 +127,30 @@ def prepare_chat_body(
         apply_temperature(body, model, temperature)
     if profile.prefer_max_completion_tokens and "max_tokens" in body:
         body["max_completion_tokens"] = body.pop("max_tokens")
+    return body
+
+
+def apply_disable_thinking(
+    body: dict[str, Any],
+    model: str | None,
+    *,
+    anthropic: bool = False,
+) -> dict[str, Any]:
+    """Turn off long thinking for one-shot classify/probe calls.
+
+    Anthropic extended thinking is opt-in, so chat Completions-style flags are
+    only added for models that think by default (Kimi / GLM / Qwen / o-series).
+    Unknown fields are dropped on HTTP 400 by ``param_to_drop``.
+    """
+    slug = model_slug(model)
+    if not slug or anthropic:
+        return body
+    if _KIMI_FIXED.search(slug) or _GLM_THINKING.search(slug):
+        body["thinking"] = {"type": "disabled"}
+    elif _QWEN_THINKING.search(slug):
+        body["enable_thinking"] = False
+    elif _OPENAI_REASONING.search(slug):
+        body["reasoning_effort"] = "low"
     return body
 
 

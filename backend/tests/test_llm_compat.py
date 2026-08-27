@@ -91,3 +91,32 @@ def test_param_to_drop_prefers_named_field():
     assert param_to_drop(body, "Parameter 'temperature'=0.2 is not supported") == "temperature"
     assert param_to_drop(body, "unknown parameter stream_options") == "stream_options"
     assert param_to_drop({"model": "x", "messages": []}, "bad request") is None
+
+
+def test_apply_disable_thinking_for_default_thinking_models():
+    from app.agent.llm_compat import apply_disable_thinking
+
+    kimi = apply_disable_thinking({"model": "kimi-k3"}, "kimi-k3")
+    assert kimi["thinking"] == {"type": "disabled"}
+
+    glm = apply_disable_thinking({"model": "glm-5.2"}, "glm-5.2")
+    assert glm["thinking"] == {"type": "disabled"}
+
+    qwen = apply_disable_thinking({"model": "qwen3-max"}, "qwen3-max")
+    assert qwen["enable_thinking"] is False
+
+    o3 = apply_disable_thinking({"model": "o3-mini"}, "o3-mini")
+    assert o3["reasoning_effort"] == "low"
+
+    gpt = apply_disable_thinking({"model": "gpt-4o"}, "gpt-4o")
+    assert "thinking" not in gpt
+    assert "enable_thinking" not in gpt
+
+    claude = apply_disable_thinking({"model": "claude-sonnet-4"}, "claude-sonnet-4", anthropic=True)
+    assert "thinking" not in claude
+
+
+def test_param_to_drop_thinking_fields():
+    body = {"thinking": {"type": "disabled"}, "enable_thinking": False}
+    assert param_to_drop(body, "Unknown parameter: thinking") == "thinking"
+    assert param_to_drop(body, "enable_thinking is not supported") == "enable_thinking"

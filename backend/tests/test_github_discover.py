@@ -77,6 +77,11 @@ def test_classify_web_vs_library():
     assert kind == "mixed"
 
 
+def test_llm_classify_is_single_round():
+    assert discover._LLM_CLASSIFY_MAX_ROUNDS == 1
+    assert discover._LLM_CLASSIFY_TIMEOUT <= 20.0
+
+
 def test_llm_overrides_keyword_classification(monkeypatch):
     monkeypatch.setattr(
         discover,

@@ -717,3 +717,4 @@ def test_discover_target_kind_prompt_exists():
     assert "mixed" in text
     assert "target_kind" in text
     assert "关键词" in text
+    assert "一轮" in text

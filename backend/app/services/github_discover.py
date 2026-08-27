@@ -160,8 +160,9 @@ _LIBRARY_TOPICS = frozenset(
         "api-client",
     }
 )
-_LLM_CLASSIFY_TIMEOUT = 45.0
+_LLM_CLASSIFY_TIMEOUT = 20.0
 _LLM_CLASSIFY_MAX_TOKENS = 256
+_LLM_CLASSIFY_MAX_ROUNDS = 1
 _REASON_MAX = 500
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 _KIND_JSON_RE = re.compile(r"\{[^{}]*\"target_kind\"[^{}]*\}", re.I | re.S)
@@ -315,7 +316,7 @@ def _choice_content(data: dict[str, Any]) -> str:
 
 
 def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
-    """One-shot JSON classification. Returns model text or None on skip/failure."""
+    """One-shot JSON classification (max 1 round, thinking disabled)."""
     from ..agent.anthropic_compat import (
         anthropic_headers,
         anthropic_message_to_openai,
@@ -323,7 +324,12 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
         build_anthropic_body,
         is_anthropic_wire,
     )
-    from ..agent.llm_compat import param_to_drop, prepare_chat_body, sampling_temperature
+    from ..agent.llm_compat import (
+        apply_disable_thinking,
+        param_to_drop,
+        prepare_chat_body,
+        sampling_temperature,
+    )
     from ..config import settings
     from ..services.http_client import chat_http_client, chat_http_timeout
     from ..services.llm_settings import bind_llm_to_endpoint, pool_endpoints_resolved, resolve_llm
@@ -351,7 +357,8 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     if ep.id == handle.endpoint_id:
                         llm = bind_llm_to_endpoint(llm, ep)
                         break
-            if is_anthropic_wire(llm.wire_api):
+            anthropic = is_anthropic_wire(llm.wire_api)
+            if anthropic:
                 url = anthropic_url(llm.base_url)
                 headers = anthropic_headers(llm.api_key)
                 body: dict[str, Any] = build_anthropic_body(
@@ -372,8 +379,10 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     "max_tokens": _LLM_CLASSIFY_MAX_TOKENS,
                 }
                 prepare_chat_body(body, llm.model, temperature=settings.temperature)
+            apply_disable_thinking(body, llm.model, anthropic=anthropic)
 
             with chat_http_client(timeout=timeout) as client:
+                # One classify round. Extra POSTs are only to drop unknown fields on HTTP 400.
                 for _attempt in range(2):
                     res = client.post(url, headers=headers, json=body)
                     if res.status_code == 400:
@@ -395,7 +404,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                         return None
                     if not isinstance(data, dict):
                         return None
-                    if is_anthropic_wire(llm.wire_api) or data.get("type") == "message":
+                    if anthropic or data.get("type") == "message":
                         data = anthropic_message_to_openai(data)
                     return _choice_content(data) or None
     except Exception:  # noqa: BLE001
