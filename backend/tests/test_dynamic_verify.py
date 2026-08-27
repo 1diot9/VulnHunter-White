@@ -504,6 +504,58 @@ def test_prepare_run_languages():
     jname, jcmd = prepare_run("java", "public class Demo { public static void main(String[] a) {} }")
     assert jname == "Demo.java"
     assert "javac Demo.java" in jcmd
+    gname, gcmd = prepare_run("go", "package main\nfunc main() {}")
+    assert gname == "main.go"
+    assert "/tmp/harness" in gcmd
+    assert "go build" in gcmd
+
+
+def test_execute_harness_tmpfs_allows_exec_for_compiled_go(tmp_env, monkeypatch):
+    captured: dict = {}
+
+    class FakeContainer:
+        def wait(self, timeout=None):  # noqa: ARG002, ANN001
+            return {"StatusCode": 0}
+
+        def logs(self, stdout=True, stderr=False):  # noqa: ARG002, ANN001
+            return b"ok"
+
+        def remove(self, force=False):  # noqa: ARG002, ANN001
+            return None
+
+    class FakeContainers:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return FakeContainer()
+
+    class FakeClient:
+        containers = FakeContainers()
+
+    monkeypatch.setattr(
+        "app.services.sandbox_exec.sandbox_diagnosis",
+        lambda: {
+            "available": True,
+            "image": "vulnhunter/sandbox:latest",
+            "image_present": True,
+            "error": "",
+            "network_mode": "none",
+        },
+    )
+    monkeypatch.setattr("app.services.sandbox_exec._connect", lambda: (FakeClient(), ""))
+    result = execute_harness("package main\nfunc main() {}", language="go")
+    assert result["ok"] is True
+    tmpfs = captured["tmpfs"]
+    for mount in ("/tmp", "/home/sandbox"):
+        opts = {part.strip() for part in tmpfs[mount].split(",") if part.strip()}
+        assert "exec" in opts, tmpfs[mount]
+        assert "noexec" not in opts
+    env = captured["environment"]
+    assert env["TMPDIR"] == "/tmp"
+    assert env["GOTMPDIR"] == "/tmp"
+    assert env["GOCACHE"].startswith("/tmp/")
+    assert env["CGO_ENABLED"] == "0"
+    assert captured["command"][:2] == ["sh", "-c"]
+    assert "/tmp/harness" in captured["command"][2]
 
 
 def test_execute_harness_without_docker(monkeypatch):

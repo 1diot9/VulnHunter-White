@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 
 _JAVA_CLASS_RE = re.compile(r"\b(?:public\s+)?class\s+(\w+)")
 
+# Docker tmpfs defaults to noexec. Go (and any compiled harness) writes a
+# binary under /tmp or $HOME and execs it; without exec that is EACCES.
+# /workspace is a host bind mount (on Windows often also noexec), so compile
+# output must stay on these tmpfs mounts.
+_SANDBOX_TMPFS: dict[str, str] = {
+    "/tmp": "rw,exec,nosuid,nodev,size=256m,mode=1777",
+    "/home/sandbox": "rw,exec,nosuid,nodev,size=64m,mode=1777",
+}
+
+_GO_BUILD_AND_RUN = "go build -o /tmp/harness main.go && /tmp/harness"
+
 _LANG_FILES: dict[str, tuple[str, str]] = {
     "python": ("run.py", "python3 run.py"),
     "python3": ("run.py", "python3 run.py"),
@@ -27,8 +38,8 @@ _LANG_FILES: dict[str, tuple[str, str]] = {
     "node": ("run.js", "node run.js"),
     "ruby": ("run.rb", "ruby run.rb"),
     "rb": ("run.rb", "ruby run.rb"),
-    "go": ("main.go", "go run main.go"),
-    "golang": ("main.go", "go run main.go"),
+    "go": ("main.go", _GO_BUILD_AND_RUN),
+    "golang": ("main.go", _GO_BUILD_AND_RUN),
     "bash": ("run.sh", "bash run.sh"),
     "sh": ("run.sh", "bash run.sh"),
     "shell": ("run.sh", "bash run.sh"),
@@ -106,6 +117,27 @@ def _java_run_spec(code: str) -> tuple[str, str]:
     match = _JAVA_CLASS_RE.search(code or "")
     name = match.group(1) if match else "Main"
     return f"{name}.java", f"javac {name}.java && java {name}"
+
+
+def _sandbox_environment(description: str) -> dict[str, str]:
+    return {
+        "HTTP_PROXY": "",
+        "HTTPS_PROXY": "",
+        "http_proxy": "",
+        "https_proxy": "",
+        "NO_PROXY": "*",
+        "no_proxy": "*",
+        "HOME": "/home/sandbox",
+        "TMPDIR": "/tmp",
+        "GOTMPDIR": "/tmp",
+        "GOCACHE": "/tmp/go-cache",
+        "GOPATH": "/tmp/go",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "CGO_ENABLED": "0",
+        "GOTOOLCHAIN": "local",
+        "VULNHUNTER_HARNESS": (description or "")[:200],
+    }
 
 
 def prepare_run(language: str, code: str) -> tuple[str, str]:
@@ -195,20 +227,9 @@ def execute_harness(
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],
                 volumes={host_bind: {"bind": "/workspace", "mode": "rw"}},
-                tmpfs={
-                    "/tmp": "rw,size=100m,mode=1777",
-                    "/home/sandbox": "rw,size=100m,mode=1777",
-                },
+                tmpfs=dict(_SANDBOX_TMPFS),
                 working_dir="/workspace",
-                environment={
-                    "HTTP_PROXY": "",
-                    "HTTPS_PROXY": "",
-                    "http_proxy": "",
-                    "https_proxy": "",
-                    "NO_PROXY": "*",
-                    "no_proxy": "*",
-                    "VULNHUNTER_HARNESS": (description or "")[:200],
-                },
+                environment=_sandbox_environment(description),
             )
             result = container.wait(timeout=timeout)
             stdout = container.logs(stdout=True, stderr=False) or b""
