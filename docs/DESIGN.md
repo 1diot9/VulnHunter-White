@@ -23,12 +23,15 @@ VulnHunter-White 的特点：
 - 支持**靶场动态**、**局部 harness**、**纯静态**三种审核验证方式
 - 可选 **FOFA 互联网验证**与 **Human-in-the-loop** 确认
 - 挖掘与审核结束后可选**攻击链串联**
+- 设置页可配**模型商池**（多 Base URL、会话粘滞、端点故障换路）
+- 每项目可设 **Token 用量上限**与 Worker 人工提示；可从公开 GHSA **发现仓库**
+- 漏洞产出含**产出日历**、中文报告 / Advisory / CVE JSON，可追问与打包下载
 
-创建任务页面：通过 GitHub 链接或上传 zip 开始审计。
+创建任务页面：通过 GitHub 链接或上传 zip 开始审计，支持设定最大 Token 用量。
 
 ![image-20260824113345879](../assets/image-20260824113345879.png)
 
-![image-20260824113417149](../assets/image-20260824113417149.png)
+![image-20260827160028278](../assets/image-20260827160028278.png)
 
 ![创建任务（续）](../assets/1787305131954-fd22d7db-8af2-4dff-9113-636109d3a476.png)
 
@@ -38,13 +41,13 @@ VulnHunter-White 的特点：
 
 ![image-20260824113549690](../assets/image-20260824113549690.png)
 
-![任务详情（续）](../assets/1787305265014-07c06412-1749-4ef5-b0b8-c61f95ba63d3.png)
+![image-20260827160150510](../assets/image-20260827160150510.png)
 
 互联网验证确认页面：对可能产生危害的漏洞进行人工干预。
 
 ![验证确认](../assets/1787235668376-78ad9df1-71fe-44f4-bd3b-0a7d52e77349.png)
 
-漏洞产出页面：验证形式（静态 / 动态 / 局部）、权限（前台 / 后台）、互联网复现情况。报告支持普通格式、advisory格式、CVE Json格式。可追问报告。
+漏洞产出页面：验证形式（静态 / 动态 / 局部）、权限（前台 / 后台）、互联网复现情况。报告支持普通格式、advisory 格式、CVE JSON。可追问报告、复制 CVE JSON、下载报告与 PoC 压缩包。产出日历按日统计已确认与误报。
 
 ![漏洞列表](../assets/1787235300999-a0e85751-d9ae-4b53-8d2e-2d1a51906b97.png)
 
@@ -52,13 +55,19 @@ VulnHunter-White 的特点：
 
 ![image-20260824113203107](../assets/image-20260824113203107.png)
 
-容器管理页面：监测动态复现时启动的容器。
+![image-20260827155754825](../assets/image-20260827155754825.png)
+
+容器管理页面：监测动态复现时启动的容器。项目详情也可一键启停本项目 Docker 靶场并重映射端口。
 
 ![容器管理](../assets/1787235734952-1d7d6474-e228-4a30-857c-4d83e64b4b9d.png)
 
-设置页面：Chat Completions / Anthropic Messages、自定义挖掘提示词、日志清理等。（当前模型商主要测试过 GLM、DeepSeek、百炼）
+设置页面：Chat Completions / Anthropic Messages、自定义挖掘提示词、日志清理等，支持设置多个服务商作为 LLM 池（当前模型商主要测试过 GLM、DeepSeek、百炼）。
+
+![image-20260827160330224](../assets/image-20260827160330224.png)
 
 ![设置页](../assets/1787235801542-2f2bbf74-a406-4b01-9873-4ea0ca2114ef.png)
+
+发现仓库页面：从公开 GHSA 筛可审计仓库，关键词粗分后再用模型复核审计对象；已创建与可创建分开列出，可忽略候选。
 
 ---
 
@@ -110,8 +119,17 @@ VulnHunter-White 的特点：
 | Bash | 在允许时执行 shell 命令 |
 | PowerShell | 在允许时执行 PowerShell 命令 |
 | TodoWrite | 维护运行时待办；每 50 轮自动注入上下文，压缩后自动注入 |
+| SearchOldVuln | 查已落盘历史洞或本项目已提交/已确认报告，用于去重与攻击链 |
+| WebSearch | 互联网补搜（历史漏洞补漏阶段） |
+| SearchGHSA | 查 GitHub Advisories |
+| SearchGitHubIssues | 查本仓库未关闭 Issues |
+| ReadCveRecord | 读取本条漏洞的 CVE 5.2 JSON 填表状态 |
+| SetCveRecordField | 按字段写入 `cve.json`；未知填 `VULNHUNTER_PENDING`，不要整文件覆盖 |
+| RunCode | 局部验证沙箱执行 `harness.py`（仅 harness 审核轮注入） |
+| SearchTools | 检索 `tools/cli` 已索引的用户 CLI（审核轮） |
+| FinishIndex | CLI 静默索引轮写入口与描述后结束 |
 
-运行时 Bash 与 PowerShell **只注入本机原生的那一个**。
+运行时 Bash 与 PowerShell **只注入本机原生的那一个**。`Read` / `Grep` / `Glob` / `SearchOldVuln` / `SearchTools` / `WebSearch` 允许同一助手回合并行。
 
 ### 4.2 编排策略与状态管理
 
@@ -137,7 +155,7 @@ VulnHunter-White 的特点：
 #### 超时与限流
 
 4. 各阶段墙钟超时：侦察 3600s，盖章轮 1800s，Worker 一轮 7200s，审核静态 1800s，靶场动态再加 Docker 1800s，Verifier / 攻击链 / Semgrep / Sink 筛选各 1800s。每阶段最多超时 2 次，此后抢救落盘并保留基本产出（如审核默认降级为仅静态）。
-5. LLM 429 休眠 90s 再试，最多 20 次，进程级全局共享冷却；其它瞬时失败最多退避 3 次。全局 LLM 线程上限默认 6，满则按到达顺序排队。
+5. LLM 429 休眠 90s 再试，最多 20 次；其它瞬时失败最多退避 3 次。设置页模型商池：同一协议多个 Base URL（各自 Key、模型、并发上限），全局线程上限 = 各端点并发之和（单端点默认 6）；会话粘滞到所选端点，满则按到达顺序排队。某端点 429 / 额度用尽 / 5xx 只冷却该端点并立刻换路，不拖垮全池。项目级 `llm_model` 仍优先。
 
 #### 工具执行容错
 
@@ -239,7 +257,9 @@ VulnHunter-White 的特点：
 
 | 工具 | 用途 |
 | --- | --- |
-| SubmitVuln | 提交待审核漏洞 |
+| SearchOldVuln | 与历史洞 / 已提交报告去重 |
+| SubmitVuln | 提交待审核漏洞（同时交中文报告与英文 Advisory） |
+| ReadCveRecord / SetCveRecordField | 提交后逐字段填写 CVE JSON 英文详述 |
 | AppendAffectedLocations | 向已有待审报告追加同根因受影响点 |
 | FinishFile | 标记文件不必再作为后续轮次焦点 |
 | FinishRound | 焦点文件分析完后结束本轮 |
@@ -247,7 +267,7 @@ VulnHunter-White 的特点：
 
 **创新点：按定权文件排队，而非 Agent 自由选点。** 权重从高到低，每文件一轮；每轮产出 `worker-round-N.md` 摘要，后续轮注入最近 10 轮摘要，避免重复尝试。
 
-**轻量开关**：只把权重 100 的文件当入口，降低 token 消耗。
+**轻量开关**：只把权重 100 的文件当入口，降低 token 消耗。每项目可配置 `worker_hint`，注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息。
 
 **AppendAffectedLocations**：同根因多受影响点合并为父子报告集合，避免重复报告又不丢信息。
 
@@ -255,7 +275,9 @@ VulnHunter-White 的特点：
 
 | 工具 | 用途 |
 | --- | --- |
+| SearchOldVuln | 与历史洞 / 已提交报告去重 |
 | SubmitVuln | 绕过补丁或确认未修复洞仍可打时提交 |
+| ReadCveRecord / SetCveRecordField | 提交后填写 CVE JSON |
 | AppendAffectedLocations | 追加同根因受影响点 |
 | FinishBypass | 结束本轮注入的这一条历史漏洞 |
 
@@ -273,7 +295,9 @@ VulnHunter-White 的特点：
 
 | 工具 | 用途 |
 | --- | --- |
+| SearchOldVuln | 与历史洞 / 已提交报告去重 |
 | SubmitVuln | 按本轮 Sink 回推后提交 |
+| ReadCveRecord / SetCveRecordField | 提交后填写 CVE JSON |
 | AppendAffectedLocations | 追加同根因受影响点 |
 | FinishSink | 结束本轮注入的 Sink |
 
@@ -281,7 +305,7 @@ VulnHunter-White 的特点：
 
 #### 4.5.4 报告修复（fix）
 
-Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与报告包装由 Reviewer 收口，一般不打回 Worker 改 PoC。Fix Worker 用于纠正分析债务。
+Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与报告包装由 Reviewer 收口，一般不打回 Worker 改 PoC。Fix Worker 用于纠正分析债务，工具含 `SearchOldVuln`、`SubmitVuln`、`ReadCveRecord` / `SetCveRecordField`、`AppendAffectedLocations`、`FinishFix`。
 
 ### 4.6 审核阶段
 
@@ -306,16 +330,18 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 | CollectLabFingerprints | 从靶场升级项目共享指纹 |
 | SearchTools | 搜索已索引的用户 CLI |
 | SearchGHSA / SearchOldVuln | 查公告与已提交报告 |
+| ReadCveRecord / SetCveRecordField | 收口 CVE JSON（`descriptions` 须含入口→sink、漏洞代码路径与原文、HTTP/API PoC） |
+| RunCode | 仅局部验证轮：在沙箱跑 `harness.py` |
 
 要点：
 
 - 靶场可用时 **ConfirmVuln 会系统再执行落盘 `poc.py`**（`python poc.py -u <target_url>`），退出码非 0 则拒绝确认。
 - PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 **Java / Node / Python debug MCP**。
-- `SearchTools` 检索 `tools/cli` 下用户放置的 CLI（如 JNDI、恶意 JDBC 服务），按绝对路径 Shell 执行。
+- `SearchTools` 检索 `tools/cli` 下用户放置的 CLI（如 JNDI、恶意 JDBC 服务），按绝对路径 Shell 执行。后台静默索引轮（`cli_indexer`）用 `FinishIndex` 写入入口与描述；内容变了才重索引。
 
 #### 4.6.3 局部验证（harness）
 
-在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，思路类似「抽出可疑函数 + mock 驱动 payload」，成本低但无法证明完整 HTTP 链路与 classpath 复杂场景。确认后 `evidence_level=harness`。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。
+在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，思路类似「抽出可疑函数 + mock 驱动 payload」，成本低但无法证明完整 HTTP 链路与 classpath 复杂场景。确认后 `evidence_level=harness`。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。仅 harness 确认的前台洞不入队 Verifier；项目切到靶场动态后，已 harness 确认的漏洞可追加 Docker 靶场验证（证据升级为 `dynamic` / `mcp`）。已仅静态确认的漏洞也可按当前模式追加靶场或局部验证。
 
 #### 4.6.4 静态验证
 
@@ -343,7 +369,22 @@ Reviewer 复核数据流是否用户可控、防护是否有效、权限标注�
 
 挖掘与审核结束后，根据已确认漏洞尝试多步串联；优先危害最大、利用最简单的链写详文，其余一句话索引。有本地 Docker 靶场时，对纯 HTTP/脚本可打通的详文链编写串联脚本并由系统对靶场复测；含 XSS / CSRF 等需用户交互的链跳过动态验证。
 
-### 4.9 流水线总览
+### 4.9 产品能力与运维
+
+| 能力 | 说明 |
+| --- | --- |
+| 模型商池 | 见 4.3；设置页多 Base URL，会话粘滞、端点故障换路 |
+| 项目 Token 上限 | `max_token_usage`（默认 0 不限制）按本项目全部 Agent 输入+输出合计，到达后自动暂停；提高上限或改为 0 后再续跑 |
+| 接续对话 | 阶段日志 SSE 下方按当前小阶段：**引导**（进行中下一轮注入）、**接续**（用最新一轮完整消息继续）、**新开**（放弃检查点再跑一轮）。轮结束后检查点归档到 `workspace/last-conversation/` |
+| 重置启发式进度 | 暂停或终态可用；清 `audited`/认领/启发式轮次摘要与 Worker 检查点。快速扫描 Sink 队列与绕过进度不重置；漏洞产出与侦察文档保留 |
+| GitHub 发现仓库 | 从公开 GHSA 筛星标与活跃度达标的仓库；关键词粗分后再用模型单轮复核 `target_kind`。已创建与可创建分开列出，可忽略候选使其不再出现 |
+| 产出日历 | 漏洞产出页按日统计已确认与误报 |
+| 报告产物 | 中文 `report.md`（标题须中文）、英文 `advisory.md`、CVE 5.2 `cve.json`。详情可追问改写、一键复制 CVE JSON、下载与批量下载相同的报告+PoC 压缩包 |
+| 访问令牌 | `VULNHUNTER_ACCESS_TOKEN` 或设置页配置后，前端须先输入令牌才能调 API |
+| 局域网监听 | 默认绑 `127.0.0.1`；`start.cmd --lan` / `sh start.sh --lan` 或 `VULNHUNTER_HOST=0.0.0.0` 对局域网开放 |
+| 一键靶场 | 项目详情可启停本项目 Docker 靶场并重映射端口 |
+
+### 4.10 流水线总览
 
 ```mermaid
 flowchart LR
@@ -371,13 +412,23 @@ flowchart LR
 
 ## 5. 挖掘成果
 
-目前申请编号的流程尚未走完，此处仅作概览。
-
-已在多个 Java / Python 项目（低代码平台、AI 网关、网盘、博客等）上试跑：
+目前大部分漏洞编号还在申请中。已在多个 Java / Python 项目（低代码平台、AI 网关、网盘、博客等）上试跑：
 
 - 漏洞类型以 XSS、SSRF、越权为主；高危相对较少，最高危为前台 SQL、后台提权等。
 - 赏金模式下每个项目约 3–40 条产出，误报与低质量报告较少。
 - Token 消耗约 1 亿–10 亿；启发式轻量模式约 1 亿–3 亿。
+
+已被 GitHub Advisory 接受的有两条：
+
+![image-20260827155610737](../assets/image-20260827155610737.png)
+
+![image-20260827155704261](../assets/image-20260827155704261.png)
+
+漏洞产出页的产出日历：
+
+![image-20260827155754825](../assets/image-20260827155754825.png)
+
+后续申请完毕后会再列成果表格。
 
 ---
 
