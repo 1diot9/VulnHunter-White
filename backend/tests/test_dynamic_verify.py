@@ -563,13 +563,33 @@ def test_run_code_without_docker_does_not_look_like_false_positive(tmp_env, proj
     assert "误报" in (out.get("error") or "") or "误报" in (out.get("hint") or "")
 
 
+def test_prepare_run_java_release_comment():
+    _, default_cmd = prepare_run("java", "public class Demo { public static void main(String[] a) {} }")
+    assert "--release 8" in default_cmd
+    _, j11 = prepare_run(
+        "java",
+        "// java-release: 11\npublic class Demo { public static void main(String[] a) {} }",
+    )
+    assert "javac --release 11 Demo.java" in j11
+    _, j17 = prepare_run(
+        "java",
+        "/* java-release: 17 */\npublic class Demo { public static void main(String[] a) {} }",
+    )
+    assert "javac --release 17 Demo.java" in j17
+    _, invalid = prepare_run(
+        "java",
+        "// java-release: 21\npublic class Demo { public static void main(String[] a) {} }",
+    )
+    assert "javac --release 8 Demo.java" in invalid
+
+
 def test_prepare_run_languages():
     name, cmd = prepare_run("python", "print(1)")
     assert name == "run.py"
     assert "python3" in cmd
     jname, jcmd = prepare_run("java", "public class Demo { public static void main(String[] a) {} }")
     assert jname == "Demo.java"
-    assert "javac Demo.java" in jcmd
+    assert "javac --release 8 Demo.java" in jcmd
     gname, gcmd = prepare_run("go", "package main\nfunc main() {}")
     assert gname == "main.go"
     assert "/tmp/harness" in gcmd

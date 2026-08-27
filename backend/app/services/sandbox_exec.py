@@ -16,6 +16,11 @@ from .paths import data_tmp_dir
 logger = logging.getLogger(__name__)
 
 _JAVA_CLASS_RE = re.compile(r"\b(?:public\s+)?class\s+(\w+)")
+_JAVA_RELEASE_RE = re.compile(
+    r"(?im)^\s*(?://|/\*)\s*java-release\s*:\s*(\d+)\b"
+)
+_JAVA_RELEASE_DEFAULT = 8
+_JAVA_RELEASE_MAX = 17
 
 # Docker tmpfs defaults to noexec. Go (and any compiled harness) writes a
 # binary under /tmp or $HOME and execs it; without exec that is EACCES.
@@ -113,10 +118,27 @@ def sandbox_diagnosis() -> dict[str, Any]:
     }
 
 
+def _java_release(code: str) -> int:
+    match = _JAVA_RELEASE_RE.search(code or "")
+    if not match:
+        return _JAVA_RELEASE_DEFAULT
+    try:
+        n = int(match.group(1))
+    except ValueError:
+        return _JAVA_RELEASE_DEFAULT
+    if n < _JAVA_RELEASE_DEFAULT or n > _JAVA_RELEASE_MAX:
+        return _JAVA_RELEASE_DEFAULT
+    return n
+
+
 def _java_run_spec(code: str) -> tuple[str, str]:
     match = _JAVA_CLASS_RE.search(code or "")
     name = match.group(1) if match else "Main"
-    return f"{name}.java", f"javac {name}.java && java {name}"
+    release = _java_release(code)
+    return (
+        f"{name}.java",
+        f"javac --release {release} {name}.java && java {name}",
+    )
 
 
 def _sandbox_environment(description: str) -> dict[str, str]:
@@ -303,7 +325,7 @@ def harness_debug_plan() -> dict[str, Any]:
         "sandbox": diagnosis,
         "steps": [
             "Read 报告与源码，确认文件和代码片段真实存在",
-            "按目标语言设计 mock / harness，用 RunCode 在沙箱执行",
+            "按目标语言设计 mock / harness，用 RunCode 在沙箱执行；Java 默认 JDK 8，更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17",
             "mock 失败或沙箱不可用不要判误报；静态已能证明默认可利用则 static_only",
             "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；stdout 必须打印运行时实际数据，禁止写死成功字段；不要把同一份 mock 写进 poc.py",
         ],

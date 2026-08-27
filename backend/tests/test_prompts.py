@@ -340,10 +340,14 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "必须用英语" in text
     assert "运行时" in text
     assert "success" in text
+    assert "JDK 8" in text
+    assert "java-release: 17" in text
     followup = load_prompt("initial/reviewer-harness-followup.md")
     assert "### 漏洞代码" in followup
     assert "完整文件路径" in followup
     assert "运行时实际数据" in followup
+    assert "JDK 8" in followup
+    assert "java-release: 17" in followup
     with SessionLocal() as db:
         p = db.get(Project, project)
         p.dynamic_verify_mode = "harness"
@@ -357,6 +361,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "必须用英语" in overlay
     assert "脚本与注释一律英语" in overlay
     assert "运行时实际数据" in overlay
+    assert "JDK 8" in overlay
+    assert "java-release: 17" in overlay
 
 
 def test_reviewer_debug_mcp_is_poc_rewrite_fallback():
