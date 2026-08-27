@@ -68,7 +68,9 @@ export default function ProjectFilterCombobox({
           className,
         )}
       >
-        <span className="min-w-0 flex-1 truncate text-left">{selected.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {selected.id != null ? `#${selected.id} ${selected.name}` : selected.name}
+                  </span>
         <Combobox.Icon className="flex shrink-0">
           <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
         </Combobox.Icon>
@@ -96,7 +98,9 @@ export default function ProjectFilterCombobox({
                   value={item}
                   className="relative flex min-h-7 w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
                 >
-                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {item.id != null ? `#${item.id} ${item.name}` : item.name}
+                  </span>
                   <Combobox.ItemIndicator className="pointer-events-none absolute right-2 flex size-4 items-center justify-center">
                     <CheckIcon className="size-4" />
                   </Combobox.ItemIndicator>
