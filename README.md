@@ -436,7 +436,7 @@ pytest
 
 ## 成果展示
 
-目前大部分漏洞编号还在申请中，被Github Advisory接受的有两个：
+目前大部分漏洞编号还在申请中，已经被Github Advisory接受的有两个：
 ![image-20260827155610737](./assets/image-20260827155610737.png)
 
 ![image-20260827155704261](./assets/image-20260827155704261.png)
