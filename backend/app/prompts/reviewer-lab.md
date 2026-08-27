@@ -10,7 +10,8 @@
 - compose 项目名必须是 `${lab_compose_project}`（文件里写 `name:`，或 `docker compose -p`），不要用目录名 `env`
 - 每个容器和自建镜像必须带标签：`${lab_label_args}`（compose 写 `labels: { vulnhunter: "1", vulnhunter.project: "${project_id}" }`）
 - 写出 `env/env.json`（`accepted`、`runtime`、`image`、`container_name`、端口、`target_url`、`lab_state`、`credentials`、`status`）
-- 容器可访问且 `accepted=true`、`status=running` 后，系统会写 `docs/lab.md`
+- **`accepted=true` 仅当业务应用本身可达**：登录页/门户/健康检查等真实入口能打开，不要只凭 `docker ps` 或 Tomcat/nginx 默认页 200
+- 业务应用可达且 `accepted=true`、`status=running` 后，系统会写 `docs/lab.md`
 - 业务端口与调试端口分离；调试端口绑定 127.0.0.1
 - 本项目共用一套 lab，不要按漏洞重建
 

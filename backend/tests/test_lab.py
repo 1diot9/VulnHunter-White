@@ -4,8 +4,11 @@ import json
 import subprocess
 
 from app.services.lab import (
+    LAB_REBUILD_MAX,
+    clear_lab_retry_flags,
     find_free_port,
     finish_manual_lab,
+    invalidate_lab_for_rebuild,
     lab_bring_up_failed,
     lab_compose_project,
     lab_container_name,
@@ -14,6 +17,10 @@ from app.services.lab import (
     lab_image_name,
     lab_name_prefixes,
     lab_naming,
+    lab_ready,
+    lab_rebuild_count,
+    lab_rebuild_requested,
+    lab_round_complete,
     lab_setup_failed,
     lab_setup_finished,
     load_env,
@@ -412,6 +419,103 @@ def test_reset_lab_setup_for_retry_clears_finished_and_stores_message(project):
     env = load_env(project)
     assert env.get("user_retry_requested") is True
     assert env.get("retry_user_message") == "优先 compose"
+
+
+def test_invalidate_lab_for_rebuild_clears_ready_and_reopens_setup(project):
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "container_name": lab_container_name(project),
+            "image": lab_image_name(project),
+            "lab_ever_ready": True,
+        },
+    )
+    env = invalidate_lab_for_rebuild(project, "/portal 404，数据库容器已退出")
+    assert env["accepted"] is False
+    assert env["setup_finished"] is False
+    assert env["status"] == "needs_rebuild"
+    assert env["lab_state"] == "setup"
+    assert env.get("lab_rebuild_requested") is True
+    assert env.get("rebuild_requested_by") == "reviewer"
+    assert env.get("user_retry_requested") is True
+    assert env.get("retry_user_message") == "/portal 404，数据库容器已退出"
+    assert env.get("last_target_url") == "http://127.0.0.1:18080"
+    assert not env.get("target_url")
+    assert env.get("container_name") == lab_container_name(project)
+    assert env.get("image") == lab_image_name(project)
+    assert env.get("lab_rebuild_count") == 1
+    assert lab_rebuild_requested(project) is True
+    assert lab_rebuild_count(project) == 1
+    assert lab_ready(env) is False
+    assert lab_setup_finished(project) is False
+    doc = lab_doc_path(project).read_text(encoding="utf-8")
+    assert "reviewer-rebuild" in doc or "needs_rebuild" in doc
+    assert "/portal 404" in doc or "假就绪" in doc or "reviewer_rebuild" in doc
+
+
+def test_lab_ready_false_after_rebuild_request_even_if_status_running(project):
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    invalidate_lab_for_rebuild(project, "业务入口 404")
+    env = load_env(project)
+    assert lab_ready(env) is False
+
+
+def test_clear_lab_retry_flags_clears_rebuild_markers(project):
+    invalidate_lab_for_rebuild(project, "sidecar 退出")
+    assert lab_rebuild_requested(project) is True
+    clear_lab_retry_flags(project)
+    env = load_env(project)
+    assert "lab_rebuild_requested" not in env
+    assert "rebuild_requested_by" not in env
+    assert "user_retry_requested" not in env
+    assert env.get("lab_rebuild_count") == 1
+
+
+def test_mark_lab_setup_finished_ready_resets_rebuild_count(project):
+    invalidate_lab_for_rebuild(project, "假就绪")
+    save_env(
+        project,
+        {
+            **load_env(project),
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    env = mark_lab_setup_finished(project, via="test")
+    assert env.get("setup_finished") is True
+    assert "lab_rebuild_requested" not in env
+    assert "lab_rebuild_count" not in env
+    assert lab_rebuild_count(project) == 0
+    assert LAB_REBUILD_MAX == 2
+
+
+def test_lab_round_complete_false_while_rebuild_requested(project):
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "lab_rebuild_requested": True,
+            "setup_finished": False,
+        },
+    )
+    assert lab_ready(load_env(project)) is True
+    assert lab_round_complete(project) is False
+    assert lab_round_complete(project, {"lab_done": True}) is True
 
 
 def test_lab_setup_failed_false_when_running(project):

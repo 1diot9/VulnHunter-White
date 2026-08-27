@@ -1578,6 +1578,7 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "ConfirmVuln" in reviewer_names
     assert "MarkFalsePositive" in reviewer_names
     assert "ReturnToWorker" in reviewer_names
+    assert "RequestLabRebuild" in reviewer_names
     assert "RunCode" not in reviewer_names
     assert "CollectLabFingerprints" in reviewer_names
     assert "FinishLab" not in reviewer_names
@@ -1594,6 +1595,7 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "ConfirmVuln" not in lab_names
     assert "CollectLabFingerprints" not in lab_names
     assert "ReturnToWorker" not in lab_names
+    assert "RequestLabRebuild" not in lab_names
     assert "MarkFalsePositive" not in lab_names
     verifier_names = {t["function"]["name"] for t in registry.openai_tools_for_role("verifier")}
     assert "FofaSearch" in verifier_names
@@ -2087,6 +2089,111 @@ def test_finish_lab_skip_without_running_container(tmp_env, project):
     assert out["skipped"] is True
     assert lab_setup_finished(project) is True
     assert (docs_dir(project) / "lab.md").is_file()
+
+
+def test_request_lab_rebuild_invalidates_and_ends_review(tmp_env, project):
+    from app.models import Project, SessionLocal
+    from app.services.lab import lab_rebuild_requested, lab_setup_finished, load_env, save_env
+    from app.services.paths import docs_dir as project_docs
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.dynamic_verify_enabled = True
+        proj.dynamic_verify_mode = "lab"
+        db.commit()
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "container_name": f"demo-{project}",
+        },
+    )
+    ctx = _ctx(project, "reviewer")
+    out = registry.dispatch(
+        ctx,
+        "RequestLabRebuild",
+        {"reason": "/portal 返回 404，数据库容器已退出"},
+    )
+    assert out["ok"] is True
+    assert ctx.state.get("review_done") is True
+    assert ctx.state.get("review_verdict") == "lab_rebuild"
+    assert lab_setup_finished(project) is False
+    assert lab_rebuild_requested(project) is True
+    env = load_env(project)
+    assert env.get("accepted") is False
+    assert env.get("last_target_url") == "http://127.0.0.1:18080"
+    assert env.get("retry_user_message") == "/portal 返回 404，数据库容器已退出"
+    assert (project_docs(project) / "lab.md").is_file()
+
+
+def test_request_lab_rebuild_denied_when_not_lab_mode(tmp_env, project):
+    out = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "RequestLabRebuild",
+        {"reason": "404"},
+    )
+    assert out["ok"] is False
+    assert "靶场动态" in out["error"]
+
+
+def test_request_lab_rebuild_denied_while_setup_in_progress(tmp_env, project):
+    from app.models import Project, SessionLocal
+    from app.services.lab import save_env
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.dynamic_verify_enabled = True
+        proj.dynamic_verify_mode = "lab"
+        db.commit()
+    save_env(project, {"setup_finished": False, "accepted": False})
+    out = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "RequestLabRebuild",
+        {"reason": "假就绪"},
+    )
+    assert out["ok"] is False
+    assert "已在进行" in out["error"]
+
+
+def test_request_lab_rebuild_capped(tmp_env, project):
+    from app.models import Project, SessionLocal
+    from app.services.lab import LAB_REBUILD_MAX, save_env
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.dynamic_verify_enabled = True
+        proj.dynamic_verify_mode = "lab"
+        db.commit()
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "lab_rebuild_count": LAB_REBUILD_MAX,
+        },
+    )
+    out = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "RequestLabRebuild",
+        {"reason": "再次假就绪"},
+    )
+    assert out["ok"] is False
+    assert "多次交回" in out["error"]
+
+
+def test_request_lab_rebuild_acl_blocks_lab_role(tmp_env, project):
+    denied = registry.dispatch(
+        _ctx(project, "reviewer_lab"),
+        "RequestLabRebuild",
+        {"reason": "假就绪"},
+    )
+    assert denied["ok"] is False
+    assert "无权" in denied["error"]
 
 
 def test_recon_mark_cannot_read(tmp_env, project):

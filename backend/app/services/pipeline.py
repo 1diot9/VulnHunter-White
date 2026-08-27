@@ -74,6 +74,7 @@ from ..services.lab import (
     lab_had_docker_lab,
     lab_naming,
     lab_ready,
+    lab_rebuild_requested,
     lab_round_complete,
     lab_setup_failed,
     lab_setup_finished,
@@ -1479,6 +1480,8 @@ _BRINGUP_FAILED_NOTE = (
     "Docker 靶场拉起失败（见 docs/lab.md），本轮强制仅静态审核。"
     "不要搭建或启动 Docker、不要对靶场发请求或运行 poc.py、不要 docker exec / debug MCP。"
     "ConfirmVuln 必须 evidence_level=static_only。"
+    "若判定靶场假就绪、需要完整重建而不是仅 docker start，"
+    "可调用 RequestLabRebuild(reason=...) 交回环境搭建 Agent。"
 )
 
 _ATTACK_CHAIN_STATIC_NOTE = (
@@ -1662,6 +1665,8 @@ def _timeout_forced_static_note(streak: int) -> str:
     return (
         f"本条漏洞已连续超时 {streak} 轮（阈值 {threshold}），系统已强制本轮仅静态审核。"
         "忽略上一轮未完成的动态环境、认证或路由排查。"
+        "若 Docker 靶场假就绪（容器在跑但业务入口 404/无法登录等），"
+        "调用 RequestLabRebuild 交回搭建，不要空转修容器。"
         f"\n{_STATIC_REVIEW_NOTE}"
     )
 
@@ -1946,6 +1951,17 @@ def _worker_hint_block(project_id: int) -> str:
 def _lab_retry_hint_block(project_id: int) -> str:
     env = load_env(project_id)
     text = str(env.get("retry_user_message") or "").strip()
+    if lab_rebuild_requested(project_id):
+        body = (
+            "## Reviewer 交回搭建\n"
+            "审核判定当前靶场假就绪（容器在跑但业务入口不可用）。"
+            "不要只 docker start 应用容器后直接 FinishLab。"
+            "先用 compose 拉起依赖 sidecar，再确认业务 URL（登录页/门户/健康检查等）真正可访问；"
+            "无法修复则 FinishLab(skipped=true, reason=...)。\n\n"
+        )
+        if text:
+            body += f"{text}\n\n"
+        return body
     if not text:
         return ""
     return (
@@ -1957,6 +1973,8 @@ def _lab_retry_hint_block(project_id: int) -> str:
 
 def _lab_initial_prompt_doc(project_id: int) -> str:
     env = load_env(project_id)
+    if lab_rebuild_requested(project_id):
+        return "reviewer-lab-rebuild.md"
     if _truthy(env.get("user_retry_requested")):
         return "reviewer-lab-user-retry.md"
     return "reviewer-lab.md"
@@ -4094,7 +4112,7 @@ def _run_reviewer_lab(project_id: int) -> None:
             _finish_resumable_phase(project_id, "reviewer-lab")
             return
         env = load_env(project_id)
-        if env.get("accepted"):
+        if env.get("accepted") and not lab_rebuild_requested(project_id):
             rec = recreate_lab(project_id, mode="start")
             if lab_ready(load_env(project_id) or env):
                 mark_lab_setup_finished(project_id, via=str(rec.get("via") or "reuse"))

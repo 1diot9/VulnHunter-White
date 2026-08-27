@@ -39,6 +39,7 @@ INITIAL_DOCS = (
     "reviewer-lab-retry-timeout.md",
     "reviewer-lab-retry-other.md",
     "reviewer-lab-user-retry.md",
+    "reviewer-lab-rebuild.md",
     "verifier.md",
     "fast_worker.md",
     "bypass_worker.md",
@@ -157,6 +158,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "仅响应差别" in text
     assert "limited_info" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
+    assert "RequestLabRebuild" in text
+    assert "RequestLabRebuild" in load_prompt("initial/reviewer.md")
     assert "SearchTools" in load_prompt("reviewer.md")
     assert "SearchTools" in load_prompt("initial/reviewer.md")
     followup = load_prompt("initial/reviewer-dynamic-followup.md")
@@ -325,6 +328,7 @@ def test_lab_verify_overlay_prompt():
     assert "靶场动态" in text
     assert "即将落盘" in text
     assert "退出码" in text
+    assert "RequestLabRebuild" in text
 
 
 def test_harness_verify_overlay_prompt(tmp_env, project):
@@ -630,6 +634,7 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "${lab_label_args}" in text
     assert "被测应用必须用最新版本" in text
     assert "vulhub" in text
+    assert "业务应用本身可达" in text
     initial = load_prompt("initial/reviewer-lab.md")
     assert "FinishLab" in initial
     assert "不要审核漏洞" in initial
@@ -644,11 +649,18 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "vulnhunter.project" in docker
     assert "Audited app = latest" in docker
     assert "vulhub" in docker
+    assert "application itself" in docker
     rendered = pipeline._lab_system_prompt(project)
     assert f"demo-{project}:lab" in rendered
     assert f"demo-{project}" in rendered
     assert f"vulnhunter.project={project}" in rendered or f'vulnhunter.project: "{project}"' in rendered
     assert "${lab_image}" not in rendered
+    rebuild = load_prompt("initial/reviewer-lab-rebuild.md")
+    assert "假就绪" in rebuild
+    assert "FinishLab" in rebuild
+    assert "不要审核漏洞" in rebuild
+    assert "docker start" in rebuild
+    assert "${lab_image}" in rebuild
 
 
 def test_verifier_prompt_requires_fofa_and_three_successes():

@@ -21,6 +21,7 @@ _MAX_NAME_SLUG = 48
 LAB_LABEL_KEY = "vulnhunter"
 LAB_LABEL_VALUE = "1"
 LAB_PROJECT_LABEL_KEY = "vulnhunter.project"
+LAB_REBUILD_MAX = 2
 
 
 def _lab_role_suffix(role: str | None) -> str:
@@ -191,6 +192,18 @@ def lab_bring_up_failed(project_id: int) -> bool:
     return _truthy(load_env(project_id).get("bring_up_failed"))
 
 
+def lab_rebuild_requested(project_id: int) -> bool:
+    """True when Reviewer handed a false-ready lab back to the setup Agent."""
+    return _truthy(load_env(project_id).get("lab_rebuild_requested"))
+
+
+def lab_rebuild_count(project_id: int) -> int:
+    try:
+        return max(0, int(load_env(project_id).get("lab_rebuild_count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def lab_had_docker_lab(project_id: int) -> bool:
     """True when a Docker lab was accepted at least once (metadata still present)."""
     env = load_env(project_id)
@@ -260,7 +273,12 @@ def reset_lab_setup_for_retry(project_id: int, user_message: str = "") -> dict[s
 def clear_lab_retry_flags(project_id: int) -> None:
     env = dict(load_env(project_id) or {})
     changed = False
-    for key in ("user_retry_requested", "retry_user_message"):
+    for key in (
+        "user_retry_requested",
+        "retry_user_message",
+        "lab_rebuild_requested",
+        "rebuild_requested_by",
+    ):
         if key in env:
             env.pop(key)
             changed = True
@@ -268,11 +286,46 @@ def clear_lab_retry_flags(project_id: int) -> None:
         save_env(project_id, env)
 
 
+def invalidate_lab_for_rebuild(project_id: int, reason: str) -> dict[str, Any]:
+    """Mark a false-ready lab as not ready and reopen the dedicated lab-setup round."""
+    env = dict(load_env(project_id) or {})
+    env["accepted"] = False
+    env["setup_finished"] = False
+    env["status"] = "needs_rebuild"
+    env["lab_state"] = "setup"
+    env["lab_rebuild_requested"] = True
+    env["rebuild_requested_by"] = "reviewer"
+    env["user_retry_requested"] = True
+    env["bring_up_failed"] = False
+    env.pop("bring_up_fail_reason", None)
+    prev_url = str(env.get("target_url") or "").strip()
+    if prev_url:
+        env["last_target_url"] = prev_url
+    env.pop("target_url", None)
+    text = str(reason or "").strip() or "审核判定靶场假就绪"
+    env["retry_user_message"] = text
+    try:
+        count = max(0, int(env.get("lab_rebuild_count") or 0))
+    except (TypeError, ValueError):
+        count = 0
+    env["lab_rebuild_count"] = count + 1
+    prev_notes = str(env.get("notes") or "").strip()
+    line = f"reviewer_rebuild: {text}"
+    env["notes"] = f"{prev_notes}\n{line}".strip() if prev_notes else line
+    save_env(project_id, env)
+    write_lab_doc(project_id, env, via="reviewer-rebuild")
+    return env
+
+
 def lab_round_complete(project_id: int, state: dict[str, Any] | None = None) -> bool:
     if state and state.get("lab_done"):
         return True
     if lab_setup_finished(project_id):
         return True
+    if lab_rebuild_requested(project_id):
+        # Reviewer handed back a false-ready lab: do not auto-complete on env.json
+        # still looking accepted/running. The setup Agent must FinishLab.
+        return False
     return lab_ready(load_env(project_id))
 
 
@@ -318,6 +371,9 @@ def mark_lab_setup_finished(
         env["lab_ever_ready"] = True
         env["bring_up_failed"] = False
         env.pop("bring_up_fail_reason", None)
+        env.pop("lab_rebuild_requested", None)
+        env.pop("rebuild_requested_by", None)
+        env.pop("lab_rebuild_count", None)
     if notes:
         prev = str(env.get("notes") or "").strip()
         env["notes"] = f"{prev}\n{notes}".strip() if prev else notes

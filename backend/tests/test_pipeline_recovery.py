@@ -1134,6 +1134,83 @@ def test_run_reviewer_lab_reuses_ready_env_without_agent(tmp_env, project, monke
     assert lab_setup_finished(project) is True
 
 
+def test_run_reviewer_lab_skips_reuse_when_rebuild_requested(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+    from app.services.lab import lab_setup_finished, save_env
+
+    _enable_dynamic_verify(project)
+    save_env(
+        project,
+        {
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "container_name": f"vulnhunter-{project}",
+            "lab_rebuild_requested": True,
+            "setup_finished": False,
+        },
+    )
+    reused = {"start": 0}
+
+    def fake_recreate(pid, mode="full"):  # noqa: ARG001
+        reused["start"] += 1
+        return {"ok": True, "via": "reuse"}
+
+    monkeypatch.setattr(pipeline, "recreate_lab", fake_recreate)
+    called = {"loop": 0}
+
+    class FakeLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003, ARG002
+            called["loop"] += 1
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, cancelled=True, stop_reason="cancelled")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(pipeline, "resolve_llm", lambda role, **kwargs: object())
+    pipeline._run_reviewer_lab(project)
+    assert reused["start"] == 0
+    assert called["loop"] == 1
+    assert lab_setup_finished(project) is False
+
+
+def test_next_reviewer_step_is_lab_after_rebuild_request(tmp_env, project):
+    from app.services.lab import invalidate_lab_for_rebuild, save_env
+
+    _enable_dynamic_verify(project)
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    invalidate_lab_for_rebuild(project, "/portal 404")
+    assert pipeline._next_reviewer_step(project, pending=1) == "lab"
+
+
+def test_lab_rebuild_prompt_doc_and_hint(tmp_env, project):
+    from app.services.lab import invalidate_lab_for_rebuild, save_env
+
+    save_env(
+        project,
+        {
+            "setup_finished": True,
+            "accepted": True,
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+        },
+    )
+    invalidate_lab_for_rebuild(project, "数据库 sidecar 已退出")
+    assert pipeline._lab_initial_prompt_doc(project) == "reviewer-lab-rebuild.md"
+    hint = pipeline._lab_retry_hint_block(project)
+    assert "Reviewer 交回搭建" in hint
+    assert "数据库 sidecar 已退出" in hint
+    assert "docker start" in hint
+
+
 def test_reviewer_once_appends_dynamic_followup_without_interrupt(tmp_env, project, monkeypatch):
     from app.agent.checkpoint import LoopCheckpoint, save_checkpoint
     from app.agent.loop import INTERRUPT_RESUME, LoopResult

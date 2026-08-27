@@ -292,6 +292,7 @@ def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
     assert "CollectLabFingerprints" not in names
     assert "RunCode" not in names
     assert "ConfirmVuln" in names
+    assert "RequestLabRebuild" in names
     blocked = registry.dispatch(
         _ctx(project, "reviewer", vuln_id=vid),
         native_shell_tool(),

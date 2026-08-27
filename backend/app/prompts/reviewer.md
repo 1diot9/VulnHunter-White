@@ -61,6 +61,7 @@
    - **debug MCP 只用于改 PoC 时的动态调试**（不是首选）：poc.py 缺失、无法运行、或按报告跑不出冲击，且你需要自己改写/调试时，才 attach（runtime 为 java/nodejs/python、调试端口可用且 MCP 已接入）。用断点/变量确认 sink 是否到达、payload 如何被处理，再据此修正 poc.py。不要一上来就挂 MCP，也不要用 MCP 往靶场写入 payload 制造利用条件。
    - 原 PoC 无有害差异 → 先分清：同链 payload 细节问题则自己改再跑；需种文件、换 sink、或另找一条利用链才成立 → MarkFalsePositive。不要标 `evidence_level=dynamic`/`mcp` 把未证明的冲击确认掉，也不要为此打回 Worker。
    - **ConfirmVuln 闸门**：靶场可用时系统会再跑一遍即将落盘的 `poc.py`（`python poc.py -u <target_url>`，直连）。退出码 0 才允许确认，非 0 / 超时 / 缺 `-u/--url` 则拒绝，漏洞保持 pending。不要用 `static_only` 跳过。跑通后标 `dynamic`（用了 debug MCP 则 `mcp`）。
+   - **假就绪**：容器 `running`、`lab.md` 仍写 ready，但业务入口 404/无法登录、依赖 sidecar 已退出、Spring 内核未起来等 → 调用 `RequestLabRebuild(reason=...)` 改写靶场状态并结束本轮。系统会交回环境搭建 Agent 重建；搭完或 `FinishLab(skipped)` 后再审。不要自己 `docker start` / kill Tomcat，也不要用 `static_only` 硬过闸门。
    - 环境起不来（无 target_url），但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
    - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。
@@ -104,6 +105,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显 vs 仅探测）；局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm（标题改成中文） |
 | 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1/4.0、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 的基础分、严重度标签与向量字符串，与 ConfirmVuln 严重度校准一致；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述过短、缺漏洞代码（完整路径 + 源码）、缺 HTTP/API PoC 或未写入口→sink 链路、版本/参考链接 | `ReadCveRecord` 查看字段与 `quality_issues`，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`；`descriptions[0].value` 须为英文详述，含漏洞代码路径与原文；supportingMedia 用 HTML 且漏洞代码与 PoC 放 `<pre>`）；不要 Write 整份 `cve.json` |
+| 容器在跑但业务入口 404/无法登录、sidecar 已退出等假就绪 | RequestLabRebuild(reason=...)，结束本轮交回搭建；不要自己 docker start/kill，也不要用 static_only 硬过闸门 |
 | 入口 / sink / 根因分析错了，需要重新读源码补分析 | ReturnToWorker（写清缺哪一块）；上限 1 次，超过由系统误报 |
 | 同根因同危害多份 | MergeIntoVuln，不要误报、不要打回 |
 
@@ -115,4 +117,4 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 - 需要额外写原语或非默认目录才能出冲击时，复杂度应标 `specific_environment`，并通常直接误报；不要用 `multi_step` 把 -2 变成 0，也不要把种文件后的 SSTI 写成已有 `sensitive_data_or_privilege`。
 - 不要把低危害难利用项标成 `cve_candidate`。
 - 不要把同根因同危害拆成的多份报告标成 `false_positive` 或打回「合并」；用 `MergeIntoVuln`。
-- 本条 Confirm/Merge/MarkFalsePositive/Return 后本审核会话结束（absorb 后须再 Confirm 才结束）。
+- 本条 Confirm/Merge/MarkFalsePositive/Return/RequestLabRebuild 后本审核会话结束（absorb 后须再 Confirm 才结束）。

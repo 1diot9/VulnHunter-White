@@ -1,4 +1,4 @@
-"""Reviewer tools: ConfirmVuln, MergeIntoVuln, MarkFalsePositive, ReturnToWorker, FinishLab."""
+"""Reviewer tools: ConfirmVuln, MergeIntoVuln, MarkFalsePositive, ReturnToWorker, RequestLabRebuild, FinishLab."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from ..dynamic_verify import (
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     coerce_evidence_level,
+    is_lab_mode,
     normalize_evidence_level,
     project_verify_mode,
     static_after_review_timeouts,
@@ -33,9 +34,13 @@ from ..services.asset_proof import (
     upgrade_project_fingerprints,
 )
 from ..services.lab import (
+    LAB_REBUILD_MAX,
     clear_lab_bring_up_failed,
+    invalidate_lab_for_rebuild,
     lab_bring_up_failed,
     lab_ready,
+    lab_rebuild_count,
+    lab_setup_finished,
     load_env,
     mark_lab_bring_up_failed,
     mark_lab_setup_finished,
@@ -728,6 +733,34 @@ def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _request_lab_rebuild(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return call_fail("交回搭建必须说明假就绪原因 reason")
+    with SessionLocal() as db:
+        proj = db.get(Project, ctx.project_id)
+        if not proj or not is_lab_mode(project_verify_mode(proj)):
+            return call_fail("仅靶场动态可交回搭建")
+    if not lab_setup_finished(ctx.project_id):
+        return call_fail("环境搭建轮已在进行")
+    count = lab_rebuild_count(ctx.project_id)
+    if count >= LAB_REBUILD_MAX:
+        return call_fail(
+            f"已多次交回搭建（{count}/{LAB_REBUILD_MAX}）；"
+            "请 static_only 或误报，或等搭建轮 FinishLab(skipped)"
+        )
+    env = invalidate_lab_for_rebuild(ctx.project_id, reason)
+    ctx.state["review_done"] = True
+    ctx.state["review_verdict"] = "lab_rebuild"
+    return {
+        "ok": True,
+        "setup_finished": False,
+        "lab_rebuild_count": env.get("lab_rebuild_count"),
+        "reason": reason,
+        "message": "已标记靶场需重建，本轮审核结束，将交回环境搭建 Agent",
+    }
+
+
 def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
     skipped = bool(args.get("skipped"))
     reason = str(args.get("reason") or args.get("notes") or "").strip()
@@ -1118,6 +1151,29 @@ def register_reviewer_tools() -> None:
                 },
             },
             handler=_return_to_worker,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="RequestLabRebuild",
+            description=(
+                "靶场假就绪时交回环境搭建 Agent：容器在跑但业务入口 404/无法登录、"
+                "依赖 sidecar 已退出、Spring 内核未起来等。"
+                "会改写 env 为未就绪并结束本轮审核；漏洞保持 pending_review。"
+                "系统随后跑搭建轮，搭完或 FinishLab(skipped) 后再审。"
+                "不要自己 docker start/kill Tomcat，也不要用 static_only 硬过闸门。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "必须写清假就绪现象（如 /portal 404、数据库容器已退出）",
+                    },
+                },
+                "required": ["reason"],
+            },
+            handler=_request_lab_rebuild,
         )
     )
     registry.register(

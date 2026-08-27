@@ -169,6 +169,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "MergeIntoVuln",
             "MarkFalsePositive",
             "ReturnToWorker",
+            "RequestLabRebuild",
             "RunCode",
             "ReadCveRecord",
             "SetCveRecordField",
