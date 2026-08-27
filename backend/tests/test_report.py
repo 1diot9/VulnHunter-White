@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.services.report import (
+    CHINESE_TITLE_ERROR,
+    chinese_title_block_reason,
     ensure_search_fingerprint_section,
     extract_asset_queries,
     format_produced_at,
@@ -78,9 +80,25 @@ def test_format_naive_utc():
     assert format_produced_at(dt) == "2026-08-16 09:17:00"
 
 
-def test_submit_vuln_stamps_custom_report(tmp_env, project):
+def test_chinese_title_block_reason_unit():
+    assert chinese_title_block_reason("登录处 SQL 注入") is None
+    assert chinese_title_block_reason("XXOA 前台 SQL Injection") is None
+    assert chinese_title_block_reason("SQL Injection in login") == CHINESE_TITLE_ERROR
+    assert chinese_title_block_reason("RCE") == CHINESE_TITLE_ERROR
+    assert (
+        chinese_title_block_reason(
+            "登录处 SQL 注入",
+            report_md="# SQL Injection in login\n\n## 摘要\nx\n",
+        )
+        == CHINESE_TITLE_ERROR
+    )
+    assert chinese_title_block_reason(report_md='---\ntitle: "登录注入"\n---\n\n# 登录注入\n') is None
+    assert chinese_title_block_reason() is None
+
+
+def test_submit_vuln_rejects_english_only_title(tmp_env, project):
     payload = {
-        "title": "custom report",
+        "title": "SQL Injection in login",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -91,7 +109,54 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
         "config_premise": "default",
-        "report_md": "# custom report\n\n## 漏洞描述\nhello\n",
+    }
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        payload,
+    )
+    assert out["ok"] is False
+    assert "中文" in out["error"]
+
+
+def test_submit_vuln_rejects_english_report_h1(tmp_env, project):
+    payload = {
+        "title": "登录处 SQL 注入",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "a->b",
+        "auth_premise": "未授权",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "ok",
+        "config_premise": "default",
+        "report_md": "# SQL Injection in login\n\n## 摘要\nx\n",
+    }
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        payload,
+    )
+    assert out["ok"] is False
+    assert "中文" in out["error"]
+
+
+def test_submit_vuln_stamps_custom_report(tmp_env, project):
+    payload = {
+        "title": "自定义报告",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "a->b",
+        "auth_premise": "未授权",
+        "http_request": "GET / HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "ok",
+        "config_premise": "default",
+        "report_md": "# 自定义报告\n\n## 漏洞描述\nhello\n",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),
@@ -100,7 +165,7 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
     )
     assert out["ok"] is True
     report = (vuln_dir(project, out["vuln_id"]) / "report.md").read_text(encoding="utf-8")
-    assert report.startswith("# custom report\n\n**产出时间**：")
+    assert report.startswith("# 自定义报告\n\n**产出时间**：")
     assert "## 漏洞描述" in report
     assert "## 互联网资产证明" in report
     advisory = (vuln_dir(project, out["vuln_id"]) / "advisory.md").read_text(encoding="utf-8")
@@ -113,7 +178,7 @@ def test_submit_vuln_stamps_custom_report(tmp_env, project):
 
 def test_submit_vuln_writes_search_fingerprints(tmp_env, project):
     payload = {
-        "title": "fingerprint report",
+        "title": "指纹报告",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -147,7 +212,7 @@ def test_submit_vuln_writes_search_fingerprints(tmp_env, project):
 
 def test_finish_fix_keeps_original_produced_at(tmp_env, project):
     payload = {
-        "title": "needs fix",
+        "title": "待修复",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -175,7 +240,7 @@ def test_finish_fix_keeps_original_produced_at(tmp_env, project):
     registry.dispatch(
         ToolContext(project_id=project, role="fix", phase="fix", vuln_id=vuln_id),
         "FinishFix",
-        {"vuln_id": vuln_id, "report_md": "# needs fix\n\nupdated\n"},
+        {"vuln_id": vuln_id, "report_md": "# 待修复\n\nupdated\n"},
     )
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     from app.services.report import produced_at_line
@@ -186,7 +251,7 @@ def test_finish_fix_keeps_original_produced_at(tmp_env, project):
 
 def test_submit_and_confirm_write_custom_advisory(tmp_env, project):
     payload = {
-        "title": "budget bypass",
+        "title": "预算绕过",
         "vuln_type": "idor",
         "cwe": "CWE-863",
         "file_path": "app/Keys.java",
@@ -384,7 +449,7 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
     from app.tools import ToolContext, registry
 
     payload = {
-        "title": "sqli demo",
+        "title": "SQL 注入演示",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Db.java",
@@ -395,7 +460,7 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         "poc_code": "print(1)\n",
         "expected_evidence": "500",
         "config_premise": "default",
-        "report_md": "# sqli\n\n## 摘要\nx\n## 漏洞描述\nx\n## 漏洞危害\nx\n## 漏洞厂商全称\nx\n## 已知受影响产品及版本\nx\n## 互联网资产证明\nx\n## 漏洞技术细节\nx\n## 同根因受影响点\nx\n## 复现证明\nx\n## 修复方案\nx\n## 备注\nx\n",
+        "report_md": "# SQL 注入演示\n\n## 摘要\nx\n## 漏洞描述\nx\n## 漏洞危害\nx\n## 漏洞厂商全称\nx\n## 已知受影响产品及版本\nx\n## 互联网资产证明\nx\n## 漏洞技术细节\nx\n## 同根因受影响点\nx\n## 复现证明\nx\n## 修复方案\nx\n## 备注\nx\n",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),

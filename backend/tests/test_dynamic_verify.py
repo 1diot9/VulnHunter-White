@@ -113,7 +113,7 @@ def test_confirm_coerces_static_after_timeout_streak(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "SQLI",
+            "title": "SQL 注入",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "a.java",
@@ -174,7 +174,7 @@ def _submit_sqli(project: int, poc_code: str) -> int:
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "SQLI",
+            "title": "SQL 注入",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "a.java",
@@ -371,7 +371,7 @@ def test_project_verify_mode_legacy_enabled_is_lab(tmp_env, project):
 def test_confirm_harness_when_mode_harness(tmp_env, project):
     _set_verify_mode(project, VERIFY_MODE_HARNESS)
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -438,7 +438,7 @@ def test_confirm_coerces_dynamic_in_harness_mode(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "SQLI",
+            "title": "SQL 注入",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "a.java",

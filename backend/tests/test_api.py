@@ -867,7 +867,7 @@ def test_vulns_list_and_download(tmp_env, project):
     from app.tools import ToolContext, registry
 
     payload = {
-        "title": "RCE demo",
+        "title": "远程代码执行演示",
         "vuln_type": "rce",
         "cwe": "CWE-78",
         "file_path": "app/Main.java",
@@ -897,7 +897,7 @@ def test_vulns_list_and_download(tmp_env, project):
         detail = client.get(f"/api/vulns/{vid}")
         assert detail.status_code == 200
         body = detail.json()
-        assert body["title"] == "RCE demo"
+        assert body["title"] == "远程代码执行演示"
         assert body["project_name"] == "demo"
         assert body["mining_path"] == "heuristic"
         assert body["config_premise"] == "default"
@@ -919,6 +919,7 @@ def test_vulns_list_and_download(tmp_env, project):
         assert len(dl.content) > 20
         import io
         import zipfile
+        from urllib.parse import quote
 
         names = zipfile.ZipFile(io.BytesIO(dl.content)).namelist()
         assert f"vuln-{vid}/report.md" in names
@@ -932,7 +933,8 @@ def test_vulns_list_and_download(tmp_env, project):
         one_disp = one.headers["content-disposition"]
         assert "attachment" in one_disp
         assert f'filename="vuln-{vid}.zip"' in one_disp
-        assert f"vuln-{vid}-RCE%20demo.zip" in one_disp
+        encoded = quote(f"vuln-{vid}-远程代码执行演示", safe="-.")
+        assert f"{encoded}.zip" in one_disp
         one_names = zipfile.ZipFile(io.BytesIO(one.content)).namelist()
         assert one_names == names
         report = client.get(f"/api/vulns/{vid}/download?kind=report")
@@ -941,7 +943,7 @@ def test_vulns_list_and_download(tmp_env, project):
         disposition = report.headers["content-disposition"]
         assert "attachment" in disposition
         assert f'filename="vuln-{vid}.md"' in disposition
-        assert f"vuln-{vid}-RCE%20demo.md" in disposition
+        assert f"{encoded}.md" in disposition
         assert "**产出时间**：" in report.text
         advisory = client.get(f"/api/vulns/{vid}/download?kind=advisory")
         assert advisory.status_code == 200

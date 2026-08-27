@@ -120,7 +120,7 @@ def test_search_old_vuln_attack_chain_filters_old_and_pending(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Pending Only",
+            "title": "仅待审核",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "a.java",
@@ -134,14 +134,14 @@ def test_search_old_vuln_attack_chain_filters_old_and_pending(tmp_env, project):
         },
     )
     assert pending["ok"] is True
-    confirmed_id = _submit_and_confirm(project, title="Confirmed Hole")
+    confirmed_id = _submit_and_confirm(project, title="已确认漏洞")
 
     listed = registry.dispatch(_ctx(project, "attack_chain"), "SearchOldVuln", {})
     assert listed["ok"] is True
     titles = {d["title"] for d in listed["docs"]}
     assert "Hist CVE" not in titles
-    assert "Pending Only" not in titles
-    assert "Confirmed Hole" in titles
+    assert "仅待审核" not in titles
+    assert "已确认漏洞" in titles
     doc = next(d for d in listed["docs"] if d["vuln_id"] == confirmed_id)
     assert doc["kind"] == "found"
     assert doc["status"] in ("confirmed", "static_only")

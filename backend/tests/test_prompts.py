@@ -490,6 +490,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "docs/app-fingerprints.json" in worker
     assert "不要每条漏洞重新识别" in worker
     assert "docs/lab.md" in worker
+    assert "title（中文）" in worker
     assert "不允许出现「或」" in worker
     assert "templates/vuln-advisory.md" in worker
     assert "advisory_md" in worker
@@ -497,6 +498,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     text = report.read_text(encoding="utf-8")
     assert "SSRF 须明确：观察面" in text
     assert "仅响应差别（内网端口探测）" in text
+    assert "标题须为中文" in text
     advisory = Path(__file__).resolve().parents[2] / "templates" / "vuln-advisory.md"
     advisory_text = advisory.read_text(encoding="utf-8")
     assert "## Title" in advisory_text
@@ -520,6 +522,7 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     text = load_prompt("report-formats.md")
     assert "# 报告 / Advisory / CVE 格式" in text
     assert "必须为中文" in text
+    assert "标题须为中文" in text
     assert "必须为英文 GitHub Advisory 填表稿" in text
     assert "不要把中文报告粘进去" in text
     assert "VULNHUNTER_PENDING" in text
@@ -536,6 +539,7 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     overlay = pipeline._phase_system_prompt(project, "worker.md")
     assert "报告 / Advisory / CVE 格式" in overlay
     assert "必须为英文 GitHub Advisory 填表稿" in overlay
+    assert "标题须为中文" in overlay
     assert "英文详述" in overlay
     reviewer = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "报告 / Advisory / CVE 格式" in reviewer

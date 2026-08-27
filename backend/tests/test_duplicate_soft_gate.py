@@ -20,7 +20,7 @@ def _ctx(project_id: int, role: str, vuln_id: int | None = None) -> ToolContext:
 
 def _payload(**extra):
     base = {
-        "title": "Hardcoded AES key",
+        "title": "硬编码 AES 密钥",
         "vuln_type": "hardcoded_secret",
         "cwe": "CWE-798",
         "file_path": "src/EncryptedString.java",
@@ -47,26 +47,26 @@ def test_submit_soft_gate_requires_prior_warning_then_ack(tmp_env, project):
     premature = registry.dispatch(
         _ctx(project, "worker"),
         "SubmitVuln",
-        _payload(title="dup early ack", confirm_not_duplicate=True),
+        _payload(title="重复提前确认", confirm_not_duplicate=True),
     )
     assert premature["ok"] is False
     assert premature.get("duplicate_soft_gate") is True
     assert "提醒过" in premature["error"]
 
-    warn = registry.dispatch(ctx, "SubmitVuln", _payload(title="dup warn"))
+    warn = registry.dispatch(ctx, "SubmitVuln", _payload(title="重复提醒"))
     assert warn["ok"] is False
     assert warn.get("need_confirm_not_duplicate") is True
     assert any(c["vuln_id"] == vid for c in warn["candidates"])
     assert "same_file_type" in warn["candidates"][0]["match_reasons"]
 
-    still = registry.dispatch(ctx, "SubmitVuln", _payload(title="dup still"))
+    still = registry.dispatch(ctx, "SubmitVuln", _payload(title="重复仍提交"))
     assert still["ok"] is False
     assert still.get("duplicate_soft_gate") is True
 
     ok = registry.dispatch(
         ctx,
         "SubmitVuln",
-        _payload(title="dup ack", confirm_not_duplicate=True),
+        _payload(title="重复确认提交", confirm_not_duplicate=True),
     )
     assert ok["ok"] is True
     assert ok["vuln_id"] != vid
@@ -85,7 +85,7 @@ def test_submit_soft_gate_same_root_key_different_file(tmp_env, project):
         ctx,
         "SubmitVuln",
         _payload(
-            title="same key other file",
+            title="同键不同文件",
             file_path="b/Two.java",
             vuln_type="idor",
             root_cause_key="idor:SysCommentController",
@@ -97,13 +97,13 @@ def test_submit_soft_gate_same_root_key_different_file(tmp_env, project):
 
 def test_confirm_soft_gate_requires_ack(tmp_env, project):
     worker = _ctx(project, "worker")
-    a = registry.dispatch(worker, "SubmitVuln", _payload(title="A"))
-    warn = registry.dispatch(worker, "SubmitVuln", _payload(title="B"))
+    a = registry.dispatch(worker, "SubmitVuln", _payload(title="洞甲"))
+    warn = registry.dispatch(worker, "SubmitVuln", _payload(title="洞乙"))
     assert warn["ok"] is False
     b = registry.dispatch(
         worker,
         "SubmitVuln",
-        _payload(title="B", confirm_not_duplicate=True),
+        _payload(title="洞乙", confirm_not_duplicate=True),
     )
     assert b["ok"] is True
 

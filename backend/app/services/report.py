@@ -402,6 +402,55 @@ def missing_report_headings(text: str, *, bypass: bool = False) -> list[str]:
     return missing
 
 
+_CJK_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
+_REPORT_H1_RE = re.compile(r"(?m)^#\s+(.+)$")
+CHINESE_TITLE_ERROR = (
+    "中文报告标题须为中文（可保留产品名、类名、CVE 编号原文），不要只用英文"
+)
+
+
+def has_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text or ""))
+
+
+def extract_report_titles(report_md: str) -> list[str]:
+    """YAML frontmatter `title` and the first ATX H1, if present."""
+    body = (report_md or "").replace("\r\n", "\n")
+    found: list[str] = []
+    rest = body
+    if body.startswith("---"):
+        end = body.find("\n---\n", 3)
+        if end != -1:
+            fm = body[4:end]
+            rest = body[end + 5 :]
+            for line in fm.splitlines():
+                if line.lower().startswith("title:"):
+                    val = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    if val:
+                        found.append(val)
+    match = _REPORT_H1_RE.search(rest)
+    if match:
+        found.append(match.group(1).strip())
+    return found
+
+
+def chinese_title_block_reason(
+    title: str | None = None,
+    *,
+    report_md: str | None = None,
+) -> str | None:
+    """Reject English-only titles on the Chinese report / vuln list field."""
+    texts: list[str] = []
+    stripped = str(title or "").strip()
+    if stripped:
+        texts.append(stripped)
+    texts.extend(extract_report_titles(str(report_md or "")))
+    for text in texts:
+        if text and not has_cjk(text):
+            return CHINESE_TITLE_ERROR
+    return None
+
+
 def _extract_vuln_code_section(text: str) -> str | None:
     match = _VULN_CODE_HEADING_RE.search(text or "")
     if not match:

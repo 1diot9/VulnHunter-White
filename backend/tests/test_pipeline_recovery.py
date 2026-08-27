@@ -181,7 +181,7 @@ def test_mining_and_project_complete_gates(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "late",
+            "title": "迟到提交",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "app/Main.java",

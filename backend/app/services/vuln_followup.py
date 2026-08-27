@@ -54,7 +54,7 @@ def _revision_format_rules(kind: str, *, bypass: bool) -> str:
     else:
         focus = (
             "本次只改中文报告：revised_text 必须是完整中文 Markdown，"
-            "结构、章节与语言与提交/收口时相同。"
+            "结构、章节与语言与提交/收口时相同；标题（YAML title 与一级标题）须为中文。"
         )
         if bypass:
             focus += " 本条为历史漏洞绕过产出，必须保留 `### 补丁绕过简析`。"

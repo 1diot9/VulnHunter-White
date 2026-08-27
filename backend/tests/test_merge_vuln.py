@@ -36,7 +36,7 @@ def _confirm(ctx: ToolContext, args: dict) -> dict:
 
 def _submit_payload(**extra):
     payload = {
-        "title": "IDOR update",
+        "title": "评论更新越权",
         "vuln_type": "idor",
         "cwe": "CWE-639",
         "file_path": "app/SysCommentController.java",
@@ -125,9 +125,9 @@ def test_append_affected_locations_pending_only(tmp_env, project):
 
 def test_merge_into_vuln_into_and_absorb(tmp_env, project):
     worker = _ctx(project, "worker")
-    primary = _submit(worker, _submit_payload(title="IDOR primary", line_no=10))
-    sibling = _submit(worker, _submit_payload(title="IDOR sibling", line_no=42))
-    third = _submit(worker, _submit_payload(title="IDOR third", line_no=88))
+    primary = _submit(worker, _submit_payload(title="越权主报告", line_no=10))
+    sibling = _submit(worker, _submit_payload(title="越权兄弟报告", line_no=42))
+    third = _submit(worker, _submit_payload(title="越权第三入口", line_no=88))
     pid, sid, tid = primary["vuln_id"], sibling["vuln_id"], third["vuln_id"]
 
     absorb = registry.dispatch(
@@ -186,7 +186,7 @@ def test_merge_into_vuln_into_and_absorb(tmp_env, project):
     merged_report = (vuln_dir(project, pid) / "report.md").read_text(encoding="utf-8")
     assert "88" in merged_report or "patch" in merged_report
 
-    listed = registry.dispatch(_ctx(project, "worker"), "SearchOldVuln", {"query": "IDOR third"})
+    listed = registry.dispatch(_ctx(project, "worker"), "SearchOldVuln", {"query": "越权第三入口"})
     docs = [d for d in listed["docs"] if d.get("vuln_id") == tid]
     assert docs
     assert docs[0].get("merged_into_id") == pid
@@ -194,11 +194,11 @@ def test_merge_into_vuln_into_and_absorb(tmp_env, project):
 
 
 def test_merge_into_vuln_gates(tmp_env, project):
-    a = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", _submit_payload(title="A"))
+    a = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", _submit_payload(title="洞甲"))
     b = registry.dispatch(
         _ctx(project, "worker"),
         "SubmitVuln",
-        _submit_payload(title="B", vuln_type="ssrf", root_cause_key="ssrf:other"),
+        _submit_payload(title="洞乙", vuln_type="ssrf", root_cause_key="ssrf:other"),
     )
     ctx = _ctx(project, "reviewer", vuln_id=a["vuln_id"])
     self_merge = registry.dispatch(ctx, "MergeIntoVuln", {"into": a["vuln_id"]})

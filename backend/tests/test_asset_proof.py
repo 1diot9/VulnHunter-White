@@ -114,7 +114,7 @@ def test_collect_tool_apply_writes_report(tmp_env, project, monkeypatch):
         {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
     )
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -153,7 +153,7 @@ def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
         {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
     )
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -194,7 +194,7 @@ def test_confirm_auto_fills_placeholder_from_lab(tmp_env, project, monkeypatch):
 
 def test_confirm_uses_explicit_fingerprints(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -229,7 +229,7 @@ def test_confirm_uses_explicit_fingerprints(tmp_env, project):
 
 def test_confirm_rejects_or_fingerprint(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -264,7 +264,7 @@ def test_maybe_enrich_skips_when_queries_already_good(tmp_env, project, monkeypa
         {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
     )
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -354,7 +354,7 @@ def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "SQLI in login",
+            "title": "登录处 SQL 注入",
             "vuln_type": "sqli",
             "cwe": "CWE-89",
             "file_path": "app/Main.java",
@@ -377,7 +377,7 @@ def test_second_vuln_reuses_project_fingerprint(tmp_env, project, monkeypatch):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "IDOR list",
+            "title": "列表越权",
             "vuln_type": "idor",
             "cwe": "CWE-639",
             "file_path": "app/Main.java",

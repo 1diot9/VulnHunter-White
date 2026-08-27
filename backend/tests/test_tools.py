@@ -152,7 +152,7 @@ def test_submit_vuln_requires_config_premise(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "RCE",
+            "title": "远程代码执行",
             "vuln_type": "rce",
             "cwe": "CWE-78",
             "file_path": "app/Main.java",
@@ -180,7 +180,7 @@ def test_submit_vuln_stores_config_premise(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "RCE",
+            "title": "远程代码执行",
             "vuln_type": "rce",
             "cwe": "CWE-78",
             "file_path": "app/Main.java",
@@ -209,7 +209,7 @@ def test_submit_vuln_stores_config_premise(tmp_env, project):
 
 def test_confirm_vuln_can_override_config_premise(tmp_env, project):
     payload = {
-        "title": "RCE in ping",
+        "title": "ping 接口远程代码执行",
         "vuln_type": "rce",
         "cwe": "CWE-78",
         "file_path": "app/Main.java",
@@ -250,7 +250,7 @@ def test_submit_vuln_rejects_hardcoded_http_poc(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "RCE",
+            "title": "远程代码执行",
             "vuln_type": "rce",
             "cwe": "CWE-78",
             "file_path": "app/Main.java",
@@ -273,7 +273,7 @@ def test_submit_vuln_rejects_http_poc_without_proxy(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "RCE",
+            "title": "远程代码执行",
             "vuln_type": "rce",
             "cwe": "CWE-78",
             "file_path": "app/Main.java",
@@ -307,7 +307,7 @@ def _set_target_kind(project_id: int, kind: str) -> None:
 
 def _library_submit_payload(**overrides):
     body = {
-        "title": "Policy bypass via list-form agents",
+        "title": "列表形态 agents 策略绕过",
         "vuln_type": "auth_bypass",
         "cwe": "CWE-284",
         "file_path": "src/pkg/core.py",
@@ -410,7 +410,7 @@ def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):
     from app.services.paths import vuln_dir
 
     payload = {
-        "title": "RCE in ping",
+        "title": "ping 接口远程代码执行",
         "vuln_type": "rce",
         "cwe": "CWE-78",
         "file_path": "app/Main.java",
@@ -455,7 +455,7 @@ def test_confirm_vuln_can_rewrite_parameterized_poc(tmp_env, project):
 
 def test_submit_and_confirm_flow(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -556,7 +556,7 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
     fast = registry.dispatch(
         _ctx(project, "fast_worker"),
         "SubmitVuln",
-        payload("fast", "app/Fast.java"),
+        payload("快速扫描洞", "app/Fast.java"),
     )
     assert fast["ok"] is True
     assert fast["mining_path"] == "fast"
@@ -564,7 +564,7 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
     bypass = registry.dispatch(
         _ctx(project, "bypass_worker"),
         "SubmitVuln",
-        payload("bypass", "app/Bypass.java"),
+        payload("绕过路径洞", "app/Bypass.java"),
     )
     assert bypass["ok"] is True
     assert bypass["mining_path"] == "bypass"
@@ -579,8 +579,8 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
         _ctx(project, "bypass_worker"),
         "SubmitVuln",
         {
-            **payload("bypass-bad", "app/BypassBad.java"),
-            "report_md": "# bad\n\n## 漏洞描述\nonly partial\n",
+            **payload("绕过缺段", "app/BypassBad.java"),
+            "report_md": "# 不完整报告\n\n## 漏洞描述\nonly partial\n",
         },
     )
     assert bad["ok"] is False
@@ -595,7 +595,7 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
     fix = registry.dispatch(
         _ctx(project, "fix", vuln_id=fast["vuln_id"]),
         "SubmitVuln",
-        payload("from-fix", "app/Fix.java"),
+        payload("修复轮提交", "app/Fix.java"),
     )
     assert fix["ok"] is True
     assert fix["mining_path"] == "fast"
@@ -608,7 +608,7 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
 
 def test_confirm_requires_attack_surface(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -637,7 +637,7 @@ def test_confirm_requires_attack_surface(tmp_env, project):
 
 def test_confirm_requires_severity_factors(tmp_env, project):
     payload = {
-        "title": "SSRF",
+        "title": "服务端请求伪造",
         "vuln_type": "ssrf",
         "cwe": "CWE-918",
         "file_path": "app/Main.java",
@@ -662,7 +662,7 @@ def test_confirm_requires_severity_factors(tmp_env, project):
 
 def test_confirm_requires_submission_tier(tmp_env, project):
     payload = {
-        "title": "SSRF",
+        "title": "服务端请求伪造",
         "vuln_type": "ssrf",
         "cwe": "CWE-918",
         "file_path": "app/Main.java",
@@ -693,7 +693,7 @@ def test_confirm_requires_submission_tier(tmp_env, project):
 
 def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
     payload = {
-        "title": "SQLi",
+        "title": "SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -728,7 +728,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     _set_audit_mode(project, "full")
     worker = _ctx(project, "worker")
     payload = {
-        "title": "CORS",
+        "title": "CORS 配置不当",
         "vuln_type": "other",
         "cwe": "CWE-942",
         "file_path": "app/Main.java",
@@ -759,7 +759,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
     assert hard["submission_tier"] == "low_impact"
 
     payload2 = dict(payload)
-    payload2["title"] = "CORS again"
+    payload2["title"] = "再次 CORS 配置不当"
     warn2 = registry.dispatch(worker, "SubmitVuln", payload2)
     assert warn2.get("duplicate_soft_gate") is True
     out2 = registry.dispatch(worker, "SubmitVuln", {**payload2, "confirm_not_duplicate": True})
@@ -826,7 +826,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         assert parent.root_cause_key == "cors:JwtFilter"
 
     payload3 = dict(payload)
-    payload3["title"] = "CORS third"
+    payload3["title"] = "第三条 CORS 配置不当"
     warn3 = registry.dispatch(worker, "SubmitVuln", payload3)
     assert warn3.get("duplicate_soft_gate") is True
     out3 = registry.dispatch(worker, "SubmitVuln", {**payload3, "confirm_not_duplicate": True})
@@ -872,7 +872,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
 
 def test_confirm_defaults_static_only_when_dynamic_off(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -914,7 +914,7 @@ def test_confirm_keeps_dynamic_when_enabled(tmp_env, project):
         {"accepted": True, "status": "running", "target_url": "http://127.0.0.1:18080"},
     )
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -956,7 +956,7 @@ def test_collect_lab_fingerprints_allows_static_only(tmp_env, project, monkeypat
     from app.services.lab import save_env
 
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -1005,7 +1005,7 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Reflected XSS",
+            "title": "反射型 XSS",
             "vuln_type": "反射XSS",
             "cwe": "CWE-79",
             "file_path": "app/Main.java",
@@ -1022,7 +1022,7 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
     assert "赏金模式" in xss["error"]
 
     payload = {
-        "title": "CORS",
+        "title": "CORS 配置不当",
         "vuln_type": "other",
         "cwe": "CWE-942",
         "file_path": "app/Main.java",
@@ -1059,7 +1059,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Comment stored XSS",
+            "title": "评论存储型 XSS",
             "vuln_type": "xss",
             "cwe": "CWE-79",
             "file_path": "app/Comment.java",
@@ -1096,7 +1096,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "1-click CSRF to plugin install RCE",
+            "title": "一键 CSRF 安装插件导致远程代码执行",
             "vuln_type": "csrf",
             "cwe": "CWE-352",
             "file_path": "app/PluginController.java",
@@ -1151,7 +1151,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Hardcoded JWT secret",
+            "title": "硬编码 JWT 密钥",
             "vuln_type": "hardcoded_secret",
             "cwe": "CWE-798",
             "file_path": "app/JwtHelper.java",
@@ -1170,7 +1170,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Default password in yml",
+            "title": "配置文件默认口令",
             "vuln_type": "hardcoded_secret",
             "cwe": "CWE-798",
             "file_path": "src/main/resources/application.yml",
@@ -1194,7 +1194,7 @@ def test_full_mode_allows_xss_submit(tmp_env, project):
         _ctx(project, "worker"),
         "SubmitVuln",
         {
-            "title": "Reflected XSS",
+            "title": "反射型 XSS",
             "vuln_type": "xss",
             "cwe": "CWE-79",
             "file_path": "app/Main.java",
@@ -1213,7 +1213,7 @@ def test_full_mode_allows_xss_submit(tmp_env, project):
 
 def test_confirm_backend_requires_account(tmp_env, project):
     payload = {
-        "title": "SQLI in login",
+        "title": "登录处 SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -1268,7 +1268,7 @@ def test_confirm_backend_requires_account(tmp_env, project):
 
 def test_confirm_backend_user_account(tmp_env, project):
     payload = {
-        "title": "IDOR",
+        "title": "越权访问",
         "vuln_type": "privilege_escalation",
         "cwe": "CWE-639",
         "file_path": "app/Main.java",
@@ -1303,7 +1303,7 @@ def test_confirm_backend_user_account(tmp_env, project):
 
 def test_confirm_frontend_ignores_account(tmp_env, project):
     payload = {
-        "title": "SQLi",
+        "title": "SQL 注入",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -1339,7 +1339,7 @@ def test_confirm_frontend_ignores_account(tmp_env, project):
 
 def test_mark_false_positive(tmp_env, project):
     payload = {
-        "title": "intended",
+        "title": "预期行为",
         "vuln_type": "info_disclosure",
         "cwe": "CWE-200",
         "file_path": "app/Main.java",
@@ -1363,12 +1363,12 @@ def test_mark_false_positive(tmp_env, project):
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert report.rstrip().endswith("已知业务能力")
     assert "## 误报判定" in report
-    assert report.index("## 误报判定") > report.index("# intended")
+    assert report.index("## 误报判定") > report.index("# 预期行为")
 
 
 def test_return_to_worker_false_positive_compat(tmp_env, project):
     payload = {
-        "title": "legacy fp",
+        "title": "遗留误报",
         "vuln_type": "info_disclosure",
         "cwe": "CWE-200",
         "file_path": "app/Main.java",
@@ -1393,7 +1393,7 @@ def test_return_to_worker_false_positive_compat(tmp_env, project):
 
 def test_return_to_worker_keeps_report_when_not_fp(tmp_env, project):
     payload = {
-        "title": "needs fix",
+        "title": "待修复",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",
@@ -1422,7 +1422,7 @@ def test_return_to_worker_keeps_report_when_not_fp(tmp_env, project):
 
 def test_return_to_worker_max_rejects_appends_reason(tmp_env, project):
     payload = {
-        "title": "flaky",
+        "title": "不稳定复现",
         "vuln_type": "sqli",
         "cwe": "CWE-89",
         "file_path": "app/Main.java",

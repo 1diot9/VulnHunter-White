@@ -499,7 +499,7 @@ def test_finish_verifier_skipped_harm_requires_ask_first(tmp_env, project):
         project,
         enable_verifier=True,
         vuln_type="dos",
-        title="DoS",
+        title="拒绝服务",
         root_cause_key="dos:x",
     )
     out = registry.dispatch(

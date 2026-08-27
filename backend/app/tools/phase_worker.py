@@ -28,6 +28,7 @@ from ..services.poc_script import (
 )
 from ..services.cve_record import initialize_cve_record
 from ..services.report import (
+    chinese_title_block_reason,
     default_advisory_md,
     ensure_search_fingerprint_section,
     missing_report_headings,
@@ -265,6 +266,9 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     missing = [f for f in required if args.get(f) in (None, "")]
     if missing:
         return {"ok": False, "error": f"SubmitVuln 缺少必填字段: {', '.join(missing)}"}
+    title_blocked = chinese_title_block_reason(str(args.get("title") or ""))
+    if title_blocked:
+        return {"ok": False, "error": title_blocked}
     poc_blocked = poc_cli_block_reason(poc_text, target_kind=kind)
     if poc_blocked:
         return {"ok": False, "error": poc_blocked}
@@ -307,6 +311,10 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
 
     mining_path = _resolve_mining_path(ctx)
     report_md_raw = args.get("report_md")
+    if report_md_raw:
+        report_title_blocked = chinese_title_block_reason(report_md=str(report_md_raw))
+        if report_title_blocked:
+            return {"ok": False, "error": report_title_blocked}
     if mining_path == "bypass" and report_md_raw:
         missing = missing_report_headings(str(report_md_raw), bypass=True)
         if missing:
@@ -607,6 +615,12 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
             )
             if poc_blocked:
                 return {"ok": False, "error": poc_blocked}
+        title_blocked = chinese_title_block_reason(
+            None if args.get("title") is None else str(args.get("title") or ""),
+            report_md=None if not report_md else str(report_md),
+        )
+        if title_blocked:
+            return {"ok": False, "error": title_blocked}
         # optional field updates
         for key in (
             "title",
@@ -691,7 +705,14 @@ def register_worker_tools() -> None:
             parameters={
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "中文标题，概括漏洞类型与位置/入口。"
+                            "产品名、类名、CVE 编号可保留原文；不要只用英文。"
+                            "英文标题只写在 advisory_md 的 Title。"
+                        ),
+                    },
                     "vuln_type": {"type": "string"},
                     "cwe": {"type": "string"},
                     "file_path": {"type": "string"},
@@ -744,7 +765,8 @@ def register_worker_tools() -> None:
                     "report_md": {
                         "type": "string",
                         "description": (
-                            "中文报告。历史漏洞绕过须对齐 templates/vuln-report-bypass.md"
+                            "中文报告。标题须为中文（YAML title 与一级标题）。"
+                            "历史漏洞绕过须对齐 templates/vuln-report-bypass.md"
                             "（同 vuln-report.md 且 ## 漏洞技术细节 下第一节为 ### 补丁绕过简析）；"
                             "启发式/快速扫描对齐 templates/vuln-report.md。"
                         ),
@@ -862,7 +884,12 @@ def register_worker_tools() -> None:
                             "可选。英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
                         ),
                     },
-                    "title": {"type": "string"},
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "可选。纠正中文标题（须为中文，可保留产品名/类名原文）。"
+                        ),
+                    },
                     "source_sink": {"type": "string"},
                     "auth_premise": {"type": "string"},
                     "config_premise": {

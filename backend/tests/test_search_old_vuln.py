@@ -67,14 +67,14 @@ def test_search_old_vuln_includes_submitted(tmp_env, project):
         "---\ntitle: Demo CVE\nsummary: historical sqli\n---\n\n# old body\n",
         encoding="utf-8",
     )
-    out = _submit(project, title="SQLI in login")
+    out = _submit(project, title="登录处 SQL 注入")
     assert out["ok"] is True
     vuln_id = out["vuln_id"]
 
     listed = registry.dispatch(_ctx(project), "SearchOldVuln", {"query": "sqli"})
     kinds = {d["title"]: d["kind"] for d in listed["docs"]}
     assert kinds["Demo CVE"] == "old"
-    assert kinds["SQLI in login"] == "found"
+    assert kinds["登录处 SQL 注入"] == "found"
     found = next(d for d in listed["docs"] if d["kind"] == "found")
     assert found["kind_label"] == "本项目已提交"
     assert found["vuln_id"] == vuln_id
@@ -84,7 +84,7 @@ def test_search_old_vuln_includes_submitted(tmp_env, project):
     assert "submission_tier" in found
     assert "content" not in found
 
-    full = registry.dispatch(_ctx(project), "SearchOldVuln", {"title": "SQLI in login"})
+    full = registry.dispatch(_ctx(project), "SearchOldVuln", {"title": "登录处 SQL 注入"})
     assert full["matched"] is True
     assert full["kind"] == "found"
     assert full["vuln_id"] == vuln_id
@@ -96,7 +96,7 @@ def test_search_old_vuln_includes_submitted(tmp_env, project):
 
 
 def test_search_old_vuln_stays_in_project(tmp_env, project):
-    _submit(project, title="project-one-only")
+    _submit(project, title="仅项目一")
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     with Session() as db:
@@ -108,24 +108,24 @@ def test_search_old_vuln_stays_in_project(tmp_env, project):
     from app.services.paths import ensure_project_dirs
 
     ensure_project_dirs(other_id)
-    _submit(other_id, title="project-two-only")
+    _submit(other_id, title="仅项目二")
 
     listed = registry.dispatch(_ctx(project), "SearchOldVuln", {"query": ""})
     titles = {d["title"] for d in listed["docs"]}
-    assert "project-one-only" in titles
-    assert "project-two-only" not in titles
+    assert "仅项目一" in titles
+    assert "仅项目二" not in titles
 
 
 def test_search_old_vuln_excludes_current_review_vuln(tmp_env, project):
     worker = _ctx(project)
-    first = _submit(project, title="first submitted", ctx=worker)
-    second = _submit(project, title="second submitted", ctx=worker)
+    first = _submit(project, title="第一条提交", ctx=worker)
+    second = _submit(project, title="第二条提交", ctx=worker)
     listed = registry.dispatch(
         _ctx(project, role="reviewer", vuln_id=second["vuln_id"]),
         "SearchOldVuln",
         {"query": ""},
     )
     titles = {d["title"] for d in listed["docs"]}
-    assert "first submitted" in titles
-    assert "second submitted" not in titles
+    assert "第一条提交" in titles
+    assert "第二条提交" not in titles
     assert first["vuln_id"] != second["vuln_id"]
