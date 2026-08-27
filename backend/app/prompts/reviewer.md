@@ -111,7 +111,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 
 ## 规则
 - 不要换一条利用链或换一个 sink 来把洞「救活」，也不要改靶场（写文件、改配置、种模板）替 Worker 圆谎；那是误报，不是打回。
-- **同一条链上的 PoC 校准归你**：CLI 参数化（含 `--proxy`）、补 header/编码/参数名、按动态证据改 payload、把脚本输出与注释改成英语。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。纯库洞：沙箱证据只进 `harness.py`；不要把内联/mock 抄进 `poc.py`；无 HTTP/安装面时不要补假 CLI。
+- **同一条链上的 PoC 校准归你**：CLI 参数化（含 `--proxy`）、补 header/编码/参数名、按动态证据改 payload、把脚本输出与注释改成英语。Write `vulns/{id}/poc.py`，ConfirmVuln 同时传入 `poc_code`。不要为此 ReturnToWorker。纯库洞：沙箱证据只进 `harness.py`；不要把内联/mock 抄进 `poc.py`；无 HTTP/安装面时不要补假 CLI。局部验证 harness 必须打印运行时实际数据，禁止写死成功字段或预期回显字面量。
 - 需要额外写原语或非默认目录才能出冲击时，复杂度应标 `specific_environment`，并通常直接误报；不要用 `multi_step` 把 -2 变成 0，也不要把种文件后的 SSTI 写成已有 `sensitive_data_or_privilege`。
 - 不要把低危害难利用项标成 `cve_candidate`。
 - 不要把同根因同危害拆成的多份报告标成 `false_positive` 或打回「合并」；用 `MergeIntoVuln`。

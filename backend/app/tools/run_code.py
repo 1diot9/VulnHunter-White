@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..dynamic_verify import project_is_harness
+from ..services.harness_output import harness_output_block_reason
 from ..services.poc_script import write_harness_code
 from ..services.sandbox_exec import execute_harness
 from . import ToolSpec, registry
@@ -17,6 +18,9 @@ def _run_code(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not code:
         return {"ok": False, "error": "缺少 code"}
     language = str(args.get("language") or "python").strip() or "python"
+    blocked = harness_output_block_reason(code, language=language)
+    if blocked:
+        return {"ok": False, "error": blocked}
     description = str(args.get("description") or "").strip()
     try:
         timeout = int(args.get("timeout") or 60)
@@ -46,6 +50,9 @@ def register_run_code_tool() -> None:
             description=(
                 "在隔离沙箱中执行你编写的局部验证 harness（Python/PHP/JS/Ruby/Go/Java/Bash）。"
                 "仅局部验证模式可用。抽出目标函数、mock 依赖、用多种 payload 观察 stdout/stderr/退出码。"
+                "最终输出必须打印运行时实际数据（返回值、查询结果、命令回显、渲染结果、异常原文）；"
+                "禁止只打印固定 SUCCESS/CONFIRMED，禁止写死 success=True / {\"success\": true}，"
+                "禁止把预期回显写成字面量。判定标签可以有，但必须同时打印实际数据。"
                 "脚本自身打印（标签、步骤、判定）与注释必须用英语；源码/payload/回显原文不要翻译。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"
                 "沙箱无网、跑完即删。失败（无 Docker、缺镜像、编译错误）不要据此误报。"
@@ -56,7 +63,10 @@ def register_run_code_tool() -> None:
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "完整可执行的测试代码，不要依赖宿主机文件（源码请内联或自行简化 mock）。",
+                        "description": (
+                            "完整可执行的测试代码，不要依赖宿主机文件（源码请内联或自行简化 mock）。"
+                            "必须打印 sink/抽出函数的运行时实际数据；不要只打印固定成功字段或预期回显字面量。"
+                        ),
                     },
                     "language": {
                         "type": "string",

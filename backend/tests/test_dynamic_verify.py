@@ -368,6 +368,16 @@ def test_project_verify_mode_legacy_enabled_is_lab(tmp_env, project):
         assert project_verify_mode(proj) == VERIFY_MODE_LAB
 
 
+GOOD_HARNESS = """
+def sink(name):
+    return [{"id": 1, "name": name, "role": "admin"}]
+
+rows = sink("' OR 1=1 --")
+print(rows)
+print(f"row_count={len(rows)} leaked_role={rows[0]['role']}")
+"""
+
+
 def test_confirm_harness_when_mode_harness(tmp_env, project):
     _set_verify_mode(project, VERIFY_MODE_HARNESS)
     payload = {
@@ -411,14 +421,14 @@ def test_confirm_harness_when_mode_harness(tmp_env, project):
             "vuln_id": vuln_id,
             "evidence_level": "harness",
             "attack_surface": "frontend",
-            "harness_code": "print('harness')\n",
+            "harness_code": GOOD_HARNESS,
             **SEVERITY_FACTORS,
         },
     )
     assert conf["ok"] is True
     assert conf["evidence_level"] == "harness"
     assert conf["status"] == "confirmed"
-    assert harness_path(project, vuln_id).read_text(encoding="utf-8") == "print('harness')\n"
+    assert harness_path(project, vuln_id).read_text(encoding="utf-8") == GOOD_HARNESS
     from app.models import SessionLocal
 
     with SessionLocal() as db:
@@ -430,6 +440,62 @@ def test_confirm_harness_when_mode_harness(tmp_env, project):
         queued = enqueue_frontend_vuln(project, vuln_id)
         assert queued["queued"] is False
         assert queued["skipped"] is True
+
+
+def test_confirm_rejects_canned_harness_output(tmp_env, project):
+    from app.services.harness_output import HARNESS_OUTPUT_ERROR
+
+    _set_verify_mode(project, VERIFY_MODE_HARNESS)
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "登录处 SQL 注入",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "app/Main.java",
+            "line_no": 1,
+            "source_sink": "login -> query",
+            "auth_premise": "未授权",
+            "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+            "poc_code": "print('poc')\n",
+            "expected_evidence": "error based",
+            "config_premise": "default",
+        },
+    )
+    vuln_id = out["vuln_id"]
+    _write_harness_vuln_code(
+        project,
+        vuln_id,
+        "app/Main.java",
+        'String q = "SELECT * FROM users WHERE id=" + id;',
+    )
+    canned = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "harness",
+            "attack_surface": "frontend",
+            "harness_code": 'print("VULNERABILITY CONFIRMED")\n',
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert canned["ok"] is False
+    assert canned["error"] == HARNESS_OUTPUT_ERROR
+
+
+def test_run_code_rejects_canned_harness_output(tmp_env, project):
+    from app.services.harness_output import HARNESS_OUTPUT_ERROR
+
+    _set_verify_mode(project, VERIFY_MODE_HARNESS)
+    out = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=1),
+        "RunCode",
+        {"code": 'print("SUCCESS")\nprint({"success": True})\n', "language": "python"},
+    )
+    assert out["ok"] is False
+    assert out["error"] == HARNESS_OUTPUT_ERROR
 
 
 def test_confirm_coerces_dynamic_in_harness_mode(tmp_env, project):
@@ -491,7 +557,7 @@ def test_run_code_without_docker_does_not_look_like_false_positive(tmp_env, proj
     out = registry.dispatch(
         _ctx(project, "reviewer", vuln_id=1),
         "RunCode",
-        {"code": "print(1)", "language": "python"},
+        {"code": GOOD_HARNESS, "language": "python"},
     )
     assert out["ok"] is False
     assert "误报" in (out.get("error") or "") or "误报" in (out.get("hint") or "")

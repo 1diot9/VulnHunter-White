@@ -190,6 +190,33 @@ def harness_path(project_id: int, vuln_id: int, *, language: str | None = None) 
     return vuln_dir(project_id, vuln_id) / harness_filename(language)
 
 
+_HARNESS_EXT_LANG = {
+    ".py": "python",
+    ".php": "php",
+    ".js": "javascript",
+    ".rb": "ruby",
+    ".go": "go",
+    ".java": "java",
+    ".sh": "bash",
+}
+
+
+def find_harness_path(project_id: int, vuln_id: int) -> Path | None:
+    seen: set[str] = set()
+    for name in _HARNESS_NAMES.values():
+        if name in seen:
+            continue
+        seen.add(name)
+        path = vuln_dir(project_id, vuln_id) / name
+        if path.is_file():
+            return path
+    return None
+
+
+def harness_language_from_path(path: Path) -> str:
+    return _HARNESS_EXT_LANG.get(path.suffix.lower(), "python")
+
+
 def write_harness_code(
     project_id: int,
     vuln_id: int,

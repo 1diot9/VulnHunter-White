@@ -42,8 +42,11 @@ from ..services.lab import (
 )
 from ..services.paths import vuln_dir
 from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
+from ..services.harness_output import harness_output_block_reason
 from ..services.poc_script import (
     POC_CODE_TOOL_DESCRIPTION,
+    find_harness_path,
+    harness_language_from_path,
     poc_cli_block_reason,
     read_poc_code,
     write_harness_code,
@@ -512,6 +515,17 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         code_gap = harness_vuln_code_gap(report_text, file_path=soft_file)
         if code_gap:
             return {"ok": False, "error": code_gap}
+        check_code = str(harness_code).strip() if harness_code else ""
+        check_lang = harness_language
+        if not check_code:
+            existing = find_harness_path(ctx.project_id, int(vuln_id))
+            if existing is not None:
+                check_code = existing.read_text(encoding="utf-8", errors="ignore")
+                check_lang = harness_language_from_path(existing)
+        if check_code:
+            blocked_harness = harness_output_block_reason(check_code, language=check_lang)
+            if blocked_harness:
+                return {"ok": False, "error": blocked_harness}
 
     proof = maybe_enrich_asset_proof(
         ctx.project_id,
@@ -811,6 +825,7 @@ def register_reviewer_tools() -> None:
                 "仅当用 debug MCP 改写/调试 PoC 后复现成功才标 mcp；"
                 "局部验证打通时标 harness，不要标 dynamic；"
                 "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
+                "harness 必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
                 "还必须标注 impact、exploit_complexity、defense_status、"
                 "submission_tier、submission_reason。"
                 "核对 Worker 的 config_premise；错误则 Confirm 时传入纠正。"
@@ -838,7 +853,8 @@ def register_reviewer_tools() -> None:
                             "靶场可用时系统会跑落盘 poc.py，失败则拒绝确认。"
                             "mcp 仅在 debug MCP 改写/调试 PoC 后复现成功时使用；"
                             "局部验证打通用 harness；"
-                            "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
+                            "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）；"
+                            "脚本须打印运行时实际数据，禁止写死成功字段。"
                         ),
                     },
                     "attack_surface": {
@@ -945,6 +961,8 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "可选。局部验证的 mock/harness 源码，写入 vulns/{id}/harness.*。"
                             "不要把内联/mock 脚本放进 poc.py，也不要复制同一套测试矩阵。"
+                            "必须打印 sink/抽出函数的运行时实际数据；禁止只打印固定 SUCCESS/CONFIRMED，"
+                            "禁止写死 success=True / {\"success\": true}，禁止把预期回显写成字面量。"
                             "脚本自身打印与注释须用英语。"
                         ),
                     },

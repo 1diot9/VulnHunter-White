@@ -9,5 +9,5 @@
 
 ### 验证
 - 默认偏 harness；若用户开启靶场动态，可用于带 demo 的整仓复现。
-- 库核心纯 API 洞：证据进 `harness.py`；`poc.py` 仅在能对已安装包调用公开 API 时才写。demo 上的 HTTP 洞才写 `-u/--proxy` 的 `poc.py`。不要把同一份 mock 写进两个文件。
+- 库核心纯 API 洞：证据进 `harness.py`（须打印运行时实际数据，禁止写死成功字段）；`poc.py` 仅在能对已安装包调用公开 API 时才写。demo 上的 HTTP 洞才写 `-u/--proxy` 的 `poc.py`。不要把同一份 mock 写进两个文件。
 - FOFA 指纹仅在确认存在可部署应用面时填写，否则写「不适用」。

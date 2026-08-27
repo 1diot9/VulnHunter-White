@@ -305,6 +305,6 @@ def harness_debug_plan() -> dict[str, Any]:
             "Read 报告与源码，确认文件和代码片段真实存在",
             "按目标语言设计 mock / harness，用 RunCode 在沙箱执行",
             "mock 失败或沙箱不可用不要判误报；静态已能证明默认可利用则 static_only",
-            "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；不要把同一份 mock 写进 poc.py",
+            "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；stdout 必须打印运行时实际数据，禁止写死成功字段；不要把同一份 mock 写进 poc.py",
         ],
     }
