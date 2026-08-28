@@ -275,7 +275,7 @@ export function vulnMatchesQuery(
     formatSeverity(v.severity),
     formatSeverityScore(v.severity_score, v.severity),
     v.status,
-    formatVulnStatus(v.status, v.evidence_level),
+    formatVulnStatus(v.status, v.evidence_level, v.fp_kind),
     v.submission_tier,
     formatSubmissionTier(v.submission_tier),
     v.tracking_status,

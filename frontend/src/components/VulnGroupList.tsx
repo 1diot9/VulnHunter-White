@@ -51,7 +51,7 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
                 : 'warning'
         }
       >
-        {formatVulnStatus(v.status, v.evidence_level)}
+        {formatVulnStatus(v.status, v.evidence_level, v.fp_kind)}
       </Badge>
       {miningPath ? (
         <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">

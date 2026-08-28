@@ -194,6 +194,8 @@ export type Vuln = {
   merged_into_id: number | null
   review_rounds: number
   return_reason: string | null
+  /** timeout — closed after review timeouts; empty/null — reviewer-judged FP */
+  fp_kind?: string | null
   intended_behavior: boolean
   report_path: string | null
   verifier_status?: string | null

@@ -163,6 +163,9 @@ def _append_false_positive_reason(project_id: int, vuln_id: int, reason: str) ->
     upsert_report_section(vuln_dir(project_id, vuln_id) / "report.md", _FP_HEADING, reason.strip())
 
 
+FP_KIND_TIMEOUT = "timeout"
+
+
 def mark_timeout_give_up(vuln: Vuln, streak: int) -> str:
     """Stop retrying a pending review after the static timeout retry also failed."""
     reason = (
@@ -170,6 +173,7 @@ def mark_timeout_give_up(vuln: Vuln, streak: int) -> str:
         "系统停止重试并标为误报"
     )
     vuln.status = "false_positive"
+    vuln.fp_kind = FP_KIND_TIMEOUT
     vuln.return_reason = reason
     vuln.review_timeout_streak = int(streak)
     _append_false_positive_reason(vuln.project_id, int(vuln.id), reason)
@@ -178,6 +182,7 @@ def mark_timeout_give_up(vuln: Vuln, streak: int) -> str:
 
 def _commit_false_positive(ctx, db, vuln: Vuln, vuln_id: int, reason: str, message: str) -> dict[str, Any]:
     vuln.status = "false_positive"
+    vuln.fp_kind = None
     vuln.return_reason = reason
     _append_false_positive_reason(vuln.project_id, int(vuln_id), reason)
     db.commit()
@@ -566,6 +571,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             vuln.status = "static_only"
         else:
             vuln.status = "confirmed"
+        vuln.fp_kind = None
         vuln.evidence_level = evidence
         vuln.attack_surface = surface
         vuln.required_account = account
@@ -591,6 +597,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             )
         if note:
             vuln.return_reason = None
+            vuln.fp_kind = None
         upsert_report_section(
             vuln_dir(vuln.project_id, int(vuln_id)) / "report.md",
             _REVIEW_HEADING,

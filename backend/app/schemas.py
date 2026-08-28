@@ -450,6 +450,8 @@ class VulnOut(BaseModel):
     merged_into_id: int | None = None
     review_rounds: int = 0
     return_reason: str | None = None
+    # timeout — closed after review timeouts; empty/null — reviewer-judged FP
+    fp_kind: str | None = None
     intended_behavior: bool = False
     # default | specific
     config_premise: str | None = None

@@ -1018,6 +1018,7 @@ def test_reviewer_timeout_retry_then_false_positive(tmp_env, project, monkeypatc
     with Session() as db:
         row = db.get(models.Vuln, vid)
         assert row.status == "false_positive"
+        assert row.fp_kind == "timeout"
         assert row.review_timeout_streak == 2
         assert "已重试一轮" in (row.return_reason or "")
 
@@ -1067,7 +1068,37 @@ def test_reviewer_gives_up_already_exhausted_timeout_streak(tmp_env, project, mo
     with Session() as db:
         row = db.get(models.Vuln, vid)
         assert row.status == "false_positive"
+        assert row.fp_kind == "timeout"
         assert "已重试一轮" in (row.return_reason or "")
+
+
+def test_backfill_fp_kind_timeout_from_return_reason(tmp_env, project):
+    from app.models import _backfill_fp_kind_timeout
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        timeout = models.Vuln(
+            project_id=project,
+            title="timeout",
+            vuln_type="sqli",
+            status="false_positive",
+            return_reason="审核连续超时 2 轮（失败后已重试一轮仍未收口）",
+        )
+        judged = models.Vuln(
+            project_id=project,
+            title="judged",
+            vuln_type="sqli",
+            status="false_positive",
+            return_reason="不是漏洞",
+        )
+        db.add_all([timeout, judged])
+        db.commit()
+        timeout_id, judged_id = timeout.id, judged.id
+    _backfill_fp_kind_timeout()
+    with Session() as db:
+        assert db.get(models.Vuln, timeout_id).fp_kind == "timeout"
+        assert db.get(models.Vuln, judged_id).fp_kind is None
 
 
 def test_reviewer_non_timeout_failure_does_not_increment_streak(tmp_env, project, monkeypatch):

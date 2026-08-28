@@ -65,15 +65,22 @@ const VULN_STATUS_LABEL: Record<string, string> = {
   fixing: '修复中',
 }
 
-/** Confirmed vulns fold evidence into one badge: 已确认-仅静态 / 局部验证 / 动态验证. */
+export const FP_KIND_TIMEOUT = 'timeout'
+
+/** Confirmed vulns fold evidence into one badge: 已确认-仅静态 / 局部验证 / 动态验证.
+ * Timeout give-ups show 误报-审核超时; reviewer-judged FPs stay 误报. */
 export function formatVulnStatus(
   status: string | null | undefined,
   evidenceLevel?: string | null,
+  fpKind?: string | null,
 ): string {
   const s = (status || '').trim()
   if (s === 'confirmed' || s === 'static_only') {
     const evidence = formatEvidenceLevel(evidenceLevel)
     return evidence ? `已确认-${evidence}` : '已确认-仅静态'
+  }
+  if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_TIMEOUT) {
+    return '误报-审核超时'
   }
   return VULN_STATUS_LABEL[s] || s
 }

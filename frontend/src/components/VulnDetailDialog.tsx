@@ -245,7 +245,7 @@ export default function VulnDetailDialog({
                         : 'info'
                   }
                 >
-                  {formatVulnStatus(detail.status, detail.evidence_level)}
+                  {formatVulnStatus(detail.status, detail.evidence_level, detail.fp_kind)}
                 </Badge>
                 {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
                 {detailConfigPremise ? <Badge variant="outline">{detailConfigPremise}</Badge> : null}

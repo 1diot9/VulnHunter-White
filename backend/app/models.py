@@ -272,6 +272,8 @@ class Vuln(Base):
     # Consecutive Reviewer timeouts; >= before_static forces static retry; >= before_static+1 give up as FP.
     review_timeout_streak: Mapped[int] = mapped_column(Integer, default=0)
     return_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # timeout — system closed after review timeouts; empty/null — Reviewer MarkFalsePositive
+    fp_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # none | pending | awaiting_user | verified | failed | skipped — Verifier 互联网复测
     verifier_status: Mapped[str] = mapped_column(String(32), default="none")
@@ -491,6 +493,7 @@ def _ensure_columns() -> None:
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",
             "review_timeout_streak": "INTEGER DEFAULT 0",
+            "fp_kind": "VARCHAR(32)",
             "tracking_status": "VARCHAR(32) DEFAULT 'none'",
             "verifier_status": "VARCHAR(32) DEFAULT 'none'",
             "verifier_verified_url": "VARCHAR(1024)",
@@ -618,6 +621,25 @@ def _backfill_parent_root_cause_keys() -> None:
             db.commit()
 
 
+def _backfill_fp_kind_timeout() -> None:
+    """Label existing timeout give-ups so the UI can show 误报-审核超时."""
+    insp = inspect(engine)
+    if "vulns" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("vulns")}
+    if "fp_kind" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE vulns SET fp_kind = 'timeout' "
+                "WHERE status = 'false_positive' "
+                "AND COALESCE(fp_kind, '') = '' "
+                "AND return_reason LIKE '%审核连续超时%'"
+            )
+        )
+
+
 def ensure_schema() -> None:
     """Idempotent: create missing tables/columns. Safe to call from worker threads."""
     DATA_DIR = DB_PATH.parent
@@ -629,6 +651,7 @@ def ensure_schema() -> None:
     _backfill_verifier_status()
     _backfill_dynamic_verify_mode()
     _backfill_parent_root_cause_keys()
+    _backfill_fp_kind_timeout()
     existing = set(inspect(engine).get_table_names())
     missing = [t for t in REQUIRED_TABLES if t not in existing]
     if missing:

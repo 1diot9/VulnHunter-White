@@ -908,6 +908,7 @@ def test_vulns_list_and_download(tmp_env, project):
         assert body["submission_reason"] is None
         assert body["root_cause_key"] is None
         assert body["tracking_status"] == "none"
+        assert body.get("fp_kind") in (None, "")
         assert "**产出时间**：" in (body.get("report_md") or "")
         assert "GitHub Security Advisory" in (body.get("advisory_md") or "")
         assert "## Title" in (body.get("advisory_md") or "")
@@ -980,6 +981,38 @@ def test_download_single_vuln_report_missing_file(tmp_env, project):
         bundle = client.get(f"/api/vulns/{vid}/download")
         assert bundle.status_code == 200
         assert bundle.headers["content-type"].startswith("application/zip")
+
+
+def test_vuln_timeout_fp_kind_in_api(tmp_env, project):
+    from app.main import app
+    from app.models import SessionLocal, Vuln
+
+    with SessionLocal() as db:
+        timeout = Vuln(
+            project_id=project,
+            title="timeout fp",
+            vuln_type="sqli",
+            status="false_positive",
+            fp_kind="timeout",
+        )
+        judged = Vuln(
+            project_id=project,
+            title="judged fp",
+            vuln_type="xss",
+            status="false_positive",
+        )
+        db.add_all([timeout, judged])
+        db.commit()
+        timeout_id, judged_id = timeout.id, judged.id
+
+    with TestClient(app) as client:
+        timeout_row = client.get(f"/api/vulns/{timeout_id}").json()
+        judged_row = client.get(f"/api/vulns/{judged_id}").json()
+        assert timeout_row["fp_kind"] == "timeout"
+        assert judged_row.get("fp_kind") in (None, "")
+        listed = {v["id"]: v for v in client.get(f"/api/vulns?project_id={project}").json()}
+        assert listed[timeout_id]["fp_kind"] == "timeout"
+        assert listed[judged_id].get("fp_kind") in (None, "")
 
 
 def test_vuln_tracking_status_mark_and_filter(tmp_env, project):

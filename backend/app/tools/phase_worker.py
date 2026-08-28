@@ -669,6 +669,7 @@ def _finish_fix(ctx, args: dict[str, Any]) -> dict[str, Any]:
             write_poc_code(ctx.project_id, vuln.id, str(args["poc_code"]))
         vuln.status = "pending_review"
         vuln.return_reason = None
+        vuln.fp_kind = None
         db.commit()
         vid = vuln.id
     ctx.state["fix_finished"] = True
