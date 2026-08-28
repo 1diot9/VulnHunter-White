@@ -9,7 +9,7 @@
 | 文件 | 职责 | 何时写 |
 | --- | --- | --- |
 | `poc.py` | 对**真实运行面**复测：Web / HTTP 面打任意 origin；纯库洞则 `import` 已安装包并调用公开 API | 有 HTTP 利用面，或安装真实包后能复现 |
-| `harness.py` | 局部验证沙箱证据：抽出函数 + mock 依赖，由 `RunCode` 落盘。stdout 必须打印运行时实际数据，禁止写死成功字段 | 仅局部验证模式 |
+| `harness.py` | 局部验证沙箱证据：默认抽出函数 + mock；公开入口本身吃 HTTP/请求对象时改为同进程请求级加强验证。由 `RunCode` 落盘。stdout 必须打印运行时实际数据，禁止写死成功字段 | 仅局部验证模式 |
 
 - **禁止**把 harness 的内联源码、mock、TEST 矩阵抄进 `poc.py`。
 - **禁止**给纯库洞加未使用的 `-u/--url` / `--proxy`「仅为 CLI 兼容」。
@@ -120,7 +120,7 @@ python poc.py -u https://real-domain.com --strict-ssl
 ## 组件库 / 混合审计对象
 当项目 `target_kind` 为 `library` 或 `mixed`：
 - 有 HTTP 利用面时，仍遵守上文 `-u/--url` + `--proxy` 合同，且 `poc_code` 必填。
-- **纯库洞**以 `harness.py`（`RunCode`）为局部验证证据主路径。`poc.py` **仅当**安装真实包（pip/npm/maven 等）后能 `import` 公开 API 并打出冲击时才写：最小调用脚本，argparse 可用包路径/版本等参数，**不要** `-u/--url`。不要复制 harness 的内联/mock 测试。
+- **纯库洞**以 `harness.py`（`RunCode`）为局部验证证据主路径。公开入口本身吃 HTTP/请求对象时，harness 须调用 `src/` 该 API 并在同进程内发攻击请求（payload 来自请求），不要只拷内部函数；YAML/编解码等无请求面 API 不要包 HTTP。`poc.py` **仅当**安装真实包（pip/npm/maven 等）后能 `import` 公开 API 并打出冲击时才写：最小调用脚本，argparse 可用包路径/版本等参数，**不要** `-u/--url`。不要复制 harness 的内联/mock 测试。
 - 无 HTTP 面、也无法对已安装包复现：省略 `poc_code`，不要交空壳或假 HTTP CLI。
 - SubmitVuln 的 `http_request` 可写 **API 调用配方**（类/方法/参数），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
 - harness 自身打印与注释同样必须用英语。stdout 的最终证据必须是运行时实际数据，禁止写死 `success=True` / `{"success": true}` 或只打印 `CONFIRMED`。

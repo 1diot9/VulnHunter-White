@@ -3,7 +3,7 @@
 项目选择**局部验证**，不搭建 Docker 靶场，也不对 `target_url` 发 HTTP / 跑 `poc.py` / 使用 debug MCP。**覆盖上文「动态验证阶梯」**：
 
 1. 先 Read 报告、`poc.py` 和源码，确认 `file_path` 与代码片段真实存在。文件不存在或代码对不上 → 误报。
-2. 按**目标语言**自己设计验证：抽出可疑函数或最小可编译片段，mock 数据库 / HTTP / 文件系统 / 框架依赖，用多种 payload 打 sink。
+2. 按**目标语言**自己设计验证。默认：抽出可疑函数或最小可编译片段，mock 数据库 / 文件系统 / 框架依赖，用多种 payload 打 sink。**仅当组件公开入口本身就吃 HTTP / WebSocket / RPC 等请求对象时**（如 `ValidateRequest`、中间件、`ServeHTTP`、吃 `HttpServletRequest` 的 Filter），做一次**同进程请求级加强验证**（见下节）；YAML / 加密 / 模板 / 反序列化等只吃字节或字符串的 API **不要**再包一层 HTTP。
 3. 用 `RunCode` 在一次性沙箱里执行（Python / PHP / JS / Ruby / Go / Java / Bash 均可）。不要在本机 Bash/PowerShell 里跑 harness。**脚本自己打印的 stdout/stderr（标签、步骤、判定）以及注释 / docstring 必须用英语**；源码片段、payload、目标回显原文不要翻译。
 4. **输出必须来自运行时数据**：最后落到 stdout 的证据必须是调用抽出函数 / sink 之后的实际值（返回值、查询行、命令回显、渲染 HTML、异常原文等）。**禁止**只打印固定字符串（`VULNERABILITY CONFIRMED` / `SUCCESS` / `PASS`）；**禁止**写死成功字段（`success = True`、`{"success": true}`、`confirmed: true`）；**禁止**把预期回显写成字面量（如直接 `print("uid=0(root)")`）。判定标签可以有，但必须同时打印实际数据；成功/失败字段必须由运行结果计算。
 5. **禁止**用另一种语言复述源码逻辑再标 `harness`（例如用 Python 重写 Java Controller）。跑的必须是目标语言代码，或与源码同语义的可编译片段。
@@ -20,3 +20,9 @@
 10. 不要标 `dynamic` / `mcp`。无运行中的站点，不要 `CollectLabFingerprints`。
 11. 沙箱默认无网。SSRF 等必须出网的类型不要指望 harness 打通，走静态判断。
 12. **组件库审计**：Confirm 以 `RunCode` harness 为准；勿因缺 HTTP 靶场或没有 `poc.py -u` 而误报。纯库洞：沙箱证据只进 `harness.py`。仅当安装真实包后能 `import` 公开 API 时才另写最小 `poc.py`（不要假 `-u/--proxy`，不要抄 harness）。无 HTTP 面且无安装面时不要落盘 `poc.py`，报告写 API 调用配方即可。
+13. **请求型公开 API 的加强验证**（组件库 / 混合仓的库核心；Web 应用里若 sink 就在请求校验中间件上，同样适用）。判定「组件本身接受请求」：公开 API 的参数就是 HTTP Request / 中间件 / 路由校验输入，而不是 `[]byte` / `string` / Reader。满足时必须加强，不要只拷 `deepSet` 这类内部函数：
+    - 编译或 import **项目 `src/`**，调用该公开入口（如 `openapi3filter.ValidateRequest`），禁止把 sink 逐字拷进 handler 再当主证据。
+    - 同一脚本内：进程内测试服务器（Go `httptest`、同进程客户端打 loopback）+ 发送攻击请求 + 打印真实状态码 / 响应 / panic 原文。优先 `httptest` / 短生命周期监听；不要绑 `0.0.0.0`，不要当成 Docker 靶场，`evidence_level` 仍为 `harness`。
+    - payload **必须来自这次请求**（query / body / header），禁止 handler 内写死常量再让 `GET /` 当门铃。
+    - 整模块在沙箱编不过或依赖不够 → 退回抽出函数，并在输出里写明未打到公开 API；不要因此误报。
+    - 不要把 YAML / `json.Unmarshal` / 模板 `Execute` / 反序列化等无请求面 API 包进自写 HTTP；那会伪造远程攻击面。这类继续直接调公开函数并打印运行时异常或返回值。

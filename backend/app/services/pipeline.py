@@ -1488,12 +1488,16 @@ _STATIC_VERIFY_GATE = (
 _HARNESS_VERIFY_GATE = (
     "本轮局部验证：不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
     "用 RunCode 写 harness；打通后 evidence_level=harness。"
+    "组件公开入口本身吃 HTTP/请求对象时，对 src/ 公开 API 做同进程请求级加强验证，禁止只拷内部 sink；"
+    "YAML/编解码等无请求面 API 不要包 HTTP。"
     "沙箱不可用或 mock 失败不要因此误报，静态已能证明则 static_only。"
 )
 
 _HARNESS_REVIEW_NOTE = (
     "本项目为局部验证：不要搭建 Docker 靶场，不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
     "用 RunCode 按目标语言写 mock/harness；打通且成立性满足时 evidence_level=harness。"
+    "组件公开入口本身吃 HTTP/请求对象时，harness 须调用 src/ 公开 API 并在同进程内发请求（httptest/loopback），"
+    "payload 须来自该请求；不要只拷 sink，也不要把无请求面的解析 API 包进自写 HTTP。"
     "harness 最终输出必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
     "沙箱不可用或 mock 失败不要误报，静态已能证明默认可利用则 static_only。"
     "不要把 harness 的内联/mock 或同一套测试写进 poc.py；纯库洞无 HTTP/安装面时不要补假 -u/--proxy。"
