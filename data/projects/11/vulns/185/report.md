@@ -128,11 +128,8 @@ python poc.py -u http://TARGET:5000
 - 攻击面：前台
 - 配置前提：默认配置
 - 严重度：高危（high）
-- 校准得分：3
-- 可达性：未认证可达
-- 影响范围：敏感数据泄露/权限提升/部分数据
-- 利用复杂度：单请求或简单触发
-- 防护状态：无有效防护
+- CVSS 3.1：8.2
+- 评分向量：CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N
 - 价值分层：有 CVE 价值（cve_candidate）
 - 分层理由：Stored XSS: anonymous attacker injects persistent JavaScript via unauthenticated POST /api/notes, which executes in every visitor's browser (including admin) on the public /notes page. The | safe filter in notes.html:18 disables Jinja2 auto-escaping. Can steal admin session cookies and chain to RCE via admin ping endpoint. Clear, independently exploitable, CVE-worthy impact.
 - 根因合并键：stored_xss:notes.html

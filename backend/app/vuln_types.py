@@ -65,7 +65,8 @@ SEVERITY_LABELS: dict[str, str] = {
     "high": "高危",
     "medium": "中危",
     "low": "低危",
-    "pending": "待校准",
+    "none": "无",
+    "pending": "待评分",
 }
 
 SUBMISSION_TIERS: dict[str, str] = {
@@ -140,142 +141,6 @@ _SUBMISSION_TIER_ALIASES: dict[str, str] = {
     "同根因重复": "duplicate_grouped",
     "重复": "duplicate_grouped",
 }
-
-_REACHABILITY_SCORES: dict[str, int] = {
-    "unauthenticated": 1,
-    "low_privilege": 0,
-    "admin": -1,
-}
-
-_IMPACT_SCORES: dict[str, int] = {
-    "rce_or_full_data": 4,
-    "sensitive_data_or_privilege": 2,
-    "limited_info": 1,
-}
-
-_COMPLEXITY_SCORES: dict[str, int] = {
-    "single_request": 1,
-    "multi_step": 0,
-    "specific_environment": -2,
-}
-
-_DEFENSE_SCORES: dict[str, int] = {
-    "none": 0,
-    "bypassable": 0,
-    "conditional": -1,
-}
-
-REVIEW_FACTOR_LABELS: dict[str, dict[str, str]] = {
-    "reachability": {
-        "unauthenticated": "未认证可达",
-        "low_privilege": "低权限可达",
-        "admin": "管理员权限才可达",
-    },
-    "impact": {
-        "rce_or_full_data": "RCE/全库读取/完整控制",
-        "sensitive_data_or_privilege": "敏感数据泄露/权限提升/部分数据",
-        "limited_info": "有限信息泄露/信息收集",
-    },
-    "exploit_complexity": {
-        "single_request": "单请求或简单触发",
-        "multi_step": "多步骤利用",
-        "specific_environment": "依赖特定环境",
-    },
-    "defense_status": {
-        "none": "无有效防护",
-        "bypassable": "有防护但可绕过",
-        "conditional": "有防护且绕过需额外条件",
-    },
-}
-
-_IMPACT_ALIASES: dict[str, str] = {
-    "rce_or_full_data": "rce_or_full_data",
-    "rce": "rce_or_full_data",
-    "full_data": "rce_or_full_data",
-    "full_database": "rce_or_full_data",
-    "full_db": "rce_or_full_data",
-    "complete_compromise": "rce_or_full_data",
-    "code_execution": "rce_or_full_data",
-    "代码执行": "rce_or_full_data",
-    "远程代码执行": "rce_or_full_data",
-    "全库": "rce_or_full_data",
-    "完整数据泄露": "rce_or_full_data",
-    "完整控制": "rce_or_full_data",
-    "sensitive_data_or_privilege": "sensitive_data_or_privilege",
-    "sensitive_data": "sensitive_data_or_privilege",
-    "partial_data": "sensitive_data_or_privilege",
-    "privilege": "sensitive_data_or_privilege",
-    "privilege_escalation": "sensitive_data_or_privilege",
-    "敏感数据": "sensitive_data_or_privilege",
-    "部分数据": "sensitive_data_or_privilege",
-    "权限提升": "sensitive_data_or_privilege",
-    "越权": "sensitive_data_or_privilege",
-    "limited_info": "limited_info",
-    "info": "limited_info",
-    "information": "limited_info",
-    "limited": "limited_info",
-    "信息收集": "limited_info",
-    "有限影响": "limited_info",
-    "有限信息泄露": "limited_info",
-}
-
-_COMPLEXITY_ALIASES: dict[str, str] = {
-    "single_request": "single_request",
-    "single": "single_request",
-    "simple": "single_request",
-    "low": "single_request",
-    "单请求": "single_request",
-    "简单": "single_request",
-    "低": "single_request",
-    "multi_step": "multi_step",
-    "multiple_steps": "multi_step",
-    "medium": "multi_step",
-    "多步骤": "multi_step",
-    "中": "multi_step",
-    "specific_environment": "specific_environment",
-    "specific_env": "specific_environment",
-    "environment": "specific_environment",
-    "high": "specific_environment",
-    "特定环境": "specific_environment",
-    "特定条件": "specific_environment",
-    "高": "specific_environment",
-}
-
-_DEFENSE_ALIASES: dict[str, str] = {
-    "none": "none",
-    "no_protection": "none",
-    "no_effective_protection": "none",
-    "absent": "none",
-    "无防护": "none",
-    "无有效防护": "none",
-    "bypassable": "bypassable",
-    "has_bypass": "bypassable",
-    "bypass": "bypassable",
-    "weak": "bypassable",
-    "可绕过": "bypassable",
-    "有防护但可绕过": "bypassable",
-    "conditional": "conditional",
-    "extra_condition": "conditional",
-    "hard_to_bypass": "conditional",
-    "partial": "conditional",
-    "需额外条件": "conditional",
-    "有防护且绕过需额外条件": "conditional",
-}
-
-
-@dataclass(frozen=True)
-class SeverityCalibration:
-    severity: str
-    score: int
-    reachability: str
-    impact: str
-    exploit_complexity: str
-    defense_status: str
-
-    @property
-    def severity_label(self) -> str:
-        return SEVERITY_LABELS[self.severity]
-
 
 @dataclass(frozen=True)
 class SubmissionTierDecision:
@@ -456,57 +321,6 @@ def config_premise_label(raw: Any) -> str | None:
         return None
 
 
-def reachability_from_review_context(attack_surface: str, required_account: str | None) -> str:
-    if attack_surface == "frontend":
-        return "unauthenticated"
-    if attack_surface == "backend" and required_account == "user":
-        return "low_privilege"
-    return "admin"
-
-
-def severity_from_review_score(score: int) -> str:
-    if score >= 5:
-        return "critical"
-    if score >= 3:
-        return "high"
-    if score >= 1:
-        return "medium"
-    return "low"
-
-
-def calibrate_review_severity(
-    *,
-    attack_surface: str,
-    required_account: str | None,
-    impact: Any,
-    exploit_complexity: Any,
-    defense_status: Any,
-) -> SeverityCalibration:
-    """Calibrate final review severity from exploit context, not vulnerability type alone."""
-    reachability = reachability_from_review_context(attack_surface, required_account)
-    normalized_impact = _normalize_review_factor(impact, _IMPACT_ALIASES, "impact")
-    normalized_complexity = _normalize_review_factor(
-        exploit_complexity, _COMPLEXITY_ALIASES, "exploit_complexity"
-    )
-    normalized_defense = _normalize_review_factor(
-        defense_status, _DEFENSE_ALIASES, "defense_status"
-    )
-    score = (
-        _REACHABILITY_SCORES[reachability]
-        + _IMPACT_SCORES[normalized_impact]
-        + _COMPLEXITY_SCORES[normalized_complexity]
-        + _DEFENSE_SCORES[normalized_defense]
-    )
-    return SeverityCalibration(
-        severity=severity_from_review_score(score),
-        score=score,
-        reachability=reachability,
-        impact=normalized_impact,
-        exploit_complexity=normalized_complexity,
-        defense_status=normalized_defense,
-    )
-
-
 def normalize_submission_tier(raw: Any) -> str:
     key = _factor_key(raw)
     if not key:
@@ -558,11 +372,17 @@ def normalize_submission_decision(
     return SubmissionTierDecision(tier=tier, reason=reason, root_cause_key=root)
 
 
-def suggest_submission_tier(*, calibration: SeverityCalibration) -> str:
+def suggest_submission_tier(*, cvss: Any) -> str:
     """Heuristic hint for tests/docs; Reviewer still must choose explicitly."""
-    if calibration.reachability == "admin" and calibration.impact == "limited_info":
+    score = float(getattr(cvss, "score", 0) or 0)
+    metrics = getattr(cvss, "metrics", None) or {}
+    pr = str(metrics.get("PR") or "")
+    high_cia = any(metrics.get(key) == "H" for key in ("C", "I", "A"))
+    if pr == "H" and not high_cia:
         return "low_impact"
-    if calibration.score >= 3 and calibration.reachability in ("unauthenticated", "low_privilege"):
+    if score >= 7.0 and pr in ("N", "L"):
+        return "cve_candidate"
+    if score >= 7.0:
         return "cve_candidate"
     return "low_impact"
 

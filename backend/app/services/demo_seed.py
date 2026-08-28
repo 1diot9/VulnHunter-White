@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, inspect as sa_inspect, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, inspect as sa_inspect, text
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -112,6 +112,11 @@ def _row_kwargs(model: type, row: dict[str, Any]) -> dict[str, Any]:
             out[key] = bool(value)
         elif isinstance(col.type, DateTime):
             out[key] = _parse_dt(value)
+        elif isinstance(col.type, Float) and not isinstance(value, bool):
+            try:
+                out[key] = float(value)
+            except (TypeError, ValueError):
+                out[key] = value
         elif isinstance(col.type, Integer) and not isinstance(value, bool):
             try:
                 out[key] = int(value)

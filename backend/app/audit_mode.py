@@ -34,10 +34,9 @@ _AUDIT_MODE_ALIASES: dict[str, str] = {
 }
 
 # Reflected / DOM XSS stay out of bounty reports; stored_xss is allowed.
-# CSRF is allowed only as 1-click high-impact; limited_info CSRF is rejected on confirm.
+# CSRF is allowed only as 1-click high-impact; C/I/A must include High.
 BOUNTY_DISALLOWED_TYPES = frozenset({"xss"})
 BOUNTY_DISALLOWED_TIERS = frozenset({"low_impact"})
-BOUNTY_CSRF_DISALLOWED_IMPACTS = frozenset({"limited_info"})
 
 BOUNTY_TYPE_LABELS = (
     "RCE、SSTI、反序列化、SQL 注入、XML 注入、任意文件操作（读/写/删/改/复制/解压穿越等）、"
@@ -205,18 +204,20 @@ def bounty_confirm_block_reason(
     vuln_type: str,
     submission_tier: str,
     file_path: str = "",
-    impact: str = "",
+    cvss: Any = None,
 ) -> str | None:
     if vuln_type in BOUNTY_DISALLOWED_TYPES:
         return "赏金模式应将反射 XSS / DOM XSS 判误报，不要 ConfirmVuln。存储型 XSS 类型应为 stored_xss。"
     if vuln_type == "hardcoded_secret" and is_user_modifiable_secret_path(file_path):
         return "赏金模式不入库配置文件/.env/compose 中的密钥；仅源码硬编码密钥可 Confirm。"
-    if vuln_type == "csrf" and impact in BOUNTY_CSRF_DISALLOWED_IMPACTS:
-        return (
-            "赏金模式只确认 1-click CSRF：受害者打开恶意页面后立即触发 RCE 或其他高危操作。"
-            "普通缺 CSRF token、改资料/登出/点赞等低危状态变更应 MarkFalsePositive；"
-            "impact 须为 rce_or_full_data 或 sensitive_data_or_privilege，不要用 limited_info。"
-        )
+    if vuln_type == "csrf":
+        high_cia = bool(getattr(cvss, "has_high_impact", False))
+        if not high_cia:
+            return (
+                "赏金模式只确认 1-click CSRF：受害者打开恶意页面后立即触发 RCE 或其他高危操作。"
+                "普通缺 CSRF token、改资料/登出/点赞等低危状态变更应 MarkFalsePositive；"
+                "CVSS 3.1 向量中 C/I/A 至少一项须为 H，不要写成仅 L/N。"
+            )
     if submission_tier in BOUNTY_DISALLOWED_TIERS:
         return (
             "赏金模式不入库低危害难利用项（CORS/安全头/开放重定向/弱随机/单点限速绕过/反射 XSS/普通 CSRF 等）。"

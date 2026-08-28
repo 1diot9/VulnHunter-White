@@ -24,7 +24,7 @@ import {
 
 function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
-  const score = formatSeverityScore(v.severity_score, v.severity)
+  const score = formatSeverityScore(v.severity_score, v.severity, v.cvss_vector)
   const tier = formatSubmissionTier(v.submission_tier)
   const verifier = formatVerifierStatus(v.verifier_status)
   const miningPath = formatMiningPath(v.mining_path)
@@ -74,7 +74,8 @@ function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
       {score ? (
         <Badge
           variant="outline"
-          className={cn(severityScoreBadgeClass(v.severity_score), nested && 'h-4 px-1.5 text-[10px]')}
+          className={cn(severityScoreBadgeClass(v.severity_score, v.cvss_vector), nested && 'h-4 px-1.5 text-[10px]')}
+          title={v.cvss_vector || undefined}
         >
           {score}
         </Badge>

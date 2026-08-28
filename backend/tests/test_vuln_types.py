@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from app.cvss31 import parse_cvss31
 from app.vuln_types import (
     PENDING_SEVERITY,
-    calibrate_review_severity,
     infer_vuln_type_from_text,
     normalize_config_premise,
     normalize_submission_decision,
@@ -73,40 +73,18 @@ def test_normalize_config_premise():
         assert "config_premise" in str(exc)
 
 
-def test_review_severity_calibration_can_upgrade_without_type_mapping():
-    calibration = calibrate_review_severity(
-        attack_surface="frontend",
-        required_account=None,
-        impact="rce_or_full_data",
-        exploit_complexity="single_request",
-        defense_status="none",
-    )
-    assert calibration.score == 6
-    assert calibration.severity == "critical"
+def test_cvss31_scoring_replaces_old_review_calibration():
+    critical = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+    assert critical.score == 9.8
+    assert critical.severity == "critical"
 
+    low = parse_cvss31("CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N")
+    assert low.score == 2.0
+    assert low.severity == "low"
 
-def test_review_severity_calibration_can_downgrade_by_context():
-    calibration = calibrate_review_severity(
-        attack_surface="backend",
-        required_account="admin",
-        impact="limited_info",
-        exploit_complexity="specific_environment",
-        defense_status="conditional",
-    )
-    assert calibration.score == -3
-    assert calibration.severity == "low"
-
-
-def test_review_severity_calibration_accepts_chinese_aliases():
-    calibration = calibrate_review_severity(
-        attack_surface="backend",
-        required_account="user",
-        impact="敏感数据",
-        exploit_complexity="多步骤",
-        defense_status="有防护但可绕过",
-    )
-    assert calibration.score == 2
-    assert calibration.severity == "medium"
+    medium = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N")
+    assert medium.score == 5.4
+    assert medium.severity == "medium"
 
 
 def test_normalize_submission_decision_and_aliases():
@@ -152,20 +130,8 @@ def test_normalize_submission_decision_and_aliases():
 
 
 def test_suggest_submission_tier_hint():
-    strong = calibrate_review_severity(
-        attack_surface="frontend",
-        required_account=None,
-        impact="rce_or_full_data",
-        exploit_complexity="single_request",
-        defense_status="none",
-    )
-    assert suggest_submission_tier(calibration=strong) == "cve_candidate"
+    strong = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+    assert suggest_submission_tier(cvss=strong) == "cve_candidate"
 
-    weak = calibrate_review_severity(
-        attack_surface="backend",
-        required_account="admin",
-        impact="limited_info",
-        exploit_complexity="specific_environment",
-        defense_status="conditional",
-    )
-    assert suggest_submission_tier(calibration=weak) == "low_impact"
+    weak = parse_cvss31("CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N")
+    assert suggest_submission_tier(cvss=weak) == "low_impact"

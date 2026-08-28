@@ -273,7 +273,7 @@ export function vulnMatchesQuery(
     v.root_cause_key,
     v.severity,
     formatSeverity(v.severity),
-    formatSeverityScore(v.severity_score, v.severity),
+    formatSeverityScore(v.severity_score, v.severity, v.cvss_vector),
     v.status,
     formatVulnStatus(v.status, v.evidence_level, v.fp_kind),
     v.submission_tier,

@@ -62,9 +62,7 @@ def _submit_and_confirm(project, *, title="洞 A", file_path="a.java", root_caus
         {
             "vuln_id": vuln_id,
             "attack_surface": "frontend",
-            "impact": "sensitive_data_or_privilege",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "high impact",
             "root_cause_key": payload["root_cause_key"],

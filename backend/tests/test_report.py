@@ -279,9 +279,7 @@ def test_submit_and_confirm_write_custom_advisory(tmp_env, project):
             "vuln_id": out["vuln_id"],
             "attack_surface": "frontend",
             "evidence_level": "static_only",
-            "impact": "sensitive_data_or_privilege",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "has cve value",
             "advisory_md": "# GitHub Security Advisory\n\n## Title\n\n```\nreviewed title\n```\n",
@@ -330,7 +328,6 @@ def test_default_advisory_md_includes_cvss_fields():
 
     text = default_advisory_md({"title": "demo", "cwe": "CWE-89", "file_path": "app/Db.java"})
     assert "**CVSS 3.1:**" in text
-    assert "**CVSS 4.0:**" in text
     assert "### Vulnerable code" in text
     assert "app/Db.java" in text
 
@@ -535,6 +532,80 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         {"path": "dataType", "value": "HACKED"},
     )
     assert bad["ok"] is False
+
+
+def test_set_cve_record_field_cvss_vector_computes_score(tmp_env, project):
+    import json
+
+    from app.services.cve_record import cve_record_path
+    from app.tools import ToolContext, registry
+
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        {
+            "title": "SQL 注入演示",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "app/Db.java",
+            "line_no": 3,
+            "source_sink": "id -> query",
+            "auth_premise": "none",
+            "http_request": "GET /x HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "500",
+            "config_premise": "default",
+        },
+    )
+    vid = out["vuln_id"]
+    ctx = ToolContext(project_id=project, role="reviewer", phase="reviewer", vuln_id=vid)
+    vector_path = "containers.cna.metrics[0].cvssV3_1.vectorString"
+
+    score_write = registry.dispatch(
+        ctx,
+        "SetCveRecordField",
+        {"path": "containers.cna.metrics[0].cvssV3_1.baseScore", "value": 9.8},
+    )
+    assert score_write["ok"] is False
+    assert "不要手填" in score_write["error"]
+
+    v30 = registry.dispatch(
+        ctx,
+        "SetCveRecordField",
+        {
+            "path": "containers.cna.metrics[0].cvssV3_0.vectorString",
+            "value": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        },
+    )
+    assert v30["ok"] is False
+    assert "CVSS 3.1" in v30["error"]
+
+    invalid = registry.dispatch(
+        ctx,
+        "SetCveRecordField",
+        {"path": vector_path, "value": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H"},
+    )
+    assert invalid["ok"] is False
+    assert "缺少必填度量" in invalid["error"]
+    assert "A（" in invalid["error"]
+
+    ok = registry.dispatch(
+        ctx,
+        "SetCveRecordField",
+        {
+            "path": vector_path,
+            "value": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        },
+    )
+    assert ok["ok"] is True
+    assert ok["severity_score"] == 7.5
+    assert ok["cvss_vector"] == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    metric = json.loads(cve_record_path(project, vid).read_text(encoding="utf-8"))[
+        "containers"
+    ]["cna"]["metrics"][0]["cvssV3_1"]
+    assert metric["baseScore"] == 7.5
+    assert metric["baseSeverity"] == "HIGH"
+    assert metric["vectorString"] == ok["cvss_vector"]
 
 
 def test_cve_record_initialize_standalone(tmp_env, project):

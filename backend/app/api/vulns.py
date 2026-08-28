@@ -51,7 +51,8 @@ from ..services.verifier import (
 from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, normalize_submission_tier
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
-_SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+)")
+_CVSS_SCORE_RE = re.compile(r"-\s*CVSS\s*3\.[01][:：]\s*(\d+(?:\.\d+)?)")
+_SCORE_RE = re.compile(r"-\s*校准得分[:：]\s*(-?\d+(?:\.\d+)?)")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _CREATED_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 ALLOWED_TRACKING_STATUSES = frozenset({"none", "submitted", "ignored"})
@@ -192,14 +193,20 @@ def _zip_attachment(data: bytes, *, ascii_name: str, filename: str) -> Response:
     )
 
 
-def _report_score(v: Vuln) -> int | None:
+def _report_score(v: Vuln) -> float | None:
+    if v.cvss_score is not None:
+        return float(v.cvss_score)
     if v.severity_score is not None:
-        return int(v.severity_score)
+        return float(v.severity_score)
     path = _report_file(v, "report")
     if not path.is_file():
         return None
-    match = _SCORE_RE.search(path.read_text(encoding="utf-8", errors="ignore"))
-    return int(match.group(1)) if match else None
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    match = _CVSS_SCORE_RE.search(text)
+    if match:
+        return float(match.group(1))
+    match = _SCORE_RE.search(text)
+    return float(match.group(1)) if match else None
 
 
 def _vuln_out(v: Vuln) -> VulnOut:
@@ -326,6 +333,7 @@ def list_verifier_consent(project_id: int | None = None) -> list[VerifierConsent
                     vuln_type=v.vuln_type,
                     severity=v.severity,
                     severity_score=_report_score(fresh) if fresh else None,
+                    cvss_vector=(fresh.cvss_vector if fresh else None) or getattr(v, "cvss_vector", None),
                     verifier_ask_reason=getattr(v, "verifier_ask_reason", None),
                     verifier_status=v.verifier_status or "awaiting_user",
                     updated_at=v.updated_at,

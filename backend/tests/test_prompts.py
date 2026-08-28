@@ -104,10 +104,8 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "vulns/5/report.md" in review
     assert "advisory.md" in review
     assert "环境: ok" in review
-    assert "attack_surface" in review
-    assert "impact" in review
-    assert "exploit_complexity" in review
-    assert "defense_status" in review
+    assert "cvss_vector" in review
+    assert "CVSS 3.1" in review
     assert "submission_tier" in review
     assert "submission_reason" in review
     assert "root_cause_key" in review
@@ -122,9 +120,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     text = load_prompt("reviewer.md")
     assert "attack_surface" in text
     assert "required_account" in text
-    assert "impact" in text
-    assert "exploit_complexity" in text
-    assert "defense_status" in text
+    assert "cvss_vector" in text
+    assert "CVSS 3.1" in text
     assert "submission_tier" in text
     assert "submission_reason" in text
     assert "root_cause_key" in text
@@ -150,13 +147,11 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "fofa_fingerprint" in text
     assert "成立性否决" in text
     assert "docker exec" in text
-    assert "specific_environment" in text
     assert "不要按漏洞类型" in text
     assert "默认密码" in text
     assert "弱口令" in text
     assert "SSRF 观察面" in text
     assert "仅响应差别" in text
-    assert "limited_info" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
     assert "RequestLabRebuild" in text
     assert "RequestLabRebuild" in load_prompt("initial/reviewer.md")
@@ -533,7 +528,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "## Affected products" in advisory_text
     assert "## Severity / CWE" in advisory_text
     assert "**CVSS 3.1:**" in advisory_text
-    assert "**CVSS 4.0:**" in advisory_text
+    assert "CVSS:3.1/" in advisory_text
     assert "raw HTTP request packet" in advisory_text
     assert "<BASE64_PAYLOAD>" in advisory_text
     assert "Write all fill-in content in English" in advisory_text

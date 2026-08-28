@@ -23,9 +23,7 @@ def _ctx(project_id: int, role: str) -> ToolContext:
 
 
 SEVERITY_FACTORS = {
-    "impact": "sensitive_data_or_privilege",
-    "exploit_complexity": "single_request",
-    "defense_status": "none",
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     "submission_tier": "cve_candidate",
     "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }

@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from ..config import TEMPLATES_DIR
+from ..cvss31 import (
+    CVE_SCORE_PATH,
+    CVE_SEVERITY_PATH,
+    CVE_VECTOR_PATH,
+    Cvss31Error,
+    apply_cvss31_to_cve_record,
+    parse_cvss31,
+)
 from .paths import vuln_dir
 
 CVE_FIELD_PLACEHOLDER = "VULNHUNTER_PENDING"
@@ -78,18 +86,9 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
         "参考链接（公告、修复 PR、厂商页面等）",
     ),
     FillableField(
-        "containers.cna.metrics[0].cvssV4_0.baseScore",
-        "CVSS v4.0 基础分",
-        required=False,
-    ),
-    FillableField(
-        "containers.cna.metrics[0].cvssV4_0.baseSeverity",
-        "CVSS v4.0 严重度（CRITICAL/HIGH/MEDIUM/LOW）",
-        required=False,
-    ),
-    FillableField(
-        "containers.cna.metrics[0].cvssV4_0.vectorString",
-        "CVSS v4.0 向量字符串",
+        "containers.cna.metrics[0].cvssV3_1.vectorString",
+        "CVSS 3.1 基础向量（只填度量，如 CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H；"
+        "分数由系统计算，不要手填 baseScore）",
         required=False,
     ),
 )
@@ -329,12 +328,62 @@ def list_fillable_fields(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[str, Any]:
     normalized = str(path or "").strip()
+    if normalized in (CVE_SCORE_PATH, CVE_SEVERITY_PATH) or normalized.endswith(
+        (
+            ".cvssV3_1.baseScore",
+            ".cvssV3_1.baseSeverity",
+            ".cvssV3_0.baseScore",
+            ".cvssV3_0.baseSeverity",
+            ".cvssV4_0.baseScore",
+            ".cvssV4_0.baseSeverity",
+        )
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "不要手填 CVSS 分数或严重度标签。"
+                f"请写入 {CVE_VECTOR_PATH}，分数由系统按 CVSS 3.1 计算。"
+            ),
+        }
+    if normalized.endswith(".cvssV4_0.vectorString") or normalized.endswith(".cvssV3_0.vectorString"):
+        return {
+            "ok": False,
+            "error": f"请使用 CVSS 3.1 向量路径 {CVE_VECTOR_PATH}，不要写 3.0/4.0。",
+        }
     if normalized not in _FILLABLE_PATHS:
         return {
             "ok": False,
             "error": f"字段 {normalized!r} 不可写入；请使用 ReadCveRecord 返回的 path。",
         }
     record = ensure_cve_record(project_id, vuln_id)
+    if normalized == CVE_VECTOR_PATH:
+        if is_unfilled_value(value):
+            set_by_path(record, normalized, CVE_FIELD_PLACEHOLDER)
+            write_cve_record(project_id, vuln_id, record)
+            return {
+                "ok": True,
+                "path": normalized,
+                "current_value": CVE_FIELD_PLACEHOLDER,
+                "needs_fill": False,
+                "quality_issues": [],
+            }
+        try:
+            parsed = parse_cvss31(value)
+        except Cvss31Error as exc:
+            return {"ok": False, "error": str(exc)}
+        apply_cvss31_to_cve_record(record, parsed)
+        write_cve_record(project_id, vuln_id, record)
+        return {
+            "ok": True,
+            "path": normalized,
+            "current_value": parsed.vector,
+            "needs_fill": False,
+            "quality_issues": [],
+            "cvss_vector": parsed.vector,
+            "severity_score": parsed.score,
+            "severity": parsed.severity,
+            "message": f"已写入向量，系统计分为 {parsed.score:.1f} {parsed.severity_en}",
+        }
     try:
         set_by_path(record, normalized, value)
     except (KeyError, IndexError, TypeError, ValueError) as e:

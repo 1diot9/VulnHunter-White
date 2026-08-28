@@ -133,11 +133,8 @@ def run_user_lookup(name: str) -> list[dict]:
 - 攻击面：前台
 - 配置前提：默认配置
 - 严重度：高危（high）
-- 校准得分：3
-- 可达性：未认证可达
-- 影响范围：敏感数据泄露/权限提升/部分数据
-- 利用复杂度：单请求或简单触发
-- 防护状态：无有效防护
+- CVSS 3.1：7.5
+- 评分向量：CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N
 - 价值分层：有 CVE 价值（cve_candidate）
 - 分层理由：Unauthenticated SQL injection on a public API endpoint that leaks all users' plaintext passwords including admin credentials. Single-request exploitation, no defense, default configuration. Clear CVE-worthy impact: sensitive data leakage enabling authentication bypass and privilege escalation.
 - 根因合并键：sqli:run_user_lookup

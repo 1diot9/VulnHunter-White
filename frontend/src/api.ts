@@ -176,6 +176,7 @@ export type Vuln = {
   vuln_type: string
   severity: string
   severity_score: number | null
+  cvss_vector?: string | null
   cwe: string | null
   file_path: string | null
   line_no: number | null
@@ -215,6 +216,7 @@ export type VerifierConsentItem = {
   vuln_type: string | null
   severity: string | null
   severity_score: number | null
+  cvss_vector?: string | null
   verifier_ask_reason: string | null
   verifier_status: string
   updated_at: string

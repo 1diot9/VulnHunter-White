@@ -450,7 +450,8 @@ class VulnOut(BaseModel):
     title: str
     vuln_type: str
     severity: str
-    severity_score: int | None = None
+    severity_score: float | None = None
+    cvss_vector: str | None = None
     cwe: str | None = None
     file_path: str | None = None
     line_no: int | None = None
@@ -521,7 +522,8 @@ class VerifierConsentItem(BaseModel):
     title: str
     vuln_type: str | None = None
     severity: str | None = None
-    severity_score: int | None = None
+    severity_score: float | None = None
+    cvss_vector: str | None = None
     verifier_ask_reason: str | None = None
     verifier_status: str = "awaiting_user"
     updated_at: datetime

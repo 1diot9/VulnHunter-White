@@ -76,9 +76,7 @@ def _submit_and_confirm(
     args = {
         "vuln_id": vuln_id,
         "attack_surface": surface,
-        "impact": "sensitive_data_or_privilege",
-        "exploit_complexity": "single_request",
-        "defense_status": "none",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
         "submission_tier": "cve_candidate",
         "submission_reason": "未授权可读敏感数据",
         "root_cause_key": root_cause_key,

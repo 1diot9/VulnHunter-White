@@ -82,7 +82,7 @@ export default function VulnDetailDialog({
   }, [vulnId])
 
   const detailSurface = formatAttackSurface(detail?.attack_surface, detail?.required_account)
-  const detailScore = formatSeverityScore(detail?.severity_score, detail?.severity)
+  const detailScore = formatSeverityScore(detail?.severity_score, detail?.severity, detail?.cvss_vector)
   const detailTier = formatSubmissionTier(detail?.submission_tier)
   const detailTracking = formatTrackingStatus(detail?.tracking_status)
   const detailVerifier = formatVerifierStatus(detail?.verifier_status)
@@ -229,7 +229,11 @@ export default function VulnDetailDialog({
                 <Badge variant="outline">项目 #{detail.project_id}</Badge>
                 <Badge variant="outline">{detail.vuln_type}</Badge>
                 {detailScore ? (
-                  <Badge variant="outline" className={severityScoreBadgeClass(detail.severity_score)}>
+                  <Badge
+                    variant="outline"
+                    title={detail.cvss_vector || undefined}
+                    className={severityScoreBadgeClass(detail.severity_score, detail.cvss_vector)}
+                  >
                     {detailScore}
                   </Badge>
                 ) : formatSeverity(detail.severity) ? (

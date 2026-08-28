@@ -15,9 +15,7 @@ def _ctx(project_id: int, role: str, **kwargs) -> ToolContext:
 
 
 SEVERITY_FACTORS = {
-    "impact": "sensitive_data_or_privilege",
-    "exploit_complexity": "single_request",
-    "defense_status": "none",
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     "submission_tier": "cve_candidate",
     "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }
@@ -496,7 +494,8 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert conf["attack_surface_label"] == "前台"
     assert conf["required_account"] is None
     assert conf["severity"] == "high"
-    assert conf["severity_score"] == 4
+    assert conf["severity_score"] == 7.5
+    assert conf["cvss_vector"] == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
     assert conf["submission_tier"] == "cve_candidate"
     assert conf["submission_tier_label"] == "有 CVE 价值"
     assert "CVE" in conf["submission_reason"]
@@ -510,7 +509,8 @@ def test_submit_and_confirm_flow(tmp_env, project):
         assert v.attack_surface == "frontend"
         assert v.required_account is None
         assert v.severity == "high"
-        assert v.severity_score == 4
+        assert v.cvss_score == 7.5
+        assert v.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
         assert v.submission_tier == "cve_candidate"
         assert v.submission_reason
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
@@ -523,7 +523,8 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert "## 审核标注" in report
     assert "- 攻击面：前台" in report
     assert "- 严重度：高危（high）" in report
-    assert "- 校准得分：4" in report
+    assert "- CVSS 3.1：7.5" in report
+    assert "- 评分向量：CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" in report
     assert "- 价值分层：有 CVE 价值（cve_candidate）" in report
     assert "- 分层理由：" in report
     assert "原始类型映射" not in report
@@ -658,7 +659,52 @@ def test_confirm_requires_severity_factors(tmp_env, project):
         {"vuln_id": vuln_id, "attack_surface": "frontend"},
     )
     assert conf["ok"] is False
-    assert "impact" in conf["error"]
+    assert "cvss_vector" in conf["error"]
+
+
+def test_confirm_rejects_invalid_cvss_vector(tmp_env, project):
+    payload = {
+        "title": "服务端请求伪造",
+        "vuln_type": "ssrf",
+        "cwe": "CWE-918",
+        "file_path": "app/Main.java",
+        "line_no": 1,
+        "source_sink": "url -> requests.get",
+        "auth_premise": "未授权",
+        "http_request": "GET /fetch?url=http://127.0.0.1 HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "internal response",
+        "config_premise": "default",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "frontend",
+            "cvss_vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "未认证 SSRF",
+        },
+    )
+    assert conf["ok"] is False
+    assert "CVSS:3.1" in conf["error"]
+    assert "3.0" in conf["error"]
+    missing = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "frontend",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "未认证 SSRF",
+        },
+    )
+    assert missing["ok"] is False
+    assert "缺少必填度量" in missing["error"]
+    assert "A（" in missing["error"]
 
 
 def test_confirm_requires_submission_tier(tmp_env, project):
@@ -683,9 +729,7 @@ def test_confirm_requires_submission_tier(tmp_env, project):
         {
             "vuln_id": vuln_id,
             "attack_surface": "frontend",
-            "impact": "sensitive_data_or_privilege",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
         },
     )
     assert conf["ok"] is False
@@ -714,9 +758,7 @@ def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
             "vuln_id": out["vuln_id"],
             "evidence_level": "static_only",
             "attack_surface": "frontend",
-            "impact": "rce_or_full_data",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
             "submission_tier": "证据不足",
             "submission_reason": "环境没打出来",
         },
@@ -749,9 +791,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         {
             "vuln_id": vuln_id,
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "低危害难利用",
             "submission_reason": "CORS 配置问题，默认按低危害难利用处理",
         },
@@ -773,9 +813,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         {
             "vuln_id": out2["vuln_id"],
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "duplicate_grouped",
             "submission_reason": "与已确认 CORS 同根因",
         },
@@ -790,9 +828,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         {
             "vuln_id": out2["vuln_id"],
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "duplicate_grouped",
             "submission_reason": "与已确认 CORS 同根因",
             "root_cause_key": "cors:JwtFilter",
@@ -805,9 +841,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         {
             "vuln_id": out2["vuln_id"],
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "duplicate_grouped",
             "submission_reason": "与已确认 CORS 同根因",
             "root_cause_key": "cors:JwtFilter",
@@ -839,9 +873,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
         {
             "vuln_id": out3["vuln_id"],
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "duplicate_grouped",
             "submission_reason": "与已确认 CORS 同根因",
             "root_cause_key": "cors:JwtFilter:again",
@@ -855,9 +887,7 @@ def test_confirm_low_impact_and_duplicate_tiers(tmp_env, project):
             {
                 "vuln_id": out3["vuln_id"],
                 "attack_surface": "frontend",
-                "impact": "limited_info",
-                "exploit_complexity": "single_request",
-                "defense_status": "none",
+                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
                 "submission_tier": "duplicate_grouped",
                 "submission_reason": "与已确认 CORS 同根因",
                 "root_cause_key": "cors:JwtFilter:again",
@@ -1043,9 +1073,7 @@ def test_bounty_mode_rejects_xss_submit_and_low_impact_confirm(tmp_env, project)
         {
             "vuln_id": out["vuln_id"],
             "attack_surface": "frontend",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "hardening",
             "submission_reason": "CORS 配置问题",
         },
@@ -1121,9 +1149,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "vuln_id": csrf["vuln_id"],
             "attack_surface": "backend",
             "required_account": "admin",
-            "impact": "limited_info",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "1-click CSRF",
             "root_cause_key": "csrf:PluginController",
@@ -1138,9 +1164,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "vuln_id": csrf["vuln_id"],
             "attack_surface": "backend",
             "required_account": "admin",
-            "impact": "rce_or_full_data",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
             "submission_tier": "cve_candidate",
             "submission_reason": "打开恶意页面即触发插件安装 RCE",
             "root_cause_key": "csrf:PluginController",
@@ -1243,9 +1267,7 @@ def test_confirm_backend_requires_account(tmp_env, project):
             "vuln_id": vuln_id,
             "attack_surface": "后台",
             "required_account": "管理员",
-            "impact": "rce_or_full_data",
-            "exploit_complexity": "single_request",
-            "defense_status": "none",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
             "submission_tier": "cve_candidate",
             "submission_reason": "管理员可达但可完整控制，仍有 CVE 价值",
         },
@@ -1297,7 +1319,7 @@ def test_confirm_backend_user_account(tmp_env, project):
     assert conf["required_account"] == "user"
     assert conf["required_account_label"] == "普通权限"
     assert conf["severity"] == "high"
-    assert conf["severity_score"] == 3
+    assert conf["severity_score"] == 7.5
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "- 所需账号：普通权限" in report
 

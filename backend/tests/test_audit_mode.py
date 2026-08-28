@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.cvss31 import parse_cvss31
 from app.audit_mode import (
     AUDIT_MODE_EDITABLE_STATUSES,
     DEFAULT_AUDIT_MODE,
@@ -67,17 +68,17 @@ def test_bounty_gates_allow_stored_xss_and_source_secrets():
     assert bounty_confirm_block_reason(
         vuln_type="csrf",
         submission_tier="cve_candidate",
-        impact="rce_or_full_data",
+        cvss=parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"),
     ) is None
     assert bounty_confirm_block_reason(
         vuln_type="csrf",
         submission_tier="cve_candidate",
-        impact="sensitive_data_or_privilege",
+        cvss=parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"),
     ) is None
     csrf_low = bounty_confirm_block_reason(
         vuln_type="csrf",
         submission_tier="cve_candidate",
-        impact="limited_info",
+        cvss=parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N"),
     )
     assert csrf_low and "1-click CSRF" in csrf_low
     assert bounty_confirm_block_reason(vuln_type="xss", submission_tier="cve_candidate")

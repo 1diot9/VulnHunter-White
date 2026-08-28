@@ -327,7 +327,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 
 | 工具 | 用途 |
 | --- | --- |
-| ConfirmVuln | 确认漏洞并校准严重度与价值分层 |
+| ConfirmVuln | 确认漏洞：Agent 填 CVSS 3.1 向量，系统计分，并标注价值分层 |
 | MarkFalsePositive | 判定误报 |
 | ReturnToWorker | 仅入口 / sink / 根因分析错误时打回 |
 | MergeIntoVuln | 同根因同危害重复报告并入主报告 |
@@ -447,22 +447,18 @@ flowchart LR
 
 ## 7. 漏洞评级附录
 
-总分 ≥5 为严重，3–4 为高危，1–2 为中危，≤0 为低危。
+按 CVSS 3.1 基础分：9.0–10.0 为严重，7.0–8.9 为高危，4.0–6.9 为中危，0.1–3.9 为低危。Agent 只填写评分向量（`cvss_vector`），分数由系统按 FIRST 公式计算；向量格式错误时 ConfirmVuln / SetCveRecordField 返回具体错误。
 
-| 维度 | 取值 | 分 | 怎么来的 |
-| --- | --- | --- | --- |
-| 可达性 | 未认证可达 | +1 | `attack_surface=frontend`（前台） |
-| | 低权限可达 | +0 | 后台 + `required_account=user` |
-| | 管理员才可达 | -1 | 后台 + `required_account=admin` |
-| 影响范围 impact | RCE / 全库 / 完整控制 | +4 | `rce_or_full_data` |
-| | 敏感数据 / 权限提升 / 部分数据 | +2 | `sensitive_data_or_privilege` |
-| | 有限信息泄露 / 信息收集 | +1 | `limited_info` |
-| 利用复杂度 exploit_complexity | 单请求或简单触发 | +1 | `single_request` |
-| | 多步骤利用 | +0 | `multi_step` |
-| | 依赖特定环境 | -2 | `specific_environment` |
-| 防护状态 defense_status | 无有效防护 | +0 | `none` |
-| | 有防护但可绕过 | +0 | `bypassable` |
-| | 有防护且绕过需额外条件 | -1 | `conditional` |
+向量格式：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+
+| 度量 | 取值 |
+| --- | --- |
+| AV Attack Vector | N Network / A Adjacent / L Local / P Physical |
+| AC Attack Complexity | L Low / H High |
+| PR Privileges Required | N None / L Low / H High |
+| UI User Interaction | N None / R Required |
+| S Scope | U Unchanged / C Changed |
+| C / I / A | H High / L Low / N None |
 
 ---
 

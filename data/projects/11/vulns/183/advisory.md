@@ -99,6 +99,5 @@ CWE-89. Any network caller who can reach the default MemoBoard HTTP port can rea
 
 - **Severity:** High
 - **CVSS 3.1:** 7.5 High — `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N`
-- **CVSS 4.0:** 8.7 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N`
 - **CWE:** CWE-89 Improper Neutralization of Special Elements used in an SQL Command ("SQL Injection")
 - **Related:**

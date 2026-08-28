@@ -238,7 +238,11 @@ class Vuln(Base):
     vuln_type: Mapped[str] = mapped_column(String(64), default="other")
     severity: Mapped[str] = mapped_column(String(32), default="low")
     severity_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Reviewer 校准得分，pending_review 阶段可为空
+    # 旧四维校准整数分；新确认写入 cvss_score
+    cvss_vector: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # CVSS:3.1/AV:... 基础向量，ConfirmVuln 写入
+    cvss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # CVSS 3.1 基础分 0.0–10.0，由向量自动计算
     cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -488,6 +492,8 @@ def _ensure_columns() -> None:
             "attack_surface": "VARCHAR(32)",
             "required_account": "VARCHAR(32)",
             "severity_score": "INTEGER",
+            "cvss_vector": "VARCHAR(128)",
+            "cvss_score": "REAL",
             "submission_tier": "VARCHAR(64)",
             "submission_reason": "TEXT",
             "mining_path": "VARCHAR(32)",

@@ -144,7 +144,7 @@ def pick_parent_for_duplicate(dup: Any, candidates: list[Any]) -> Any | None:
                 token,
                 family,
                 empty_key,
-                int(getattr(item, "severity_score", None) or 0),
+                int(getattr(item, "cvss_score", None) or getattr(item, "severity_score", None) or 0),
                 -int(getattr(item, "id", 0) or 0),
                 item,
             )

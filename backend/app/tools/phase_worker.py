@@ -470,7 +470,7 @@ summary: {args.get('source_sink', '')[:200]}
 
 ## 摘要
 - 漏洞技术类型：{vtype}
-- 严重度：待 Reviewer 按利用上下文校准（不按类型映射）
+- 严重度：待 Reviewer 填写 CVSS 3.1 向量（分数由系统计算，不按类型映射）
 - CWE：{args.get('cwe')}
 - 位置：{args.get('file_path')}:{args.get('line_no')}
 - 配置前提：{config_premise_label(args.get('config_premise')) or args.get('config_premise')}
@@ -695,7 +695,7 @@ def register_worker_tools() -> None:
                 "应填写 root_cause_key（类型:稳定锚点）。"
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次调用会提醒复查；"
                 "确认仍要单独交时，再次调用并传 confirm_not_duplicate=true（仅本会话提醒过一次后才接受）。"
-                "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 校准。"
+                "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 填写 CVSS 3.1 向量，分数由系统计算。"
                 "必填 config_premise=default|specific（默认配置/特定配置）。"
                 "特定配置指须改应用自身配置才成立，且该配置不是官方已明确警示会导致安全风险的选项；"
                 "仅在官方已警示的不安全开关下才成立的不要提交。"
@@ -777,7 +777,7 @@ def register_worker_tools() -> None:
                         "description": (
                             "英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
                             "含 Title、Description（Summary/Details/Vulnerable code/PoC/Impact）、"
-                            "Affected products、Severity/CWE（含 CVSS 3.1 与 CVSS 4.0）。"
+                            "Affected products、Severity/CWE（含 CVSS 3.1 向量；分数由系统计算）。"
                             "Vulnerable code 须含完整相对路径与源码原文。不要写中文报告。"
                         ),
                     },

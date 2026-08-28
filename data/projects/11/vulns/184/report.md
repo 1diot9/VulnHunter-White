@@ -136,11 +136,8 @@ def ping_host(host: str) -> str:
 - 所需账号：管理员
 - 配置前提：默认配置
 - 严重度：高危（high）
-- 校准得分：3
-- 可达性：管理员权限才可达
-- 影响范围：RCE/全库读取/完整控制
-- 利用复杂度：单请求或简单触发
-- 防护状态：无有效防护
+- CVSS 3.1：7.2
+- 评分向量：CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H
 - 价值分层：有 CVE 价值（cve_candidate）
 - 分层理由：Authenticated admin can inject shell metacharacters into the ping host parameter, achieving full RCE with command output echoed back in the HTTP response. The admin session is obtainable via the unauthenticated SQLi on /api/users (chained attack), making this reachable from anonymous access. Classic command injection with clear RCE impact — CVE-worthy.
 - 根因合并键：rce:ping_host

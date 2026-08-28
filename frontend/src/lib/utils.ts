@@ -332,7 +332,9 @@ export function formatSeverity(value: string | null | undefined): string {
     case 'low':
       return '低危'
     case 'pending':
-      return '待校准'
+      return '待评分'
+    case 'none':
+      return '无'
     default:
       return value || ''
   }
@@ -341,15 +343,29 @@ export function formatSeverity(value: string | null | undefined): string {
 export function formatSeverityScore(
   value: number | null | undefined,
   severity?: string | null,
+  cvssVector?: string | null,
 ): string | null {
   if (value == null || Number.isNaN(value)) return null
-  const signed = value > 0 ? `+${value}` : String(value)
   const label = formatSeverity(severity)
+  if (cvssVector) {
+    const n = Number(value).toFixed(1)
+    return label ? `${n} ${label}` : n
+  }
+  const signed = value > 0 ? `+${value}` : String(value)
   return label ? `${label}${signed}` : signed
 }
 
-export function severityScoreBadgeClass(value: number | null | undefined): string {
+export function severityScoreBadgeClass(
+  value: number | null | undefined,
+  cvssVector?: string | null,
+): string {
   if (value == null || Number.isNaN(value)) return ''
+  if (cvssVector) {
+    if (value >= 9) return 'bg-red-500/20 text-red-100 ring-1 ring-red-500/30'
+    if (value >= 7) return 'bg-orange-500/20 text-orange-100 ring-1 ring-orange-500/30'
+    if (value >= 4) return 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/25'
+    return 'bg-slate-500/15 text-slate-200 ring-1 ring-slate-500/20'
+  }
   if (value >= 5) return 'bg-red-500/20 text-red-100 ring-1 ring-red-500/30'
   if (value >= 3) return 'bg-orange-500/20 text-orange-100 ring-1 ring-orange-500/30'
   if (value >= 1) return 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/25'
