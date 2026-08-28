@@ -54,6 +54,12 @@ from .compression import (
     needs_compress,
     write_summary,
 )
+from .review_wrapup import (
+    mark_grace_used,
+    note_tool_for_wrapup,
+    should_grant_wrapup_grace,
+    wrapup_grace_nudge,
+)
 from .watchdog import (
     AgentWatchdog,
     identical_abort_nudge,
@@ -412,6 +418,27 @@ class AgentLoop:
         except Exception:  # noqa: BLE001
             pass
 
+    def _maybe_grant_review_wrapup_grace(
+        self, messages: list[dict[str, Any]], remaining: float
+    ) -> bool:
+        """One-shot deadline extension when reviewer is wrapping up after verify."""
+        if not should_grant_wrapup_grace(
+            self.state, phase=self.phase, remaining=remaining
+        ):
+            return False
+        grace = max(1, int(getattr(settings, "timeout_reviewer_wrapup_grace", 600) or 600))
+        verified = bool(self.state.get("review_verified"))
+        mark_grace_used(self.state)
+        nudge = wrapup_grace_nudge(verified=verified, grace_sec=grace)
+        messages.append({"role": "user", "content": nudge})
+        self._live.system(
+            self.project_id,
+            f"审核收尾宽限 {grace}s（漏洞已验证或文档收尾中，催立刻 ConfirmVuln）",
+            phase=self.phase,
+            role=self.role,
+        )
+        return True
+
     def run(self) -> LoopResult:
         prefer = self.llm.endpoint_id if (self.llm.endpoint_id and not self._llm_injected) else None
         with llm_thread_slot(
@@ -483,6 +510,14 @@ class AgentLoop:
             if self._enforce_token_budget():
                 continue
             remaining = deadline - time.time()
+            if self._maybe_grant_review_wrapup_grace(messages, remaining):
+                grace = max(
+                    1, int(getattr(settings, "timeout_reviewer_wrapup_grace", 600) or 600)
+                )
+                deadline += grace
+                remaining = deadline - time.time()
+                self._persist(messages)
+                continue
             if remaining <= 0:
                 result.timed_out = True
                 result.stop_reason = "timeout"
@@ -809,6 +844,14 @@ class AgentLoop:
                     result.stop_reason = "awaiting_user"
                     result.state = self.state
                     return result
+                if self.phase == "reviewer":
+                    note_tool_for_wrapup(
+                        self.state,
+                        name=call["name"],
+                        arguments=call.get("arguments") or {},
+                        result=tr if isinstance(tr, dict) else {},
+                        vuln_id=self.vuln_id,
+                    )
                 if isinstance(tr, dict) and tr.get("ok") is False:
                     any_failed = True
                 messages.append(

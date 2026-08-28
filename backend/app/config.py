@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     recon_mark_batch_size: int = 150
     timeout_worker_round: int = 7200
     timeout_reviewer_static: int = 1800
+    # One-shot wall-clock extension when reviewer is wrapping up docs after verify.
+    timeout_reviewer_wrapup_grace: int = 600
     timeout_verifier: int = 1800
     timeout_attack_chain: int = 1800
     timeout_docker: int = 1800
