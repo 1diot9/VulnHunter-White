@@ -1499,6 +1499,7 @@ _HARNESS_REVIEW_NOTE = (
     "组件公开入口本身吃 HTTP/请求对象时，harness 须调用 src/ 公开 API 并在同进程内发请求（httptest/loopback），"
     "payload 须来自该请求；不要只拷 sink，也不要把无请求面的解析 API 包进自写 HTTP。"
     "harness 最终输出必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
+    "输出默认英语，须提供 --zh 切中文标签/步骤/判定；注释仍用英语。"
     "沙箱不可用或 mock 失败不要误报，静态已能证明默认可利用则 static_only。"
     "不要把 harness 的内联/mock 或同一套测试写进 poc.py；纯库洞无 HTTP/安装面时不要补假 -u/--proxy。"
     "应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"

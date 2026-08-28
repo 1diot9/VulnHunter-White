@@ -380,6 +380,7 @@ def test_submit_library_vuln_allows_installed_package_poc(tmp_env, project):
         "from pkg.api import parse\n"
         "p=argparse.ArgumentParser()\n"
         "p.add_argument('--artifact', default='target.jar')\n"
+        "p.add_argument('--zh', action='store_true')\n"
         "print(parse(p.parse_args().artifact))\n"
     )
     out = registry.dispatch(

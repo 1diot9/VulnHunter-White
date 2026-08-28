@@ -339,14 +339,14 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 
 要点：
 
-- 靶场可用时 **ConfirmVuln 会系统再执行落盘 `poc.py`**（`python poc.py -u <target_url>`），退出码非 0 则拒绝确认。
+- 靶场可用时 **ConfirmVuln 会系统再执行落盘 `poc.py`**（`python poc.py -u <target_url>`，默认英语输出），退出码非 0 则拒绝确认。`poc.py` / `harness.py` 的标签、状态、告警、判定须中英双语：默认英语，`--zh` 切中文。
 - PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 **Java / Node / Python debug MCP**。
 - `SearchTools` 检索 `tools/cli` 下用户放置的 CLI（如 JNDI、恶意 JDBC 服务），按绝对路径 Shell 执行。后台静默索引轮（`cli_indexer`）用 `FinishIndex` 写入入口与描述；内容变了才重索引。
 - 需要看无源码的 class/jar 时用 `DecompileJava`（禁止 Shell 直调 jadx/cfr）；强制仅静态轮仍可用。路径约定见 [java-decompile.md](./java-decompile.md)。
 
 #### 4.6.3 局部验证（harness）
 
-在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，默认「抽出可疑函数 + mock 驱动 payload」。**仅当组件公开入口本身吃 HTTP/请求对象**（中间件、`ValidateRequest`、`ServeHTTP` 等）时，改为同进程请求级加强验证：编译/引用项目 `src/` 的公开 API，用 `httptest` 或进程内客户端发攻击请求并打印真实响应/panic；不要只拷内部 sink，也不要把 YAML/编解码等无请求面 API 包进自写 HTTP。这仍是 harness，不是 Docker 靶场。确认后 `evidence_level=harness`。**harness 最终输出必须打印调用 sink 后的实际数据**（返回值、查询结果、命令回显、渲染结果等），禁止只打印固定 `SUCCESS`/`CONFIRMED`、写死 `success=True` / `{"success": true}`，或把预期回显写成字面量；`RunCode` / `ConfirmVuln` 会拒绝这类脚本。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。仅 harness 确认的前台洞不入队 Verifier；项目切到靶场动态后，已 harness 确认的漏洞可追加 Docker 靶场验证（证据升级为 `dynamic` / `mcp`）。已仅静态确认的漏洞也可按当前模式追加靶场或局部验证。
+在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，默认「抽出可疑函数 + mock 驱动 payload」。**仅当组件公开入口本身吃 HTTP/请求对象**（中间件、`ValidateRequest`、`ServeHTTP` 等）时，改为同进程请求级加强验证：编译/引用项目 `src/` 的公开 API，用 `httptest` 或进程内客户端发攻击请求并打印真实响应/panic；不要只拷内部 sink，也不要把 YAML/编解码等无请求面 API 包进自写 HTTP。这仍是 harness，不是 Docker 靶场。确认后 `evidence_level=harness`。**harness 最终输出必须打印调用 sink 后的实际数据**（返回值、查询结果、命令回显、渲染结果等），禁止只打印固定 `SUCCESS`/`CONFIRMED`、写死 `success=True` / `{"success": true}`，或把预期回显写成字面量；`RunCode` / `ConfirmVuln` 会拒绝这类脚本。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。脚本标签/状态/告警/判定默认英语，`--zh` 切中文。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。仅 harness 确认的前台洞不入队 Verifier；项目切到靶场动态后，已 harness 确认的漏洞可追加 Docker 靶场验证（证据升级为 `dynamic` / `mcp`）。已仅静态确认的漏洞也可按当前模式追加靶场或局部验证。
 
 #### 4.6.4 静态验证
 

@@ -4,6 +4,7 @@ from app.services.poc_script import (
     LIBRARY_POC_FAKE_HTTP_CLI_ERROR,
     POC_CLI_ERROR,
     POC_HARNESS_SHAPE_ERROR,
+    POC_I18N_ERROR,
     POC_LAB_RUN_ERROR,
     poc_cli_block_reason,
     poc_lab_run_block_reason,
@@ -23,6 +24,7 @@ p.add_argument("-u", "--url", required=True)
 p.add_argument("--proxy", default="")
 p.add_argument("--strict-ssl", action="store_true")
 p.add_argument("-c", "--cmd", default="id")
+p.add_argument("--zh", action="store_true")
 urllib.request.proxy_bypass = lambda host, **kw: False
 urllib.request.HTTPSHandler(context=ssl.create_default_context())
 args = p.parse_args()
@@ -42,6 +44,7 @@ import argparse
 from pkg.api import parse
 p = argparse.ArgumentParser()
 p.add_argument("--artifact", default="target.jar")
+p.add_argument("--zh", action="store_true")
 args = p.parse_args()
 print(parse(args.artifact))
 """
@@ -143,6 +146,46 @@ print("bypass")
 '''
     assert poc_cli_block_reason(harnessy) == POC_HARNESS_SHAPE_ERROR
     assert poc_cli_block_reason(harnessy, target_kind="library") == POC_HARNESS_SHAPE_ERROR
+
+
+def test_poc_cli_requires_zh_flag():
+    no_zh = """
+import argparse, ssl, urllib.request
+p = argparse.ArgumentParser()
+p.add_argument("-u", "--url", required=True)
+p.add_argument("--proxy", default="")
+p.add_argument("--strict-ssl", action="store_true")
+urllib.request.proxy_bypass = lambda host, **kw: False
+urllib.request.HTTPSHandler(context=ssl.create_default_context())
+args = p.parse_args()
+print(urllib.request.urlopen(args.url).read())
+"""
+    assert poc_cli_block_reason(no_zh) == POC_I18N_ERROR
+    with_zh = no_zh.replace(
+        'p.add_argument("--strict-ssl", action="store_true")',
+        'p.add_argument("--strict-ssl", action="store_true")\n'
+        'p.add_argument("--zh", action="store_true")',
+    )
+    assert poc_cli_block_reason(with_zh) is None
+
+
+def test_library_poc_requires_zh_flag():
+    no_zh = """
+import argparse
+from pkg.api import parse
+p = argparse.ArgumentParser()
+p.add_argument("--artifact", default="target.jar")
+args = p.parse_args()
+print(parse(args.artifact))
+"""
+    assert poc_cli_block_reason(no_zh, target_kind="library") == POC_I18N_ERROR
+    with_zh = no_zh.replace(
+        'p.add_argument("--artifact", default="target.jar")',
+        'p.add_argument("--artifact", default="target.jar")\n'
+        'p.add_argument("--zh", action="store_true")',
+    )
+    assert poc_cli_block_reason(with_zh, target_kind="library") is None
+    assert poc_cli_block_reason(with_zh, target_kind="mixed") is None
 
 
 def test_poc_required_for_submit_library_without_http():

@@ -17,6 +17,7 @@ _SSL_HANDLING_RE = re.compile(
     r"check_hostname|CERT_NONE|verify\s*=\s*False|--strict-ssl|HTTPSHandler\s*\(\s*context\s*=",
     re.I,
 )
+_ZH_FLAG_RE = re.compile(r"""(?:--zh\b)""")
 _HTTP_HINT_RE = re.compile(
     r"requests\.|httpx\.|urllib|aiohttp|http\.client",
     re.I,
@@ -43,7 +44,14 @@ POC_CLI_ERROR = (
     "不要写死地址或代理；有 --proxy 时 127.0.0.1/localhost 也必须强制走代理"
     "（覆盖 urllib.request.proxy_bypass，勿让本机地址旁路）；"
     "HTTPS 须默认跳过证书校验并在 https:// 目标打印告警（--strict-ssl 可选恢复校验）；"
-    "RCE 另须支持 -c/--cmd，有回显须打印命令输出；脚本自身打印与注释须用英语。"
+    "RCE 另须支持 -c/--cmd，有回显须打印命令输出；"
+    "脚本输出须中英双语：默认英语，须提供 --zh 切换中文标签/状态/告警/判定；"
+    "注释、docstring、--help 仍用英语。"
+)
+
+POC_I18N_ERROR = (
+    "脚本 stdout/stderr 标签、状态、告警、判定须中英双语：默认英语，必须提供 --zh 切换中文；"
+    "注释、docstring、argparse --help 仍用英语；目标回显原文不要翻译。"
 )
 
 POC_LAB_RUN_ERROR = (
@@ -69,7 +77,8 @@ POC_CODE_TOOL_DESCRIPTION = (
     "必须 --proxy（空则直连）并接到全部 HTTP 请求；有代理时 127.0.0.1/localhost 也必须强制走代理；"
     "RCE 须 -c/--cmd 且有回显时打印命令输出。不要写死地址或代理。"
     "SSRF 有回显须打印目标正文，仅差别则打印通/不通对照。"
-    "脚本自身打印与注释必须用英语；目标回显原文不要翻译。"
+    "脚本输出须中英双语：默认英语，必须 --zh 切换中文标签/状态/告警/判定；"
+    "注释、--help 仍用英语；目标回显原文不要翻译。"
     "纯库洞：不要交未使用的 -u/--proxy，不要把 harness 内联/mock 抄进 poc.py。"
     "仅当安装真实包后能 import 公开 API 并打出冲击时才写 poc.py；"
     "无 HTTP 面且无安装面时留空，http_request 写 API 调用配方。局部验证证据只进 harness.py。"
@@ -83,6 +92,10 @@ def _has_url_flag(text: str) -> bool:
 
 def _has_proxy_flag(text: str) -> bool:
     return bool(_PROXY_FLAG_RE.search(text))
+
+
+def _has_zh_flag(text: str) -> bool:
+    return bool(_ZH_FLAG_RE.search(text))
 
 
 def looks_like_http_request(text: str | None) -> bool:
@@ -113,8 +126,9 @@ def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None
 
     Empty poc_code is allowed here; SubmitVuln decides whether the field is required.
     HTTP-shaped scripts (including library/mixed with an HTTP client) follow the web CLI
-    contract. Pure library API scripts must import the real package — no unused -u/--proxy
-    and no inlined/mocked harness copies.
+    contract (including --zh). Pure library API scripts must import the real package —
+    no unused -u/--proxy and no inlined/mocked harness copies; argparse scripts still
+    need --zh for bilingual stdout.
     """
     from ..target_kind import is_component_target
 
@@ -128,17 +142,21 @@ def poc_cli_block_reason(poc_code: str | None, *, target_kind: str | None = None
     if component and not http:
         if _URL_FLAG_RE.search(text) or _PROXY_FLAG_RE.search(text):
             return LIBRARY_POC_FAKE_HTTP_CLI_ERROR
+        if "add_argument" in text.lower() and not _has_zh_flag(text):
+            return POC_I18N_ERROR
         return None
     if not http:
         return None
-    if (
+    if not (
         _has_url_flag(text)
         and _has_proxy_flag(text)
         and _FORCE_LOCAL_PROXY_RE.search(text)
         and _SSL_HANDLING_RE.search(text)
     ):
-        return None
-    return POC_CLI_ERROR
+        return POC_CLI_ERROR
+    if not _has_zh_flag(text):
+        return POC_I18N_ERROR
+    return None
 
 
 def poc_lab_run_block_reason(poc_code: str | None) -> str | None:

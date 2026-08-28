@@ -66,7 +66,7 @@ summary: "{{summary}}"
 ```
 
 ### 完整 PoC 描述
-（文字 + 请求包，请勿只放截图。有 HTTP 面时：可运行脚本见同目录 `poc.py`，`python poc.py -u <目标>`；须支持 `--proxy`（空则直连）；RCE 另支持 `-c/--cmd` 并打印回显。纯库洞：仅当安装真实包后能调用公开 API 时才写 `poc.py`（不要假 `-u`、不要复制 `harness.py`）；无 HTTP/安装面时写 API 调用配方即可。）
+（文字 + 请求包，请勿只放截图。有 HTTP 面时：可运行脚本见同目录 `poc.py`，`python poc.py -u <目标>`；须支持 `--proxy`（空则直连）；RCE 另支持 `-c/--cmd` 并打印回显；输出默认英语，`--zh` 切中文。纯库洞：仅当安装真实包后能调用公开 API 时才写 `poc.py`（不要假 `-u`、不要复制 `harness.py`）；无 HTTP/安装面时写 API 调用配方即可。）
 
 ```http
 
@@ -95,6 +95,7 @@ summary: "{{summary}}"
 ### 漏洞触发操作
 ```text
 python poc.py -u http://目标:端口
+python poc.py -u http://目标:端口 --zh
 python poc.py -u http://目标:端口 --proxy http://127.0.0.1:8080
 python poc.py -u http://目标:端口 -c "id"
 ```

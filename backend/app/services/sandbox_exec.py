@@ -328,6 +328,6 @@ def harness_debug_plan() -> dict[str, Any]:
             "按目标语言设计 mock / harness，用 RunCode 在沙箱执行；Java 默认 JDK 8，更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17",
             "公开入口本身吃 HTTP/请求对象时，对 src/ 该 API 做同进程请求级加强验证（httptest/进程内客户端），禁止只拷内部 sink；无请求面 API 不要包 HTTP",
             "mock 失败或沙箱不可用不要判误报；静态已能证明默认可利用则 static_only",
-            "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；stdout 必须打印运行时实际数据，禁止写死成功字段；不要把同一份 mock 写进 poc.py",
+            "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；stdout 必须打印运行时实际数据，禁止写死成功字段；输出默认英语、--zh 切中文；不要把同一份 mock 写进 poc.py",
         ],
     }

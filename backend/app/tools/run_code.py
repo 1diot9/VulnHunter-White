@@ -53,7 +53,7 @@ def register_run_code_tool() -> None:
                 "最终输出必须打印运行时实际数据（返回值、查询结果、命令回显、渲染结果、异常原文）；"
                 "禁止只打印固定 SUCCESS/CONFIRMED，禁止写死 success=True / {\"success\": true}，"
                 "禁止把预期回显写成字面量。判定标签可以有，但必须同时打印实际数据。"
-                "脚本自身打印（标签、步骤、判定）与注释必须用英语；源码/payload/回显原文不要翻译。"
+                "脚本输出须中英双语：默认英语，必须 --zh 切中文标签/步骤/判定；注释与 --help 仍用英语；源码/payload/回显原文不要翻译。"
                 "Java harness 默认按 JDK 8 编写（javac --release 8）；不要用 var/record/text block 等 9+ 语法。"
                 "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"

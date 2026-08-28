@@ -4,7 +4,7 @@
 
 1. 先 Read 报告、`poc.py` 和源码，确认 `file_path` 与代码片段真实存在。文件不存在或代码对不上 → 误报。
 2. 按**目标语言**自己设计验证。默认：抽出可疑函数或最小可编译片段，mock 数据库 / 文件系统 / 框架依赖，用多种 payload 打 sink。**仅当组件公开入口本身就吃 HTTP / WebSocket / RPC 等请求对象时**（如 `ValidateRequest`、中间件、`ServeHTTP`、吃 `HttpServletRequest` 的 Filter），做一次**同进程请求级加强验证**（见下节）；YAML / 加密 / 模板 / 反序列化等只吃字节或字符串的 API **不要**再包一层 HTTP。
-3. 用 `RunCode` 在一次性沙箱里执行（Python / PHP / JS / Ruby / Go / Java / Bash 均可）。不要在本机 Bash/PowerShell 里跑 harness。**脚本自己打印的 stdout/stderr（标签、步骤、判定）以及注释 / docstring 必须用英语**；源码片段、payload、目标回显原文不要翻译。
+3. 用 `RunCode` 在一次性沙箱里执行（Python / PHP / JS / Ruby / Go / Java / Bash 均可）。不要在本机 Bash/PowerShell 里跑 harness。**脚本自己打印的 stdout/stderr（标签、步骤、判定）须中英双语：默认英语，须提供 `--zh` 切中文**（Python `argparse`；其它语言扫 argv / `process.argv` / `os.Args`）。注释 / docstring / `--help` 仍用英语；源码片段、payload、目标回显原文不要翻译。
 4. **输出必须来自运行时数据**：最后落到 stdout 的证据必须是调用抽出函数 / sink 之后的实际值（返回值、查询行、命令回显、渲染 HTML、异常原文等）。**禁止**只打印固定字符串（`VULNERABILITY CONFIRMED` / `SUCCESS` / `PASS`）；**禁止**写死成功字段（`success = True`、`{"success": true}`、`confirmed: true`）；**禁止**把预期回显写成字面量（如直接 `print("uid=0(root)")`）。判定标签可以有，但必须同时打印实际数据；成功/失败字段必须由运行结果计算。
 5. **禁止**用另一种语言复述源码逻辑再标 `harness`（例如用 Python 重写 Java Controller）。跑的必须是目标语言代码，或与源码同语义的可编译片段。
 6. **Java harness 默认 JDK 8**：按 Java 8 语言级别与 API 写（不要用 `var`、record、text block、`List.of`/`Map.of`、`switch` 表达式等 9+ 语法，也不要调用 JDK 9+ 才有的 API）。沙箱 `javac` 默认 `--release 8`。仅当目标源码本身明确需要更高版本（`pom.xml` / `compiler.source` 为 11/17，或抽出片段用了对应语法）时，才提高到该版本，并在源码顶部写 `// java-release: 11` 或 `// java-release: 17`。

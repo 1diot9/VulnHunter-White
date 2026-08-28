@@ -328,6 +328,7 @@ Must include at least one raw HTTP request packet below. Replace long header/bod
 
 ```text
 python poc.py -u http://TARGET:PORT
+python poc.py -u http://TARGET:PORT --zh
 python poc.py -u http://TARGET:PORT --proxy http://127.0.0.1:8080
 ```
 

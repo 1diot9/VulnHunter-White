@@ -224,7 +224,8 @@ def test_poc_prompt_requires_cli_parameters():
     assert "-c/--cmd" in poc
     assert "Command output" in poc
     assert "SSRF echo" in poc
-    assert "脚本与注释一律英语" in poc
+    assert "--zh" in poc
+    assert "默认英语" in poc
     assert "argparse" in poc
     assert "通/不通" in poc
     assert "不要写死" in poc
@@ -341,7 +342,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "RunCode" in text
     assert "### 漏洞代码" in text
     assert "完整相对路径" in text
-    assert "必须用英语" in text
+    assert "--zh" in text
+    assert "默认英语" in text
     assert "运行时" in text
     assert "success" in text
     assert "JDK 8" in text
@@ -366,8 +368,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "RunCode" in overlay
     assert "evidence_level=harness" in overlay
     assert "### 漏洞代码" in overlay
-    assert "必须用英语" in overlay
-    assert "脚本与注释一律英语" in overlay
+    assert "--zh" in overlay
+    assert "默认英语" in overlay
     assert "运行时实际数据" in overlay
     assert "JDK 8" in overlay
     assert "java-release: 17" in overlay

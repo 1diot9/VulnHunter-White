@@ -31,7 +31,7 @@
    - 需登录：`--cookie` / `--token`，或 `-U/--user` `-P/--password`。
    - 其它入口（path、id、filename 等）同样做成 CLI，不要写死本次样本。
 5. **打印结果**：打印 HTTP 状态、关键响应头、响应正文（过长可截断并注明）。RCE 有回显时单独打印命令输出。打出预期冲击退出码 0，否则非 0。靶场动态下 ConfirmVuln 会系统再跑一遍落盘脚本，非 0 则拒绝确认。
-6. **脚本与注释一律英语**：`poc.py` / `harness.py`（及 `harness.*`）作者写的文本必须用英语，包括 stdout/stderr 状态行、标签、告警、成功/失败判定、`argparse` `--help`、注释与 docstring。目标回显（HTTP 正文、命令输出、文件内容、异常原文）原样打印，不要翻译。
+6. **输出中英双语（`--zh`）**：`poc.py` / `harness.py`（及 `harness.*`、攻击链脚本）作者打印的 stdout/stderr 标签、状态、告警、成功/失败判定必须同时准备中英文。**默认英语**；传入 `--zh` 后改打中文。用一份 `(en, zh)` 对照表 + `msg(key, zh)`（或其它语言等价：扫 argv 是否含 `--zh`），禁止只写死中文，也禁止默认输出中英混排。注释、docstring、`argparse` `--help` 仍用英语。目标回显（HTTP 正文、命令输出、文件内容、异常原文）原样打印，不要翻译。
 7. 不要写成 notebook 片段、伪代码，或依赖当前工作目录之外的文件。
 
 ## 推荐骨架
@@ -42,6 +42,22 @@ import argparse
 import os
 import ssl
 import urllib.request
+
+MSGS = {
+    "ssl_warn": (
+        "[!] Warning: HTTPS target skips TLS certificate verification by default "
+        "(common for IP access or self-signed certs); pass --strict-ssl for strict verification",
+        "[!] 警告：HTTPS 目标默认跳过 TLS 证书校验（常见于 IP 访问或自签证书）；传入 --strict-ssl 可恢复严格校验",
+    ),
+    "status": ("Status:", "状态:"),
+    "response": ("Response:", "响应:"),
+    "cmd_out": ("Command output:", "命令输出:"),
+    "ssrf_echo": ("SSRF echo:", "SSRF 回显:"),
+}
+
+def msg(key: str, zh: bool) -> str:
+    en, zh_s = MSGS[key]
+    return zh_s if zh else en
 
 def never_bypass(host, **kwargs):
     return False
@@ -77,21 +93,24 @@ def main() -> int:
         action="store_true",
         help="Strict HTTPS certificate verification (default: skip mismatch/self-signed)",
     )
+    p.add_argument(
+        "--zh",
+        action="store_true",
+        help="Print labels/status in Chinese (default: English)",
+    )
     p.add_argument("-c", "--cmd", default="id", help="Command to execute (RCE)")
     args = p.parse_args()
+    zh = args.zh
     base = args.url.rstrip("/")
     if base.lower().startswith("https://") and not args.strict_ssl:
-        print(
-            "[!] Warning: HTTPS target skips TLS certificate verification by default "
-            "(common for IP access or self-signed certs); pass --strict-ssl for strict verification"
-        )
+        print(msg("ssl_warn", zh))
     http = opener(args.proxy, strict_ssl=args.strict_ssl)
     # Send request: http.open(urllib.request.Request(...))
     # requests: verify=args.strict_ssl; override proxy_bypass the same way
     # requests.utils.should_bypass_proxies = lambda url, no_proxy=None: False
     # session.trust_env = False; session.proxies = {"http": args.proxy, "https": args.proxy}
-    # print("Status:", ...); print("Response:", ...)
-    # If echoed: print("Command output:"); print(output)
+    # print(msg("status", zh), ...); print(msg("response", zh), ...)
+    # If echoed: print(msg("cmd_out", zh)); print(output)
     # Return 0 only when the expected impact is observed, else 1
     return 0
 
@@ -103,17 +122,20 @@ if __name__ == "__main__":
 
 ```text
 python poc.py -u http://TARGET:PORT
+python poc.py -u http://TARGET:PORT --zh
 python poc.py -u http://TARGET:PORT --proxy http://127.0.0.1:8080
 python poc.py -u http://TARGET:PORT -c "whoami"
 python poc.py -u http://TARGET:PORT -c "id" --cookie "SESSION=..." --proxy http://127.0.0.1:8080
 python poc.py -u https://110.238.73.241
 python poc.py -u https://real-domain.com --strict-ssl
+python harness.py
+python harness.py --zh
 ```
 
 ## Reviewer / Verifier
 - 动态验证或互联网复测：先跑 `python vulns/{id}/poc.py -u <该目标>`，按需加 `-c`、`--proxy` 等参数，不要把地址或代理写回脚本。
 - **靶场动态收口闸门**：ConfirmVuln 会系统再执行即将落盘的 `poc.py -u <target_url>`；退出码非 0 则拒绝确认。你仍须先自己跑一遍观察冲击。
-- **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI（含 `--proxy` / HTTPS 证书处理）、有代理却让 `127.0.0.1` 旁路、HTTPS 因证书校验失败直接中断、脚本输出或注释用了中文、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
+- **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI（含 `--proxy` / HTTPS 证书处理 / `--zh`）、有代理却让 `127.0.0.1` 旁路、HTTPS 因证书校验失败直接中断、默认输出写死中文或中英混排、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
 - **debug MCP**：仅当 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。
 - **禁止**换一条利用链或换一个 sink 来让洞过关，也禁止改靶场替 Worker 圆谎。同一条链上的 payload 校准（编码、参数名、鉴权头）不算换链。
 
@@ -123,4 +145,4 @@ python poc.py -u https://real-domain.com --strict-ssl
 - **纯库洞**以 `harness.py`（`RunCode`）为局部验证证据主路径。公开入口本身吃 HTTP/请求对象时，harness 须调用 `src/` 该 API 并在同进程内发攻击请求（payload 来自请求），不要只拷内部函数；YAML/编解码等无请求面 API 不要包 HTTP。`poc.py` **仅当**安装真实包（pip/npm/maven 等）后能 `import` 公开 API 并打出冲击时才写：最小调用脚本，argparse 可用包路径/版本等参数，**不要** `-u/--url`。不要复制 harness 的内联/mock 测试。
 - 无 HTTP 面、也无法对已安装包复现：省略 `poc_code`，不要交空壳或假 HTTP CLI。
 - SubmitVuln 的 `http_request` 可写 **API 调用配方**（类/方法/参数），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
-- harness 自身打印与注释同样必须用英语。stdout 的最终证据必须是运行时实际数据，禁止写死 `success=True` / `{"success": true}` 或只打印 `CONFIRMED`。
+- harness 同样须支持 `--zh`（Python `argparse`；其它语言扫 argv / `process.argv` / `os.Args` 是否含 `--zh`）。默认英语标签，`--zh` 切中文；注释与 `--help` 仍用英语。stdout 的最终证据必须是运行时实际数据，禁止写死 `success=True` / `{"success": true}` 或只打印 `CONFIRMED`。

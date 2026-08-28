@@ -1017,7 +1017,7 @@ def register_reviewer_tools() -> None:
                             "不要把内联/mock 脚本放进 poc.py，也不要复制同一套测试矩阵。"
                             "必须打印 sink/抽出函数的运行时实际数据；禁止只打印固定 SUCCESS/CONFIRMED，"
                             "禁止写死 success=True / {\"success\": true}，禁止把预期回显写成字面量。"
-                            "脚本自身打印与注释须用英语。"
+                            "脚本输出须中英双语：默认英语，必须 --zh 切中文；注释仍用英语。"
                         ),
                     },
                     "harness_language": {

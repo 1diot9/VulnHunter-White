@@ -88,7 +88,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 ## PoC 要求
 - 有 HTTP 利用面时，poc_code 必须是可运行的 Python，目标由 CLI 传入（-u/--url），并必须提供 `--proxy`（空则直连）且接到全部 HTTP 请求；有 `--proxy` 时访问 `127.0.0.1`/`localhost` 也必须强制走代理（覆盖 `proxy_bypass`，不要本机旁路）。HTTPS 须默认跳过证书校验并在 `https://` 目标打印告警（可选 `--strict-ssl`）。不要写死靶场地址或代理。这是给 Reviewer / Verifier 换目标复测的**静态草案**；有靶场时由 Reviewer 收口，不要指望自己能动态调通。
 - **纯库洞**：不要交未使用的 `-u/--proxy`，不要把内联/mock harness 抄进 poc.py。仅当安装真实包后能 import 公开 API 并打出冲击时才写最小 poc.py；无 HTTP 面且无安装面时省略 poc_code，http_request 写 API 调用配方。局部验证证据由 Reviewer 写入 harness.py。
-- 漏洞参数也走 CLI：RCE / 命令注入必须支持 `-c/--cmd` 执行自定义命令，**有回显则把命令输出打印到 stdout**；文件读 `-f/--file`、SSRF `--ssrf-url`（有回显打印目标正文，仅差别则打印通/不通对照）、需登录 `--cookie`/`--token` 等同理，并给安全默认值，使只传 `-u` 也能打出代表证据。脚本自己打印的标签、状态、告警、判定、`--help` 以及注释 / docstring 一律英语；目标回显原文不要翻译。
+- 漏洞参数也走 CLI：RCE / 命令注入必须支持 `-c/--cmd` 执行自定义命令，**有回显则把命令输出打印到 stdout**；文件读 `-f/--file`、SSRF `--ssrf-url`（有回显打印目标正文，仅差别则打印通/不通对照）、需登录 `--cookie`/`--token` 等同理，并给安全默认值，使只传 `-u` 也能打出代表证据。脚本输出（标签、状态、告警、判定）须中英双语：默认英语，必须提供 `--zh` 切中文；`--help` 以及注释 / docstring 仍用英语；目标回显原文不要翻译。
 - http_request 为完整 HTTP 请求包；组件库无 HTTP 面时写 API 调用配方。
 - PoC 必须按静态分析证明默认部署上的有害冲击；仅 404、模板不存在、或与未带 payload 的正常响应相同，不算漏洞证据。同根因多方法只需一份代表 PoC。
 - 中文 `report_md`、英文 `advisory_md`、CVE JSON 的章节、语言与占位符见系统附加的**报告格式专章**（对齐 `templates/vuln-report.md`、`templates/vuln-advisory.md`、`templates/cve.json`）。`title` 与中文报告一级标题须为中文。提交后用 `ReadCveRecord` / `SetCveRecordField` 填写 CVE JSON：`descriptions[0].value` 须为英文详述（产品/版本、根因、入口→sink 链路、漏洞代码完整路径与源码原文、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），不要一句话摘要。`advisory_md` 的 `### Vulnerable code` 同样须贴路径与源码。`## 互联网资产证明` 复用 `docs/app-fingerprints.json`（不要每条漏洞重新识别；测绘语句不允许出现「或」）。「基础环境搭建」只引用 `docs/lab.md`。

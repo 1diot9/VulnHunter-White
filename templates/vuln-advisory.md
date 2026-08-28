@@ -44,7 +44,7 @@ Requires a running instance you are authorized to test. Do not include real secr
 
 For header or body values that are long (roughly 80+ characters, e.g. Base64 blobs, serialized gadgets, JWTs), replace the long portion with a short descriptive placeholder such as `<BASE64_PAYLOAD>`, `<JWT_TOKEN>`, or `<SERIALIZED_GADGET>` while keeping the surrounding structure and short attack primitives intact.
 
-Optionally reference the reproducible CLI script in the same directory (`python poc.py -u http://TARGET:PORT`; add `--proxy` when needed). For a library issue with no HTTP surface, describe the public API call instead; do not copy `harness.py`.
+Optionally reference the reproducible CLI script in the same directory (`python poc.py -u http://TARGET:PORT`; add `--proxy` when needed; add `--zh` for Chinese labels). For a library issue with no HTTP surface, describe the public API call instead; do not copy `harness.py`.
 
 ```http
 
