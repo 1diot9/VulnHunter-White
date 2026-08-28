@@ -556,6 +556,21 @@ def test_llm_gate_compacts_json_error_and_keeps_reason_during_cooldown():
     still = gate.snapshot(["ep-3"])
     assert still["ep-3"]["last_error"] == "insufficient quota for gpt-4"
     assert still["ep-3"]["error_kind"] == "quota"
+    assert 290 <= float(still["ep-3"]["cooldown_sec"]) <= 300
+
+
+def test_llm_gate_quota_cooldown_is_five_minutes_not_half_hour():
+    gate = LlmRequestGate()
+    gate.note_error("ep-quota", "quota", message="insufficient_quota")
+    gate.note_error("ep-429", "rate_limit", retry_after=12, message="429")
+    gate.note_error("ep-5xx", "transient", message="HTTP 503")
+    gate.note_error("ep-401", "auth", message="401")
+    snap = gate.snapshot(["ep-quota", "ep-429", "ep-5xx", "ep-401"])
+    assert 290 <= float(snap["ep-quota"]["cooldown_sec"]) <= 300
+    assert 10 <= float(snap["ep-429"]["cooldown_sec"]) <= 12
+    assert 8 <= float(snap["ep-5xx"]["cooldown_sec"]) <= 10
+    assert float(snap["ep-401"]["cooldown_sec"]) < 0
+    assert snap["ep-401"]["disabled"] is True
 
 
 def test_llm_gate_acquire_does_not_serialize():

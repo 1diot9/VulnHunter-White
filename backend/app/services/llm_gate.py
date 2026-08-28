@@ -17,7 +17,7 @@ ErrorKind = Literal["rate_limit", "quota", "auth", "transient"]
 # Cooldown policy (seconds)
 _RATE_LIMIT_BASE = 30.0
 _RATE_LIMIT_CAP = 90.0
-_QUOTA_COOLDOWN = 30 * 60.0
+_QUOTA_COOLDOWN = 5 * 60.0
 _TRANSIENT_COOLDOWN = 10.0
 
 
