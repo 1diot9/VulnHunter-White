@@ -418,6 +418,7 @@ export type LlmEndpointUsage = {
   limit: number
   cooldown_sec: number
   last_error: string
+  error_kind?: string
   disabled: boolean
 }
 

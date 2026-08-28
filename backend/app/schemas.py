@@ -73,6 +73,7 @@ class LlmEndpointUsageOut(BaseModel):
     limit: int = 6
     cooldown_sec: float = 0.0
     last_error: str = ""
+    error_kind: str = ""
     disabled: bool = False
 
 

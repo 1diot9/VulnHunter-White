@@ -181,6 +181,9 @@ def test_rebind_moves_off_cooled_endpoint():
     snap = lim.detailed_snapshot()
     by_id = {ep["id"]: ep for ep in snap["endpoints"]}
     assert by_id["ep-a"]["used"] == 0
+    assert by_id["ep-a"]["cooldown_sec"] > 0
+    assert by_id["ep-a"]["last_error"] == "429"
+    assert by_id["ep-a"]["error_kind"] == "rate_limit"
     assert by_id["ep-b"]["used"] == 1
     lim.release(rebound)
 

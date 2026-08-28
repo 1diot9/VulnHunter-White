@@ -284,6 +284,7 @@ class LlmThreadLimiter:
                         "limit": b.cap,
                         "cooldown_sec": 0.0 if cd < 0 else cd,
                         "last_error": str(h.get("last_error") or ""),
+                        "error_kind": str(h.get("error_kind") or ""),
                         "disabled": bool(h.get("disabled")),
                     }
                 )

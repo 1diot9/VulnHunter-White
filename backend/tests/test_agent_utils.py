@@ -528,6 +528,34 @@ def test_llm_gate_rate_limit_sets_cooldown(monkeypatch):
     assert gate.cooldown_remaining("ep-y") == 0
     assert not gate.is_available("ep-x")
     assert gate.is_available("ep-y")
+    snap = gate.snapshot(["ep-x", "ep-y"])
+    assert snap["ep-x"]["last_error"] == "rate_limit"
+    assert snap["ep-x"]["error_kind"] == "rate_limit"
+    assert snap["ep-y"]["last_error"] == ""
+
+
+def test_llm_gate_compacts_json_error_and_keeps_reason_during_cooldown():
+    from app.services.llm_gate import compact_llm_error
+
+    raw = '{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}'
+    assert compact_llm_error(raw, "quota") == "You exceeded your current quota"
+    prefixed = 'HTTP 429: {"error":{"message":"Rate limit reached"}}'
+    assert compact_llm_error(prefixed, "rate_limit") == "Rate limit reached"
+
+    gate = LlmRequestGate()
+    gate.note_error(
+        "ep-3",
+        "quota",
+        message='{"error":{"message":"insufficient quota for gpt-4","type":"insufficient_quota"}}',
+    )
+    snap = gate.snapshot(["ep-3"])
+    assert snap["ep-3"]["error_kind"] == "quota"
+    assert snap["ep-3"]["last_error"] == "insufficient quota for gpt-4"
+    assert snap["ep-3"]["cooldown_sec"] > 0
+    gate.note_success("ep-3")
+    still = gate.snapshot(["ep-3"])
+    assert still["ep-3"]["last_error"] == "insufficient quota for gpt-4"
+    assert still["ep-3"]["error_kind"] == "quota"
 
 
 def test_llm_gate_acquire_does_not_serialize():

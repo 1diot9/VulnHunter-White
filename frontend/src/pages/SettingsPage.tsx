@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, setAccessToken, type Settings } from '../api'
+import { api, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
+import { endpointCooldownReason, formatCooldownSec } from '../components/LlmThreadUsageBar'
+import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -183,6 +185,24 @@ export default function SettingsPage() {
   const [tokenMsg, setTokenMsg] = useState('')
   const [tokenOk, setTokenOk] = useState<boolean | null>(null)
   const [tokenSaving, setTokenSaving] = useState(false)
+  const [epUsage, setEpUsage] = useState<LlmEndpointUsage[]>([])
+
+  useEffect(
+    () =>
+      startVisibilityPoll(() => {
+        return api
+          .llmThreadUsage()
+          .then((u) => setEpUsage(u.endpoints || []))
+          .catch(() => {})
+      }, 2000),
+    [],
+  )
+
+  const usageById = useMemo(() => {
+    const m = new Map<string, LlmEndpointUsage>()
+    for (const ep of epUsage) m.set(ep.id, ep)
+    return m
+  }, [epUsage])
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -673,6 +693,7 @@ export default function SettingsPage() {
                     </Button>
                   ) : null}
                 </div>
+                <EndpointHealthLine health={usageById.get(ep.id)} />
                 <Input
                   value={ep.base_url}
                   onChange={(e) => updateEndpoint(ep.id, { base_url: e.target.value })}
@@ -1033,6 +1054,21 @@ export default function SettingsPage() {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+function EndpointHealthLine({ health }: { health: LlmEndpointUsage | undefined }) {
+  if (!health) return null
+  const cooling = health.disabled || health.cooldown_sec > 0
+  const reason = endpointCooldownReason(health)
+  if (!cooling && !reason) return null
+  return (
+    <div className="text-xs break-all">
+      <span className={health.disabled ? 'text-red-300' : 'text-amber-200'}>
+        {health.disabled ? '已禁用' : health.cooldown_sec > 0 ? `冷却 ${formatCooldownSec(health.cooldown_sec)}` : null}
+      </span>
+      {reason ? <span className="mt-0.5 block whitespace-pre-wrap text-slate-400">{reason}</span> : null}
     </div>
   )
 }

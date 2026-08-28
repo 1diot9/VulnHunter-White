@@ -6,6 +6,7 @@ health/cooldown state shared with the pool scheduler.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from contextlib import contextmanager
@@ -20,13 +21,52 @@ _QUOTA_COOLDOWN = 30 * 60.0
 _TRANSIENT_COOLDOWN = 10.0
 
 
+def compact_llm_error(message: str, kind: str = "") -> str:
+    """Prefer provider `error.message` over a raw JSON body."""
+    text = (message or "").strip()
+    extracted = _extract_provider_message(text) if text else ""
+    return (extracted or text or kind)[:240]
+
+
+def _extract_provider_message(text: str) -> str:
+    brace = text.find("{")
+    if brace < 0:
+        return ""
+    try:
+        obj = json.loads(text[brace:])
+    except json.JSONDecodeError:
+        return ""
+    return _walk_error_message(obj)
+
+
+def _walk_error_message(obj: object) -> str:
+    if isinstance(obj, str):
+        return obj.strip()
+    if not isinstance(obj, dict):
+        return ""
+    err = obj.get("error")
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    if isinstance(err, dict):
+        for key in ("message", "msg"):
+            val = err.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    for key in ("message", "msg", "detail"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 class EndpointHealth:
-    __slots__ = ("cooldown_until", "disabled", "last_error", "rate_limit_strikes")
+    __slots__ = ("cooldown_until", "disabled", "last_error", "error_kind", "rate_limit_strikes")
 
     def __init__(self) -> None:
         self.cooldown_until = 0.0
         self.disabled = False
         self.last_error = ""
+        self.error_kind = ""
         self.rate_limit_strikes = 0
 
 
@@ -65,7 +105,8 @@ class LlmRequestGate:
         now = time.time()
         with self._lock:
             h = self._health(eid)
-            h.last_error = (message or kind)[:240]
+            h.error_kind = kind
+            h.last_error = compact_llm_error(message, kind)
             if kind == "auth":
                 h.disabled = True
                 h.cooldown_until = float("inf")
@@ -107,13 +148,15 @@ class LlmRequestGate:
         eid = (endpoint_id or "").strip()
         if not eid:
             return
+        now = time.time()
         with self._lock:
             h = self._by_id.get(eid)
             if h is None:
                 return
             h.rate_limit_strikes = 0
-            if not h.disabled:
+            if not h.disabled and now >= h.cooldown_until:
                 h.last_error = ""
+                h.error_kind = ""
 
     def is_available(self, endpoint_id: str, *, now: float | None = None) -> bool:
         eid = (endpoint_id or "").strip() or "_default"
@@ -167,6 +210,7 @@ class LlmRequestGate:
                     "cooldown_sec": cd if cd != float("inf") else -1.0,
                     "disabled": h.disabled,
                     "last_error": h.last_error,
+                    "error_kind": h.error_kind,
                 }
             return out
 
