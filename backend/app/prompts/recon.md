@@ -20,6 +20,7 @@
 ## 规则
 
 - 源码只读；产物写到 docs/workspace。Read 大文件若 truncated=true，用 next_offset 继续读，不要增大 max_bytes。
+- 若存在无源码的 `.class` / `.jar` / `.war`：先 `ListBytecode`，再对重要条目 `DecompileJava`（可整包，超大小上限则改 class_name/package）。queued 时不要空转轮询，继续写地图；完成后系统会注入通知。把 `output_root` 记入 `docs/code-map.md`。Grep 反编译树须显式 `root=workspace/decompiled/...`。第三方 jar 默认拒绝，确认需要才 `force=true`。
 - 不要检索或撰写历史漏洞，不要 `WriteOldVuln`。
 - 不要扫全库标权重；不要追加源码扩展名。
 - 用中文写文档。

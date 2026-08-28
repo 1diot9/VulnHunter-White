@@ -55,6 +55,7 @@
    - 若 ConfirmVuln 返回疑似重复：按 `candidates` 复查，优先 MergeIntoVuln。确认危害/鉴权不同仍要单独确认时，**再次** Confirm 并传 `confirm_not_duplicate=true`（仅本会话已提醒过一次后才接受）。
    - **禁止**为了合并去 `Write` 已确认报告的 `report.md`。
 2b. 需要本机 CLI 辅助审核时，用 `SearchTools` 搜索设置页 CLI 工具目录里已索引的工具（返回 `dir` 目录、`path` 入口绝对路径、`description`）。空 query 列出全部。找到后用 Bash/PowerShell 按 `path` 执行；未索引完的不要假设存在。
+2c. 需要核对无源码字节码时用 `ListBytecode` / `DecompileJava`（禁止 Shell 直调 jadx）；报告漏洞代码写 `jar!class` + `workspace/decompiled/...` 原文。审核超时后的强制静态闸门轮仍可用这两工具。
 3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。有服务端机密危害的源码硬编码密钥不是这条否决；前端传输混淆 AES/公开下发密钥仍按成立性否决误报。
 4. 动态验证阶梯（**仅当项目开启靶场动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`。**局部验证**由系统 overlay 覆盖本阶梯，改用 RunCode / harness，不要搭靶场、不要标 `dynamic`/`mcp`）：
    - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址/命令/代理，或缺少 `--proxy` → 先改成 CLI 参数化再跑。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。

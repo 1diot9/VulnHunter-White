@@ -78,7 +78,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 - 危害或攻击面明显不同（例如同一过滤器既能 SSRF 又能读文件）才允许另交；不要为「多一个同构方法」另交。
 
 ## 流程
-1. 按角色 Read/Grep 分析注入焦点（入口沿调用链，Service/Util 回推 caller，控面看匹配与绕过）。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。
+1. 按角色 Read/Grep 分析注入焦点（入口沿调用链，Service/Util 回推 caller，控面看匹配与绕过）。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。需要阅读无源码的 class/jar 时用 `ListBytecode` / `DecompileJava`（可整包，受大小上限；queued 勿空转轮询）；Grep 产物须显式 `root=workspace/decompiled/...`。漏洞代码同时写 `jar!class` 与反编译路径。
 2. 仅当满足上方提交闸门时 SubmitVuln（必填：title（中文）, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, expected_evidence；有 HTTP 面时必填 poc_code；并填 root_cause_key、report_md、advisory_md）。不要把「发现不安全 API」当成发现漏洞。
 3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。

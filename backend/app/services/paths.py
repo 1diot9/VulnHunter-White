@@ -85,6 +85,7 @@ def ensure_project_dirs(project_id: int) -> Path:
         "workspace/last-conversation",
         "workspace/steer",
         "workspace/rounds",
+        "workspace/decompiled",
         "docs",
         "docs/old-vulns",
         "docs/summaries",

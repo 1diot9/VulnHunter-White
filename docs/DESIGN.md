@@ -128,8 +128,10 @@ VulnHunter-White 的特点：
 | RunCode | 局部验证沙箱执行 `harness.py`（仅 harness 审核轮注入） |
 | SearchTools | 检索 `tools/cli` 已索引的用户 CLI（审核轮） |
 | FinishIndex | CLI 静默索引轮写入口与描述后结束 |
+| ListBytecode | 枚举 `src/` 下 `.class` / `.jar` / `.war`（不受普通 Glob 后缀忽略限制；默认仍跳过 `target` 等） |
+| DecompileJava | 内置 jadx 反编译：索引命中立即返回，否则异步入队；详见 [java-decompile.md](./java-decompile.md) |
 
-运行时 Bash 与 PowerShell **只注入本机原生的那一个**。`Read` / `Grep` / `Glob` / `SearchOldVuln` / `SearchTools` / `WebSearch` 允许同一助手回合并行。
+运行时 Bash 与 PowerShell **只注入本机原生的那一个**。`Read` / `Grep` / `Glob` / `SearchOldVuln` / `SearchTools` / `WebSearch` / `ListBytecode` / `DecompileJava` 允许同一助手回合并行（后两者为立刻返回的异步提交/查询，不阻塞本轮）。
 
 ### 4.2 编排策略与状态管理
 
@@ -178,6 +180,8 @@ VulnHunter-White 的特点：
 ### 4.4 侦察阶段
 
 #### 4.4.1 代码地图与鉴权（recon）
+
+Java 字节码反编译（设计已拍板、实现见后续迭代）：Recon 用 `ListBytecode` 发现、`DecompileJava` 预解重要 jar/class（系统可启发式自动入队）；挖掘与审核可补录，**允许整包 jar**，默认输入 ≤80MiB。任务挂项目级队列，不阻塞地图门闩；产物在 `workspace/decompiled/`，不进 `FileWeight`。完整决策见 [java-decompile.md](./java-decompile.md)。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -338,6 +342,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 - 靶场可用时 **ConfirmVuln 会系统再执行落盘 `poc.py`**（`python poc.py -u <target_url>`），退出码非 0 则拒绝确认。
 - PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 **Java / Node / Python debug MCP**。
 - `SearchTools` 检索 `tools/cli` 下用户放置的 CLI（如 JNDI、恶意 JDBC 服务），按绝对路径 Shell 执行。后台静默索引轮（`cli_indexer`）用 `FinishIndex` 写入入口与描述；内容变了才重索引。
+- 需要看无源码的 class/jar 时用 `DecompileJava`（禁止 Shell 直调 jadx/cfr）；强制仅静态轮仍可用。路径约定见 [java-decompile.md](./java-decompile.md)。
 
 #### 4.6.3 局部验证（harness）
 

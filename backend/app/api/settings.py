@@ -15,6 +15,8 @@ from ..schemas import (
     FofaTestOut,
     GithubProbeIn,
     GithubTestOut,
+    JadxProbeIn,
+    JadxTestOut,
     LiveLogPurgeIn,
     LiveLogPurgeOut,
     LlmEndpointUsageOut,
@@ -128,6 +130,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.chat_proxy = (body.chat_proxy or "").strip()
         if body.cli_tools_dir is not None:
             row.cli_tools_dir = (body.cli_tools_dir or "").strip() or None
+        if body.jadx_path is not None:
+            row.jadx_path = (body.jadx_path or "").strip() or None
         db.commit()
         db.refresh(row)
         out = settings_out_from_row(row)
@@ -245,6 +249,14 @@ def probe_fofa_test(body: FofaProbeIn) -> FofaTestOut:
 @router.post("/github/test", response_model=GithubTestOut)
 def probe_github_test(body: GithubProbeIn) -> GithubTestOut:
     return test_github_connectivity(body)
+
+
+@router.post("/jadx/test", response_model=JadxTestOut)
+def probe_jadx_test(body: JadxProbeIn) -> JadxTestOut:
+    from ..services.decompile_java import probe_jadx
+
+    result = probe_jadx(body.jadx_path)
+    return JadxTestOut(**result)
 
 
 @router.post("/logs/purge", response_model=LiveLogPurgeOut)

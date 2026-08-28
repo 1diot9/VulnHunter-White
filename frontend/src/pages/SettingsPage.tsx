@@ -159,6 +159,10 @@ export default function SettingsPage() {
   const [httpProxy, setHttpProxy] = useState('')
   const [chatProxy, setChatProxy] = useState('')
   const [cliToolsDir, setCliToolsDir] = useState('tools/cli')
+  const [jadxPath, setJadxPath] = useState('')
+  const [jadxTesting, setJadxTesting] = useState(false)
+  const [jadxOk, setJadxOk] = useState<boolean | null>(null)
+  const [jadxMsg, setJadxMsg] = useState('')
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -240,6 +244,7 @@ export default function SettingsPage() {
       setHttpProxy(x.http_proxy || '')
       setChatProxy(x.chat_proxy || '')
       setCliToolsDir(x.cli_tools_dir || 'tools/cli')
+      setJadxPath(x.jadx_path || '')
     })
   }, [])
 
@@ -423,6 +428,32 @@ export default function SettingsPage() {
     }
   }
 
+  async function testJadx() {
+    setJadxTesting(true)
+    setJadxOk(null)
+    setJadxMsg('')
+    try {
+      const body: { jadx_path?: string } = {}
+      if (jadxPath.trim()) body.jadx_path = jadxPath.trim()
+      const out = await api.testJadx(body)
+      if (!out.ok) {
+        setJadxOk(false)
+        setJadxMsg(out.error || '检测失败')
+        return
+      }
+      const parts = [out.version || '可用']
+      if (out.path) parts.push(out.path)
+      if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
+      setJadxOk(true)
+      setJadxMsg(parts.join(' · '))
+    } catch (e) {
+      setJadxOk(false)
+      setJadxMsg(String(e))
+    } finally {
+      setJadxTesting(false)
+    }
+  }
+
   async function save() {
     setMsg('')
     try {
@@ -435,6 +466,7 @@ export default function SettingsPage() {
         http_proxy: httpProxy.trim(),
         chat_proxy: chatProxy.trim(),
         cli_tools_dir: cliToolsDir.trim() || 'tools/cli',
+        jadx_path: jadxPath.trim(),
         llm_endpoints: endpoints.map((ep) => ({
           id: ep.id,
           base_url: ep.base_url.trim(),
@@ -927,6 +959,32 @@ export default function SettingsPage() {
           />
           <div className="text-xs text-slate-500">
             Reviewer 用 SearchTools 搜索这里已索引的 CLI。每个子目录是一个工具。相对路径相对仓库根目录。后台轮询扫描，静默 Agent（最多 30 轮）生成描述；日志写在该子目录的 agent.log.jsonl。
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>jadx 路径</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="min-w-[16rem] flex-1"
+              value={jadxPath}
+              onChange={(e) => setJadxPath(e.target.value)}
+              placeholder="留空则使用 PATH 上的 jadx / jadx.bat"
+            />
+            <Button type="button" variant="outline" disabled={jadxTesting} onClick={testJadx}>
+              {jadxTesting ? '检测中…' : '检测'}
+            </Button>
+          </div>
+          {jadxMsg ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {jadxOk != null ? (
+                <Badge variant={jadxOk ? 'success' : 'destructive'}>{jadxOk ? '成功' : '失败'}</Badge>
+              ) : null}
+              <span className={jadxOk === false ? 'text-red-300' : 'text-slate-300'}>{jadxMsg}</span>
+            </div>
+          ) : null}
+          <div className="text-xs text-slate-500">
+            Recon / Worker / Reviewer 的 DecompileJava 调用此二进制。检测跑 jadx --version，使用当前表单路径（空则已保存配置或 PATH），不会自动保存。也可设环境变量
+            VULNHUNTER_JADX_PATH。
           </div>
         </div>
         <div className="flex items-center gap-3">

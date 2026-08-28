@@ -1521,6 +1521,8 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "WebSearch" not in recon_names
     assert "MarkSource" in recon_names
     assert "FinishReconMap" in recon_names
+    assert "ListBytecode" in recon_names
+    assert "DecompileJava" in recon_names
     assert "AddSourceExt" not in recon_names
     assert "SubmitVuln" not in recon_names
     assert "MarkWeight" not in recon_names
@@ -1575,6 +1577,8 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     reviewer_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer")}
     assert "MergeIntoVuln" in reviewer_names
     assert "SearchTools" in reviewer_names
+    assert "ListBytecode" in reviewer_names
+    assert "DecompileJava" in reviewer_names
     assert "ConfirmVuln" in reviewer_names
     assert "MarkFalsePositive" in reviewer_names
     assert "ReturnToWorker" in reviewer_names

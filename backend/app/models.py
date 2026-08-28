@@ -47,6 +47,7 @@ class AppSettings(Base):
     http_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     chat_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     cli_tools_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    jadx_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # SHA-256 hex of the global access token. None = fall back to VULNHUNTER_ACCESS_TOKEN.
     access_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -451,6 +452,7 @@ def _ensure_columns() -> None:
             "http_proxy": "VARCHAR(1024)",
             "chat_proxy": "VARCHAR(1024)",
             "cli_tools_dir": "VARCHAR(1024)",
+            "jadx_path": "VARCHAR(1024)",
             "access_token_hash": "TEXT",
         },
         "file_weights": {

@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     cli_tools_poll_sec: int = 15
     timeout_cli_index: int = 900
 
+    # Java decompilation (jadx)
+    jadx_path: str = ""
+    decompile_max_jar_bytes: int = 80 * 1024 * 1024
+    decompile_max_output_bytes: int = 500 * 1024 * 1024
+    decompile_timeout_sec: int = 1800
+    decompile_concurrency: int = 2
+
     # Import bundled MemoBoard showcase (data/projects/11 + showcase/db-seed.json) on startup.
     # Set VULNHUNTER_DEMO_SEED=0 to disable.
     demo_seed: bool = True

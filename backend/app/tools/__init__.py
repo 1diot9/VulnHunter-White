@@ -20,7 +20,9 @@ from ..services.live_log import live_log
 ToolHandler = Callable[["ToolContext", dict[str, Any]], dict[str, Any]]
 
 # Tools that may run in parallel within one assistant turn
-PARALLEL_SAFE = frozenset({"Read", "Grep", "Glob", "SearchOldVuln", "SearchTools", "WebSearch"})
+PARALLEL_SAFE = frozenset(
+    {"Read", "Grep", "Glob", "SearchOldVuln", "SearchTools", "WebSearch", "ListBytecode", "DecompileJava"}
+)
 
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 # Hidden and rejected when a pending vuln has hit consecutive reviewer timeouts.
@@ -69,6 +71,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "TodoWrite",
             "MarkSource",
             "FinishReconMap",
+            "ListBytecode",
+            "DecompileJava",
         }
     ),
     "recon_source_ext": frozenset(
@@ -123,6 +127,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishFile",
             "FinishRound",
             "FinishFix",
+            "ListBytecode",
+            "DecompileJava",
         }
     ),
     "fast_worker": frozenset(
@@ -173,6 +179,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "RunCode",
             "ReadCveRecord",
             "SetCveRecordField",
+            "ListBytecode",
+            "DecompileJava",
         }
     ),
     "reviewer_lab": frozenset(
@@ -197,6 +205,8 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "PowerShell",
             "TodoWrite",
             "SearchOldVuln",
+            "ListBytecode",
+            "DecompileJava",
             "FinishFix",
             "SubmitVuln",
             "ReadCveRecord",
@@ -562,3 +572,4 @@ def register_all_tools() -> None:
     from . import phase_attack_chain  # noqa: F401
     from . import run_code  # noqa: F401
     from . import phase_cve_record  # noqa: F401
+    from . import phase_decompile  # noqa: F401

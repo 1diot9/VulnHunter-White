@@ -297,6 +297,12 @@ def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     # git clone 要求目标不存在或为空；Windows 上残留 .git 只读文件常导致 rmtree 不干净
     force_rmtree(dest)
+    try:
+        from .decompile_java import clear_decompiled
+
+        clear_decompiled(project_id)
+    except Exception:  # noqa: BLE001
+        pass
     clone_url = url.strip()
     if pat and "github.com" in clone_url:
         # https://TOKEN@github.com/owner/repo.git
@@ -334,6 +340,12 @@ def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
 def extract_zip(project_id: int, zip_path: Path) -> Path:
     dest = src_dir(project_id)
     force_rmtree(dest)
+    try:
+        from .decompile_java import clear_decompiled
+
+        clear_decompiled(project_id)
+    except Exception:  # noqa: BLE001
+        pass
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(windows_long_path(dest))

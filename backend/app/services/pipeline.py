@@ -327,6 +327,12 @@ def _pause_event(project_id: int) -> threading.Event:
 
 def request_cancel(project_id: int) -> None:
     _cancel_event(project_id).set()
+    try:
+        from .decompile_java import cancel_project_jobs
+
+        cancel_project_jobs(project_id)
+    except Exception:  # noqa: BLE001
+        pass
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if proj and proj.status not in ("completed",):
@@ -3083,6 +3089,19 @@ def _finish_resumable_phase(project_id: int, phase: str) -> None:
 
 
 def _run_recon_map(project_id: int, cancel: threading.Event) -> bool:
+    try:
+        from .decompile_java import enqueue_heuristic_candidates
+
+        queued = enqueue_heuristic_candidates(project_id)
+        if queued:
+            live_log.system(
+                project_id,
+                f"已启发式入队 {len(queued)} 个 Java 反编译任务",
+                phase="recon",
+                role="recon",
+            )
+    except Exception as e:  # noqa: BLE001
+        live_log.system(project_id, f"反编译启发式入队跳过: {e}", phase="recon", role="recon")
     return _run_recon_gated_session(
         project_id,
         cancel,

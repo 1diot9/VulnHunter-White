@@ -408,6 +408,7 @@ export type Settings = {
   http_proxy: string
   chat_proxy: string
   cli_tools_dir: string
+  jadx_path: string
   access_token_set: boolean
 }
 
@@ -547,6 +548,18 @@ export type GithubTest = {
   login: string
   rate_limit: number | null
   rate_remaining: number | null
+  error: string | null
+}
+
+export type JadxProbeBody = {
+  jadx_path?: string | null
+}
+
+export type JadxTest = {
+  ok: boolean
+  path: string
+  version: string
+  latency_ms: number | null
   error: string | null
 }
 
@@ -1076,6 +1089,12 @@ export const api = {
     }),
   testGithub: (body: GithubProbeBody) =>
     request<GithubTest>('/api/settings/github/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  testJadx: (body: JadxProbeBody) =>
+    request<JadxTest>('/api/settings/jadx/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

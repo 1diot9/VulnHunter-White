@@ -545,6 +545,7 @@ class AgentLoop:
 
             self._maybe_inject_todolist(messages)
             self._maybe_inject_steer(messages)
+            self._maybe_inject_decompile_notices(messages)
 
             try:
                 resp, usage, retry_after = self._chat(messages, tools, remaining)
@@ -750,6 +751,51 @@ class AgentLoop:
                 tool_name = (loop_reason.split(":")[-1] or "").strip() or (
                     parsed_calls[0]["name"] if parsed_calls else "unknown"
                 )
+                # DecompileJava pending polls: soft redirect, do not burn abort budget
+                pending_decompile = False
+                if tool_name == "DecompileJava" and parsed_calls:
+                    try:
+                        from ..services.decompile_java import is_pending_decompile_query
+
+                        pending_decompile = all(
+                            c.get("name") == "DecompileJava"
+                            and is_pending_decompile_query(c.get("arguments") or {}, self.project_id)
+                            for c in parsed_calls
+                        )
+                    except Exception:  # noqa: BLE001
+                        pending_decompile = False
+                if pending_decompile:
+                    self.watchdog.identical_threshold_hits = max(
+                        0, int(self.watchdog.identical_threshold_hits) - 1
+                    )
+                    redirect = (
+                        "看门狗导向：DecompileJava 任务仍在排队/运行中，请不要反复同参查询。"
+                        "请立刻去做 Read/Grep/写文档或其它分析；完成后系统会注入通知，也可用 job_id 稍后再查。"
+                    )
+                    self._live.system(
+                        self.project_id,
+                        "看门狗导向：DecompileJava 仍在运行，已提示改做其它工作（不计入终止额度）",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                    for call in parsed_calls:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.get("id") or call["name"],
+                                "content": json.dumps(
+                                    {
+                                        "ok": True,
+                                        "status": "running",
+                                        "hint": redirect,
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        )
+                    messages.append({"role": "user", "content": redirect})
+                    self._persist(messages)
+                    continue
                 err_text = identical_tool_nudge(tool_name, self.watchdog.max_same_tool_calls)
                 hit = self.watchdog.identical_threshold_hits
                 max_hits = self.watchdog.max_identical_threshold_hits
@@ -1313,6 +1359,35 @@ class AgentLoop:
                 phase=self.phase,
                 role=self.role,
             )
+        self._persist(messages)
+
+    def _maybe_inject_decompile_notices(self, messages: list[dict[str, Any]]) -> None:
+        watched = self.state.get("decompile_jobs")
+        if not isinstance(watched, list) or not watched:
+            return
+        already = self.state.setdefault("decompile_notified", [])
+        if not isinstance(already, list):
+            already = []
+            self.state["decompile_notified"] = already
+        try:
+            from ..services.decompile_java import format_completion_inject, take_finished_notices
+
+            notices = take_finished_notices(self.project_id, watched, set(already))
+        except Exception:  # noqa: BLE001
+            return
+        if not notices:
+            return
+        for n in notices:
+            jid = n.get("job_id")
+            if jid and jid not in already:
+                already.append(jid)
+        messages.append({"role": "user", "content": format_completion_inject(notices)})
+        self._live.system(
+            self.project_id,
+            f"反编译完成通知 {len(notices)} 条",
+            phase=self.phase,
+            role=self.role,
+        )
         self._persist(messages)
 
     def _maybe_inject_todolist(self, messages: list[dict[str, Any]]) -> None:

@@ -63,6 +63,7 @@ class SettingsOut(BaseModel):
     http_proxy: str = ""
     chat_proxy: str = ""
     cli_tools_dir: str = "tools/cli"
+    jadx_path: str = ""
     access_token_set: bool = False
 
 
@@ -99,6 +100,7 @@ class SettingsUpdate(BaseModel):
     http_proxy: str | None = None
     chat_proxy: str | None = None
     cli_tools_dir: str | None = None
+    jadx_path: str | None = None
 
 
 class AccessTokenUpdate(BaseModel):
@@ -177,6 +179,20 @@ class GithubTestOut(BaseModel):
     login: str = ""
     rate_limit: int | None = None
     rate_remaining: int | None = None
+    error: str | None = None
+
+
+class JadxProbeIn(BaseModel):
+    """Unsaved form values for jadx detection."""
+
+    jadx_path: str | None = None  # None = use saved/env/PATH; "" same
+
+
+class JadxTestOut(BaseModel):
+    ok: bool
+    path: str = ""
+    version: str = ""
+    latency_ms: int | None = None
     error: str | None = None
 
 

@@ -311,6 +311,9 @@ def _write_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return call_fail("缺少 path")
     if content is None:
         return call_fail("缺少 content")
+    rel = str(path).replace("\\", "/").lstrip("/")
+    if rel == "workspace/decompiled/index.jsonl" or rel.startswith("workspace/decompiled/"):
+        return call_fail("禁止 Write 反编译索引或产物目录；请使用 DecompileJava")
     try:
         target = _writable(ctx, path)
         target.parent.mkdir(parents=True, exist_ok=True)
