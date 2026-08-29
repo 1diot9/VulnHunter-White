@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Combobox } from '@base-ui/react/combobox'
 import { CheckIcon, ChevronDownIcon, SearchIcon } from 'lucide-react'
-import type { Project } from '../api'
+import type { ProjectName } from '../api'
 import { cn } from '@/lib/utils'
 
 const ALL_PROJECTS: ProjectOption = { id: null, name: '全部项目' }
@@ -27,7 +27,7 @@ export default function ProjectFilterCombobox({
   onProjectIdChange,
   className,
 }: {
-  projects: Project[]
+  projects: ProjectName[]
   projectId: number | undefined
   onProjectIdChange: (id: number | undefined) => void
   className?: string

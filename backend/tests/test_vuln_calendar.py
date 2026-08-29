@@ -97,7 +97,7 @@ def test_vuln_calendar_buckets_by_shanghai_day(tmp_env, project):
         day_list = client.get(
             "/api/vulns",
             params={"created_date": "2026-08-25"},
-        ).json()
+        ).json()["items"]
         titles = {row["title"] for row in day_list}
         assert "confirmed-aug25" in titles
         assert "fp-aug25" in titles

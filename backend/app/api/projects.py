@@ -22,6 +22,7 @@ from ..dynamic_verify import (
     apply_verify_mode,
     is_lab_mode,
     project_verify_mode,
+    project_verify_mode_values,
     resolve_verify_mode,
     verify_mode_enabled,
 )
@@ -60,6 +61,7 @@ from ..schemas import (
     PhaseRunOut,
     ProjectCreate,
     ProjectListOut,
+    ProjectNameOut,
     ProjectOut,
     ProjectRunStatusCounts,
     ProjectUpdate,
@@ -76,8 +78,7 @@ from ..schemas import (
 from ..services.ingest import indexed_weight_exts
 from ..services.lab import (
     get_lab_status,
-    lab_setup_failed,
-    lab_setup_finished,
+    lab_setup_state,
     patch_lab_ports,
     start_lab,
     stop_lab,
@@ -92,6 +93,7 @@ from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.conversation import get_conversation_state, request_conversation
 from ..services.pipeline import (
     get_phase_states,
+    is_project_paused,
     note_audit_mode_changed,
     note_dynamic_verify_changed,
     note_mining_paths_changed,
@@ -268,10 +270,18 @@ def _project_out(
     p: Project,
     summary: dict[str, int] | None = None,
     weight_exts: list | None = None,
+    *,
+    include_phase_states: bool = True,
 ) -> ProjectOut:
     summary = summary or _project_summaries(db, [p.id]).get(p.id, _empty_project_summary())
     if weight_exts is None:
         weight_exts = indexed_weight_exts(db, [p.id]).get(p.id, [])
+    verify_mode = project_verify_mode(p)
+    lab_done, lab_failed = lab_setup_state(p.id)
+    if include_phase_states:
+        phase_fields = _phase_state_fields(p.id)
+    else:
+        phase_fields = {"phase_states": {}, "project_paused": is_project_paused(p.id)}
     return ProjectOut(
         id=p.id,
         name=p.name,
@@ -291,8 +301,8 @@ def _project_out(
         verifier_enabled=bool(p.verifier_enabled),
         attack_chain_enabled=bool(getattr(p, "attack_chain_enabled", False)),
         attack_chain_done=bool(getattr(p, "attack_chain_done", False)),
-        dynamic_verify_enabled=verify_mode_enabled(project_verify_mode(p)),
-        dynamic_verify_mode=project_verify_mode(p),
+        dynamic_verify_enabled=verify_mode_enabled(verify_mode),
+        dynamic_verify_mode=verify_mode,
         heuristic_enabled=bool(getattr(p, "heuristic_enabled", True)),
         heuristic_lite=bool(getattr(p, "heuristic_lite", False)),
         fast_enabled=bool(getattr(p, "fast_enabled", False)),
@@ -326,10 +336,10 @@ def _project_out(
         tokens_cached=summary["tokens_cached"],
         tokens_total=summary["tokens_total"],
         recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
-        lab_setup_done=lab_setup_finished(p.id),
-        lab_setup_retryable=is_lab_mode(project_verify_mode(p)) and lab_setup_failed(p.id),
+        lab_setup_done=lab_done,
+        lab_setup_retryable=is_lab_mode(verify_mode) and lab_failed,
         verifier_pending=int(summary.get("verifier_pending") or 0),
-        **_phase_state_fields(p.id),
+        **phase_fields,
     )
 
 
@@ -365,15 +375,15 @@ def _project_run_bucket(status: str, project_paused: bool) -> str:
     return "running"
 
 
-def _filter_project_rows(
-    rows: list[Project],
+def _filter_project_ids(
+    rows: list[tuple[int, str]],
     run_status: str,
-) -> tuple[list[Project], ProjectRunStatusCounts]:
+) -> tuple[list[int], ProjectRunStatusCounts]:
     counts = ProjectRunStatusCounts()
-    filtered: list[Project] = []
-    for p in rows:
-        paused = bool(get_phase_states(p.id).get("project_paused"))
-        bucket = _project_run_bucket(p.status, paused)
+    filtered: list[int] = []
+    for pid, status in rows:
+        paused = is_project_paused(pid)
+        bucket = _project_run_bucket(status, paused)
         counts.all += 1
         if bucket == "running":
             counts.running += 1
@@ -382,7 +392,7 @@ def _filter_project_rows(
         elif bucket == "completed":
             counts.completed += 1
         if run_status == "all" or run_status == bucket:
-            filtered.append(p)
+            filtered.append(pid)
     return filtered, counts
 
 
@@ -403,16 +413,33 @@ def list_projects(
     run_status: str = Query("all", pattern="^(all|running|paused|completed)$"),
 ) -> ProjectListOut:
     with SessionLocal() as db:
-        query = _apply_project_search(db.query(Project), q)
-        rows = query.order_by(Project.id.desc()).all()
-        filtered, status_counts = _filter_project_rows(rows, run_status)
-        total = len(filtered)
-        page_rows = filtered[offset : offset + limit]
-        ids = [p.id for p in page_rows]
-        summaries = _project_summaries(db, ids)
-        exts = indexed_weight_exts(db, ids)
+        query = _apply_project_search(db.query(Project.id, Project.status), q)
+        id_status_rows = query.order_by(Project.id.desc()).all()
+        filtered_ids, status_counts = _filter_project_ids(id_status_rows, run_status)
+        total = len(filtered_ids)
+        page_ids = filtered_ids[offset : offset + limit]
+        if not page_ids:
+            return ProjectListOut(
+                items=[],
+                total=total,
+                limit=limit,
+                offset=offset,
+                status_counts=status_counts,
+            )
+        loaded = db.query(Project).filter(Project.id.in_(page_ids)).all()
+        by_id = {p.id: p for p in loaded}
+        page_rows = [by_id[pid] for pid in page_ids if pid in by_id]
+        summaries = _project_summaries(db, page_ids)
+        exts = indexed_weight_exts(db, page_ids)
         items = [
-            _project_out(db, p, summaries.get(p.id), exts.get(p.id, [])) for p in page_rows
+            _project_out(
+                db,
+                p,
+                summaries.get(p.id),
+                exts.get(p.id, []),
+                include_phase_states=False,
+            )
+            for p in page_rows
         ]
         return ProjectListOut(
             items=items,
@@ -421,6 +448,33 @@ def list_projects(
             offset=offset,
             status_counts=status_counts,
         )
+
+
+@router.get("/names", response_model=list[ProjectNameOut])
+def list_project_names() -> list[ProjectNameOut]:
+    with SessionLocal() as db:
+        rows = (
+            db.query(
+                Project.id,
+                Project.name,
+                Project.dynamic_verify_mode,
+                Project.dynamic_verify_enabled,
+            )
+            .order_by(Project.id.desc())
+            .all()
+        )
+        items: list[ProjectNameOut] = []
+        for pid, name, mode, enabled in rows:
+            verify_mode = project_verify_mode_values(mode, enabled)
+            items.append(
+                ProjectNameOut(
+                    id=int(pid),
+                    name=name or "",
+                    dynamic_verify_mode=verify_mode,
+                    dynamic_verify_enabled=verify_mode_enabled(verify_mode),
+                )
+            )
+        return items
 
 
 @router.get("/{project_id}", response_model=ProjectOut)

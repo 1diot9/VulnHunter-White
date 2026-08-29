@@ -114,7 +114,7 @@ export default function VulnCalendar({
     let cancelled = false
     setDayLoading(true)
     api
-      .listVulns(projectId, undefined, undefined, undefined, undefined, undefined, selectedDate)
+      .listAllVulns({ projectId, createdDate: selectedDate })
       .then((rows) => {
         if (!cancelled) setDayVulns(rows.filter(isCalendarOutcome))
       })

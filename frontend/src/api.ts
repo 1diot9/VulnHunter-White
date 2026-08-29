@@ -115,6 +115,13 @@ export type ProjectListQuery = {
   run_status?: 'all' | 'running' | 'paused' | 'completed'
 }
 
+export type ProjectName = {
+  id: number
+  name: string
+  dynamic_verify_mode?: 'off' | 'lab' | 'harness'
+  dynamic_verify_enabled?: boolean
+}
+
 export type CustomAuditMode = {
   id: number
   name: string
@@ -206,6 +213,26 @@ export type Vuln = {
   verifier_consent?: boolean
   created_at: string
   updated_at: string
+}
+
+export type VulnListQuery = {
+  projectId?: number
+  status?: string
+  attackSurface?: string
+  submissionTier?: string
+  rootCauseKey?: string
+  trackingStatus?: string
+  createdDate?: string
+  q?: string
+  limit?: number
+  offset?: number
+}
+
+export type VulnList = {
+  items: Vuln[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export type VerifierConsentItem = {
@@ -706,21 +733,7 @@ export const api = {
     const s = params.toString()
     return request<ProjectList>(`/api/projects${s ? `?${s}` : ''}`)
   },
-  /** Page through GET /api/projects (max limit 100) until every project is loaded. */
-  listAllProjects: async () => {
-    const pageSize = 100
-    const items: Project[] = []
-    let offset = 0
-    let total = Number.POSITIVE_INFINITY
-    while (offset < total) {
-      const page = await request<ProjectList>(`/api/projects?limit=${pageSize}&offset=${offset}`)
-      items.push(...page.items)
-      total = page.total
-      if (!page.items.length) break
-      offset += page.items.length
-    }
-    return items
-  },
+  listProjectNames: () => request<ProjectName[]>('/api/projects/names'),
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
   listDiscoveries: (query?: { limit?: number; offset?: number }) => {
     const params = new URLSearchParams()
@@ -941,25 +954,34 @@ export const api = {
   },
   getPhaseReport: (id: number, path: string) =>
     request<PhaseReportDetail>(`/api/projects/${id}/reports/file?path=${encodeURIComponent(path)}`),
-  listVulns: (
-    projectId?: number,
-    status?: string,
-    attackSurface?: string,
-    submissionTier?: string,
-    rootCauseKey?: string,
-    trackingStatus?: string,
-    createdDate?: string,
-  ) => {
+  listVulns: (query: VulnListQuery = {}) => {
     const q = new URLSearchParams()
-    if (projectId != null) q.set('project_id', String(projectId))
-    if (status) q.set('status', status)
-    if (attackSurface) q.set('attack_surface', attackSurface)
-    if (submissionTier) q.set('submission_tier', submissionTier)
-    if (rootCauseKey) q.set('root_cause_key', rootCauseKey)
-    if (trackingStatus) q.set('tracking_status', trackingStatus)
-    if (createdDate) q.set('created_date', createdDate)
+    if (query.projectId != null) q.set('project_id', String(query.projectId))
+    if (query.status) q.set('status', query.status)
+    if (query.attackSurface) q.set('attack_surface', query.attackSurface)
+    if (query.submissionTier) q.set('submission_tier', query.submissionTier)
+    if (query.rootCauseKey) q.set('root_cause_key', query.rootCauseKey)
+    if (query.trackingStatus) q.set('tracking_status', query.trackingStatus)
+    if (query.createdDate) q.set('created_date', query.createdDate)
+    if (query.q) q.set('q', query.q)
+    if (query.limit != null) q.set('limit', String(query.limit))
+    if (query.offset != null) q.set('offset', String(query.offset))
     const s = q.toString()
-    return request<Vuln[]>(`/api/vulns${s ? `?${s}` : ''}`)
+    return request<VulnList>(`/api/vulns${s ? `?${s}` : ''}`)
+  },
+  listAllVulns: async (query: Omit<VulnListQuery, 'limit' | 'offset'> = {}) => {
+    const pageSize = 200
+    const items: Vuln[] = []
+    let offset = 0
+    let total = Number.POSITIVE_INFINITY
+    while (offset < total) {
+      const page = await api.listVulns({ ...query, limit: pageSize, offset })
+      items.push(...page.items)
+      total = page.total
+      if (!page.items.length) break
+      offset += page.items.length
+    }
+    return items
   },
   getVulnCalendar: (year: number, month: number, projectId?: number) => {
     const q = new URLSearchParams()

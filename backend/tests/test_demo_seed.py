@@ -39,7 +39,7 @@ def test_seed_demo_creates_project_and_vulns(tmp_env):
     with TestClient(app) as client:
         projects = client.get("/api/projects", params={"limit": 100}).json()
         assert any(p["id"] == DEMO_PROJECT_ID and p["name"] == DEMO_PROJECT_NAME for p in projects["items"])
-        vulns = client.get(f"/api/vulns?project_id={DEMO_PROJECT_ID}").json()
+        vulns = client.get(f"/api/vulns?project_id={DEMO_PROJECT_ID}").json()["items"]
         assert len(vulns) == 1
         assert vulns[0]["id"] == 183
         assert vulns[0]["status"] == "confirmed"

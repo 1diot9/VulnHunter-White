@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { SearchIcon, XIcon } from 'lucide-react'
-import { api, type Project, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
+import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, XIcon } from 'lucide-react'
+import { api, type ProjectName, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -13,6 +13,8 @@ import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
 import { saveBlob } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+
+const PAGE_SIZE = 50
 
 const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
   all: '全部分层',
@@ -38,10 +40,13 @@ export default function VulnsPage() {
   const [tierFilter, setTierFilter] = useState<VulnTierFilter>('all')
   const [trackingFilter, setTrackingFilter] = useState<'all' | VulnTrackingStatus>('all')
   const [projectId, setProjectId] = useState<number | undefined>()
-  const [projects, setProjects] = useState<Project[]>([])
+  const [projects, setProjects] = useState<ProjectName[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<number[]>([])
   const [marking, setMarking] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
 
   const projectNameById = useMemo(() => {
@@ -50,40 +55,54 @@ export default function VulnsPage() {
     return map
   }, [projects])
 
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const listQuery = useMemo(
+    () => ({
+      projectId,
+      status: filter === 'all' ? undefined : filter,
+      attackSurface: surfaceFilter === 'all' ? undefined : surfaceFilter,
+      submissionTier: tierFilter === 'all' ? undefined : tierFilter,
+      trackingStatus: trackingFilter === 'all' ? undefined : trackingFilter,
+      q: search,
+    }),
+    [projectId, filter, surfaceFilter, tierFilter, trackingFilter, search],
+  )
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput), 300)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
+
   const refresh = () =>
     api
-      .listVulns(
-        projectId,
-        filter === 'all' ? undefined : filter,
-        surfaceFilter === 'all' ? undefined : surfaceFilter,
-        undefined,
-        undefined,
-        trackingFilter === 'all' ? undefined : trackingFilter,
-      )
-      .then(setVulns)
+      .listVulns({
+        ...listQuery,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      })
+      .then((data) => {
+        setVulns(data.items)
+        setTotal(data.total)
+        const nextPageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
+        if (page >= nextPageCount) setPage(Math.max(0, nextPageCount - 1))
+      })
       .catch(() => {})
 
   useEffect(() => {
-    api.listAllProjects().then(setProjects).catch(() => {})
+    api.listProjectNames().then(setProjects).catch(() => {})
   }, [])
 
-  useEffect(() => startVisibilityPoll(refresh, 5000), [filter, projectId, surfaceFilter, trackingFilter])
+  useEffect(() => startVisibilityPoll(refresh, 5000), [listQuery, page])
 
   useEffect(() => {
+    setPage(0)
     setSelected([])
-  }, [filter, projectId, surfaceFilter, tierFilter, trackingFilter])
+  }, [listQuery])
 
   const searchedVulns = useMemo(
     () => vulns.filter((v) => vulnMatchesQuery(v, search, projectNameById)),
     [vulns, search, projectNameById],
-  )
-  const visibleVulns = useMemo(
-    () =>
-      filterVulnGroups(groupVulnsByRootCause(searchedVulns), tierFilter).flatMap((g) => [
-        g.primary,
-        ...g.others,
-      ]),
-    [searchedVulns, tierFilter],
   )
   const cveCandidateIds = useMemo(
     () => searchedVulns.filter((v) => v.submission_tier === 'cve_candidate').map((v) => v.id),
@@ -102,15 +121,26 @@ export default function VulnsPage() {
     saveBlob(await api.downloadVulns(ids), filename)
   }
 
+  async function matchingVulns() {
+    const all = await api.listAllVulns(listQuery)
+    const searched = all.filter((v) => vulnMatchesQuery(v, search, projectNameById))
+    return filterVulnGroups(groupVulnsByRootCause(searched), tierFilter).flatMap((g) => [
+      g.primary,
+      ...g.others,
+    ])
+  }
+
   async function download() {
-    const ids = selected.length ? selected : visibleVulns.map((v) => v.id)
+    const ids = selected.length ? selected : (await matchingVulns()).map((v) => v.id)
     await downloadIds(ids, 'vulns.zip')
   }
 
   async function downloadCveCandidates() {
     const ids = selected.length
       ? selected.filter((sid) => cveCandidateIds.includes(sid))
-      : cveCandidateIds
+      : (await matchingVulns())
+          .filter((v) => v.submission_tier === 'cve_candidate')
+          .map((v) => v.id)
     await downloadIds(ids, 'vulns-cve-candidates.zip')
   }
 
@@ -192,7 +222,7 @@ export default function VulnsPage() {
           >
             取消标记
           </Button>
-          <Button variant="outline" onClick={downloadCveCandidates} disabled={!cveCandidateIds.length && !selected.length}>
+          <Button variant="outline" onClick={downloadCveCandidates} disabled={!selected.length && total === 0}>
             仅下载有 CVE 价值
           </Button>
           <Button onClick={download}>批量下载</Button>
@@ -209,17 +239,17 @@ export default function VulnsPage() {
         <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           className="pr-8 pl-8"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
           placeholder="搜索标题、路径、类型、编号、项目…"
           aria-label="搜索漏洞"
         />
-        {search ? (
+        {searchInput ? (
           <button
             type="button"
             className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
             aria-label="清除搜索"
-            onClick={() => setSearch('')}
+            onClick={() => setSearchInput('')}
           >
             <XIcon className="size-4" />
           </button>
@@ -296,6 +326,36 @@ export default function VulnsPage() {
           projectNameById={projectNameById}
         />
       </Card>
+
+      {total > PAGE_SIZE ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <span>
+            第 {page + 1} / {pageCount} 页，共 {total} 条
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              aria-label="上一页"
+            >
+              <ChevronLeftIcon className="size-4" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page + 1 >= pageCount}
+              onClick={() => setPage((p) => p + 1)}
+              aria-label="下一页"
+            >
+              下一页
+              <ChevronRightIcon className="size-4" />
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <VulnDetailDialog
         vulnId={detailId}

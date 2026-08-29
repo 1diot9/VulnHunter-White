@@ -55,11 +55,17 @@ export default function HomePage() {
   const [page, setPage] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput), 300)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
 
   const applyListData = useCallback(
     (data: Awaited<ReturnType<typeof api.listProjects>>) => {
@@ -156,22 +162,22 @@ export default function HomePage() {
           <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pr-8 pl-8"
-            value={search}
+            value={searchInput}
             onChange={(e) => {
               setPage(0)
-              setSearch(e.target.value)
+              setSearchInput(e.target.value)
             }}
             placeholder="搜索项目名称、仓库、模式、模型、状态…"
             aria-label="搜索审计项目"
           />
-          {search ? (
+          {searchInput ? (
             <button
               type="button"
               className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
               aria-label="清除搜索"
               onClick={() => {
                 setPage(0)
-                setSearch('')
+                setSearchInput('')
               }}
             >
               <XIcon className="size-4" />
@@ -309,7 +315,7 @@ export default function HomePage() {
         {!loading && projects.length === 0 ? (
           <Card className="w-full">
             <CardContent className="flex flex-col items-start gap-3 py-8 text-sm text-muted-foreground">
-              {search.trim() || statusFilter !== 'all' ? (
+              {searchInput.trim() || statusFilter !== 'all' ? (
                 '无匹配项目'
               ) : (
                 <>

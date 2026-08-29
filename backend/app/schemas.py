@@ -443,6 +443,13 @@ class ProjectListOut(BaseModel):
     status_counts: ProjectRunStatusCounts = Field(default_factory=ProjectRunStatusCounts)
 
 
+class ProjectNameOut(BaseModel):
+    id: int
+    name: str
+    dynamic_verify_mode: str = "off"
+    dynamic_verify_enabled: bool = False
+
+
 class VulnOut(BaseModel):
     id: int
     project_id: int
@@ -483,6 +490,13 @@ class VulnOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class VulnListOut(BaseModel):
+    items: list[VulnOut] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
 
 
 class VulnDetail(VulnOut):

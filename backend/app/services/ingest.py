@@ -10,6 +10,8 @@ from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from sqlalchemy import case, func
+
 from ..models import FileWeight, Project, SessionLocal
 from .paths import (
     ensure_project_dirs,
@@ -190,14 +192,21 @@ def indexed_weight_exts(db, project_ids: list[int]) -> dict[int, list[dict[str, 
     out: dict[int, list[dict[str, Any]]] = {pid: [] for pid in ids}
     if not ids:
         return out
+    known_exts = tuple(sorted(SOURCE_EXTS | EXTRA_SOURCE_EXTS, key=lambda e: (-len(e), e)))
+    ext_expr = case(
+        *((FileWeight.path.ilike(f"%{ext}"), ext) for ext in known_exts),
+        else_=None,
+    )
     counts: dict[int, Counter[str]] = defaultdict(Counter)
-    for pid, path in (
-        db.query(FileWeight.project_id, FileWeight.path).filter(FileWeight.project_id.in_(ids)).all()
+    for pid, ext, n in (
+        db.query(FileWeight.project_id, ext_expr, func.count(FileWeight.id))
+        .filter(FileWeight.project_id.in_(ids))
+        .group_by(FileWeight.project_id, ext_expr)
+        .all()
     ):
-        ext = path_source_ext(str(path or ""))
         if not ext:
             continue
-        counts[int(pid)][ext] += 1
+        counts[int(pid)][str(ext)] += int(n or 0)
     for pid, counter in counts.items():
         rows = [
             {

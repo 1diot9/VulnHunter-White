@@ -325,6 +325,13 @@ def _pause_event(project_id: int) -> threading.Event:
         return _pause_flags[project_id]
 
 
+def is_project_paused(project_id: int) -> bool:
+    """In-memory project pause flag without allocating an Event for unseen ids."""
+    with _lock:
+        ev = _pause_flags.get(int(project_id))
+        return bool(ev is not None and ev.is_set())
+
+
 def request_cancel(project_id: int) -> None:
     _cancel_event(project_id).set()
     try:

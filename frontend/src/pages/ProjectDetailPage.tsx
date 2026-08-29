@@ -195,7 +195,7 @@ export default function ProjectDetailPage() {
     const refreshVulns = async () => {
       setVulnsLoading(true)
       try {
-        const vs = await api.listVulns(projectId)
+        const vs = await api.listAllVulns({ projectId })
         if (alive) setVulns(vs)
       } catch {
         /* ignore transient */

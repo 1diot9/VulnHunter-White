@@ -174,17 +174,22 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
+def lab_setup_state(project_id: int) -> tuple[bool, bool]:
+    """Return (setup_finished, setup_failed) from one env.json read."""
+    env = load_env(project_id)
+    finished = _truthy(env.get("setup_finished"))
+    failed = finished and not lab_ready(env)
+    return finished, failed
+
+
 def lab_setup_finished(project_id: int) -> bool:
     """True after the dedicated lab round completed (success or skipped)."""
-    return _truthy(load_env(project_id).get("setup_finished"))
+    return lab_setup_state(project_id)[0]
 
 
 def lab_setup_failed(project_id: int) -> bool:
     """True when the lab round ended without a running accepted env."""
-    env = load_env(project_id)
-    if not _truthy(env.get("setup_finished")):
-        return False
-    return not lab_ready(env)
+    return lab_setup_state(project_id)[1]
 
 
 def lab_bring_up_failed(project_id: int) -> bool:

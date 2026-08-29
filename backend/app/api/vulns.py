@@ -8,13 +8,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import or_
-from sqlalchemy.orm import joinedload
+from sqlalchemy import cast, func, or_
+from sqlalchemy.orm import joinedload, load_only
+from sqlalchemy.types import String
 
-from ..models import SessionLocal, Vuln
+from ..models import Project, SessionLocal, Vuln
 from ..schemas import (
     VerifierConsentIn,
     VerifierConsentItem,
@@ -24,6 +25,7 @@ from ..schemas import (
     VulnDetail,
     VulnFollowUpIn,
     VulnFollowUpThread,
+    VulnListOut,
     VulnOut,
     VulnReportApplyIn,
     VulnReportApplyOut,
@@ -193,11 +195,51 @@ def _zip_attachment(data: bytes, *, ascii_name: str, filename: str) -> Response:
     )
 
 
-def _report_score(v: Vuln) -> float | None:
+_VULN_LIST_COLUMNS = (
+    Vuln.id,
+    Vuln.project_id,
+    Vuln.title,
+    Vuln.vuln_type,
+    Vuln.severity,
+    Vuln.severity_score,
+    Vuln.cvss_vector,
+    Vuln.cvss_score,
+    Vuln.cwe,
+    Vuln.file_path,
+    Vuln.line_no,
+    Vuln.status,
+    Vuln.tracking_status,
+    Vuln.evidence_level,
+    Vuln.attack_surface,
+    Vuln.required_account,
+    Vuln.submission_tier,
+    Vuln.submission_reason,
+    Vuln.mining_path,
+    Vuln.root_cause_key,
+    Vuln.merged_into_id,
+    Vuln.review_rounds,
+    Vuln.return_reason,
+    Vuln.fp_kind,
+    Vuln.intended_behavior,
+    Vuln.config_premise,
+    Vuln.report_path,
+    Vuln.verifier_status,
+    Vuln.verifier_verified_url,
+    Vuln.verifier_ask_reason,
+    Vuln.verifier_user_instruction,
+    Vuln.verifier_consent,
+    Vuln.created_at,
+    Vuln.updated_at,
+)
+
+
+def _report_score(v: Vuln, *, read_report: bool = True) -> float | None:
     if v.cvss_score is not None:
         return float(v.cvss_score)
     if v.severity_score is not None:
         return float(v.severity_score)
+    if not read_report:
+        return None
     path = _report_file(v, "report")
     if not path.is_file():
         return None
@@ -209,18 +251,105 @@ def _report_score(v: Vuln) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def _vuln_out(v: Vuln) -> VulnOut:
+def _vuln_out(v: Vuln, *, read_report: bool = True) -> VulnOut:
     name = v.project.name if v.project is not None else ""
     return VulnOut.model_validate(v).model_copy(
         update={
             "project_name": name,
-            "severity_score": _report_score(v),
+            "severity_score": _report_score(v, read_report=read_report),
             "tracking_status": _tracking_status_out(v.tracking_status),
         }
     )
 
 
-@router.get("", response_model=list[VulnOut])
+def _apply_vuln_search(query, q: str):
+    tokens = [t for t in (q or "").strip().lower().split() if t]
+    if not tokens:
+        return query
+    for token in tokens:
+        pattern = f"%{token}%"
+        query = query.filter(
+            or_(
+                Vuln.title.ilike(pattern),
+                Vuln.vuln_type.ilike(pattern),
+                Vuln.cwe.ilike(pattern),
+                Vuln.file_path.ilike(pattern),
+                Vuln.root_cause_key.ilike(pattern),
+                Vuln.status.ilike(pattern),
+                Vuln.severity.ilike(pattern),
+                Vuln.submission_tier.ilike(pattern),
+                Vuln.tracking_status.ilike(pattern),
+                Vuln.attack_surface.ilike(pattern),
+                Vuln.evidence_level.ilike(pattern),
+                Vuln.mining_path.ilike(pattern),
+                Vuln.verifier_status.ilike(pattern),
+                Vuln.verifier_verified_url.ilike(pattern),
+                Vuln.config_premise.ilike(pattern),
+                Vuln.project.has(Project.name.ilike(pattern)),
+                cast(Vuln.id, String).ilike(pattern),
+                cast(Vuln.project_id, String).ilike(pattern),
+            )
+        )
+    return query
+
+
+def _apply_vuln_filters(
+    q,
+    *,
+    project_id: int | None = None,
+    status: str | None = None,
+    attack_surface: str | None = None,
+    submission_tier: str | None = None,
+    root_cause_key: str | None = None,
+    tracking_status: str | None = None,
+    created_date: str | None = None,
+    search: str = "",
+):
+    if project_id is not None:
+        q = q.filter(Vuln.project_id == project_id)
+    if status:
+        if status == "confirmed":
+            q = q.filter(Vuln.status.in_(("confirmed", "static_only")))
+        else:
+            q = q.filter(Vuln.status == status)
+    if tracking_status:
+        if tracking_status not in ALLOWED_TRACKING_STATUSES:
+            raise HTTPException(400, "tracking_status 须为 none|submitted|ignored")
+        if tracking_status == "none":
+            q = q.filter(or_(Vuln.tracking_status == "none", Vuln.tracking_status.is_(None)))
+        else:
+            q = q.filter(Vuln.tracking_status == tracking_status)
+    if attack_surface:
+        if attack_surface not in ("frontend", "backend"):
+            raise HTTPException(400, "attack_surface 须为 frontend|backend")
+        q = q.filter(Vuln.attack_surface == attack_surface)
+    if submission_tier:
+        if submission_tier == "untiered":
+            q = q.filter(Vuln.submission_tier.is_(None))
+        else:
+            try:
+                normalized = normalize_submission_tier(submission_tier)
+            except ValueError:
+                raise HTTPException(
+                    400,
+                    "submission_tier 须为 "
+                    + "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
+                    + "|untiered",
+                ) from None
+            if normalized == "low_impact":
+                q = q.filter(Vuln.submission_tier.in_(tuple(LEGACY_LOW_IMPACT_TIERS)))
+            else:
+                q = q.filter(Vuln.submission_tier == normalized)
+    if root_cause_key:
+        q = q.filter(Vuln.root_cause_key == root_cause_key)
+    if created_date:
+        y, m, d = _parse_created_date(created_date)
+        start_utc, end_utc = _shanghai_day_bounds(y, m, d)
+        q = q.filter(Vuln.created_at >= start_utc, Vuln.created_at < end_utc)
+    return _apply_vuln_search(q, search)
+
+
+@router.get("", response_model=VulnListOut)
 def list_vulns(
     project_id: int | None = None,
     status: str | None = None,
@@ -229,52 +358,39 @@ def list_vulns(
     root_cause_key: str | None = None,
     tracking_status: str | None = None,
     created_date: str | None = None,
-) -> list[VulnOut]:
+    q: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> VulnListOut:
+    filters = dict(
+        project_id=project_id,
+        status=status,
+        attack_surface=attack_surface,
+        submission_tier=submission_tier,
+        root_cause_key=root_cause_key,
+        tracking_status=tracking_status,
+        created_date=created_date,
+        search=q,
+    )
     with SessionLocal() as db:
-        q = db.query(Vuln).options(joinedload(Vuln.project))
-        if project_id is not None:
-            q = q.filter(Vuln.project_id == project_id)
-        if status:
-            if status == "confirmed":
-                q = q.filter(Vuln.status.in_(("confirmed", "static_only")))
-            else:
-                q = q.filter(Vuln.status == status)
-        if tracking_status:
-            if tracking_status not in ALLOWED_TRACKING_STATUSES:
-                raise HTTPException(400, "tracking_status 须为 none|submitted|ignored")
-            if tracking_status == "none":
-                q = q.filter(or_(Vuln.tracking_status == "none", Vuln.tracking_status.is_(None)))
-            else:
-                q = q.filter(Vuln.tracking_status == tracking_status)
-        if attack_surface:
-            if attack_surface not in ("frontend", "backend"):
-                raise HTTPException(400, "attack_surface 须为 frontend|backend")
-            q = q.filter(Vuln.attack_surface == attack_surface)
-        if submission_tier:
-            if submission_tier == "untiered":
-                q = q.filter(Vuln.submission_tier.is_(None))
-            else:
-                try:
-                    normalized = normalize_submission_tier(submission_tier)
-                except ValueError:
-                    raise HTTPException(
-                        400,
-                        "submission_tier 须为 "
-                        + "|".join(sorted(ALLOWED_SUBMISSION_TIERS))
-                        + "|untiered",
-                    ) from None
-                if normalized == "low_impact":
-                    q = q.filter(Vuln.submission_tier.in_(tuple(LEGACY_LOW_IMPACT_TIERS)))
-                else:
-                    q = q.filter(Vuln.submission_tier == normalized)
-        if root_cause_key:
-            q = q.filter(Vuln.root_cause_key == root_cause_key)
-        if created_date:
-            y, m, d = _parse_created_date(created_date)
-            start_utc, end_utc = _shanghai_day_bounds(y, m, d)
-            q = q.filter(Vuln.created_at >= start_utc, Vuln.created_at < end_utc)
-        rows = q.order_by(Vuln.id.desc()).all()
-        return [_vuln_out(r) for r in rows]
+        total = int(_apply_vuln_filters(db.query(func.count(Vuln.id)), **filters).scalar() or 0)
+        rows_q = db.query(Vuln).options(
+            load_only(*_VULN_LIST_COLUMNS),
+            joinedload(Vuln.project).load_only(Project.id, Project.name),
+        )
+        rows = (
+            _apply_vuln_filters(rows_q, **filters)
+            .order_by(Vuln.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return VulnListOut(
+            items=[_vuln_out(r) for r in rows],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
 
 
 @router.get("/calendar", response_model=VulnCalendarOut)
@@ -288,18 +404,18 @@ def vuln_calendar(
     start_utc, end_utc = _shanghai_month_bounds(year, month)
     tallies: dict[str, dict[str, int]] = defaultdict(lambda: {"confirmed": 0, "false_positive": 0})
     with SessionLocal() as db:
-        q = db.query(Vuln).filter(
+        q = db.query(Vuln.status, Vuln.created_at).filter(
             Vuln.status.in_(tuple(_CALENDAR_STATUSES)),
             Vuln.created_at >= start_utc,
             Vuln.created_at < end_utc,
         )
         if project_id is not None:
             q = q.filter(Vuln.project_id == project_id)
-        for row in q.all():
-            day = _to_shanghai_date(row.created_at)
-            if row.status in _CONFIRMED_STATUSES:
+        for status, created_at in q.all():
+            day = _to_shanghai_date(created_at)
+            if status in _CONFIRMED_STATUSES:
                 tallies[day]["confirmed"] += 1
-            elif row.status == "false_positive":
+            elif status == "false_positive":
                 tallies[day]["false_positive"] += 1
     days = [
         VulnCalendarDay(date=day, confirmed=counts["confirmed"], false_positive=counts["false_positive"])

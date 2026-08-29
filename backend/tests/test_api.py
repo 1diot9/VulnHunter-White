@@ -3,6 +3,12 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
+def _vuln_items(resp):
+    body = resp.json()
+    assert "items" in body
+    return body["items"]
+
+
 def test_health_and_settings(tmp_env):
     from app.main import app
 
@@ -393,6 +399,55 @@ def test_projects_list_pagination(tmp_env, monkeypatch):
 
         over = client.get("/api/projects", params={"limit": 200})
         assert over.status_code == 422
+
+
+def test_projects_list_run_status_skips_phase_states(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+
+    def boom(*_a, **_k):
+        raise AssertionError("list_projects should not call get_phase_states")
+
+    monkeypatch.setattr("app.api.projects.get_phase_states", boom)
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        running = Project(name="run-live", source_type="zip", status="auditing")
+        paused = Project(name="paused-db", source_type="zip", status="paused")
+        done = Project(name="done", source_type="zip", status="completed")
+        db.add_all([running, paused, done])
+        db.commit()
+        db.refresh(running)
+        running_id = running.id
+        paused_id = paused.id
+        done_id = done.id
+
+    pipeline._pause_event(running_id).set()
+
+    with TestClient(app) as client:
+        body = client.get("/api/projects", params={"limit": 100}).json()
+        assert body["status_counts"] == {
+            "all": 3,
+            "running": 0,
+            "paused": 2,
+            "completed": 1,
+        }
+        paused_rows = client.get(
+            "/api/projects", params={"run_status": "paused", "limit": 100}
+        ).json()
+        names = {p["name"] for p in paused_rows["items"]}
+        assert names == {"run-live", "paused-db"}
+        by_name = {p["name"]: p for p in paused_rows["items"]}
+        assert by_name["run-live"]["project_paused"] is True
+        assert by_name["paused-db"]["status"] == "paused"
+
+        names_body = client.get("/api/projects/names").json()
+        by_id = {row["id"]: row for row in names_body}
+        assert set(by_id) == {running_id, paused_id, done_id}
+        assert by_id[running_id]["name"] == "run-live"
+        assert "dynamic_verify_mode" in by_id[running_id]
+        assert "custom_audit_prompt" not in by_id[running_id]
 
 
 def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
@@ -890,7 +945,7 @@ def test_vulns_list_and_download(tmp_env, project):
     with TestClient(app) as client:
         lst = client.get(f"/api/vulns?project_id={project}")
         assert lst.status_code == 200
-        hit = next(v for v in lst.json() if v["id"] == vid)
+        hit = next(v for v in _vuln_items(lst) if v["id"] == vid)
         assert hit["project_name"] == "demo"
         assert hit["mining_path"] == "heuristic"
         assert hit["config_premise"] == "default"
@@ -1010,7 +1065,7 @@ def test_vuln_timeout_fp_kind_in_api(tmp_env, project):
         judged_row = client.get(f"/api/vulns/{judged_id}").json()
         assert timeout_row["fp_kind"] == "timeout"
         assert judged_row.get("fp_kind") in (None, "")
-        listed = {v["id"]: v for v in client.get(f"/api/vulns?project_id={project}").json()}
+        listed = {v["id"]: v for v in _vuln_items(client.get(f"/api/vulns?project_id={project}"))}
         assert listed[timeout_id]["fp_kind"] == "timeout"
         assert listed[judged_id].get("fp_kind") in (None, "")
 
@@ -1040,11 +1095,11 @@ def test_vuln_tracking_status_mark_and_filter(tmp_env, project):
         assert ignored.status_code == 200
         assert ignored.json()["tracking_status"] == "ignored"
 
-        submitted = client.get(f"/api/vulns?project_id={project}&tracking_status=submitted").json()
+        submitted = _vuln_items(client.get(f"/api/vulns?project_id={project}&tracking_status=submitted"))
         assert [v["id"] for v in submitted] == [aid]
-        ignored_rows = client.get(f"/api/vulns?project_id={project}&tracking_status=ignored").json()
+        ignored_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&tracking_status=ignored"))
         assert [v["id"] for v in ignored_rows] == [bid]
-        unmarked = client.get(f"/api/vulns?project_id={project}&tracking_status=none").json()
+        unmarked = _vuln_items(client.get(f"/api/vulns?project_id={project}&tracking_status=none"))
         assert [v["id"] for v in unmarked] == [cid]
 
         batch = client.post(
@@ -1515,7 +1570,7 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
     )
 
     with TestClient(app) as client:
-        front_rows = client.get(f"/api/vulns?project_id={project}&attack_surface=frontend").json()
+        front_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&attack_surface=frontend"))
         front_ids = {v["id"] for v in front_rows}
         assert front_id in front_ids
         assert legacy_id in front_ids
@@ -1524,31 +1579,72 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
         assert next(v for v in front_rows if v["id"] == front_id)["severity_score"] == 4
         assert next(v for v in front_rows if v["id"] == legacy_id)["severity_score"] == -1
 
-        back_rows = client.get(f"/api/vulns?project_id={project}&attack_surface=backend").json()
+        back_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&attack_surface=backend"))
         assert [v["id"] for v in back_rows] == [back_id]
 
         bad = client.get(f"/api/vulns?project_id={project}&attack_surface=internal")
         assert bad.status_code == 400
 
-        cve_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=cve_candidate").json()
+        cve_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&submission_tier=cve_candidate"))
         assert [v["id"] for v in cve_rows] == [front_id]
         assert cve_rows[0]["submission_reason"] == "未认证 SQLI"
 
-        low_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=low_impact").json()
+        low_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&submission_tier=low_impact"))
         assert {v["id"] for v in low_rows} == {back_id, hard_id}
-        alias_rows = client.get(f"/api/vulns?project_id={project}&submission_tier=hardening").json()
+        alias_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&submission_tier=hardening"))
         assert {v["id"] for v in alias_rows} == {back_id, hard_id}
 
-        untiered = client.get(f"/api/vulns?project_id={project}&submission_tier=untiered").json()
+        untiered = _vuln_items(client.get(f"/api/vulns?project_id={project}&submission_tier=untiered"))
         assert [v["id"] for v in untiered] == [legacy_id]
 
-        grouped = client.get(
-            f"/api/vulns?project_id={project}&root_cause_key=idor:UserController"
-        ).json()
+        grouped = _vuln_items(
+            client.get(f"/api/vulns?project_id={project}&root_cause_key=idor:UserController")
+        )
         assert [v["id"] for v in grouped] == [back_id]
 
         bad_tier = client.get(f"/api/vulns?project_id={project}&submission_tier=nope")
         assert bad_tier.status_code == 400
+
+
+def test_vulns_list_pagination_and_search(tmp_env, project):
+    from app.main import app
+    from app.models import SessionLocal, Vuln
+
+    with SessionLocal() as db:
+        for i in range(7):
+            db.add(
+                Vuln(
+                    project_id=project,
+                    title=f"page-item-{i}",
+                    vuln_type="xss",
+                    status="confirmed",
+                    file_path=f"app/File{i}.java",
+                )
+            )
+        db.commit()
+
+    with TestClient(app) as client:
+        first = client.get("/api/vulns", params={"project_id": project, "limit": 5, "offset": 0}).json()
+        assert first["total"] == 7
+        assert first["limit"] == 5
+        assert first["offset"] == 0
+        assert len(first["items"]) == 5
+
+        second = client.get("/api/vulns", params={"project_id": project, "limit": 5, "offset": 5}).json()
+        assert second["total"] == 7
+        assert second["offset"] == 5
+        assert len(second["items"]) == 2
+
+        defaulted = client.get("/api/vulns", params={"project_id": project}).json()
+        assert defaulted["limit"] == 50
+        assert len(defaulted["items"]) == 7
+
+        over = client.get("/api/vulns", params={"limit": 500})
+        assert over.status_code == 422
+
+        found = client.get("/api/vulns", params={"project_id": project, "q": "page-item-6"}).json()
+        assert found["total"] == 1
+        assert found["items"][0]["title"] == "page-item-6"
 
 
 def test_phase_control_endpoints(tmp_env, project, monkeypatch):
