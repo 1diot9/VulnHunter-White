@@ -446,6 +446,7 @@ class ProjectListOut(BaseModel):
 class ProjectNameOut(BaseModel):
     id: int
     name: str
+    target_kind: str = "web"
     dynamic_verify_mode: str = "off"
     dynamic_verify_enabled: bool = False
 
@@ -454,6 +455,7 @@ class VulnOut(BaseModel):
     id: int
     project_id: int
     project_name: str = ""
+    project_target_kind: str = "web"
     title: str
     vuln_type: str
     severity: str

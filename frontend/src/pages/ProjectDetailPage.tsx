@@ -690,6 +690,7 @@ export default function ProjectDetailPage() {
               activeId={detailVulnId}
               emptyText={vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
               onSelectVuln={setDetailVulnId}
+              projectKindById={new Map([[project.id, project.target_kind]])}
             />
           </Card>
           <VulnDetailDialog

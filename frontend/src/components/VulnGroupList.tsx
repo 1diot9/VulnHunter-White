@@ -14,6 +14,7 @@ import {
   formatMiningPath,
   formatSeverity,
   formatSeverityScore,
+  formatVulnProjectName,
   formatSubmissionTier,
   formatTrackingStatus,
   formatVerifierStatus,
@@ -115,6 +116,7 @@ function VulnRow({
   active,
   nested,
   projectName,
+  projectKind,
   selected,
   onToggleSelect,
   onSelectVuln,
@@ -123,6 +125,7 @@ function VulnRow({
   active: boolean
   nested?: boolean
   projectName: string
+  projectKind?: string | null
   selected?: boolean
   onToggleSelect?: (id: number, checked: boolean) => void
   onSelectVuln?: (id: number) => void
@@ -149,7 +152,7 @@ function VulnRow({
         </div>
       ) : null}
       <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
-        #{v.id} · {projectName} · {v.vuln_type} · {formatSeverity(v.severity)}
+        #{v.id} · {formatVulnProjectName(projectName, projectKind ?? v.project_target_kind)} · {v.vuln_type} · {formatSeverity(v.severity)}
         {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
       </div>
     </>
@@ -216,6 +219,7 @@ export default function VulnGroupList({
   onToggleSelect,
   onSelectVuln,
   projectNameById,
+  projectKindById,
   tierFilter = 'all',
   emptyText = '暂无数据',
   expandAll = false,
@@ -226,6 +230,7 @@ export default function VulnGroupList({
   onToggleSelect?: (id: number, checked: boolean) => void
   onSelectVuln?: (id: number) => void
   projectNameById?: Map<number, string>
+  projectKindById?: Map<number, string>
   tierFilter?: VulnTierFilter
   emptyText?: string
   expandAll?: boolean
@@ -301,6 +306,7 @@ export default function VulnGroupList({
                   v={group.primary}
                   active={activeId === group.primary.id}
                   projectName={projectName}
+                  projectKind={projectKindById?.get(group.primary.project_id)}
                   selected={selectedSet.has(group.primary.id)}
                   onToggleSelect={onToggleSelect}
                   onSelectVuln={onSelectVuln}
@@ -333,6 +339,7 @@ export default function VulnGroupList({
                     active={activeId === v.id}
                     nested
                     projectName={v.project_name || projectNameById?.get(v.project_id) || projectName}
+                    projectKind={projectKindById?.get(v.project_id)}
                     selected={selectedSet.has(v.id)}
                     onToggleSelect={onToggleSelect}
                     onSelectVuln={onSelectVuln}

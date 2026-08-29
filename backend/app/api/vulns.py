@@ -15,6 +15,7 @@ from sqlalchemy import cast, func, or_
 from sqlalchemy.orm import joinedload, load_only
 from sqlalchemy.types import String
 
+from ..target_kind import normalize_target_kind
 from ..models import Project, SessionLocal, Vuln
 from ..schemas import (
     VerifierConsentIn,
@@ -50,7 +51,13 @@ from ..services.verifier import (
     parse_verifier_targets,
     resolve_verifier_consent,
 )
-from ..vuln_types import ALLOWED_SUBMISSION_TIERS, LEGACY_LOW_IMPACT_TIERS, normalize_submission_tier
+from ..vuln_types import (
+    ALLOWED_SUBMISSION_TIERS,
+    ALLOWED_VULN_TYPES,
+    LEGACY_LOW_IMPACT_TIERS,
+    VULN_TYPES,
+    normalize_submission_tier,
+)
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 _CVSS_SCORE_RE = re.compile(r"-\s*CVSS\s*3\.[01][:：]\s*(\d+(?:\.\d+)?)")
@@ -253,9 +260,11 @@ def _report_score(v: Vuln, *, read_report: bool = True) -> float | None:
 
 def _vuln_out(v: Vuln, *, read_report: bool = True) -> VulnOut:
     name = v.project.name if v.project is not None else ""
+    kind = normalize_target_kind(getattr(v.project, "target_kind", None) if v.project is not None else None)
     return VulnOut.model_validate(v).model_copy(
         update={
             "project_name": name,
+            "project_target_kind": kind,
             "severity_score": _report_score(v, read_report=read_report),
             "tracking_status": _tracking_status_out(v.tracking_status),
         }
@@ -303,6 +312,7 @@ def _apply_vuln_filters(
     root_cause_key: str | None = None,
     tracking_status: str | None = None,
     created_date: str | None = None,
+    vuln_type: str | None = None,
     search: str = "",
 ):
     if project_id is not None:
@@ -340,6 +350,10 @@ def _apply_vuln_filters(
                 q = q.filter(Vuln.submission_tier.in_(tuple(LEGACY_LOW_IMPACT_TIERS)))
             else:
                 q = q.filter(Vuln.submission_tier == normalized)
+    if vuln_type:
+        if vuln_type not in ALLOWED_VULN_TYPES:
+            raise HTTPException(400, "vuln_type 须为 " + "|".join(VULN_TYPES))
+        q = q.filter(Vuln.vuln_type == vuln_type)
     if root_cause_key:
         q = q.filter(Vuln.root_cause_key == root_cause_key)
     if created_date:
@@ -358,6 +372,7 @@ def list_vulns(
     root_cause_key: str | None = None,
     tracking_status: str | None = None,
     created_date: str | None = None,
+    vuln_type: str | None = None,
     q: str = Query(""),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -370,13 +385,14 @@ def list_vulns(
         root_cause_key=root_cause_key,
         tracking_status=tracking_status,
         created_date=created_date,
+        vuln_type=vuln_type,
         search=q,
     )
     with SessionLocal() as db:
         total = int(_apply_vuln_filters(db.query(func.count(Vuln.id)), **filters).scalar() or 0)
         rows_q = db.query(Vuln).options(
             load_only(*_VULN_LIST_COLUMNS),
-            joinedload(Vuln.project).load_only(Project.id, Project.name),
+            joinedload(Vuln.project).load_only(Project.id, Project.name, Project.target_kind),
         )
         rows = (
             _apply_vuln_filters(rows_q, **filters)

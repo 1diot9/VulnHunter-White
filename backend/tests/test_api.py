@@ -446,8 +446,18 @@ def test_projects_list_run_status_skips_phase_states(tmp_env, monkeypatch):
         by_id = {row["id"]: row for row in names_body}
         assert set(by_id) == {running_id, paused_id, done_id}
         assert by_id[running_id]["name"] == "run-live"
+        assert by_id[running_id]["target_kind"] == "web"
         assert "dynamic_verify_mode" in by_id[running_id]
         assert "custom_audit_prompt" not in by_id[running_id]
+        from app.models import SessionLocal, Project
+
+        with SessionLocal() as db:
+            proj = db.get(Project, running_id)
+            assert proj is not None
+            proj.target_kind = "library"
+            db.commit()
+        names_lib = client.get("/api/projects/names").json()
+        assert {row["id"]: row["target_kind"] for row in names_lib}[running_id] == "library"
 
 
 def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
@@ -947,6 +957,7 @@ def test_vulns_list_and_download(tmp_env, project):
         assert lst.status_code == 200
         hit = next(v for v in _vuln_items(lst) if v["id"] == vid)
         assert hit["project_name"] == "demo"
+        assert hit["project_target_kind"] == "web"
         assert hit["mining_path"] == "heuristic"
         assert hit["config_premise"] == "default"
         detail = client.get(f"/api/vulns/{vid}")
@@ -954,6 +965,7 @@ def test_vulns_list_and_download(tmp_env, project):
         body = detail.json()
         assert body["title"] == "远程代码执行演示"
         assert body["project_name"] == "demo"
+        assert body["project_target_kind"] == "web"
         assert body["mining_path"] == "heuristic"
         assert body["config_premise"] == "default"
         assert body["created_at"]
@@ -1012,6 +1024,17 @@ def test_vulns_list_and_download(tmp_env, project):
         assert f'filename="vuln-{vid}-cve.json"' in cve.headers["content-disposition"]
         assert client.get(f"/api/vulns/{vid}/download?kind=nope").status_code == 400
         assert client.get("/api/vulns/999999/download").status_code == 404
+        from app.models import Project, SessionLocal
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project)
+            assert proj is not None
+            proj.target_kind = "library"
+            db.commit()
+        lst_lib = client.get(f"/api/vulns?project_id={project}")
+        assert lst_lib.status_code == 200
+        hit_lib = next(v for v in _vuln_items(lst_lib) if v["id"] == vid)
+        assert hit_lib["project_target_kind"] == "library"
 
 
 def test_download_single_vuln_report_missing_file(tmp_env, project):
@@ -1596,6 +1619,13 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
 
         untiered = _vuln_items(client.get(f"/api/vulns?project_id={project}&submission_tier=untiered"))
         assert [v["id"] for v in untiered] == [legacy_id]
+
+        sqli_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&vuln_type=sqli"))
+        assert [v["id"] for v in sqli_rows] == [front_id]
+        xss_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&vuln_type=xss"))
+        assert [v["id"] for v in xss_rows] == [legacy_id]
+        bad_type = client.get(f"/api/vulns?project_id={project}&vuln_type=nope")
+        assert bad_type.status_code == 400
 
         grouped = _vuln_items(
             client.get(f"/api/vulns?project_id={project}&root_cause_key=idor:UserController")

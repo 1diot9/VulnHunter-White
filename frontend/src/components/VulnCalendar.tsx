@@ -55,10 +55,12 @@ function shiftMonth(year: number, month: number, delta: number): { year: number;
 export default function VulnCalendar({
   projectId,
   projectNameById,
+  projectKindById,
   onOpenVuln,
 }: {
   projectId?: number
   projectNameById: Map<number, string>
+  projectKindById?: Map<number, string>
   onOpenVuln?: (id: number) => void
 }) {
   const today = useMemo(() => shanghaiYmd(), [])
@@ -243,6 +245,7 @@ export default function VulnCalendar({
                 tierFilter="all"
                 emptyText="该日无已确认或误报产出"
                 projectNameById={projectNameById}
+                projectKindById={projectKindById}
                 onSelectVuln={(id) => {
                   onOpenVuln?.(id)
                   setSelectedDate(null)

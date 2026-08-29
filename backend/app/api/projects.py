@@ -457,6 +457,7 @@ def list_project_names() -> list[ProjectNameOut]:
             db.query(
                 Project.id,
                 Project.name,
+                Project.target_kind,
                 Project.dynamic_verify_mode,
                 Project.dynamic_verify_enabled,
             )
@@ -464,12 +465,13 @@ def list_project_names() -> list[ProjectNameOut]:
             .all()
         )
         items: list[ProjectNameOut] = []
-        for pid, name, mode, enabled in rows:
+        for pid, name, kind, mode, enabled in rows:
             verify_mode = project_verify_mode_values(mode, enabled)
             items.append(
                 ProjectNameOut(
                     id=int(pid),
                     name=name or "",
+                    target_kind=normalize_target_kind(kind),
                     dynamic_verify_mode=verify_mode,
                     dynamic_verify_enabled=verify_mode_enabled(verify_mode),
                 )

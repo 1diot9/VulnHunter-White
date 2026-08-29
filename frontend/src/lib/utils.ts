@@ -200,6 +200,17 @@ export function formatTargetKind(value: string | null | undefined): string {
   return TARGET_KIND_OPTIONS.find((o) => o.value === value)?.label ?? TARGET_KIND_OPTIONS[0].label
 }
 
+export function formatTargetKindShort(value: string | null | undefined): string {
+  if (value === 'library') return '组件'
+  if (value === 'mixed') return '混合'
+  return 'Web'
+}
+
+export function formatVulnProjectName(name: string, kind?: string | null): string {
+  const label = (name || '').trim() || '项目'
+  return `${label}(${formatTargetKindShort(kind)})`
+}
+
 export function formatTargetKindHint(value: string | null | undefined): string {
   return TARGET_KIND_OPTIONS.find((o) => o.value === value)?.hint ?? TARGET_KIND_OPTIONS[0].hint
 }
@@ -319,6 +330,37 @@ export function formatDateTime(value: string | null | undefined): string {
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+}
+
+export const VULN_TYPE_OPTIONS = [
+  ['rce', 'RCE'],
+  ['ssti', 'SSTI'],
+  ['deserialization', '反序列化'],
+  ['jndi_injection', 'JNDI注入'],
+  ['jdbc_attack', 'JDBC攻击'],
+  ['file_read', '任意文件读取'],
+  ['file_upload', '任意文件上传'],
+  ['file_delete', '任意文件删除'],
+  ['auth_bypass', '认证绕过'],
+  ['sqli', 'SQL注入'],
+  ['xxe', 'XXE'],
+  ['path_traversal', '路径穿越'],
+  ['ssrf', 'SSRF'],
+  ['privilege_escalation', '越权'],
+  ['dos', 'DoS'],
+  ['xss', 'XSS'],
+  ['stored_xss', '存储型XSS'],
+  ['csrf', 'CSRF'],
+  ['hardcoded_secret', '硬编码密钥'],
+  ['info_disclosure', '信息泄露'],
+  ['other', '其他'],
+] as const
+
+export function formatVulnType(value: string | null | undefined): string {
+  const key = (value || '').trim()
+  if (!key) return ''
+  const hit = VULN_TYPE_OPTIONS.find(([id]) => id === key)
+  return hit ? hit[1] : key
 }
 
 export function formatSeverity(value: string | null | undefined): string {

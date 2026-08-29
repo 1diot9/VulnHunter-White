@@ -118,6 +118,7 @@ export type ProjectListQuery = {
 export type ProjectName = {
   id: number
   name: string
+  target_kind?: 'web' | 'library' | 'mixed'
   dynamic_verify_mode?: 'off' | 'lab' | 'harness'
   dynamic_verify_enabled?: boolean
 }
@@ -179,6 +180,7 @@ export type Vuln = {
   id: number
   project_id: number
   project_name?: string
+  project_target_kind?: 'web' | 'library' | 'mixed'
   title: string
   vuln_type: string
   severity: string
@@ -223,6 +225,7 @@ export type VulnListQuery = {
   rootCauseKey?: string
   trackingStatus?: string
   createdDate?: string
+  vulnType?: string
   q?: string
   limit?: number
   offset?: number
@@ -963,6 +966,7 @@ export const api = {
     if (query.rootCauseKey) q.set('root_cause_key', query.rootCauseKey)
     if (query.trackingStatus) q.set('tracking_status', query.trackingStatus)
     if (query.createdDate) q.set('created_date', query.createdDate)
+    if (query.vulnType) q.set('vuln_type', query.vulnType)
     if (query.q) q.set('q', query.q)
     if (query.limit != null) q.set('limit', String(query.limit))
     if (query.offset != null) q.set('offset', String(query.offset))

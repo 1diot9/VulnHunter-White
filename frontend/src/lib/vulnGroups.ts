@@ -8,8 +8,12 @@ import {
   formatSeverityScore,
   formatSubmissionTier,
   formatTrackingStatus,
+  formatTargetKind,
+  formatTargetKindShort,
   formatVerifierStatus,
+  formatVulnProjectName,
   formatVulnStatus,
+  formatVulnType,
 } from './utils'
 
 export type VulnGroup = {
@@ -19,12 +23,7 @@ export type VulnGroup = {
   others: Vuln[]
 }
 
-export type VulnTierFilter =
-  | 'all'
-  | 'cve_candidate'
-  | 'low_impact'
-  | 'duplicate_grouped'
-  | 'untiered'
+export type VulnTierFilter = 'all' | 'cve_candidate' | 'low_impact'
 
 const SEVERITY_RANK: Record<string, number> = {
   critical: 50,
@@ -164,7 +163,6 @@ function findAttachParent(dup: Vuln, pool: Vuln[]): Vuln | null {
 
 function matchesTier(v: Vuln, tier: VulnTierFilter): boolean {
   if (tier === 'all') return true
-  if (tier === 'untiered') return !v.submission_tier
   if (tier === 'low_impact') return ['low_impact', 'hardening', 'advisory_only'].includes(v.submission_tier || '')
   return v.submission_tier === tier
 }
@@ -285,12 +283,16 @@ export function vulnMatchesQuery(
     formatEvidenceLevel(v.evidence_level),
     v.mining_path,
     formatMiningPath(v.mining_path),
+    formatVulnType(v.vuln_type),
     v.config_premise,
     formatConfigPremise(v.config_premise),
     v.verifier_status,
     formatVerifierStatus(v.verifier_status),
     v.verifier_verified_url,
     projectName,
+    formatVulnProjectName(projectName, v.project_target_kind),
+    formatTargetKind(v.project_target_kind),
+    formatTargetKindShort(v.project_target_kind),
     String(v.project_id),
     `#${v.project_id}`,
     `项目 ${v.project_id}`,
@@ -309,16 +311,6 @@ export function filterVulnGroups(groups: VulnGroup[], tier: VulnTierFilter = 'al
   const out: VulnGroup[] = []
   for (const group of groups) {
     const members = [group.primary, ...group.others]
-    if (tier === 'duplicate_grouped') {
-      const dups = members.filter(isDuplicate)
-      if (!dups.length) continue
-      if (isDuplicate(group.primary)) {
-        out.push({ ...group, others: group.others.filter(isDuplicate) })
-      } else {
-        out.push({ ...group, others: group.others.filter(isDuplicate) })
-      }
-      continue
-    }
     const kept = members.filter((v) => matchesTier(v, tier))
     if (!kept.length) continue
     const primary = kept.find((v) => v.id === group.primary.id) ?? kept[0]

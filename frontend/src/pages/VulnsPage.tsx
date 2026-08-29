@@ -11,7 +11,7 @@ import VulnCalendar from '../components/VulnCalendar'
 import VulnDetailDialog from '../components/VulnDetailDialog'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
-import { saveBlob } from '../lib/utils'
+import { formatVulnType, saveBlob, VULN_TYPE_OPTIONS } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PAGE_SIZE = 50
@@ -20,8 +20,6 @@ const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
   all: '全部分层',
   cve_candidate: '有 CVE 价值',
   low_impact: '低危害难利用',
-  duplicate_grouped: '同根因重复',
-  untiered: '未分层',
 }
 
 const TRACKING_FILTER_LABEL: Record<'all' | VulnTrackingStatus, string> = {
@@ -38,6 +36,7 @@ export default function VulnsPage() {
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'false_positive' | 'pending_review'>('all')
   const [surfaceFilter, setSurfaceFilter] = useState<'all' | 'frontend' | 'backend'>('all')
   const [tierFilter, setTierFilter] = useState<VulnTierFilter>('all')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
   const [trackingFilter, setTrackingFilter] = useState<'all' | VulnTrackingStatus>('all')
   const [projectId, setProjectId] = useState<number | undefined>()
   const [projects, setProjects] = useState<ProjectName[]>([])
@@ -54,6 +53,13 @@ export default function VulnsPage() {
     for (const p of projects) map.set(p.id, p.name)
     return map
   }, [projects])
+  const projectKindById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const p of projects) {
+      if (p.target_kind) map.set(p.id, p.target_kind)
+    }
+    return map
+  }, [projects])
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -63,10 +69,11 @@ export default function VulnsPage() {
       status: filter === 'all' ? undefined : filter,
       attackSurface: surfaceFilter === 'all' ? undefined : surfaceFilter,
       submissionTier: tierFilter === 'all' ? undefined : tierFilter,
+      vulnType: typeFilter === 'all' ? undefined : typeFilter,
       trackingStatus: trackingFilter === 'all' ? undefined : trackingFilter,
       q: search,
     }),
-    [projectId, filter, surfaceFilter, tierFilter, trackingFilter, search],
+    [projectId, filter, surfaceFilter, tierFilter, typeFilter, trackingFilter, search],
   )
 
   useEffect(() => {
@@ -90,7 +97,41 @@ export default function VulnsPage() {
       .catch(() => {})
 
   useEffect(() => {
-    api.listProjectNames().then(setProjects).catch(() => {})
+    let cancelled = false
+    const load = async () => {
+      try {
+        const names = await api.listProjectNames()
+        if (cancelled) return
+        const missingKind = names.some((p) => !p.target_kind)
+        if (!missingKind) {
+          setProjects(names)
+          return
+        }
+        const kinds = new Map<number, NonNullable<ProjectName['target_kind']>>()
+        let offset = 0
+        let total = Infinity
+        while (offset < total) {
+          const page = await api.listProjects({ limit: 100, offset })
+          total = page.total
+          for (const p of page.items) kinds.set(p.id, p.target_kind)
+          offset += page.items.length
+          if (!page.items.length) break
+        }
+        if (cancelled) return
+        setProjects(
+          names.map((p) => ({
+            ...p,
+            target_kind: kinds.get(p.id) ?? p.target_kind,
+          })),
+        )
+      } catch {
+        /* ignore transient */
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => startVisibilityPoll(refresh, 5000), [listQuery, page])
@@ -232,6 +273,7 @@ export default function VulnsPage() {
       <VulnCalendar
         projectId={projectId}
         projectNameById={projectNameById}
+        projectKindById={projectKindById}
         onOpenVuln={(vid) => navigate(`/vulns/${vid}`)}
       />
 
@@ -266,6 +308,25 @@ export default function VulnsPage() {
             <SelectItem value="all">全部前后台</SelectItem>
             <SelectItem value="frontend">前台漏洞</SelectItem>
             <SelectItem value="backend">后台漏洞</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={typeFilter}
+          onValueChange={(value) => {
+            if (value == null) return
+            setTypeFilter(value)
+          }}
+        >
+          <SelectTrigger className="w-auto min-w-36">
+            <SelectValue>{typeFilter === 'all' ? '全部类型' : formatVulnType(typeFilter)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
+            <SelectItem value="all">全部类型</SelectItem>
+            {VULN_TYPE_OPTIONS.map(([id, label]) => (
+              <SelectItem key={id} value={id}>
+                {label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Select value={tierFilter} onValueChange={(value) => setTierFilter(value as VulnTierFilter)}>
@@ -324,6 +385,7 @@ export default function VulnsPage() {
             setSelected((prev) => (checked ? [...prev, vid] : prev.filter((x) => x !== vid)))
           }
           projectNameById={projectNameById}
+          projectKindById={projectKindById}
         />
       </Card>
 

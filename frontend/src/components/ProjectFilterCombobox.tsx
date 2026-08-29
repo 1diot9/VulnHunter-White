@@ -88,8 +88,8 @@ export default function ProjectFilterCombobox({
                 />
               </div>
             </div>
-            <Combobox.Empty className="px-2 py-6 text-center text-sm text-muted-foreground">
-              无匹配项目
+            <Combobox.Empty className="text-center text-sm text-muted-foreground">
+              <span className="block px-2 py-6">无匹配项目</span>
             </Combobox.Empty>
             <Combobox.List className={cn('overflow-x-hidden overflow-y-auto overscroll-contain p-1 outline-none', LIST_MAX_HEIGHT_CLASS)}>
               {(item: ProjectOption) => (
