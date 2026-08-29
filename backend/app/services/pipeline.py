@@ -1686,6 +1686,7 @@ def _phase_system_prompt(
     if name in _REPORT_FORMAT_PHASES:
         parts.append(load_prompt("report-formats.md").strip())
     if name == "reviewer.md":
+        parts.append(load_prompt("cvss.md").strip())
         chosen = verify_mode if verify_mode is not None else _read_dynamic_verify_mode(project_id)
         if chosen == VERIFY_MODE_OFF:
             parts.append(load_prompt("verify/static.md").strip())

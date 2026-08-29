@@ -185,6 +185,37 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "观察面" in load_prompt("verifier.md")
 
 
+def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
+    from app.tools import registry
+
+    text = load_prompt("cvss.md")
+    assert "PR 必须与 attack_surface" in text
+    assert "普通权限" in text
+    assert "PR:L" in text
+    assert "XSS" in text
+    assert "C:L/I:L" in text
+    assert "S:C" in text
+    assert "Cookie" in text
+    reviewer = load_prompt("reviewer.md")
+    assert "PR 必须与攻击面一致" in reviewer
+    assert "XSS 默认" in reviewer
+    initial = load_prompt("initial/reviewer.md")
+    assert "PR 必须与攻击面一致" in initial
+    overlay = pipeline._phase_system_prompt(project, "reviewer.md")
+    assert "CVSS 3.1 度量标准" in overlay
+    assert "XSS（含存储型）" in overlay
+    spec = registry.get("ConfirmVuln")
+    assert spec is not None
+    assert "CVSS 3.1 度量标准" in spec.description
+    assert "PR:L" in spec.description
+    vector_desc = spec.parameters["properties"]["cvss_vector"]["description"]
+    assert "CVSS 3.1 度量标准" in vector_desc
+    assert "Cookie" in vector_desc
+    cve_spec = registry.get("SetCveRecordField")
+    assert cve_spec is not None
+    assert "PR 须与已确认的 attack_surface 一致" in cve_spec.description
+
+
 def test_worker_prompt_requires_default_exploitability():
     worker = load_prompt("worker.md")
     assert "什么算漏洞" in worker

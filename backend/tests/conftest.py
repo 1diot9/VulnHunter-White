@@ -70,6 +70,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.demo_seed as demo_seed
     import app.services.bypass_queue as bypass_queue
     import app.services.conversation as conversation_service
+    import app.services.cve_record as cve_record
 
     for mod in (
         models,
@@ -100,6 +101,7 @@ def tmp_env(tmp_path, monkeypatch):
         sink_queue,
         bypass_queue,
         conversation_service,
+        cve_record,
         demo_seed,
         agent_loop,
         agent_checkpoint,

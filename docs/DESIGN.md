@@ -447,7 +447,7 @@ flowchart LR
 
 ## 7. 漏洞评级附录
 
-按 CVSS 3.1 基础分：9.0–10.0 为严重，7.0–8.9 为高危，4.0–6.9 为中危，0.1–3.9 为低危。Agent 只填写评分向量（`cvss_vector`），分数由系统按 FIRST 公式计算；向量格式错误时 ConfirmVuln / SetCveRecordField 返回具体错误。
+按 CVSS 3.1 基础分：9.0–10.0 为严重，7.0–8.9 为高危，4.0–6.9 为中危，0.1–3.9 为低危。Agent 只填写评分向量（`cvss_vector`），分数由系统按 FIRST 公式计算；向量格式错误、或 PR 与 `attack_surface` / `required_account` 不一致时 ConfirmVuln / SetCveRecordField 返回具体错误。
 
 向量格式：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
 
@@ -459,6 +459,8 @@ flowchart LR
 | UI User Interaction | N None / R Required |
 | S Scope | U Unchanged / C Changed |
 | C / I / A | H High / L Low / N None |
+
+PR 必须与攻击面一致：前台 → PR:N，后台普通权限 → PR:L，后台管理员 → PR:H。XSS 默认 `UI:R/S:C/C:L/I:L/A:N`，不要因 Cookie/账户接管把 C/I 标 H。完整度量标准见 `backend/app/prompts/cvss.md`（注入 Reviewer 系统提示词与 ConfirmVuln 工具描述）。
 
 ---
 

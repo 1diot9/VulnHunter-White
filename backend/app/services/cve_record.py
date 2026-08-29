@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from ..config import TEMPLATES_DIR
+from ..models import SessionLocal, Vuln
 from ..cvss31 import (
     CVE_SCORE_PATH,
     CVE_SEVERITY_PATH,
     CVE_VECTOR_PATH,
     Cvss31Error,
     apply_cvss31_to_cve_record,
+    cvss_pr_alignment_error,
     parse_cvss31,
 )
 from .paths import vuln_dir
@@ -88,7 +90,9 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
     FillableField(
         "containers.cna.metrics[0].cvssV3_1.vectorString",
         "CVSS 3.1 基础向量（只填度量，如 CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H；"
-        "分数由系统计算，不要手填 baseScore）",
+        "分数由系统计算，不要手填 baseScore）。"
+        "PR 须与已确认的 attack_surface 一致：前台 PR:N，后台 user PR:L，admin PR:H。"
+        "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。",
         required=False,
     ),
 )
@@ -371,6 +375,14 @@ def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[
             parsed = parse_cvss31(value)
         except Cvss31Error as exc:
             return {"ok": False, "error": str(exc)}
+        with SessionLocal() as db:
+            vuln = db.get(Vuln, int(vuln_id))
+            surface = (getattr(vuln, "attack_surface", None) or "").strip() if vuln else ""
+            account = (getattr(vuln, "required_account", None) or "").strip() or None if vuln else None
+        if surface:
+            pr_mismatch = cvss_pr_alignment_error(parsed, surface, account)
+            if pr_mismatch:
+                return {"ok": False, "error": pr_mismatch}
         apply_cvss31_to_cve_record(record, parsed)
         write_cve_record(project_id, vuln_id, record)
         return {

@@ -21,3 +21,8 @@ def render_prompt(name: str, **kwargs: object) -> str:
     """Load a prompt document and substitute ${placeholders}."""
     mapping = {key: "" if value is None else str(value) for key, value in kwargs.items()}
     return Template(load_prompt(name)).safe_substitute(mapping).strip()
+
+
+def cvss_scoring_prompt() -> str:
+    """CVSS 3.1 metric selection rules shared by Reviewer prompts and ConfirmVuln."""
+    return load_prompt("cvss.md").strip()

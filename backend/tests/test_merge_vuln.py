@@ -11,6 +11,10 @@ SEVERITY_FACTORS = {
     "submission_tier": "cve_candidate",
     "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }
+BACKEND_USER_FACTORS = {
+    **SEVERITY_FACTORS,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+}
 
 
 def _ctx(project_id: int, role: str, vuln_id: int | None = None) -> ToolContext:
@@ -104,7 +108,7 @@ def test_append_affected_locations_pending_only(tmp_env, project):
             "evidence_level": "static_only",
             "attack_surface": "backend",
             "required_account": "user",
-            **SEVERITY_FACTORS,
+            **BACKEND_USER_FACTORS,
             "root_cause_key": "idor:SysCommentController",
         },
     )
@@ -151,7 +155,7 @@ def test_merge_into_vuln_into_and_absorb(tmp_env, project):
             "evidence_level": "static_only",
             "attack_surface": "backend",
             "required_account": "user",
-            **SEVERITY_FACTORS,
+            **BACKEND_USER_FACTORS,
             "root_cause_key": "idor:SysCommentController",
         },
     )

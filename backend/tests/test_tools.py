@@ -19,6 +19,10 @@ SEVERITY_FACTORS = {
     "submission_tier": "cve_candidate",
     "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }
+BACKEND_USER_FACTORS = {
+    **SEVERITY_FACTORS,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+}
 
 
 def _set_audit_mode(project_id: int, mode: str) -> None:
@@ -758,7 +762,7 @@ def test_confirm_rejects_needs_more_evidence_tier(tmp_env, project):
             "vuln_id": out["vuln_id"],
             "evidence_level": "static_only",
             "attack_surface": "frontend",
-            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
             "submission_tier": "证据不足",
             "submission_reason": "环境没打出来",
         },
@@ -1114,7 +1118,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "vuln_id": stored["vuln_id"],
             "attack_surface": "backend",
             "required_account": "user",
-            **SEVERITY_FACTORS,
+            **BACKEND_USER_FACTORS,
             "submission_reason": "存储型 XSS 可在其他用户浏览器执行",
             "root_cause_key": "stored_xss:Comment",
         },
@@ -1149,7 +1153,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "vuln_id": csrf["vuln_id"],
             "attack_surface": "backend",
             "required_account": "admin",
-            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "1-click CSRF",
             "root_cause_key": "csrf:PluginController",
@@ -1312,16 +1316,115 @@ def test_confirm_backend_user_account(tmp_env, project):
             "vuln_id": vuln_id,
             "attack_surface": "backend",
             "required_account": "普通权限",
-            **SEVERITY_FACTORS,
+            **BACKEND_USER_FACTORS,
         },
     )
     assert conf["ok"] is True
     assert conf["required_account"] == "user"
     assert conf["required_account_label"] == "普通权限"
     assert conf["severity"] == "high"
-    assert conf["severity_score"] == 7.5
+    assert conf["severity_score"] == 8.1
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "- 所需账号：普通权限" in report
+
+
+def test_confirm_rejects_pr_mismatch_with_attack_surface(tmp_env, project):
+    payload = {
+        "title": "存储型 XSS",
+        "vuln_type": "stored_xss",
+        "cwe": "CWE-79",
+        "file_path": "app/Comment.java",
+        "line_no": 1,
+        "source_sink": "comment -> html",
+        "auth_premise": "登录用户",
+        "http_request": "POST /comment HTTP/1.1\n",
+        "poc_code": "print(1)\n",
+        "expected_evidence": "script persists",
+        "config_premise": "default",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    backend_pr_n = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "user",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "存储型 XSS",
+            "root_cause_key": "stored_xss:Comment",
+        },
+    )
+    assert backend_pr_n["ok"] is False
+    assert "PR" in backend_pr_n["error"]
+    assert "PR:L" in backend_pr_n["error"]
+    assert "PR:N" in backend_pr_n["error"]
+
+    frontend = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {**payload, "title": "前台泄露", "file_path": "app/Public.java", "vuln_type": "sqli"},
+    )
+    frontend_pr_l = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": frontend["vuln_id"],
+            "attack_surface": "frontend",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "未认证泄露",
+        },
+    )
+    assert frontend_pr_l["ok"] is False
+    assert "PR:N" in frontend_pr_l["error"]
+
+    admin = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {**payload, "title": "管理员配置 XSS", "file_path": "app/AdminConfig.java"},
+    )
+    admin_pr_l = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": admin["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "admin",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "管理员存储型 XSS",
+            "root_cause_key": "stored_xss:AdminConfig",
+        },
+    )
+    assert admin_pr_l["ok"] is False
+    assert "PR:H" in admin_pr_l["error"]
+
+    aligned = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": out["vuln_id"],
+            "attack_surface": "backend",
+            "required_account": "user",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "存储型 XSS",
+            "root_cause_key": "stored_xss:Comment",
+        },
+    )
+    assert aligned["ok"] is True
+    rewrite = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=out["vuln_id"]),
+        "SetCveRecordField",
+        {
+            "path": "containers.cna.metrics[0].cvssV3_1.vectorString",
+            "value": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N",
+        },
+    )
+    assert rewrite["ok"] is False
+    assert "PR:L" in rewrite["error"]
 
 
 def test_confirm_frontend_ignores_account(tmp_env, project):

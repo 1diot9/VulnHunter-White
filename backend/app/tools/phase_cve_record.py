@@ -110,6 +110,8 @@ registry.register(
             "写入 CVE JSON 的单个字段（路径见 ReadCveRecord）。"
             "descriptions[0].value 须含漏洞链路、漏洞代码（完整路径+源码）与 HTTP/API PoC，不要一句话摘要。"
             "CVSS 只写 vectorString（CVSS:3.1/...），不要手填 baseScore；向量无效会返回具体错误。"
+            "PR 须与已确认的 attack_surface 一致（前台 PR:N，后台 user PR:L，admin PR:H）；"
+            "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。"
             "仅可写预定义字段；未知信息请传统一占位符，不要 Write 整份 cve.json。"
         ),
         parameters={

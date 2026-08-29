@@ -69,9 +69,11 @@ from ..cvss31 import (
     Cvss31Error,
     Cvss31Result,
     apply_cvss31_to_cve_record,
+    cvss_pr_alignment_error,
     parse_cvss31,
     stamp_advisory_cvss31,
 )
+from ..prompts import cvss_scoring_prompt
 from ..services.cve_record import ensure_cve_record, write_cve_record
 from ..vuln_types import (
     SubmissionTierDecision,
@@ -424,6 +426,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
     except (Cvss31Error, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
+    pr_mismatch = cvss_pr_alignment_error(cvss, surface, account)
+    if pr_mismatch:
+        return {"ok": False, "error": pr_mismatch}
     config_premise = None
     if args.get("config_premise") not in (None, ""):
         try:
@@ -905,10 +910,13 @@ def register_reviewer_tools() -> None:
                 "确认危害/鉴权不同仍要单独确认时，再次调用并传 confirm_not_duplicate=true"
                 "（仅本会话提醒过一次后才接受）。"
                 "严重度按 CVSS 3.1 向量由系统计分，不要手填分数，也不要按漏洞类型映射。"
+                "PR 必须与 attack_surface / required_account 一致，否则拒绝确认。"
                 "SSRF 须按观察面确认：有回显才能写可读元数据/内网正文；"
                 "仅状态码/时延/报错差别只算内网端口探测，向量 C/I/A 不要按凭据窃取标 H。"
                 "有漏洞环境时若项目指纹仍缺，用 CollectLabFingerprints 升级项目共享指纹，"
                 "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会写入 docs/app-fingerprints.json 的共享指纹。"
+                "\n\n"
+                + cvss_scoring_prompt()
             ),
             parameters={
                 "type": "object",
@@ -947,10 +955,13 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "必填。CVSS 3.1 基础评分向量，只填度量，不要填分数。"
                             "格式 CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H。"
-                            "度量：AV=N|A|L|P，AC=L|H，PR=N|L|H，UI=N|R，S=U|C，"
-                            "C/I/A=H|L|N。向量无效时工具会返回具体错误。"
+                            "PR 必须与 attack_surface 一致：前台 PR:N，后台 user PR:L，admin PR:H，否则拒绝。"
+                            "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。"
                             "SSRF 仅端口探测时 C/I/A 不要标成已窃取凭据（H）；"
                             "有回显读元数据/内网正文才可将 C 标 H。"
+                            "完整度量标准见本工具描述。"
+                            "\n\n"
+                            + cvss_scoring_prompt()
                         ),
                     },
                     "submission_tier": {

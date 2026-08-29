@@ -66,10 +66,11 @@
    - 环境起不来（无 target_url），但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
    - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。
-5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。ConfirmVuln 必须传 `cvss_vector`（CVSS 3.1 基础向量），**只填度量、不要填分数**；系统按 FIRST CVSS 3.1 计分并回写严重度。向量格式不对时工具会返回具体错误，改完再调。
+5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。ConfirmVuln 必须传 `cvss_vector`（CVSS 3.1 基础向量），**只填度量、不要填分数**；系统按 FIRST CVSS 3.1 计分并回写严重度。向量格式不对、或 PR 与攻击面不一致时工具会返回错误，改完再调。完整度量标准见系统附加的 CVSS 专章（与 ConfirmVuln 工具描述相同）。
    - 向量：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
    - 度量：AV=N|A|L|P，AC=L|H，PR=N|L|H，UI=N|R，S=U|C，C/I/A=H|L|N
-   - 前台未认证 → 通常 PR:N；后台普通权限 → PR:L；管理员 → PR:H。须与 `attack_surface` / `required_account` 一致。
+   - **PR 必须与攻击面一致**（硬校验）：前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。不要用「SNMP/设备侧注入」把后台洞写成 PR:N。
+   - XSS 默认 `UI:R/S:C/C:L/I:L/A:N`，不要因 Cookie/账户接管把 C/I 标 H。
    - 分数阈值：9.0–10.0 critical，7.0–8.9 high，4.0–6.9 medium，0.1–3.9 low。
 6. 资产证明审核：报告必须包含 `## 互联网资产证明`（旧报告中的 `## 应用搜索指纹` 视为等价），并分别给出 FOFA 与 X 情报社区查询语句。测绘语句不允许出现「或」/`||`。**指纹是项目级的**（`docs/app-fingerprints.json`），全项目只识别一次，本条 Confirm 写入报告即可，不要每条洞重新搜。
    - **有漏洞环境**（`env.json` 的 `target_url` 可访问，或人工靶场说明里有地址）：若项目指纹仍缺 `icon_hash`/标题，才 `CollectLabFingerprints` 升级项目指纹并写回本条（`apply=true` 或 ConfirmVuln 传入 `fofa_fingerprint`/`x_fingerprint`）。占位「待运行环境确认」、照搬漏洞路径/PoC 参数、编造 hash，都由你在本轮改好，不要为此 ReturnToWorker。

@@ -86,3 +86,21 @@ def test_stamp_advisory_replaces_old_cvss_lines():
     assert "CVSS 3.0" not in out
     assert "CVSS 4.0" not in out
     assert "**Severity:** High" in out
+
+
+def test_expected_pr_follows_attack_surface():
+    from app.cvss31 import cvss_pr_alignment_error, expected_pr, parse_cvss31
+
+    assert expected_pr("frontend") == "N"
+    assert expected_pr("backend", "user") == "L"
+    assert expected_pr("backend", "admin") == "H"
+    assert expected_pr("backend") is None
+
+    xss_inflated = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N")
+    err = cvss_pr_alignment_error(xss_inflated, "backend", "user")
+    assert err is not None
+    assert "PR:L" in err
+    assert cvss_pr_alignment_error(xss_inflated, "frontend") is None
+
+    aligned = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N")
+    assert cvss_pr_alignment_error(aligned, "backend", "user") is None

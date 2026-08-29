@@ -140,6 +140,54 @@ class Cvss31Result:
         }
 
 
+_PR_SURFACE_HINT = {
+    "N": "前台未认证",
+    "L": "后台普通权限",
+    "H": "后台管理员",
+}
+
+
+def expected_pr(attack_surface: str, required_account: str | None = None) -> str | None:
+    """PR required by ConfirmVuln attack_surface / required_account, or None if unknown."""
+    surface = (attack_surface or "").strip()
+    account = (required_account or "").strip() or None
+    if surface == "frontend":
+        return "N"
+    if surface == "backend":
+        if account == "admin":
+            return "H"
+        if account == "user":
+            return "L"
+    return None
+
+
+def cvss_pr_alignment_error(
+    cvss: Cvss31Result,
+    attack_surface: str,
+    required_account: str | None = None,
+) -> str | None:
+    """Reject PR that contradicts the declared attack surface."""
+    expected = expected_pr(attack_surface, required_account)
+    if expected is None:
+        return None
+    actual = cvss.metrics.get("PR")
+    if actual == expected:
+        return None
+    surface = (attack_surface or "").strip()
+    account = (required_account or "").strip() or None
+    declared = "前台" if surface == "frontend" else (
+        "后台管理员" if account == "admin" else "后台普通权限"
+    )
+    return (
+        "PR 必须与 attack_surface / required_account 一致："
+        f"当前标注为{declared}，须写 PR:{expected}（{_PR_SURFACE_HINT[expected]}），"
+        f"向量里是 PR:{actual}。"
+        "前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。"
+        "不要用「SNMP/设备侧注入不需要应用账号」把后台洞写成 PR:N；"
+        "若攻击者确实无需本应用账号且受害者页面未认证，应改标 attack_surface=frontend。"
+    )
+
+
 def severity_from_cvss_score(score: float) -> str:
     if score <= 0:
         return "none" if score == 0 else "low"
