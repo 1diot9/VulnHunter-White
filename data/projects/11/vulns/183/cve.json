@@ -41,7 +41,10 @@
       ],
       "affected": [
         {
-          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "vendor": "VULNHUNTER_PENDING",
+          "product": "VULNHUNTER_PENDING",
+          "packageName": "memoboard",
+          "collectionURL": "https://pypi.python.org",
           "versions": [
             {
               "status": "affected",

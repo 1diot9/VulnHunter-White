@@ -41,7 +41,8 @@
       ],
       "affected": [
         {
-          "x_CopyOfCNAUnderAffected": "IN-CNA-LR-SCOPE",
+          "vendor": "",
+          "product": "",
           "versions": [
             {
               "status": "affected",

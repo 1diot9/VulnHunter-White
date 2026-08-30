@@ -48,8 +48,10 @@ def _read_cve_record(ctx, args: dict[str, Any]) -> dict[str, Any]:
             "使用 SetCveRecordField 逐字段写入；无法确定的字段保持占位符 "
             f"{status['placeholder']}，不要直接 Write 整份 cve.json。"
             " descriptions[0].value 须为英文详述（产品/版本、根因、入口→sink 链路、"
-            "漏洞代码完整路径与源码原文、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害），"
+            "漏洞代码完整路径与源码原文、完整 HTTP 请求包或无 HTTP 面时的 API/调用链、危害；"
+            "纯文本 value 最多 4096 字符，长 payload 用占位符），"
             "supportingMedia 用 HTML（漏洞代码与 PoC 放 <pre>）。"
+            " affected[0] 须填 vendor+product，或 packageName+collectionURL。"
         ),
     }
     if args.get("include_record"):
@@ -109,6 +111,8 @@ registry.register(
         description=(
             "写入 CVE JSON 的单个字段（路径见 ReadCveRecord）。"
             "descriptions[0].value 须含漏洞链路、漏洞代码（完整路径+源码）与 HTTP/API PoC，不要一句话摘要。"
+            "纯文本 value 最多 4096 字符，超长会自动截断；长 payload 请用 <BASE64_PAYLOAD> 等占位符。"
+            "affected[0] 须填 vendor+product，或 packageName+collectionURL（如 pip 包填 memoboard + https://pypi.python.org）。"
             "CVSS 只写 vectorString（CVSS:3.1/...），不要手填 baseScore；向量无效会返回具体错误。"
             "PR 须与已确认的 attack_surface 一致（前台 PR:N，后台 user PR:L，admin PR:H）；"
             "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。"

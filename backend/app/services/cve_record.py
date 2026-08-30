@@ -54,6 +54,45 @@ _MIN_SOURCE_CHARS = 8
 _PLAIN_DESC_PATH = "containers.cna.descriptions[0].value"
 _HTML_DESC_PATH = "containers.cna.descriptions[0].supportingMedia[0].value"
 _DETAIL_DESC_PATHS = frozenset({_PLAIN_DESC_PATH, _HTML_DESC_PATH})
+CVE_VALUE_MAX_LEN = 4096
+CVE_HTML_VALUE_MAX_LEN = 16384
+CVE_VALUE_TRUNC_SUFFIX = "\n...[truncated to CVE 4096 limit; see advisory.md]"
+_AFFECTED_BASE_PATH = "containers.cna.affected[0]"
+_AFFECTED_VENDOR_PATH = f"{_AFFECTED_BASE_PATH}.vendor"
+_AFFECTED_PRODUCT_PATH = f"{_AFFECTED_BASE_PATH}.product"
+_AFFECTED_PACKAGE_PATH = f"{_AFFECTED_BASE_PATH}.packageName"
+_AFFECTED_COLLECTION_PATH = f"{_AFFECTED_BASE_PATH}.collectionURL"
+_AFFECTED_IDENTITY_PATHS = frozenset(
+    {
+        _AFFECTED_VENDOR_PATH,
+        _AFFECTED_PRODUCT_PATH,
+        _AFFECTED_PACKAGE_PATH,
+        _AFFECTED_COLLECTION_PATH,
+    }
+)
+_ADVISORY_AFFECTED_SECTION_RE = re.compile(
+    r"(?is)##\s+affected products\s*\n+(.*?)(?=\n##\s|\Z)"
+)
+_ADVISORY_TABLE_ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?([^|`]*?)`?\s*\|", re.M)
+_LONG_TOKEN_RE = re.compile(r"(?i)([A-Za-z0-9+/=_-]{80,})")
+_ECOSYSTEM_COLLECTION_URLS: dict[str, str] = {
+    "pip": "https://pypi.python.org",
+    "pypi": "https://pypi.python.org",
+    "npm": "https://registry.npmjs.org",
+    "maven": "https://repo.maven.apache.org/maven2",
+    "nuget": "https://nuget.org/packages",
+    "packagist": "https://packagist.org",
+    "composer": "https://packagist.org",
+    "cargo": "https://crates.io",
+    "crates": "https://crates.io",
+    "rubygems": "https://rubygems.org",
+    "gem": "https://rubygems.org",
+    "go": "https://pkg.go.dev",
+    "golang": "https://pkg.go.dev",
+    "github": "https://github.com",
+    "gitlab": "https://gitlab.com/explore",
+    "docker": "https://hub.docker.com",
+}
 
 
 @dataclass(frozen=True)
@@ -72,6 +111,24 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
     FillableField(
         "containers.cna.affected[0].versions[0].version",
         "受影响产品版本（如 <=1.2.3 或 all versions）",
+    ),
+    FillableField(
+        _AFFECTED_VENDOR_PATH,
+        "受影响厂商/项目（与 product 成对；开源包可改填 packageName + collectionURL）",
+    ),
+    FillableField(
+        _AFFECTED_PRODUCT_PATH,
+        "受影响产品名（与 vendor 成对；开源包可改填 packageName + collectionURL）",
+    ),
+    FillableField(
+        _AFFECTED_PACKAGE_PATH,
+        "开源包名（与 collectionURL 成对；填写后 vendor/product 可留占位符）",
+        required=False,
+    ),
+    FillableField(
+        _AFFECTED_COLLECTION_PATH,
+        "包集合 URL（如 https://pypi.python.org、https://registry.npmjs.org；与 packageName 成对）",
+        required=False,
     ),
     FillableField(
         "containers.cna.descriptions[0].value",
@@ -181,6 +238,190 @@ def _plain_text(value: Any, *, html: bool) -> str:
     return " ".join(text.split()).strip()
 
 
+def fit_cve_value(value: str, *, max_len: int = CVE_VALUE_MAX_LEN) -> tuple[str, bool]:
+    """Fit a CVE description/plain value into schema max length."""
+    text = str(value or "")
+    if len(text) <= max_len:
+        return text, False
+    shortened = _LONG_TOKEN_RE.sub(lambda m: f"<{m.group(1)[:24]}...>", text)
+    if len(shortened) <= max_len:
+        return shortened, True
+    suffix = CVE_VALUE_TRUNC_SUFFIX
+    budget = max_len - len(suffix)
+    if budget < 256:
+        return text[: max_len - len(suffix)] + suffix, True
+    head = int(budget * 0.7)
+    tail = max(0, budget - head - 3)
+    fitted = f"{shortened[:head]}...{shortened[-tail:]}{suffix}"
+    if len(fitted) > max_len:
+        fitted = f"{shortened[: budget - 3]}...{suffix}"
+    return fitted[:max_len], True
+
+
+def _affected_entry(record: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        entry = get_by_path(record, _AFFECTED_BASE_PATH)
+    except KeyError:
+        return None
+    return entry if isinstance(entry, dict) else None
+
+
+def affected_identity_ok(record: dict[str, Any]) -> bool:
+    entry = _affected_entry(record)
+    if not entry:
+        return False
+    vendor_ok = not is_unfilled_value(entry.get("vendor"))
+    product_ok = not is_unfilled_value(entry.get("product"))
+    package_ok = not is_unfilled_value(entry.get("packageName"))
+    collection_ok = not is_unfilled_value(entry.get("collectionURL"))
+    return (vendor_ok and product_ok) or (package_ok and collection_ok)
+
+
+def affected_identity_issues(record: dict[str, Any]) -> list[str]:
+    if affected_identity_ok(record):
+        return []
+    return [
+        "affected[0] 须填写 vendor+product，或 packageName+collectionURL（CVE 5.2 必填其一）"
+    ]
+
+
+def _collection_url_for_ecosystem(raw: str) -> str | None:
+    key = re.sub(r"[^a-z0-9]+", " ", str(raw or "").lower()).strip()
+    if not key:
+        return None
+    for token in key.split():
+        url = _ECOSYSTEM_COLLECTION_URLS.get(token)
+        if url:
+            return url
+    return None
+
+
+def parse_advisory_affected(advisory_md: str) -> dict[str, str]:
+    """Parse advisory ## Affected products into CVE affected hints."""
+    section_match = _ADVISORY_AFFECTED_SECTION_RE.search(advisory_md or "")
+    if not section_match:
+        return {}
+    section = section_match.group(1).strip()
+    rows: dict[str, str] = {}
+    for match in _ADVISORY_TABLE_ROW_RE.finditer(section):
+        key = match.group(1).strip().lower()
+        val = match.group(2).strip()
+        if not key or key in {"field", "---"} or not val:
+            continue
+        rows[key] = val
+    out: dict[str, str] = {}
+    ecosystem = rows.get("ecosystem") or rows.get("package ecosystem")
+    package_name = rows.get("package name") or rows.get("package")
+    version = rows.get("affected versions") or rows.get("affected version")
+    if package_name and ecosystem:
+        collection = _collection_url_for_ecosystem(ecosystem)
+        if collection:
+            out["packageName"] = package_name
+            out["collectionURL"] = collection
+    if version and "version" not in out:
+        out["version"] = version
+    if out:
+        return out
+    line = _hint_line(section)
+    if not line:
+        return {}
+    product = line.split(" through ", 1)[0].split(" version", 1)[0].split(" latest", 1)[0].strip()
+    product = re.sub(r"\s*\(.*\)$", "", product).strip(" .")
+    if not product:
+        return {}
+    token = product.split()[0]
+    vendor = token if token else product
+    out["vendor"] = vendor
+    out["product"] = product
+    version_match = re.search(
+        r"(?i)(?:through|<=|version|v)\s*([0-9][0-9A-Za-z.+_-]*)",
+        line,
+    )
+    if version_match:
+        out["version"] = version_match.group(1)
+    return out
+
+
+def _hint_line(raw: str) -> str:
+    line = ""
+    for row in str(raw or "").splitlines():
+        text = row.strip().lstrip("-* ").strip()
+        if text and not text.startswith("|"):
+            line = text
+            break
+    line = re.sub(r"[`*_]+", "", line)
+    line = re.sub(r"\s+", " ", line).strip()
+    if len(line) > 120:
+        line = line[:120].strip()
+    return line
+
+
+def seed_affected_from_advisory(project_id: int, vuln_id: int, record: dict[str, Any]) -> bool:
+    """Fill affected vendor/product or package fields from advisory.md when still pending."""
+    advisory_path = vuln_dir(project_id, vuln_id) / "advisory.md"
+    if not advisory_path.is_file():
+        return False
+    try:
+        advisory_md = advisory_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    hints = parse_advisory_affected(advisory_md)
+    if not hints:
+        return False
+    entry = _affected_entry(record)
+    if not entry:
+        return False
+    changed = False
+    for key in ("vendor", "product", "packageName", "collectionURL"):
+        val = hints.get(key)
+        if not val or not is_unfilled_value(entry.get(key)):
+            continue
+        entry[key] = val
+        changed = True
+    version = hints.get("version")
+    if version:
+        try:
+            current = get_by_path(record, "containers.cna.affected[0].versions[0].version")
+            if is_unfilled_value(current):
+                set_by_path(record, "containers.cna.affected[0].versions[0].version", version)
+                changed = True
+        except KeyError:
+            pass
+    return changed
+
+
+def normalize_cve_record(record: dict[str, Any]) -> bool:
+    """Apply schema-oriented fixes in place (affected identity placeholders, value length)."""
+    changed = False
+    entry = _affected_entry(record)
+    if entry is not None:
+        entry.pop("x_CopyOfCNAUnderAffected", None)
+        for key in ("vendor", "product", "packageName", "collectionURL"):
+            if key not in entry:
+                entry[key] = CVE_FIELD_PLACEHOLDER
+                changed = True
+            elif entry[key] in ("", None):
+                entry[key] = CVE_FIELD_PLACEHOLDER
+                changed = True
+    try:
+        plain = get_by_path(record, _PLAIN_DESC_PATH)
+        if isinstance(plain, str) and len(plain) > CVE_VALUE_MAX_LEN:
+            fitted, _ = fit_cve_value(plain)
+            set_by_path(record, _PLAIN_DESC_PATH, fitted)
+            changed = True
+    except KeyError:
+        pass
+    try:
+        html = get_by_path(record, _HTML_DESC_PATH)
+        if isinstance(html, str) and len(html) > CVE_HTML_VALUE_MAX_LEN:
+            fitted, _ = fit_cve_value(html, max_len=CVE_HTML_VALUE_MAX_LEN)
+            set_by_path(record, _HTML_DESC_PATH, fitted)
+            changed = True
+    except KeyError:
+        pass
+    return changed
+
+
 def _looks_like_source(text: str) -> bool:
     body = str(text or "").strip()
     if len(body) < _MIN_SOURCE_CHARS:
@@ -251,10 +492,21 @@ def description_detail_issues(value: Any, *, html: bool = False) -> list[str]:
     return issues
 
 
-def _quality_issues_for(path: str, value: Any) -> list[str]:
-    if path not in _DETAIL_DESC_PATHS:
-        return []
-    return description_detail_issues(value, html=path == _HTML_DESC_PATH)
+def _quality_issues_for(path: str, value: Any, *, record: dict[str, Any] | None = None) -> list[str]:
+    issues: list[str] = []
+    if path in _DETAIL_DESC_PATHS:
+        issues.extend(description_detail_issues(value, html=path == _HTML_DESC_PATH))
+        if path == _PLAIN_DESC_PATH and isinstance(value, str) and len(value) > CVE_VALUE_MAX_LEN:
+            issues.append(f"纯文本描述超过 CVE 上限 {CVE_VALUE_MAX_LEN} 字符（写入时会自动截断）")
+        if (
+            path == _HTML_DESC_PATH
+            and isinstance(value, str)
+            and len(value) > CVE_HTML_VALUE_MAX_LEN
+        ):
+            issues.append(f"HTML 描述超过 CVE 上限 {CVE_HTML_VALUE_MAX_LEN} 字符（写入时会自动截断）")
+    if record is not None and path in _AFFECTED_IDENTITY_PATHS:
+        issues.extend(affected_identity_issues(record))
+    return issues
 
 
 def _apply_placeholders(record: dict[str, Any]) -> None:
@@ -271,6 +523,8 @@ def initialize_cve_record(project_id: int, vuln_id: int) -> dict[str, Any]:
     """Create cve.json from template with unified placeholders for agent-fillable fields."""
     record = copy.deepcopy(load_cve_template())
     _apply_placeholders(record)
+    normalize_cve_record(record)
+    seed_affected_from_advisory(project_id, vuln_id, record)
     write_cve_record(project_id, vuln_id, record)
     return record
 
@@ -283,6 +537,7 @@ def read_cve_record(project_id: int, vuln_id: int) -> dict[str, Any] | None:
 
 
 def write_cve_record(project_id: int, vuln_id: int, record: dict[str, Any]) -> Path:
+    normalize_cve_record(record)
     path = cve_record_path(project_id, vuln_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -292,6 +547,11 @@ def write_cve_record(project_id: int, vuln_id: int, record: dict[str, Any]) -> P
 def ensure_cve_record(project_id: int, vuln_id: int) -> dict[str, Any]:
     existing = read_cve_record(project_id, vuln_id)
     if existing is not None:
+        changed = normalize_cve_record(existing)
+        if not affected_identity_ok(existing):
+            changed = seed_affected_from_advisory(project_id, vuln_id, existing) or changed
+        if changed:
+            write_cve_record(project_id, vuln_id, existing)
         return existing
     return initialize_cve_record(project_id, vuln_id)
 
@@ -314,8 +574,12 @@ def list_fillable_fields(record: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
             continue
-        issues = _quality_issues_for(spec.path, current)
-        needs_fill = is_unfilled_value(current) or bool(issues)
+        issues = _quality_issues_for(spec.path, current, record=record)
+        identity_ok = affected_identity_ok(record)
+        if spec.path in _AFFECTED_IDENTITY_PATHS and identity_ok:
+            needs_fill = bool(issues)
+        else:
+            needs_fill = is_unfilled_value(current) or bool(issues)
         rows.append(
             {
                 "path": spec.path,
@@ -396,22 +660,50 @@ def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[
             "severity": parsed.severity,
             "message": f"已写入向量，系统计分为 {parsed.score:.1f} {parsed.severity_en}",
         }
+    write_value: Any = value
+    truncated = False
+    if normalized == _PLAIN_DESC_PATH and isinstance(value, str):
+        write_value, truncated = fit_cve_value(value)
+    elif normalized == _HTML_DESC_PATH and isinstance(value, str) and len(value) > CVE_HTML_VALUE_MAX_LEN:
+        write_value, truncated = fit_cve_value(value, max_len=CVE_HTML_VALUE_MAX_LEN)
+    elif normalized == _AFFECTED_COLLECTION_PATH and not is_unfilled_value(value):
+        collection = str(value).strip()
+        if collection not in set(_ECOSYSTEM_COLLECTION_URLS.values()) and not collection.startswith(
+            "https://"
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "collectionURL 须为 CVE 认可的包集合 URL"
+                    "（如 https://pypi.python.org、https://registry.npmjs.org）。"
+                ),
+            }
     try:
-        set_by_path(record, normalized, value)
+        set_by_path(record, normalized, write_value)
     except (KeyError, IndexError, TypeError, ValueError) as e:
         return {"ok": False, "error": f"写入失败: {e}"}
     write_cve_record(project_id, vuln_id, record)
     spec = _FILLABLE_BY_PATH[normalized]
     current = get_by_path(record, normalized)
-    issues = _quality_issues_for(normalized, current)
-    needs_fill = (is_unfilled_value(current) or bool(issues)) if spec.required else False
-    return {
+    issues = _quality_issues_for(normalized, current, record=record)
+    identity_ok = affected_identity_ok(record)
+    if normalized in _AFFECTED_IDENTITY_PATHS and identity_ok:
+        needs_fill = bool(issues)
+    else:
+        needs_fill = (is_unfilled_value(current) or bool(issues)) if spec.required else bool(issues)
+    out: dict[str, Any] = {
         "ok": True,
         "path": normalized,
         "current_value": current,
         "needs_fill": needs_fill,
         "quality_issues": issues,
     }
+    if truncated:
+        out["message"] = (
+            f"内容超过 CVE 字段长度上限，已自动截断至 {CVE_VALUE_MAX_LEN if normalized == _PLAIN_DESC_PATH else CVE_HTML_VALUE_MAX_LEN} 字符；"
+            "长 payload 请改用 <BASE64_PAYLOAD> 等占位符。"
+        )
+    return out
 
 
 def cve_record_status(project_id: int, vuln_id: int) -> dict[str, Any]:

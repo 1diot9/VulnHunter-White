@@ -516,6 +516,8 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         "SQL Injection",
     )
     set_cve_field(project, vid, "containers.cna.affected[0].versions[0].version", "<=1.0.0")
+    set_cve_field(project, vid, "containers.cna.affected[0].vendor", "ExampleCorp")
+    set_cve_field(project, vid, "containers.cna.affected[0].product", "WidgetApp")
     set_cve_field(
         project,
         vid,
@@ -650,3 +652,99 @@ PoC via public API / harness: invoke Parser.parse("../secrets/key.pem") from a t
 Impact: a local caller can read files outside the intended directory. Remaining control: none if the library is used as documented.
 """
     assert not description_detail_issues(lib_desc)
+
+
+def test_fit_cve_value_truncates_plain_description():
+    from app.services.cve_record import CVE_VALUE_MAX_LEN, fit_cve_value
+
+    long_text = "A" * (CVE_VALUE_MAX_LEN + 500)
+    fitted, truncated = fit_cve_value(long_text)
+    assert truncated is True
+    assert len(fitted) <= CVE_VALUE_MAX_LEN
+
+
+def test_parse_advisory_affected_table_and_free_text():
+    from app.services.cve_record import parse_advisory_affected
+
+    table = """## Affected products
+
+| Field | Value |
+| --- | --- |
+| Ecosystem | `pip` |
+| Package name | memoboard |
+| Affected versions | 0.5.0 |
+"""
+    parsed = parse_advisory_affected(table)
+    assert parsed["packageName"] == "memoboard"
+    assert parsed["collectionURL"] == "https://pypi.python.org"
+    assert parsed["version"] == "0.5.0"
+
+    free = "## Affected products\n\nLibreNMS latest version (as of August 2026)\n"
+    parsed_free = parse_advisory_affected(free)
+    assert parsed_free["vendor"] == "LibreNMS"
+    assert parsed_free["product"] == "LibreNMS"
+
+
+def test_set_cve_record_field_truncates_long_plain_description(tmp_env, project):
+    import json
+
+    from app.services.cve_record import CVE_VALUE_MAX_LEN, cve_record_path, set_cve_field
+
+    from app.tools import ToolContext, registry
+
+    out = registry.dispatch(
+        ToolContext(project_id=project, role="worker", phase="worker"),
+        "SubmitVuln",
+        {
+            "title": "SQL 注入演示",
+            "vuln_type": "sqli",
+            "cwe": "CWE-89",
+            "file_path": "app/Db.java",
+            "line_no": 3,
+            "source_sink": "id -> query",
+            "auth_premise": "none",
+            "http_request": "GET /x HTTP/1.1\n",
+            "poc_code": "print(1)\n",
+            "expected_evidence": "500",
+            "config_premise": "default",
+        },
+    )
+    vid = out["vuln_id"]
+    long_desc = ("ExampleCorp WidgetApp through 1.0.0 is affected by SQL injection because "
+                 "app/Db.java query() concatenates the id parameter. Attack chain: GET /api/item. "
+                 "Vulnerable code in app/Db.java:\npublic Result query(String id) { return stmt.execute(\"SELECT * FROM items WHERE id=\" + id); }\n"
+                 "HTTP PoC:\nGET /api/item?id=1 HTTP/1.1\nHost: TARGET\n"
+                 "Impact: remote SQL injection.\n") + ("X" * (CVE_VALUE_MAX_LEN + 200))
+    result = set_cve_field(
+        project,
+        vid,
+        "containers.cna.descriptions[0].value",
+        long_desc,
+    )
+    assert result["ok"] is True
+    assert "截断" in (result.get("message") or "")
+    stored = json.loads(cve_record_path(project, vid).read_text(encoding="utf-8"))
+    assert len(stored["containers"]["cna"]["descriptions"][0]["value"]) <= CVE_VALUE_MAX_LEN
+
+
+def test_initialize_cve_record_seeds_affected_from_advisory(tmp_env, project):
+    from app.services.cve_record import affected_identity_ok, initialize_cve_record
+    from app.services.paths import vuln_dir
+    from app.services.report import write_advisory_md
+
+    vid = 999
+    vdir = vuln_dir(project, vid)
+    write_advisory_md(
+        vdir / "advisory.md",
+        (
+            "## Title\nDemo\n\n## Affected products\n\n"
+            "| Field | Value |\n| --- | --- |\n| Ecosystem | `npm` |\n"
+            "| Package name | demo-lib |\n| Affected versions | <=1.0.0 |\n"
+        ),
+    )
+    record = initialize_cve_record(project, vid)
+    assert affected_identity_ok(record)
+    affected = record["containers"]["cna"]["affected"][0]
+    assert affected["packageName"] == "demo-lib"
+    assert affected["collectionURL"] == "https://registry.npmjs.org"
+    assert affected["versions"][0]["version"] == "<=1.0.0"

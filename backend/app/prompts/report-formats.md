@@ -24,7 +24,8 @@
 - 对齐 `templates/cve.json`。未知字段保持统一占位符 `VULNHUNTER_PENDING`。
 - Agent 挖掘/审核轮次用 `ReadCveRecord` / `SetCveRecordField` 逐字段填写，不要 Write 整份 `cve.json`。
 - CVSS 只写 `containers.cna.metrics[0].cvssV3_1.vectorString`（`CVSS:3.1/...` 基础向量）；`baseScore` / `baseSeverity` 由系统按 CVSS 3.1 计算，手填分数或 3.0/4.0 路径会被拒绝。
-- `containers.cna.descriptions[0].value` 必须是可供 CNA 审核的**英文详述**，不要一句话摘要，也不要把中文报告或 Advisory Markdown 章节标题粘进去。按下面顺序写清：
+- `containers.cna.affected[0]` 须满足 CVE 5.2：**vendor + product**，或 **packageName + collectionURL**（如 `https://pypi.python.org`）。可与 advisory `## Affected products` 对齐。
+- `containers.cna.descriptions[0].value` 必须是可供 CNA 审核的**英文详述**，不要一句话摘要，也不要把中文报告或 Advisory Markdown 章节标题粘进去。该字段**最多 4096 字符**；约 80+ 字符的长串须用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符，系统对超长文本会自动截断。按下面顺序写清：
   1. **产品**：厂商/单位、产品名称、受影响版本。
   2. **根因**：漏洞类型（CWE）、缺失或被绕过的控制、关键文件/函数。
   3. **漏洞链路**：入口（端点/参数/鉴权前提）→ 中间处理 → sink；写明默认部署下为何能打通。
