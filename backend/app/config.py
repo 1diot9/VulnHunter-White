@@ -116,6 +116,8 @@ class Settings(BaseSettings):
     sandbox_image: str = "vulnhunter/sandbox:latest"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
+    integration_sandbox_image: str = "vulnhunter/integration-sandbox:latest"
+    integration_timeout_sec: int = 180
 
     # Docker build cache hygiene. The automatic path only prunes dangling BuildKit
     # cache after Agent-issued build commands; images, containers, and volumes are untouched.

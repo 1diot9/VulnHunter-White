@@ -83,12 +83,30 @@ export function formatTrackingStatus(value: string | null | undefined): string {
   }
 }
 
-export function formatEvidenceLevel(value: string | null | undefined): string | null {
+export function harnessVerificationTier(
+  evidenceLevel: string | null | undefined,
+  harnessDepth?: string | null,
+): 'L1' | 'L2' | 'L3' | null {
+  const evidence = (evidenceLevel || '').trim().toLowerCase()
+  const depth = (harnessDepth || '').trim().toLowerCase() || 'sink'
+  if (evidence === 'harness') {
+    if (depth === 'module') return 'L2'
+    return 'L1'
+  }
+  if (evidence === 'dynamic' && depth === 'integration') return 'L3'
+  return null
+}
+
+export function formatEvidenceLevel(
+  value: string | null | undefined,
+  harnessDepth?: string | null,
+): string | null {
+  const tier = harnessVerificationTier(value, harnessDepth)
   switch (value) {
     case 'harness':
-      return '局部验证'
+      return tier ? `局部验证-${tier}` : '局部验证'
     case 'dynamic':
-      return '动态验证'
+      return tier === 'L3' ? '动态验证-L3' : '动态验证'
     case 'mcp':
       return '动态验证 · MCP'
     default:
@@ -112,10 +130,11 @@ export function formatVulnStatus(
   status: string | null | undefined,
   evidenceLevel?: string | null,
   fpKind?: string | null,
+  harnessDepth?: string | null,
 ): string {
   const s = (status || '').trim()
   if (s === 'confirmed' || s === 'static_only') {
-    const evidence = formatEvidenceLevel(evidenceLevel)
+    const evidence = formatEvidenceLevel(evidenceLevel, harnessDepth)
     return evidence ? `已确认-${evidence}` : '已确认-仅静态'
   }
   if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_TIMEOUT) {

@@ -96,7 +96,7 @@ export function vulnListSecondaryTags(v: Vuln, nested?: boolean): VulnListTag[] 
 /** Full attribute list for the ··· hover panel — nothing omitted from list view. */
 export function vulnListAttributeLines(v: Vuln, projectName?: string): VulnListAttributeLine[] {
   const lines: VulnListAttributeLine[] = [
-    { label: '状态', value: formatVulnStatus(v.status, v.evidence_level, v.fp_kind) },
+    { label: '状态', value: formatVulnStatus(v.status, v.evidence_level, v.fp_kind, v.harness_depth) },
     {
       label: '严重度',
       value: formatSeverityScore(v.severity_score, v.severity, v.cvss_vector) || formatSeverity(v.severity) || '—',
@@ -123,7 +123,7 @@ export function vulnListAttributeLines(v: Vuln, projectName?: string): VulnListA
   const premise = formatConfigPremise(v.config_premise)
   if (premise) lines.push({ label: '配置前提', value: premise })
 
-  const evidence = formatEvidenceLevel(v.evidence_level)
+  const evidence = formatEvidenceLevel(v.evidence_level, v.harness_depth)
   if (evidence) lines.push({ label: '验证方式', value: evidence })
 
   lines.push({ label: '提交跟踪', value: formatTrackingStatus(v.tracking_status) })

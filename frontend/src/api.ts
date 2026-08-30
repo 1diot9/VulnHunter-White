@@ -192,6 +192,8 @@ export type Vuln = {
   status: string
   tracking_status?: VulnTrackingStatus
   evidence_level: string | null
+  harness_depth?: string | null
+  integration_runtime?: string | null
   attack_surface: string | null
   required_account: string | null
   exposure_mode?: string | null

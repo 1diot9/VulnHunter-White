@@ -180,14 +180,26 @@ def normalize_evidence_level(raw: Any) -> str | None:
     return found if found in ALLOWED_EVIDENCE_LEVELS else None
 
 
-def coerce_evidence_level(raw: Any, *, mode: str) -> str:
+def coerce_evidence_level(
+    raw: Any,
+    *,
+    mode: str,
+    harness_depth: str | None = None,
+    integration_verified: bool = False,
+) -> str:
     """Map requested evidence onto the project's verify mode."""
+    from .harness_depth import is_integration_depth
+
     normalized_mode = normalize_verify_mode(mode)
     evidence = normalize_evidence_level(raw)
+    if integration_verified and is_integration_depth(harness_depth):
+        return EVIDENCE_DYNAMIC
     if not evidence:
         if normalized_mode == VERIFY_MODE_LAB:
             return EVIDENCE_DYNAMIC
         if normalized_mode == VERIFY_MODE_HARNESS:
+            if is_integration_depth(harness_depth):
+                return EVIDENCE_STATIC
             return EVIDENCE_HARNESS
         return EVIDENCE_STATIC
     if normalized_mode == VERIFY_MODE_OFF and evidence != EVIDENCE_STATIC:
@@ -195,6 +207,8 @@ def coerce_evidence_level(raw: Any, *, mode: str) -> str:
     if normalized_mode == VERIFY_MODE_LAB and evidence == EVIDENCE_HARNESS:
         return EVIDENCE_STATIC
     if normalized_mode == VERIFY_MODE_HARNESS and evidence in (EVIDENCE_DYNAMIC, EVIDENCE_MCP):
+        if integration_verified and is_integration_depth(harness_depth):
+            return EVIDENCE_DYNAMIC
         return EVIDENCE_STATIC
     return evidence
 

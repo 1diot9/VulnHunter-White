@@ -534,6 +534,19 @@ def harness_vuln_code_gap(report_text: str, *, file_path: str | None = None) -> 
     return None
 
 
+_HARNESS_LOCAL_SECTION_RE = re.compile(r"(?m)^###\s+局部验证")
+
+
+def harness_local_section_gap(report_text: str) -> str | None:
+    """L3 integration Confirm requires a prior harness section in the report."""
+    if _HARNESS_LOCAL_SECTION_RE.search(report_text or ""):
+        return None
+    return (
+        "integration（L3）确认前，报告须已有「### 局部验证」章节（sink 或模块链证据）。"
+        "请先完成 L1/L2 harness 并 Write 报告，再 ConfirmVuln(harness_depth=integration)。"
+    )
+
+
 def upsert_report_section(path: Path, heading: str, body: str) -> None:
     """Replace or append a trailing markdown section under ``heading``."""
     section = f"{heading}\n\n{body.strip()}\n"

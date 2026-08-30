@@ -1504,12 +1504,18 @@ def test_harness_vuln_can_append_lab_dynamic_verify(tmp_env, project, monkeypatc
         assert still_harness.json()["can_dynamic_verify"] is False
         blocked = client.post(f"/api/vulns/{vid}/dynamic-verify")
         assert blocked.status_code == 400
-        assert "靶场动态" in blocked.json()["detail"]
 
+        (vuln_dir(project, vid) / "poc.py").write_text(
+            '#!/usr/bin/env python3\nimport argparse\n'
+            'p=argparse.ArgumentParser()\n'
+            'p.add_argument("-u","--url",required=True)\n'
+            'p.add_argument("--proxy",default="")\n'
+            'args=p.parse_args()\n',
+            encoding="utf-8",
+        )
         with SessionLocal() as db:
-            proj = db.get(Project, project)
-            proj.dynamic_verify_mode = VERIFY_MODE_LAB
-            proj.dynamic_verify_enabled = True
+            v = db.get(Vuln, vid)
+            v.poc_code = (vuln_dir(project, vid) / "poc.py").read_text(encoding="utf-8")
             db.commit()
 
         ready = client.get(f"/api/vulns/{vid}")
@@ -1517,12 +1523,28 @@ def test_harness_vuln_can_append_lab_dynamic_verify(tmp_env, project, monkeypatc
         queued = client.post(f"/api/vulns/{vid}/dynamic-verify")
         assert queued.status_code == 200
         body = queued.json()
-        assert body["ok"] is True
         cp = load_checkpoint(project, body["phase_run_id"])
         assert cp is not None
-        assert cp.state["dynamic_followup"] is True
+        assert cp.state.get("followup_kind") == "integration"
         assert cp.state["prior_evidence_level"] == "harness"
-        assert any("局部验证结论：默认可利用" in str(m.get("content") or "") for m in cp.messages)
+        pipeline._finish_phase_run(body["phase_run_id"], "completed")
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project)
+            proj.dynamic_verify_mode = VERIFY_MODE_LAB
+            proj.dynamic_verify_enabled = True
+            db.commit()
+
+        lab_ready = client.get(f"/api/vulns/{vid}")
+        assert lab_ready.json()["can_dynamic_verify"] is True
+        lab_queued = client.post(f"/api/vulns/{vid}/dynamic-verify")
+        assert lab_queued.status_code == 200
+        lab_cp = load_checkpoint(project, lab_queued.json()["phase_run_id"])
+        assert lab_cp.state["dynamic_followup"] is True
+        assert any(
+            "局部验证结论：默认可利用" in str(m.get("content") or "")
+            for m in lab_cp.messages
+        )
 
 
 def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):

@@ -394,6 +394,9 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "请求级加强验证" in text
     assert "httptest" in text
     assert "不要只拷" in text
+    assert "harness_depth" in text
+    assert "integration" in text
+    assert "evidence_level=dynamic" in text
     followup = load_prompt("initial/reviewer-harness-followup.md")
     assert "### 漏洞代码" in followup
     assert "完整文件路径" in followup
@@ -418,6 +421,14 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "java-release: 17" in overlay
     assert "请求级加强验证" in overlay
     assert "httptest" in overlay
+
+
+def test_integration_followup_prompt():
+    text = load_prompt("initial/reviewer-integration-followup.md")
+    assert "追加 L3 集成验证" in text
+    assert "harness_depth=integration" in text
+    assert "evidence_level=dynamic" in text
+    assert "integration 沙箱" in text
 
 
 def test_reviewer_debug_mcp_is_poc_rewrite_fallback():

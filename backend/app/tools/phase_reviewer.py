@@ -12,13 +12,20 @@ from ..dynamic_verify import (
     EVIDENCE_HARNESS,
     EVIDENCE_MCP,
     EVIDENCE_STATIC,
+    VERIFY_MODE_HARNESS,
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     coerce_evidence_level,
+    is_harness_mode,
     is_lab_mode,
     normalize_evidence_level,
     project_verify_mode,
     static_after_review_timeouts,
+)
+from ..harness_depth import (
+    HARNESS_DEPTH_INTEGRATION,
+    is_integration_depth,
+    parse_harness_depth,
 )
 from ..models import Project, SessionLocal, Vuln
 from ..services.cli_tool_index import search_cli_tools
@@ -44,6 +51,7 @@ from ..services.lab import (
     mark_lab_setup_finished,
 )
 from ..services.paths import vuln_dir
+from ..services.integration_verify import verify_landed_integration
 from ..services.poc_run import resolve_lab_target_url, verify_landed_poc
 from ..services.harness_output import harness_output_block_reason
 from ..services.poc_script import (
@@ -55,7 +63,12 @@ from ..services.poc_script import (
     write_harness_code,
     write_poc_code,
 )
-from ..services.report import harness_vuln_code_gap, upsert_report_section, write_advisory_md
+from ..services.report import (
+    harness_local_section_gap,
+    harness_vuln_code_gap,
+    upsert_report_section,
+    write_advisory_md,
+)
 from ..services.duplicate_guard import soft_duplicate_gate
 from ..services.root_cause import (
     canonical_root_cause_key,
@@ -483,10 +496,18 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     advisory_md = args.get("advisory_md")
     harness_code = args.get("harness_code")
     harness_language = str(args.get("harness_language") or "python").strip() or "python"
+    try:
+        harness_depth = parse_harness_depth(args.get("harness_depth"))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    integration_setup = args.get("integration_setup")
+    integration_start = str(args.get("integration_start") or "").strip()
     stored_poc = ""
     verify_mode = VERIFY_MODE_OFF
     evidence = EVIDENCE_STATIC
     prior_confirmed_harness = False
+    integration_verified = False
+    integration_runtime: str | None = None
     if poc_code:
         kind = normalize_target_kind(None)
         with SessionLocal() as db:
@@ -512,7 +533,12 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         prior_confirmed_harness = (
             prior_evidence == EVIDENCE_HARNESS and vuln.status == "confirmed"
         )
-        evidence = coerce_evidence_level(evidence_raw, mode=verify_mode)
+        evidence = coerce_evidence_level(
+            evidence_raw,
+            mode=verify_mode,
+            harness_depth=harness_depth,
+            integration_verified=False,
+        )
         audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
         if audit_mode == AUDIT_MODE_BOUNTY:
             blocked = bounty_confirm_block_reason(
@@ -561,7 +587,58 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return soft
 
     poc_run: dict[str, Any] | None = None
-    if verify_mode == VERIFY_MODE_LAB:
+    integration_run: dict[str, Any] | None = None
+    if verify_mode == VERIFY_MODE_HARNESS and is_integration_depth(harness_depth):
+        landed = (str(poc_code).strip() if poc_code else "") or (
+            read_poc_code(ctx.project_id, int(vuln_id), fallback=stored_poc) or ""
+        )
+        if not landed:
+            return {"ok": False, "error": "harness_depth=integration 须提供 poc_code 或已有 poc.py"}
+        report_path = vuln_dir(ctx.project_id, int(vuln_id)) / "report.md"
+        report_text = (
+            report_path.read_text(encoding="utf-8", errors="ignore")
+            if report_path.is_file()
+            else ""
+        )
+        local_gap = harness_local_section_gap(report_text)
+        if local_gap:
+            return {"ok": False, "error": local_gap}
+        setup_cmds: list[str] = []
+        if isinstance(integration_setup, list):
+            setup_cmds = [str(x).strip() for x in integration_setup if str(x).strip()]
+        elif integration_setup not in (None, ""):
+            setup_cmds = [
+                line.strip()
+                for line in str(integration_setup).splitlines()
+                if line.strip()
+            ]
+        integration_run = verify_landed_integration(
+            ctx.project_id,
+            int(vuln_id),
+            landed,
+            setup_commands=setup_cmds,
+            start_command=integration_start,
+        )
+        if not integration_run.get("ok"):
+            return {
+                "ok": False,
+                "error": str(integration_run.get("error") or "integration 验证未通过"),
+                "target_url": integration_run.get("target_url"),
+                "exit_code": integration_run.get("exit_code"),
+                "stdout": integration_run.get("stdout") or "",
+                "stderr": integration_run.get("stderr") or "",
+                "hint": integration_run.get("hint") or "",
+                "runtime": integration_run.get("runtime"),
+            }
+        integration_verified = True
+        integration_runtime = str(integration_run.get("runtime") or "").strip() or None
+        evidence = coerce_evidence_level(
+            evidence_raw or EVIDENCE_DYNAMIC,
+            mode=verify_mode,
+            harness_depth=harness_depth,
+            integration_verified=True,
+        )
+    elif verify_mode == VERIFY_MODE_LAB:
         landed = (str(poc_code).strip() if poc_code else "") or (
             read_poc_code(ctx.project_id, int(vuln_id), fallback=stored_poc) or ""
         )
@@ -643,6 +720,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             vuln.status = "confirmed"
         vuln.fp_kind = None
         vuln.evidence_level = evidence
+        vuln.harness_depth = harness_depth
+        if integration_runtime:
+            vuln.integration_runtime = integration_runtime
         vuln.attack_surface = surface
         vuln.required_account = account
         vuln.exposure_mode = exposure_mode
@@ -1127,6 +1207,31 @@ def register_reviewer_tools() -> None:
                     "harness_language": {
                         "type": "string",
                         "description": "harness_code 的语言，默认 python。",
+                    },
+                    "harness_depth": {
+                        "type": "string",
+                        "description": (
+                            "局部验证深度：sink（默认，函数/mock）、module（同进程模块链）、"
+                            "integration（L3：系统于 integration 沙箱起 loopback 服务并跑 poc.py，"
+                            "通过后 evidence_level=dynamic）。"
+                            "integration 须已有报告「### 局部验证」章节，并传 integration_start；"
+                            "可选 integration_setup（多行 shell 或字符串数组，如 npm ci）。"
+                        ),
+                    },
+                    "integration_setup": {
+                        "type": "string",
+                        "description": (
+                            "harness_depth=integration 时可选。容器内 /workspace 执行的安装命令，"
+                            "多行 shell 或后续支持数组；如 npm ci。"
+                        ),
+                    },
+                    "integration_start": {
+                        "type": "string",
+                        "description": (
+                            "harness_depth=integration 时必填（除非已配置 env local_service_url 走 fallback）。"
+                            "后台启动命令，须监听 127.0.0.1:$PORT（$PORT 由系统注入），"
+                            "如：node bin/whistle.js start -p $PORT"
+                        ),
                     },
                     "note": {"type": "string"},
                 },

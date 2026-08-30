@@ -22,10 +22,11 @@ Windows 用根目录 `start.cmd` / `stop.cmd`；**Linux / macOS** 用 `sh start.
   - [1. 拿到源码](#1-拿到源码)
   - [2. 后端 Python 依赖](#2-后端-python-依赖startcmd--startsh-首次会做)
   - [3. 前端 Node 依赖](#3-前端-node-依赖startcmd--startsh-首次会做)
-  - [4. 局部验证沙箱镜像](#4-局部验证沙箱镜像要用局部验证时必做)
-  - [5. Debug MCP](#5-debug-mcp仅靶场动态--需要改写调试-poc-时)
-  - [6. 快速扫描用的 Semgrep](#6-快速扫描用的-semgrep)
-  - [7. 可选环境变量](#7-可选环境变量)
+  - [4. 局部验证沙箱镜像（L1/L2 harness）](#4-局部验证沙箱镜像l1l2-harness要用局部验证时必做)
+  - [5. 集成验证沙箱镜像（L3 integration）](#5-集成验证沙箱镜像l3-integration要用-l3-集成验证时必做)
+  - [6. Debug MCP](#6-debug-mcp仅靶场动态--需要改写调试-poc-时)
+  - [7. 快速扫描用的 Semgrep](#7-快速扫描用的-semgrep)
+  - [8. 可选环境变量](#8-可选环境变量)
 - [一键启停](#一键启停)
   - [首次打开：设置页](#首次打开设置页)
 - [手动启动](#手动启动)
@@ -123,7 +124,8 @@ Linux / macOS 把第一行换成 `python3 --version`。Windows 上 `python` 应�
 | 从 GitHub 导入公开仓 | Git | 导入失败 |
 | 导入私有仓 / 提高 GHSA、Issues 配额 | 设置页 **GitHub PAT** | 公开仓仍可 clone；GitHub API 更容易撞匿名限额 |
 | 靶场动态验证（Reviewer 搭 Docker 靶场并跑 `poc.py`） | **Docker** 已启动（Desktop 或 Linux 引擎），且能执行 `docker version` | 环境轮会 skip；靶场不可用时无法按动态证据确认 |
-| 局部验证（沙箱跑 harness） | Docker + 下文构建的 `vulnhunter/sandbox:latest` | 退回静态，不因此判误报 |
+| 局部验证（L1/L2：沙箱跑 harness） | Docker + 下文构建的 `vulnhunter/sandbox:latest` | 退回静态，不因此判误报 |
+| 局部验证 L3 集成验证（起 loopback 服务并跑 `poc.py`，通过后升为动态证据） | Docker + 下文构建的 `vulnhunter/integration-sandbox:latest` | 无法自动跑 L3；可写 `env/env.json` 的 `local_service_url` 走本机 fallback |
 | 快速扫描（Semgrep → Sink 回推） | 本机 `semgrep` **或** Docker（会拉 `returntocorp/semgrep:latest`） | 该路径无法跑 |
 | Verifier（FOFA 互联网复测） | 设置页 **FOFA Key**（或环境变量 `VULNHUNTER_FOFA_KEY`） | 验证轮会 skip |
 | 出站走代理（WebSearch / GitHub / FOFA） | 设置页 HTTP 代理，或 `.env` 里 `VULNHUNTER_HTTP_PROXY` | 直连；连不上时代理会自动改直连 |
@@ -137,7 +139,7 @@ Docker 相关功能还要求：
 
 - Docker **正在运行**（Windows / Mac 上为 Docker Desktop 托盘已启动；Linux 上为 docker 服务已起来），不只是装过。Windows 上通常走 WSL2 后端。
 - 当前用户能无交互执行 `docker ps`（不必每次 sudo / 管理员密码）。
-- 磁盘留足空间：沙箱镜像、Semgrep 镜像、以及每个审计项目自建的 lab 镜像都会占空间。
+- 磁盘留足空间：harness / integration 沙箱镜像、Semgrep 镜像、以及每个审计项目自建的 lab 镜像都会占空间。
 
 ## 启动前要做的构建
 
@@ -189,9 +191,9 @@ cd frontend
 npm install --registry=https://registry.npmmirror.com
 ```
 
-### 4. 局部验证沙箱镜像（要用「局部验证」时必做）
+### 4. 局部验证沙箱镜像（L1/L2 harness，要用「局部验证」时必做）
 
-Docker 启动后，在仓库根目录：
+用于 **L1（函数/mock）** 与 **L2（模块链）** 的 `RunCode` harness。Docker 启动后，在仓库根目录：
 
 ```bat
 scripts\build-sandbox.cmd
@@ -205,9 +207,29 @@ Linux / macOS：`sh scripts/build-sandbox.sh`。
 docker build -t vulnhunter/sandbox:latest docker/sandbox
 ```
 
-成功后 `docker images` 里应有 `vulnhunter/sandbox:latest`。镜像不存在时局部验证无法起沙箱，会退回静态。
+成功后 `docker images` 里应有 `vulnhunter/sandbox:latest`。镜像不存在时局部验证无法起 harness 沙箱，会退回静态。
 
-### 5. Debug MCP（仅靶场动态 + 需要改写/调试 PoC 时）
+### 5. 集成验证沙箱镜像（L3 integration，要用 L3 集成验证时必做）
+
+用于 **L3 集成验证**：在容器内临时安装依赖、起 `127.0.0.1` 上的 loopback 服务并跑 `poc.py`；通过后证据升为**动态验证**（无需 Docker 靶场镜像）。仅做 L1/L2 可不构建本镜像。
+
+Docker 启动后，在仓库根目录：
+
+```bat
+scripts\build-integration-sandbox.cmd
+```
+
+Linux / macOS：`sh scripts/build-integration-sandbox.sh`。
+
+等价于：
+
+```bat
+docker build -t vulnhunter/integration-sandbox:latest docker/integration-sandbox
+```
+
+成功后 `docker images` 里应有 `vulnhunter/integration-sandbox:latest`。镜像不存在时 L3 无法走沙箱路径；若已在 `data/projects/{id}/env/env.json` 配置 loopback 的 `local_service_url`，可退回本机跑 `poc.py`（仍须 `127.0.0.1` / `localhost`）。
+
+### 6. Debug MCP（仅靶场动态 + 需要改写/调试 PoC 时）
 
 源码在 `tools/mcp/`，路径相对仓库根。未构建时 Reviewer 仍走普通动态（当前 HTTP PoC + docker exec）。PoC 由 Reviewer 收口；只有缺失、跑不通或复现失败且需自己改写时才 attach。详见 `tools/mcp/README.md`。
 
@@ -247,14 +269,14 @@ Unix：`backend/.venv/bin/pip install -e tools/mcp/python-debug`。
 
 可用环境变量覆盖 MCP 目录：`VULNHUNTER_MCP_JAVA` / `VULNHUNTER_MCP_NODE` / `VULNHUNTER_MCP_PYTHON`（相对仓库根或绝对路径）。构建产物（`target/`、`node_modules/`、`dist/`）不要提交。
 
-### 6. 快速扫描用的 Semgrep
+### 7. 快速扫描用的 Semgrep
 
 二选一即可：
 
 - 本机安装 `semgrep`，保证 `semgrep --version` 可用；或
 - 安装并启动 Docker。首次跑快速扫描时会拉取 `returntocorp/semgrep:latest`（体积较大，需能访问镜像仓库）。
 
-### 7. 可选环境变量
+### 8. 可选环境变量
 
 可将 `.env.example` 复制为仓库根或 `backend/.env`。监听端口给 `start.cmd` / `start.sh` 用；设置页保存过代理 / FOFA 后以设置为准，**尚未保存过**时才用代理 / Key 变量回退。不要把真实 Key 写进仓库。
 
@@ -327,7 +349,7 @@ Windows 按窗口标题结束进程，并释放上次记录的端口（以及默
 
 ## 手动启动
 
-一键脚本不可用，或要分开调试前后端时用。先完成上文「启动前要做的构建」里的第 2、3 步。
+一键脚本不可用，或要分开调试前后端时用。先完成上文「启动前要做的构建」里的第 2、3 步；要用局部验证时再构建第 4、5 步的沙箱镜像。
 
 ### 后端
 
@@ -371,7 +393,8 @@ npm run dev
 | 页面能开但接口全失败 | 后端没起来，或前端端口与 Vite 代理用的 `VULNHUNTER_PORT` 不一致 |
 | GitHub 导入失败 | 确认 `git` 在 PATH；私有仓填 PAT；公司代理填设置页 HTTP 代理。若报 `Filename too long`，更新后重试即可（clone 已开 `core.longpaths`） |
 | 靶场 / 容器页提示 docker unavailable | 打开 Docker Desktop 或启动 docker 服务，等引擎就绪后再试 `docker ps` |
-| 局部验证说镜像不存在 | 重新执行 `scripts\build-sandbox.cmd` 或 `sh scripts/build-sandbox.sh` |
+| 局部验证说 harness 镜像不存在 | 执行 `scripts\build-sandbox.cmd` 或 `sh scripts/build-sandbox.sh` |
+| L3 集成验证说 integration 镜像不存在 | 执行 `scripts\build-integration-sandbox.cmd` 或 `sh scripts/build-integration-sandbox.sh`；或配置 `env/env.json` 的 `local_service_url` |
 | 快速扫描报未找到 semgrep | 安装本机 semgrep，或保证 Docker 可用并允许拉镜像 |
 | Java MCP 无效果 | 确认已 `mvn package` 且 jar 存在；`java -version` 为 17+ |
 | `/bin/sh^M: bad interpreter` 或 `\r: command not found` | 脚本被存成了 CRLF。仓库已设 `*.sh text eol=lf`；执行 `git add --renormalize '*.sh'` 后再检出，或 `sed -i 's/\r$//' start.sh stop.sh scripts/*.sh` |
@@ -410,7 +433,7 @@ pytest
 | 项目与挖掘配置 | 创建时选择赏金（默认）/ 全量 / 自定义模式；勾选挖掘路径：启发式（默认开，可开轻量版只挖权重 100）、快速扫描（默认关）、历史漏洞绕过（默认关），至少开一条。每项目可单独选模型，不选则用设置页全局模型；可设 Token 用量上限；可粘贴或上传文本作为 Worker 额外人工提示。发现仓库页从公开 GHSA 筛可审计仓 |
 | 挖掘路径 | **启发式**：历史漏洞收集完毕后按文件定权挖掘；权重 100 为用户可控入口（HTTP、WebSocket / RPC / MQ / 回调等），低权按角色回推、控面或薄扫。**快速扫描**：Recon 后 Semgrep → 代码筛 → Agent 精筛 → 按 Sink 回推；覆盖 SAST Sink，鉴权 / IDOR / 业务逻辑仍靠启发式。**历史漏洞绕过**：以历史漏洞文档为输入，每轮尝试绕过补丁或确认未修复洞仍可打。各开启路径都结束后项目才 `completed` |
 | 审计模式 | 赏金模式按可利用高危害类型收口（含存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥等；普通 CSRF / 前端 AES 混淆 / 公开下发密钥不入库）；全量模式保留低危害项（CORS、反射 XSS、缺速率限制等）；自定义模式无赏金硬闸门，完全按提示词判定。设置页可管理命名自定义提示词；项目选用时写入快照 |
-| 动态验证 | 创建时默认关闭（仅静态复核）。开启后 Reviewer 搭 Docker 靶场并跑 HTTP PoC（`poc.py -u`）；靶场可用时 `ConfirmVuln` 系统再跑落盘 `poc.py`，退出码非 0 拒绝确认。PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 Java / Node / Python debug MCP。有 HTTP 面时 `poc.py` 须支持 `-u/--url`、`--proxy`（空则直连）、RCE 的 `-c/--cmd`。局部验证证据写入 `harness.py`，stdout 须打印运行时实际数据（禁止写死 SUCCESS/`success=true` 或预期回显字面量），不要把 mock 抄进 `poc.py`。组件公开入口本身吃 HTTP/请求对象时，harness 须对 `src/` 公开 API 做同进程请求级加强验证（不要只拷内部 sink）；无请求面的解析 API 不要包 HTTP。纯库洞仅在能对已安装包调用公开 API 时才写 `poc.py`（不要假 `-u`）；无 HTTP/安装面时可省略。`poc.py` / `harness.py` 输出中英双语（默认英语，`--zh` 切中文）；注释与 `--help` 仍用英语 |
+| 动态验证 | 创建时默认关闭（仅静态复核）。**靶场动态**：Reviewer 搭 Docker 靶场并跑 HTTP PoC（`poc.py -u`）。**局部验证**：按漏洞深度分 L1/L2（harness 沙箱，`evidence_level=harness`）与 L3 集成验证（integration 沙箱起 loopback 服务并跑 `poc.py`，通过后 `evidence_level=dynamic`）。靶场可用时 `ConfirmVuln` 系统再跑落盘 `poc.py`，退出码非 0 拒绝确认。PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 debug MCP。有 HTTP 面时 `poc.py` 须支持 `-u/--url`、`--proxy`（空则直连）、RCE 的 `-c/--cmd`。`harness.py` 与 `poc.py` 职责分离；输出默认英语，`--zh` 切中文 |
 | 互联网验证 | 可选 Verifier，默认关，可在项目设置开启。确认前台漏洞后用 FOFA 搜同款目标复测（默认每批 10、成功 3 即结束，最多 5 轮共 50 目标）；指纹按项目采集复用；破坏性操作不测互联网目标 |
 | 攻击链串联 | 可选，默认关；挖掘完成且审核队列清空后，根据已确认漏洞尝试多步利用 |
 | 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 并发之和为全局 LLM 线程上限（单端点默认 6），会话粘滞、超出按到达顺序排队 |
@@ -425,7 +448,8 @@ pytest
 - `templates` — 文档模板
 - `tools/mcp` — Java / Node / Python debug MCP
 - `tools/cli` — 用户放置的 CLI 工具（一目录一工具；Reviewer SearchTools）
-- `docker/sandbox` — 局部验证沙箱镜像
+- `docker/sandbox` — 局部验证 harness 沙箱镜像（L1/L2）
+- `docker/integration-sandbox` — L3 集成验证沙箱镜像
 - `scripts` — 启停、测试、构建沙箱
 - `data/projects/{id}` — 项目隔离工作区（运行态，不要提交）
 - `docs/DESIGN.md` — 架构与设计说明

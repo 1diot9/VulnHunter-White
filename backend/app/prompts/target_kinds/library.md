@@ -14,6 +14,6 @@
 
 ### 提交与验证
 - `http_request` 可写 **API 调用配方**（类/方法/参数/依赖版本），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
-- 局部验证证据只进 **`harness.py`**。默认抽出函数 + mock；**仅当公开 API 本身吃 HTTP/请求对象时**，对 `src/` 该入口做同进程请求级加强验证（httptest/进程内客户端，payload 来自请求，不要只拷内部 sink）。YAML/加密/模板/反序列化等无请求面 API 不要包 HTTP。stdout 必须打印运行时实际数据，禁止写死成功字段或预期回显字面量。输出默认英语，须 `--zh` 切中文。`poc.py` 仅当安装真实包后能调用公开 API 时才写，不要加未使用的 `-u/--proxy`，不要复制 harness 测试。无 HTTP 面且无安装面时省略 `poc_code`。
+- 局部验证按深度：**sink**（默认函数/mock）→ `harness`；**module**（跨模块链）→ `harness`；**integration**（可起服务且完整链过 HTTP 管理面，有 `poc.py`）→ 系统 integration 沙箱跑 poc，通过 → **`dynamic`**。公开 API 吃请求对象时用 httptest 同进程（module/sink），不要把无请求面 API 包进 HTTP。`poc.py` 不要加未使用的 `-u/--proxy`，不要复制 harness 测试。
 - 有 HTTP 利用面时仍写 CLI `poc.py`（`-u/--proxy`）。
 - 不要为纯库强行编造站点 FOFA 语法；复现步骤写清受影响 API 与前置依赖版本。

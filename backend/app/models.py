@@ -260,6 +260,10 @@ class Vuln(Base):
     tracking_status: Mapped[str] = mapped_column(String(32), default="none")
     evidence_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # dynamic | static_only | mcp | harness
+    harness_depth: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # sink | module | integration — per-vuln harness tier; L3 success → evidence dynamic
+    integration_runtime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # sandbox | host_fallback — how L3 integration verify ran
     attack_surface: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # frontend | backend — Reviewer 确认时标注
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -517,6 +521,8 @@ def _ensure_columns() -> None:
             "verifier_ask_reason": "TEXT",
             "verifier_user_instruction": "TEXT",
             "verifier_consent": "BOOLEAN DEFAULT 0",
+            "harness_depth": "VARCHAR(32)",
+            "integration_runtime": "VARCHAR(32)",
         },
         "attack_chains": {
             "verify_status": "VARCHAR(32) DEFAULT 'static'",

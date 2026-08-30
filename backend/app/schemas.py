@@ -467,6 +467,8 @@ class VulnOut(BaseModel):
     status: str
     tracking_status: str = "none"
     evidence_level: str | None = None
+    harness_depth: str | None = None
+    integration_runtime: str | None = None
     attack_surface: str | None = None
     required_account: str | None = None
     exposure_mode: str | None = None

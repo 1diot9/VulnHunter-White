@@ -122,9 +122,13 @@ export default function VulnDetailDialog({
     (detail ? `项目 ${detail.project_id}` : '')
   const detailVerifyMode = normalizeDynamicVerifyMode(dynamicVerifyMode, dynamicVerifyEnabled)
   const priorIsHarness = detail?.evidence_level === 'harness'
+  const canIntegrationFollowup =
+    priorIsHarness && detailVerifyMode === 'harness' && Boolean(detail?.poc_code)
   const dynamicVerifyKind =
     detailVerifyMode === 'harness'
-      ? '局部验证'
+      ? canIntegrationFollowup
+        ? '集成验证'
+        : '局部验证'
       : detailVerifyMode === 'lab'
         ? '靶场动态验证'
         : '靶场动态或局部验证'
@@ -132,9 +136,11 @@ export default function VulnDetailDialog({
   const dynamicVerifyHint =
     detail?.dynamic_verify_queued || dynamicBusy
       ? `已接续原审核轮次，正在${priorConclusion}结论上追加${dynamicVerifyKind}，不是互联网验证。`
-      : priorIsHarness
-        ? `对已局部验证确认的漏洞追加靶场动态验证，不是互联网验证。完成后证据等级会从局部验证更新为动态验证。项目须为靶场动态模式（可在项目设置中切换）。`
-        : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
+      : canIntegrationFollowup
+        ? `对已局部验证确认的漏洞追加 L3 集成验证（integration 沙箱起服务并跑 poc.py），不是互联网验证。通过后证据升为动态验证。`
+        : priorIsHarness
+          ? `对已局部验证确认的漏洞追加靶场动态验证，不是互联网验证。完成后证据等级会从局部验证更新为动态验证。项目须为靶场动态模式（可在项目设置中切换）。`
+          : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
 
   async function downloadReport(id: number, kind: 'report' | 'advisory' | 'cve' = 'report') {
     try {
@@ -280,7 +286,7 @@ export default function VulnDetailDialog({
                         : 'info'
                   }
                 >
-                  {formatVulnStatus(detail.status, detail.evidence_level, detail.fp_kind)}
+                  {formatVulnStatus(detail.status, detail.evidence_level, detail.fp_kind, detail.harness_depth)}
                 </Badge>
                 {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
                 {detailConfigPremise ? <Badge variant="outline">{detailConfigPremise}</Badge> : null}

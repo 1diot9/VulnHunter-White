@@ -1,6 +1,18 @@
 ## 本项目验证方式：局部验证
 
-项目选择**局部验证**，不搭建 Docker 靶场，也不对 `target_url` 发 HTTP / 跑 `poc.py` / 使用 debug MCP。**覆盖上文「动态验证阶梯」**：
+项目选择**局部验证**，不搭建 Docker 靶场，也不对 Docker `target_url` 发 HTTP。**L1/L2 默认**不对 `poc.py -u` 跑靶场、不使用 debug MCP。**L3 集成验证**由系统在 integration 沙箱内起 loopback 服务并跑 `poc.py`，通过后 `evidence_level=dynamic`。**覆盖上文「动态验证阶梯」**：
+
+### 验证深度（harness_depth）
+
+| 深度 | 适用 | 方式 | 证据 |
+|------|------|------|------|
+| **sink**（默认） | 单函数 / 字符串·字节 API | RunCode harness：内联或 mock | `harness` |
+| **module** | 链跨多个 `src/` 模块、无 HTTP 请求对象入口 | harness 内 import 项目模块按真实调用序打 payload | `harness` |
+| **integration** | 组件可起 CLI/服务；完整链必经 HTTP 管理面；有 `poc.py -u` | 系统 integration 沙箱：临时依赖 → 起 `127.0.0.1:$PORT` 服务 → 跑 poc | **`dynamic`** |
+
+报告结构：`### 局部验证（sink）` 或 `### 局部验证（模块链）`；L3 成功后追加 `### 集成验证（动态）`。
+
+L3 须传 `ConfirmVuln(harness_depth=integration, integration_start=...)`；可选 `integration_setup`（如 `npm ci`）。**不要**在本机长期起服务；沙箱不可用且已写 `env/env.json` 的 `local_service_url` 时才走本机 fallback。
 
 1. 先 Read 报告、`poc.py` 和源码，确认 `file_path` 与代码片段真实存在。文件不存在或代码对不上 → 误报。
 2. 按**目标语言**自己设计验证。默认：抽出可疑函数或最小可编译片段，mock 数据库 / 文件系统 / 框架依赖，用多种 payload 打 sink。**仅当组件公开入口本身就吃 HTTP / WebSocket / RPC 等请求对象时**（如 `ValidateRequest`、中间件、`ServeHTTP`、吃 `HttpServletRequest` 的 Filter），做一次**同进程请求级加强验证**（见下节）；YAML / 加密 / 模板 / 反序列化等只吃字节或字符串的 API **不要**再包一层 HTTP。
@@ -17,7 +29,7 @@
    - 沙箱不可用、镜像缺失、编译失败、mock 起不来、依赖不够 → **不要误报**。静态已能证明默认可利用则 `evidence_level=static_only`（此时不强制 `### 漏洞代码`）；否则继续静态分析或说明信息不够后误报（仅当成立性本身不成立）。
    - harness 跑通并明确打不中（参数化查询、鉴权不可达、默认磁盘没有敏感对象等）→ 按成立性否决项误报。
 9. 成立性门槛**不降**：source→sink 可达不够；禁止种文件/改非应用配置来让洞成立。局部验证只是动态证据来源，不是降低默认可利用标准。
-10. 不要标 `dynamic` / `mcp`。无运行中的站点，不要 `CollectLabFingerprints`。
+10. L1/L2 不要标 `dynamic` / `mcp`；**仅 L3 integration 系统验证通过后可由系统写入 `dynamic`**。无运行中的 Docker 站点，不要 `CollectLabFingerprints`（L3 仍可用 integration 沙箱）。
 11. 沙箱默认无网。SSRF 等必须出网的类型不要指望 harness 打通，走静态判断。
 12. **组件库审计**：Confirm 以 `RunCode` harness 为准；勿因缺 HTTP 靶场或没有 `poc.py -u` 而误报。纯库洞：沙箱证据只进 `harness.py`。仅当安装真实包后能 `import` 公开 API 时才另写最小 `poc.py`（不要假 `-u/--proxy`，不要抄 harness）。无 HTTP 面且无安装面时不要落盘 `poc.py`，报告写 API 调用配方即可。
 13. **请求型公开 API 的加强验证**（组件库 / 混合仓的库核心；Web 应用里若 sink 就在请求校验中间件上，同样适用）。判定「组件本身接受请求」：公开 API 的参数就是 HTTP Request / 中间件 / 路由校验输入，而不是 `[]byte` / `string` / Reader。满足时必须加强，不要只拷 `deepSet` 这类内部函数：

@@ -43,6 +43,10 @@ from ..audit_mode import (
     normalize_audit_mode,
 )
 from ..config import settings
+from ..harness_depth import (
+    HARNESS_DEPTH_INTEGRATION,
+    normalize_harness_depth,
+)
 from ..dynamic_verify import (
     EVIDENCE_HARNESS,
     VERIFY_MODE_HARNESS,
@@ -455,10 +459,28 @@ def is_harness_confirmed_vuln(vuln: Vuln) -> bool:
     return (vuln.evidence_level or "").strip().lower() == EVIDENCE_HARNESS and vuln.status == "confirmed"
 
 
+def is_harness_integration_upgradeable(vuln: Vuln) -> bool:
+    """Harness-confirmed vuln with poc that can queue L3 integration follow-up."""
+    if vuln.status == "merged" or vuln.status != "confirmed":
+        return False
+    if (vuln.evidence_level or "").strip().lower() != EVIDENCE_HARNESS:
+        return False
+    depth = normalize_harness_depth(vuln.harness_depth)
+    if depth == HARNESS_DEPTH_INTEGRATION:
+        return False
+    from .poc_script import poc_path, read_poc_code
+
+    landed = read_poc_code(vuln.project_id, int(vuln.id), fallback=vuln.poc_code)
+    if landed:
+        return True
+    return poc_path(vuln.project_id, int(vuln.id)).is_file()
+
+
 def can_append_dynamic_verify(vuln: Vuln, verify_mode: str) -> bool:
     """Whether this vuln can queue a follow-up under the project's current verify mode.
 
     - ``static_only`` → append lab or harness (whichever mode is on)
+    - harness-confirmed (sink/module) + poc → append L3 integration (harness project)
     - harness-confirmed → append Docker lab only (upgrade evidence to dynamic/mcp)
     """
     if vuln.status == "merged":
@@ -466,6 +488,8 @@ def can_append_dynamic_verify(vuln: Vuln, verify_mode: str) -> bool:
     if not verify_mode_enabled(verify_mode):
         return False
     if is_static_only_vuln(vuln):
+        return True
+    if is_harness_mode(verify_mode) and is_harness_integration_upgradeable(vuln):
         return True
     if is_harness_confirmed_vuln(vuln) and is_lab_mode(verify_mode):
         return True
@@ -501,8 +525,8 @@ def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple
     return can, queued
 
 
-def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
-    """Queue a Reviewer follow-up that continues the prior round with lab/harness verification."""
+def request_dynamic_verify(vuln_id: int, *, followup_kind: str = "") -> dict[str, Any]:
+    """Queue a Reviewer follow-up that continues the prior round with lab/harness/integration verification."""
     with SessionLocal() as db:
         vuln = db.get(Vuln, vuln_id)
         if not vuln:
@@ -521,8 +545,10 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
         raise DynamicVerifyRequestError("该漏洞已并入其他报告")
     if not can_append_dynamic_verify(vuln, verify_mode):
         if is_harness_confirmed_vuln(vuln) and is_harness_mode(verify_mode):
+            if normalize_harness_depth(vuln.harness_depth) == HARNESS_DEPTH_INTEGRATION:
+                raise DynamicVerifyRequestError("该漏洞已完成集成验证")
             raise DynamicVerifyRequestError(
-                "该漏洞已局部验证；请先在项目设置中切换为靶场动态后再追加"
+                "该漏洞已局部验证；若有 poc.py 可追加集成验证，或切换靶场动态后再追加"
             )
         if is_lab_mode(verify_mode):
             raise DynamicVerifyRequestError("仅 static_only 或局部验证确认的漏洞可追加靶场动态验证")
@@ -548,6 +574,9 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
         source_run = None
 
     run_id = _new_phase_run(proj.id, "reviewer", "reviewer", vuln_id=vuln.id)
+    kind = str(followup_kind or "").strip().lower()
+    if not kind and is_harness_mode(verify_mode) and is_harness_integration_upgradeable(vuln):
+        kind = "integration"
     save_checkpoint(
         LoopCheckpoint(
             project_id=proj.id,
@@ -560,6 +589,7 @@ def request_dynamic_verify(vuln_id: int) -> dict[str, Any]:
             state={
                 "dynamic_followup": True,
                 "dynamic_followup_prompted": False,
+                "followup_kind": kind or "default",
                 "review_done": False,
                 "source_phase_run_id": source_run,
                 "prior_evidence_level": (vuln.evidence_level or "").strip().lower() or "static_only",
@@ -1490,22 +1520,23 @@ _STATIC_VERIFY_GATE = (
     "也不要重复通读报告。"
 )
 _HARNESS_VERIFY_GATE = (
-    "本轮局部验证：不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
-    "用 RunCode 写 harness；打通后 evidence_level=harness。"
+    "本轮局部验证（L1/L2）：不要对 Docker target_url 发请求或手工跑 poc.py，不要 debug MCP。"
+    "用 RunCode 写 harness；打通后 ConfirmVuln(harness_depth=sink|module, evidence_level=harness)。"
+    "L3 integration：ConfirmVuln(harness_depth=integration, integration_start=...) 由系统于 integration 沙箱起服务并跑 poc，通过 → dynamic。"
     "组件公开入口本身吃 HTTP/请求对象时，对 src/ 公开 API 做同进程请求级加强验证，禁止只拷内部 sink；"
     "YAML/编解码等无请求面 API 不要包 HTTP。"
     "沙箱不可用或 mock 失败不要因此误报，静态已能证明则 static_only。"
 )
 
 _HARNESS_REVIEW_NOTE = (
-    "本项目为局部验证：不要搭建 Docker 靶场，不要对 target_url 发请求或运行 poc.py，不要 debug MCP。"
-    "用 RunCode 按目标语言写 mock/harness；打通且成立性满足时 evidence_level=harness。"
-    "组件公开入口本身吃 HTTP/请求对象时，harness 须调用 src/ 公开 API 并在同进程内发请求（httptest/loopback），"
-    "payload 须来自该请求；不要只拷 sink，也不要把无请求面的解析 API 包进自写 HTTP。"
-    "harness 最终输出必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
-    "输出默认英语，须提供 --zh 切中文标签/步骤/判定；注释仍用英语。"
-    "沙箱不可用或 mock 失败不要误报，静态已能证明默认可利用则 static_only。"
-    "不要把 harness 的内联/mock 或同一套测试写进 poc.py；纯库洞无 HTTP/安装面时不要补假 -u/--proxy。"
+    "本项目为局部验证：不要搭建 Docker 靶场。"
+    "L1/L2：RunCode 写 mock/harness，ConfirmVuln(harness_depth=sink|module, evidence_level=harness)。"
+    "L3 integration：须有 poc.py 与报告「### 局部验证」；ConfirmVuln(harness_depth=integration, integration_start=...) "
+    "由系统在 integration 沙箱内临时装依赖、起 127.0.0.1 服务并跑 poc，通过 → evidence_level=dynamic。"
+    "L1/L2 不要手工跑 poc.py -u；不要在本机长期起服务。"
+    "组件公开入口本身吃 HTTP/请求对象时，harness 须调用 src/ 公开 API 并在同进程内发请求（httptest/loopback）。"
+    "harness 最终输出必须打印运行时实际数据；输出默认英语，须提供 --zh 切中文。"
+    "不要把 harness 的内联/mock 写进 poc.py。"
     "应用指纹复用 docs/app-fingerprints.json，不要 CollectLabFingerprints。"
 )
 
@@ -4404,7 +4435,12 @@ def _append_dynamic_followup_turn(cp: LoopCheckpoint) -> None:
     else:
         prior_basis = "static_only"
         prior_conclusion = "静态结论"
-    if mode == VERIFY_MODE_HARNESS:
+    followup_kind = str(cp.state.get("followup_kind") or "").strip().lower()
+    if followup_kind == "integration" and mode == VERIFY_MODE_HARNESS:
+        debug_plan = harness_debug_plan()
+        followup = "reviewer-integration-followup.md"
+        extra_label = "追加集成验证"
+    elif mode == VERIFY_MODE_HARNESS:
         debug_plan = harness_debug_plan()
         followup = "reviewer-harness-followup.md"
         extra_label = "追加局部验证"

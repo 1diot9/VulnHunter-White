@@ -88,7 +88,7 @@ export default function VulnListSignals({
     <div className={cn('mt-1 space-y-0.5', nested && 'mt-0.5')}>
       <div className={cn('flex flex-wrap items-center gap-1.5', nested && 'gap-1')}>
         <Badge className={compact} variant={statusVariant}>
-          {formatVulnStatus(v.status, v.evidence_level, v.fp_kind)}
+          {formatVulnStatus(v.status, v.evidence_level, v.fp_kind, v.harness_depth)}
         </Badge>
         {vulnType ? (
           <Badge className={compact} variant="outline">

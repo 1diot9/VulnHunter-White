@@ -307,6 +307,24 @@ def test_force_static_hides_and_blocks_dynamic_tools(tmp_env, project):
     assert coerce_evidence_level("harness", mode="harness") == "harness"
     assert coerce_evidence_level(None, mode="harness") == "harness"
     assert coerce_evidence_level("局部验证", mode="harness") == "harness"
+    assert (
+        coerce_evidence_level(
+            "dynamic",
+            mode="harness",
+            harness_depth="integration",
+            integration_verified=True,
+        )
+        == "dynamic"
+    )
+    assert (
+        coerce_evidence_level(
+            "dynamic",
+            mode="harness",
+            harness_depth="integration",
+            integration_verified=False,
+        )
+        == "static_only"
+    )
 
 
 def test_bring_up_failed_forces_static_tools_and_confirm(tmp_env, project):
@@ -715,6 +733,9 @@ def test_can_append_dynamic_verify_harness_only_in_lab_mode(tmp_env, project):
         db.commit()
         db.refresh(vuln)
         assert can_append_dynamic_verify(vuln, VERIFY_MODE_HARNESS) is False
+        vuln.poc_code = _LAB_POC_OK
+        db.commit()
+        assert can_append_dynamic_verify(vuln, VERIFY_MODE_HARNESS) is True
         assert can_append_dynamic_verify(vuln, VERIFY_MODE_LAB) is True
         assert can_append_dynamic_verify(vuln, VERIFY_MODE_OFF) is False
         vuln.evidence_level = "dynamic"
@@ -723,6 +744,63 @@ def test_can_append_dynamic_verify_harness_only_in_lab_mode(tmp_env, project):
         vuln.evidence_level = "static_only"
         assert can_append_dynamic_verify(vuln, VERIFY_MODE_HARNESS) is True
         assert can_append_dynamic_verify(vuln, VERIFY_MODE_LAB) is True
+
+
+def test_confirm_integration_sets_dynamic(tmp_env, project, monkeypatch):
+    from app.models import SessionLocal
+
+    _set_verify_mode(project, VERIFY_MODE_HARNESS)
+    out = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            "title": "代理劫持",
+            "vuln_type": "other",
+            "cwe": "CWE-1321",
+            "file_path": "lib/common.js",
+            "line_no": 1,
+            "source_sink": "values -> parsePlainText",
+            "auth_premise": "默认无认证",
+            "http_request": "POST /cgi-bin/values/add",
+            "poc_code": _LAB_POC_OK,
+            "expected_evidence": "redirect",
+            "config_premise": "default",
+        },
+    )
+    vuln_id = out["vuln_id"]
+    report = (
+        "# t\n\n## 漏洞技术细节\n\n### 局部验证（sink）\n\n已用 harness 证明。\n\n"
+        "### 漏洞代码\n\n`lib/common.js`：\n\n```javascript\nexports.parsePlainText = function () {}\n```\n"
+    )
+    (vuln_dir(project, vuln_id) / "report.md").write_text(report, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "app.tools.phase_reviewer.verify_landed_integration",
+        lambda *a, **k: {
+            "ok": True,
+            "exit_code": 0,
+            "stdout": "ok",
+            "stderr": "",
+            "runtime": "sandbox",
+        },
+    )
+    conf = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "harness_depth": "integration",
+            "integration_start": "node server.js -p $PORT",
+            "attack_surface": "frontend",
+            **SEVERITY_FACTORS,
+        },
+    )
+    assert conf["ok"] is True, conf
+    assert conf["evidence_level"] == "dynamic"
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        assert vuln.harness_depth == "integration"
+        assert vuln.integration_runtime == "sandbox"
 
 
 def test_ensure_reviewer_skips_lab_when_harness(tmp_env, project, monkeypatch):

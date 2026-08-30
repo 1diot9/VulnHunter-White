@@ -346,7 +346,19 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 
 #### 4.6.3 局部验证（harness）
 
-在 `vulnhunter/sandbox:latest` 沙箱中执行 `RunCode` 写入的 `harness.py`，默认「抽出可疑函数 + mock 驱动 payload」。**仅当组件公开入口本身吃 HTTP/请求对象**（中间件、`ValidateRequest`、`ServeHTTP` 等）时，改为同进程请求级加强验证：编译/引用项目 `src/` 的公开 API，用 `httptest` 或进程内客户端发攻击请求并打印真实响应/panic；不要只拷内部 sink，也不要把 YAML/编解码等无请求面 API 包进自写 HTTP。这仍是 harness，不是 Docker 靶场。确认后 `evidence_level=harness`。**harness 最终输出必须打印调用 sink 后的实际数据**（返回值、查询结果、命令回显、渲染结果等），禁止只打印固定 `SUCCESS`/`CONFIRMED`、写死 `success=True` / `{"success": true}`，或把预期回显写成字面量；`RunCode` / `ConfirmVuln` 会拒绝这类脚本。`harness.py` 与 `poc.py` 职责分离：沙箱内联/mock 只进 harness；`poc.py` 只服务真实 HTTP origin 或已安装包的公开 API 复现。脚本标签/状态/告警/判定默认英语，`--zh` 切中文。纯库洞无 HTTP/安装面时可不落盘 `poc.py`。仅 harness 确认的前台洞不入队 Verifier；项目切到靶场动态后，已 harness 确认的漏洞可追加 Docker 靶场验证（证据升级为 `dynamic` / `mcp`）。已仅静态确认的漏洞也可按当前模式追加靶场或局部验证。
+项目级仍为 `dynamic_verify_mode=harness`，**按漏洞**选择验证深度（`harness_depth`）：
+
+| 深度 | 方式 | 证据 |
+| --- | --- | --- |
+| **sink**（默认） | `vulnhunter/sandbox:latest` 中 RunCode：抽出函数 + mock | `harness` |
+| **module** | 同沙箱内 import 项目 `src/` 模块，按真实调用序打 payload | `harness` |
+| **integration**（L3） | `vulnhunter/integration-sandbox:latest`：容器内临时装依赖 → 起 `127.0.0.1:$PORT` 服务 → 跑 `poc.py` | **`dynamic`** |
+
+L1/L2 规则不变：公开入口吃 HTTP/请求对象时用 **httptest 同进程**（仍为 harness）；YAML/编解码等无请求面 API 不要包 HTTP。
+
+L3 通过 `ConfirmVuln(harness_depth=integration, integration_start=...)` 触发；须报告已有「### 局部验证」章节。integration 沙箱与 harness 沙箱不同（bridge 网络、可写、含 npm）。沙箱不可用时可用 `env/env.json` 的 `local_service_url`（仅 loopback）走本机 fallback。
+
+`harness.py` 与 `poc.py` 职责分离。L3 成功后 `evidence_level=dynamic`，可入队 Verifier（与靶场动态一致）。已 harness 确认且有 `poc.py` 的漏洞可在 harness 项目下「追加集成验证」，无需切靶场模式。
 
 #### 4.6.4 静态验证
 
