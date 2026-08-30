@@ -10,6 +10,7 @@ import { AdvancedProjectOptions, AdvancedProjectOptionsButton } from './Advanced
 import { parseMaxTokenUsageInput } from './MaxTokenUsageField'
 import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
+import { ZipUploadStatus } from './ZipUploadStatus'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -20,7 +21,14 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { AuditMode, TargetKind } from '@/lib/utils'
+import { type AuditMode, type TargetKind } from '@/lib/utils'
+
+function formatUploadError(e: unknown): string {
+  if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+    return '源码 zip 上传超时，请检查体积后重试，或改用 GitHub 导入'
+  }
+  return String(e instanceof Error ? e.message : e)
+}
 
 type Props = {
   open: boolean
@@ -61,6 +69,7 @@ export function CreateProjectDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const advancedOpenRef = useRef(false)
   const [busy, setBusy] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState<File | null>(null)
   const [error, setError] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
   const labMode = dynamicVerifyMode === 'lab'
@@ -174,15 +183,17 @@ export function CreateProjectDialog({
       return
     }
     setBusy(true)
+    setUploadingFile(file)
     setError('')
     try {
       await api.uploadZip(file, '', auditMode, opts)
       onOpenChange(false)
       await onCreated()
     } catch (e) {
-      setError(String(e))
+      setError(formatUploadError(e))
     } finally {
       setBusy(false)
+      setUploadingFile(null)
     }
   }
 
@@ -278,6 +289,7 @@ export function CreateProjectDialog({
           </div>
         </div>
         <div className="shrink-0 space-y-3 border-t border-border bg-muted/50 px-5 py-4">
+          {uploadingFile ? <ZipUploadStatus file={uploadingFile} /> : null}
           {error ? <p className="text-sm text-red-300">{error}</p> : null}
           <div className="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
             <Input

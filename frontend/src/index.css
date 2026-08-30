@@ -409,3 +409,16 @@ body,
   background: #1a2230;
   color: #e2e8f0;
 }
+
+@keyframes upload-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+
+.upload-indeterminate-bar {
+  animation: upload-indeterminate 1.5s ease-in-out infinite;
+}

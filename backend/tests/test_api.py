@@ -580,6 +580,67 @@ def test_create_zip_ignores_path_in_filename(tmp_env, monkeypatch):
     assert zip_path.resolve().is_relative_to(zip_path.parent.resolve())
 
 
+def test_upload_zip_stream_preserves_content(tmp_env, monkeypatch):
+    import io
+    import zipfile
+    from pathlib import Path
+
+    from app.main import app
+
+    captured: dict[str, object] = {}
+
+    def fake_start(pid, source_type="zip", zip_path=None, **kwargs):
+        captured["zip_path"] = zip_path
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", fake_start)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "stream-check")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+        )
+    assert created.status_code == 200
+    zip_path = captured["zip_path"]
+    assert isinstance(zip_path, Path)
+    assert zip_path.read_bytes() == raw
+
+
+async def _fail_save_upload(*args, **kwargs):
+    raise OSError("disk full")
+
+
+def test_upload_zip_save_failure_rolls_back_project(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.projects._save_upload_to_path", _fail_save_upload)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            before_ids = {p.id for p in db.query(Project).all()}
+        failed = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+        )
+        with SessionLocal() as db:
+            after_ids = {p.id for p in db.query(Project).all()}
+    assert failed.status_code == 500
+    assert "zip 保存失败" in failed.json()["detail"]
+    assert after_ids == before_ids
+    with SessionLocal() as db:
+        assert db.query(Project).filter(Project.name == "src").count() == 0
+
+
 def test_patch_audit_mode_only_when_paused_or_completed(tmp_env, project):
     from app.main import app
     from app.models import Project, SessionLocal

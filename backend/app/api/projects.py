@@ -90,6 +90,28 @@ from ..services.llm_settings import normalize_project_llm_model
 from ..services.token_budget import maybe_pause_for_token_budget, parse_max_token_usage
 from ..services import custom_audit_modes as cam
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
+
+_ZIP_WRITE_CHUNK = 1024 * 1024
+
+
+async def _save_upload_to_path(upload: UploadFile, dest: Path) -> None:
+    with dest.open("wb") as out:
+        while True:
+            chunk = await upload.read(_ZIP_WRITE_CHUNK)
+            if not chunk:
+                break
+            out.write(chunk)
+
+
+def _rollback_zip_project(project_id: int) -> None:
+    with SessionLocal() as db:
+        p = db.get(Project, project_id)
+        if p:
+            db.query(TokenUsage).filter(TokenUsage.project_id == project_id).delete()
+            db.query(ToolLog).filter(ToolLog.project_id == project_id).delete()
+            db.delete(p)
+            db.commit()
+    force_rmtree(project_dir(project_id))
 from ..services.phase_reports import read_phase_report, reports_by_phase
 from ..services.conversation import get_conversation_state, request_conversation
 from ..services.pipeline import (
@@ -668,8 +690,12 @@ async def create_project_zip(
     ensure_project_dirs(pid)
     tmp = Path(tempfile.mkdtemp(prefix="vh-zip-"))
     zip_path = tmp / "src.zip"
-    content = await file.read()
-    zip_path.write_bytes(content)
+    try:
+        await _save_upload_to_path(file, zip_path)
+    except Exception as exc:
+        force_rmtree(tmp)
+        _rollback_zip_project(pid)
+        raise HTTPException(500, f"zip 保存失败: {exc}") from exc
     start_ingest_and_audit(pid, source_type="zip", zip_path=zip_path)
     return out
 

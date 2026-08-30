@@ -684,6 +684,16 @@ export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
 }
 
 const DEFAULT_API_TIMEOUT_MS = 30_000
+const UPLOAD_TIMEOUT_MIN_MS = 120_000
+const UPLOAD_TIMEOUT_MAX_MS = 3_600_000
+const UPLOAD_TIMEOUT_BASE_MS = 60_000
+
+/** Zip upload timeout: min 2 min, ~1s/MB, max 60 min. */
+export function uploadTimeoutMs(sizeBytes: number): number {
+  const size = Math.max(0, Number(sizeBytes) || 0)
+  const bySize = UPLOAD_TIMEOUT_BASE_MS + Math.floor(size / 1024)
+  return Math.min(UPLOAD_TIMEOUT_MAX_MS, Math.max(UPLOAD_TIMEOUT_MIN_MS, bySize))
+}
 
 type ApiFetchInit = RequestInit & {
   /** Omit to use DEFAULT_API_TIMEOUT_MS; null disables the client timeout. */
@@ -868,7 +878,11 @@ export const api = {
     fd.append('worker_hint', opts.worker_hint || '')
     fd.append('recon_hint', opts.recon_hint || '')
     fd.append('max_token_usage', String(opts.max_token_usage || 0))
-    return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
+    return request<Project>('/api/projects/upload', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: uploadTimeoutMs(file.size),
+    })
   },
   updateProject: (
     id: number,
