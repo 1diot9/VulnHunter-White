@@ -8,6 +8,7 @@ import { MaxTokenUsageField, formatMaxTokenUsageInput, parseMaxTokenUsageInput }
 import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
 import { AttackChainToggle } from './AttackChainToggle'
+import { ReconHintFields } from './ReconHintFields'
 import { WorkerHintFields } from './WorkerHintFields'
 import { Button } from '@/components/ui/button'
 import {
@@ -43,6 +44,7 @@ export function ProjectSettingsButton({
   const [bypassEnabled, setBypassEnabled] = useState(project.bypass_enabled === true)
   const [llmModel, setLlmModel] = useState(project.llm_model || '')
   const [workerHint, setWorkerHint] = useState(project.worker_hint || '')
+  const [reconHint, setReconHint] = useState(project.recon_hint || '')
   const [maxTokenUsage, setMaxTokenUsage] = useState(formatMaxTokenUsageInput(project.max_token_usage))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -61,6 +63,7 @@ export function ProjectSettingsButton({
     setBypassEnabled(project.bypass_enabled === true)
     setLlmModel(project.llm_model || '')
     setWorkerHint(project.worker_hint || '')
+    setReconHint(project.recon_hint || '')
     setMaxTokenUsage(formatMaxTokenUsageInput(project.max_token_usage))
     setError('')
   }, [
@@ -76,6 +79,7 @@ export function ProjectSettingsButton({
     project.bypass_enabled,
     project.llm_model,
     project.worker_hint,
+    project.recon_hint,
     project.max_token_usage,
   ])
 
@@ -99,6 +103,7 @@ export function ProjectSettingsButton({
         dynamic_verify_mode: dynamicVerifyMode,
         llm_model: llmModel.trim(),
         worker_hint: workerHint.trim(),
+        recon_hint: reconHint.trim(),
         max_token_usage: parseMaxTokenUsageInput(maxTokenUsage),
         ...(canEditKind ? { target_kind: targetKind } : {}),
         ...(canEditPaths
@@ -130,7 +135,7 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、Token 上限、挖掘提示、验证方式与互联网验证。审计对象与挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与挖掘提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
+              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象与挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -141,6 +146,7 @@ export function ProjectSettingsButton({
             />
             <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
             <MaxTokenUsageField value={maxTokenUsage} onChange={setMaxTokenUsage} disabled={saving} />
+            <ReconHintFields value={reconHint} onChange={setReconHint} disabled={saving} />
             <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={saving} />
             <MiningPathSelect
               heuristicEnabled={heuristicEnabled}

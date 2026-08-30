@@ -35,7 +35,8 @@
         "custom_audit_prompt": null,
         "attack_chain_enabled": 1,
         "attack_chain_done": 1,
-        "worker_hint": null
+        "worker_hint": null,
+        "recon_hint": null
       }
     ],
     "vulns": [
@@ -63,6 +64,7 @@
         "updated_at": "2026-08-20 07:18:01.613722",
         "attack_surface": "frontend",
         "required_account": null,
+        "exposure_mode": "direct",
         "severity_score": 3,
         "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
         "cvss_score": 7.5,
@@ -108,6 +110,7 @@
         "updated_at": "2026-08-20 07:39:08.099431",
         "attack_surface": "backend",
         "required_account": "admin",
+        "exposure_mode": "direct",
         "severity_score": 3,
         "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
         "cvss_score": 7.2,
@@ -153,6 +156,7 @@
         "updated_at": "2026-08-20 07:43:43.561420",
         "attack_surface": "frontend",
         "required_account": null,
+        "exposure_mode": "direct",
         "severity_score": 3,
         "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N",
         "cvss_score": 8.2,
@@ -198,6 +202,7 @@
         "updated_at": "2026-08-20 07:47:32.814978",
         "attack_surface": "frontend",
         "required_account": null,
+        "exposure_mode": "direct",
         "severity_score": 3,
         "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
         "cvss_score": 7.5,

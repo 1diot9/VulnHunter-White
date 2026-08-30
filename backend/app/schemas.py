@@ -209,7 +209,9 @@ class LiveLogPurgeOut(BaseModel):
 
 
 MANUAL_LAB_PROMPT_MAX = 20000
-WORKER_HINT_MAX = 20000
+HINT_TEXT_MAX = 20000
+WORKER_HINT_MAX = HINT_TEXT_MAX
+RECON_HINT_MAX = HINT_TEXT_MAX
 
 
 def normalize_manual_lab_prompt(raw: Any) -> str:
@@ -219,13 +221,21 @@ def normalize_manual_lab_prompt(raw: Any) -> str:
     return text
 
 
-def normalize_worker_hint(raw: Any) -> str:
+def normalize_hint_text(raw: Any, *, label: str = "提示") -> str:
     text = str(raw or "").strip()
     if "\x00" in text:
-        raise ValueError("挖掘提示必须是文本，不能包含空字节")
-    if len(text) > WORKER_HINT_MAX:
-        raise ValueError(f"挖掘提示过长，最多 {WORKER_HINT_MAX} 字")
+        raise ValueError(f"{label}必须是文本，不能包含空字节")
+    if len(text) > HINT_TEXT_MAX:
+        raise ValueError(f"{label}过长，最多 {HINT_TEXT_MAX} 字")
     return text
+
+
+def normalize_worker_hint(raw: Any) -> str:
+    return normalize_hint_text(raw, label="挖掘提示")
+
+
+def normalize_recon_hint(raw: Any) -> str:
+    return normalize_hint_text(raw, label="Recon 提示")
 
 
 def normalize_lab_retry_message(raw: Any) -> str:
@@ -337,6 +347,7 @@ class ProjectCreate(BaseModel):
     bypass_enabled: bool = False
     llm_model: str = Field(default="", max_length=256)
     worker_hint: str = Field(default="", max_length=WORKER_HINT_MAX)
+    recon_hint: str = Field(default="", max_length=RECON_HINT_MAX)
     max_token_usage: int = Field(default=0, ge=0, le=1_000_000_000_000)
 
 
@@ -356,6 +367,7 @@ class ProjectUpdate(BaseModel):
     bypass_enabled: bool | None = None
     llm_model: str | None = Field(default=None, max_length=256)
     worker_hint: str | None = Field(default=None, max_length=WORKER_HINT_MAX)
+    recon_hint: str | None = Field(default=None, max_length=RECON_HINT_MAX)
     max_token_usage: int | None = Field(default=None, ge=0, le=1_000_000_000_000)
 
 
@@ -394,6 +406,7 @@ class ProjectOut(BaseModel):
     bypass_queue_frozen: bool = False
     llm_model: str = ""
     worker_hint: str = ""
+    recon_hint: str = ""
     max_token_usage: int = 0
     error: str | None = None
     worker_concurrency: int | None = None

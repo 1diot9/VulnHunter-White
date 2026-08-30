@@ -620,6 +620,44 @@ def test_prompt_with_summary_injects_worker_hint(tmp_env, project):
     assert "项目人工提示" not in empty
 
 
+def test_prompt_with_summary_injects_recon_hint(tmp_env, project):
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.recon_hint = "  重点画 SSO 与后台路由  "
+        db.commit()
+
+    recon = pipeline._prompt_with_summary("recon", project, "侦察正文")
+    assert "项目 Recon 提示" in recon
+    assert "重点画 SSO 与后台路由" in recon
+    assert recon.index("侦察正文") < recon.index("项目 Recon 提示")
+
+    for phase in ("recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"):
+        text = pipeline._prompt_with_summary(phase, project, f"{phase} 正文")
+        assert "重点画 SSO 与后台路由" in text
+
+    worker = pipeline._prompt_with_summary("worker", project, "挖掘正文")
+    assert "项目 Recon 提示" not in worker
+    assert "重点画 SSO" not in worker
+    reviewer = pipeline._prompt_with_summary("reviewer", project, "审核正文")
+    assert "项目 Recon 提示" not in reviewer
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.recon_hint = "price = ${project_id} 不要改门闩"
+        db.commit()
+    dollar = pipeline._prompt_with_summary("recon", project, "侦察正文")
+    assert "price = ${project_id} 不要改门闩" in dollar
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.recon_hint = ""
+        db.commit()
+    empty = pipeline._prompt_with_summary("recon", project, "侦察正文")
+    assert "项目 Recon 提示" not in empty
+
+
 def test_worker_prior_block_truncates_oversized_docs(tmp_env, project, monkeypatch):
     from app.agent.compression import inject_worker_prior_block
     from app.config import settings

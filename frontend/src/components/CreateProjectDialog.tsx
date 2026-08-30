@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type CustomAuditMode } from '../api'
 import { AuditModeSelect } from './AuditModeSelect'
 import { AttackChainToggle } from './AttackChainToggle'
@@ -6,11 +6,10 @@ import { AuditFlowPreview } from './AuditFlowPreview'
 import { DynamicVerifyToggle, type DynamicVerifyMode } from './DynamicVerifyToggle'
 import { ManualLabToggle } from './ManualLabFields'
 import { MiningPathSelect } from './MiningPathSelect'
-import { ProjectModelSelect } from './ProjectModelSelect'
-import { MaxTokenUsageField, parseMaxTokenUsageInput } from './MaxTokenUsageField'
+import { AdvancedProjectOptions, AdvancedProjectOptionsButton } from './AdvancedProjectOptions'
+import { parseMaxTokenUsageInput } from './MaxTokenUsageField'
 import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
-import { WorkerHintFields } from './WorkerHintFields'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -57,7 +56,10 @@ export function CreateProjectDialog({
   const [bypassEnabled, setBypassEnabled] = useState(false)
   const [llmModel, setLlmModel] = useState('')
   const [workerHint, setWorkerHint] = useState('')
+  const [reconHint, setReconHint] = useState('')
   const [maxTokenUsage, setMaxTokenUsage] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedOpenRef = useRef(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
@@ -65,7 +67,15 @@ export function CreateProjectDialog({
   const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
 
   useEffect(() => {
-    if (!open) return
+    advancedOpenRef.current = advancedOpen
+  }, [advancedOpen])
+
+  useEffect(() => {
+    if (!open) {
+      advancedOpenRef.current = false
+      setAdvancedOpen(false)
+      return
+    }
     setError('')
     api.listCustomAuditModes().then(setCustomModes).catch(() => setCustomModes([]))
     const nextUrl = (initialUrl || '').trim()
@@ -118,6 +128,7 @@ export function CreateProjectDialog({
       bypass_enabled: bypassEnabled,
       llm_model: llmModel,
       worker_hint: workerHint,
+      recon_hint: reconHint,
       max_token_usage: parseMaxTokenUsageInput(maxTokenUsage),
     }
   }
@@ -176,13 +187,15 @@ export function CreateProjectDialog({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (next) onOpenChange(true)
-        else close()
-      }}
-    >
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (advancedOpenRef.current && !next) return
+          if (next) onOpenChange(true)
+          else close()
+        }}
+      >
       <DialogContent
         className="flex max-h-[min(90vh,56rem)] w-full max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
         showCloseButton={!busy}
@@ -190,7 +203,7 @@ export function CreateProjectDialog({
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、验证方式、项目模型、Token 上限与挖掘 Worker 提示。
+            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -205,9 +218,14 @@ export function CreateProjectDialog({
                 onValueChange={setAuditMode}
                 onCustomModeIdChange={setCustomModeId}
               />
-              <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
-              <MaxTokenUsageField value={maxTokenUsage} onChange={setMaxTokenUsage} disabled={busy} />
-              <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={busy} />
+              <AdvancedProjectOptionsButton
+                onClick={() => setAdvancedOpen(true)}
+                llmModel={llmModel}
+                maxTokenUsage={maxTokenUsage}
+                workerHint={workerHint}
+                reconHint={reconHint}
+                disabled={busy}
+              />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
                 heuristicLite={heuristicLite}
@@ -290,7 +308,21 @@ export function CreateProjectDialog({
             </Label>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      <AdvancedProjectOptions
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+        llmModel={llmModel}
+        onLlmModelChange={setLlmModel}
+        maxTokenUsage={maxTokenUsage}
+        onMaxTokenUsageChange={setMaxTokenUsage}
+        workerHint={workerHint}
+        onWorkerHintChange={setWorkerHint}
+        reconHint={reconHint}
+        onReconHintChange={setReconHint}
+        disabled={busy}
+      />
+    </>
   )
 }

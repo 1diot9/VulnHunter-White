@@ -477,6 +477,7 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["dynamic_verify_enabled"] is False
         assert created.json()["llm_model"] == ""
         assert created.json()["worker_hint"] == ""
+        assert created.json()["recon_hint"] == ""
         assert created.json()["max_token_usage"] == 0
         full = client.post(
             "/api/projects",
@@ -816,6 +817,61 @@ def test_create_zip_worker_hint(tmp_env, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["worker_hint"] == "zip 提示"
+
+
+def test_project_recon_hint_create_patch_and_clear(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.projects.start_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/recon-hint",
+                "recon_hint": "  重点画 SSO 与后台路由  ",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["recon_hint"] == "重点画 SSO 与后台路由"
+        pid = created.json()["id"]
+        with SessionLocal() as db:
+            p = db.get(Project, pid)
+            assert p.status != "paused"
+        updated = client.patch(
+            f"/api/projects/{pid}",
+            json={"recon_hint": "忽略演示模块\n鉴权以 JWT 为准"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["recon_hint"] == "忽略演示模块\n鉴权以 JWT 为准"
+        cleared = client.patch(f"/api/projects/{pid}", json={"recon_hint": "  "})
+        assert cleared.status_code == 200
+        assert cleared.json()["recon_hint"] == ""
+        too_long = client.patch(f"/api/projects/{pid}", json={"recon_hint": "x" * 20001})
+        assert too_long.status_code == 422
+
+
+def test_create_zip_recon_hint(tmp_env, monkeypatch):
+    import io
+    import zipfile
+
+    from app.main import app
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.txt", "x")
+    raw = buf.getvalue()
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects/upload",
+            files={"file": ("src.zip", raw, "application/zip")},
+            data={"recon_hint": "  zip 侦察提示  "},
+        )
+        assert created.status_code == 200
+        assert created.json()["recon_hint"] == "zip 侦察提示"
 
 
 def test_project_file_progress_counts(tmp_env, project):

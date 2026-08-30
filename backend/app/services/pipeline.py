@@ -1703,6 +1703,9 @@ _REPORT_FORMAT_PHASES = frozenset(
     {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md"}
 )
 _WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
+_RECON_HINT_PHASES = frozenset(
+    {"recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"}
+)
 _LAB_HINT_PHASES = frozenset({"reviewer-lab"})
 
 
@@ -2077,6 +2080,20 @@ def _worker_hint_block(project_id: int) -> str:
     )
 
 
+def _recon_hint_block(project_id: int) -> str:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        text = str(getattr(proj, "recon_hint", None) or "").strip() if proj else ""
+    if not text:
+        return ""
+    return (
+        "## 项目 Recon 提示（每轮都会注入）\n"
+        "以下为用户为本项目侦察阶段配置的额外提示。请在本轮侦察中参考；"
+        "不要因此跳过本轮门闩任务（地图/鉴权、扩展名、历史漏洞、盖章）。\n\n"
+        f"{text}\n\n"
+    )
+
+
 def _lab_retry_hint_block(project_id: int) -> str:
     env = load_env(project_id)
     text = str(env.get("retry_user_message") or "").strip()
@@ -2151,6 +2168,10 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
         text = f"{text.rstrip()}\n\n{conv}"
     if phase in _WORKER_HINT_PHASES:
         hint = _worker_hint_block(project_id)
+        if hint:
+            text = f"{text.rstrip()}\n\n{hint}"
+    if phase in _RECON_HINT_PHASES:
+        hint = _recon_hint_block(project_id)
         if hint:
             text = f"{text.rstrip()}\n\n{hint}"
     if phase in _LAB_HINT_PHASES:
@@ -3507,14 +3528,18 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
         total = int(status.get("total") or 0)
         marked = max(0, total - unmarked)
         lines = "\n".join(f"- {p}" for p in batch)
-        user = _initial_prompt(
-            "recon-mark.md",
-            project_id=project_id,
-            marked=marked,
-            total=total,
-            batch_count=len(batch),
-            paths=lines,
-            **_target_kind_vars(project_id),
+        user = _prompt_with_summary(
+            "recon-mark",
+            project_id,
+            _initial_prompt(
+                "recon-mark.md",
+                project_id=project_id,
+                marked=marked,
+                total=total,
+                batch_count=len(batch),
+                paths=lines,
+                **_target_kind_vars(project_id),
+            ),
         )
         run_id = _new_phase_run(project_id, "recon-mark", "recon_mark")
         _consume_force_new(project_id, "recon")

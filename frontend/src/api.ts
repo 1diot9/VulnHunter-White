@@ -33,6 +33,7 @@ export type Project = {
   bypass_queue_frozen: boolean
   llm_model: string
   worker_hint: string
+  recon_hint: string
   max_token_usage: number
   error: string | null
   worker_concurrency: number | null
@@ -789,6 +790,7 @@ export const api = {
       bypass_enabled?: boolean
       llm_model?: string
       worker_hint?: string
+      recon_hint?: string
       max_token_usage?: number
     } = {},
   ) =>
@@ -814,6 +816,7 @@ export const api = {
         bypass_enabled: Boolean(opts.bypass_enabled),
         llm_model: (opts.llm_model || '').trim(),
         worker_hint: opts.worker_hint || '',
+        recon_hint: opts.recon_hint || '',
         max_token_usage: opts.max_token_usage || 0,
       }),
     }),
@@ -836,6 +839,7 @@ export const api = {
       bypass_enabled?: boolean
       llm_model?: string
       worker_hint?: string
+      recon_hint?: string
       max_token_usage?: number
     } = {},
   ) => {
@@ -862,6 +866,7 @@ export const api = {
     fd.append('bypass_enabled', opts.bypass_enabled ? 'true' : 'false')
     fd.append('llm_model', (opts.llm_model || '').trim())
     fd.append('worker_hint', opts.worker_hint || '')
+    fd.append('recon_hint', opts.recon_hint || '')
     fd.append('max_token_usage', String(opts.max_token_usage || 0))
     return request<Project>('/api/projects/upload', { method: 'POST', body: fd })
   },
@@ -883,6 +888,7 @@ export const api = {
       bypass_enabled?: boolean
       llm_model?: string
       worker_hint?: string
+      recon_hint?: string
       max_token_usage?: number
     },
   ) =>

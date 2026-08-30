@@ -35,7 +35,8 @@
         "custom_audit_prompt": null,
         "attack_chain_enabled": 1,
         "attack_chain_done": 1,
-        "worker_hint": null
+        "worker_hint": null,
+        "recon_hint": null
       }
     ],
     "vulns": [
