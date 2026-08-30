@@ -33,12 +33,12 @@ class Settings(BaseSettings):
     timeout_recon_mark_round: int = 1800
     recon_mark_batch_size: int = 150
     timeout_worker_round: int = 7200
-    timeout_reviewer_static: int = 1800
+    timeout_reviewer_static: int = 2700
     # One-shot wall-clock extension when reviewer is wrapping up docs after verify.
     timeout_reviewer_wrapup_grace: int = 600
     timeout_verifier: int = 1800
     timeout_attack_chain: int = 1800
-    timeout_docker: int = 1800
+    timeout_docker: int = 2700
     timeout_semgrep: int = 1800
     timeout_sink_triage: int = 1800
     timeout_conclude: int = 1800
@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     # Same pending vuln: after this many consecutive reviewer timeouts, the one retry is static-only.
     # One more timeout after that marks false_positive so the queue is not blocked.
     review_timeouts_before_static: int = 1
-    # Review-time Docker bring-up agent: max model turns after code start fails (wall clock still timeout_docker).
-    lab_bringup_max_turns: int = 50
+    # reviewer-lab: consecutive timeouts (each timeout_reviewer_static) before project-wide static review.
+    lab_setup_timeouts_before_static: int = 2
     file_inject_max_bytes: int = 80 * 1024
     worker_round_history: int = 10
     todo_inject_interval: int = 50

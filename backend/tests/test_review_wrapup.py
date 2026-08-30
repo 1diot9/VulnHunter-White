@@ -245,7 +245,7 @@ def test_wrapup_grace_nudge_text():
 
 def test_config_wrapup_grace_default():
     assert settings.timeout_reviewer_wrapup_grace == 600
-    assert settings.timeout_reviewer_static == 1800
+    assert settings.timeout_reviewer_static == 2700
 
 
 def test_maybe_grant_method_once(tmp_env, project):

@@ -1390,8 +1390,8 @@ def test_reviewer_once_appends_dynamic_followup_without_interrupt(tmp_env, proje
     assert "动态验证阶梯" in str(captured["system"] or "")
 
 
-def test_prepare_lab_for_review_returns_bringup_when_start_needs_agent(tmp_env, project, monkeypatch):
-    from app.services.lab import mark_lab_setup_finished, save_env
+def test_prepare_lab_for_review_hands_off_to_lab_when_start_fails(tmp_env, project, monkeypatch):
+    from app.services.lab import handoff_lab_for_repair, lab_setup_finished, load_env, mark_lab_setup_finished, save_env
 
     _enable_dynamic_verify(project)
     save_env(
@@ -1416,9 +1416,12 @@ def test_prepare_lab_for_review_returns_bringup_when_start_needs_agent(tmp_env, 
             "need_agent": True,
         },
     )
+    monkeypatch.setattr(pipeline, "handoff_lab_for_repair", handoff_lab_for_repair)
     monkeypatch.setattr(pipeline, "docker_available", lambda: True)
-    assert pipeline._prepare_lab_for_review(project) == "bringup"
-    assert pipeline._next_reviewer_step(project, pending=1) == "lab-bringup"
+    assert pipeline._prepare_lab_for_review(project) == "static"
+    assert lab_setup_finished(project) is False
+    assert "port busy" in str(load_env(project).get("retry_user_message") or "")
+    assert pipeline._next_reviewer_step(project, pending=1) == "lab"
 
 
 def test_prepare_lab_for_review_quick_static_without_docker_lab(tmp_env, project):

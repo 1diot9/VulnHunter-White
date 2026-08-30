@@ -966,11 +966,10 @@ class AgentLoop:
                         result.round_summary = conclude.read_text(encoding="utf-8", errors="replace")
                     return result
                 if left in (5, 1):
-                    if self.phase in ("reviewer-lab-bringup", "reviewer_lab_bringup"):
+                    if self.phase in ("reviewer-lab", "reviewer_lab"):
                         warn = (
-                            f"还剩 {left} 轮。停止继续改 Docker。"
-                            "立刻 FinishLab(skipped=true, reason=总结靶场拉起失败的具体原因)。"
-                            "超时将强制结束并转为静态审核。"
+                            f"还剩 {left} 轮。若靶场仍不可用，FinishLab(skipped=true, reason=...)；"
+                            "否则 FinishLab() 结束搭建。"
                         )
                     else:
                         warn = (

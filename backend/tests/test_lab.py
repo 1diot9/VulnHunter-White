@@ -4,10 +4,12 @@ import json
 import subprocess
 
 from app.services.lab import (
-    LAB_REBUILD_MAX,
+    append_lab_repair_record,
     clear_lab_retry_flags,
     find_free_port,
     finish_manual_lab,
+    handoff_lab_for_repair,
+    increment_lab_setup_timeout_streak,
     invalidate_lab_for_rebuild,
     lab_bring_up_failed,
     lab_compose_project,
@@ -18,11 +20,13 @@ from app.services.lab import (
     lab_name_prefixes,
     lab_naming,
     lab_ready,
-    lab_rebuild_count,
     lab_rebuild_requested,
+    lab_repairs_path,
     lab_round_complete,
     lab_setup_failed,
     lab_setup_finished,
+    lab_setup_timeout_streak,
+    lab_setup_timeouts_exhausted,
     load_env,
     mark_lab_bring_up_failed,
     mark_lab_setup_finished,
@@ -447,9 +451,7 @@ def test_invalidate_lab_for_rebuild_clears_ready_and_reopens_setup(project):
     assert not env.get("target_url")
     assert env.get("container_name") == lab_container_name(project)
     assert env.get("image") == lab_image_name(project)
-    assert env.get("lab_rebuild_count") == 1
     assert lab_rebuild_requested(project) is True
-    assert lab_rebuild_count(project) == 1
     assert lab_ready(env) is False
     assert lab_setup_finished(project) is False
     doc = lab_doc_path(project).read_text(encoding="utf-8")
@@ -480,10 +482,30 @@ def test_clear_lab_retry_flags_clears_rebuild_markers(project):
     assert "lab_rebuild_requested" not in env
     assert "rebuild_requested_by" not in env
     assert "user_retry_requested" not in env
-    assert env.get("lab_rebuild_count") == 1
 
 
-def test_mark_lab_setup_finished_ready_resets_rebuild_count(project):
+def test_handoff_lab_for_repair_resets_timeout_streak(project):
+    save_env(project, {"lab_setup_timeout_streak": 1, "setup_finished": True, "accepted": True})
+    handoff_lab_for_repair(project, "容器不存在", source="reviewer")
+    assert lab_setup_timeout_streak(project) == 0
+    assert lab_setup_finished(project) is False
+
+
+def test_lab_setup_timeout_streak_exhausted(project):
+    from app.config import settings
+
+    save_env(project, {"lab_setup_timeout_streak": settings.lab_setup_timeouts_before_static})
+    assert lab_setup_timeouts_exhausted(project) is True
+
+
+def test_append_lab_repair_record_writes_doc(project):
+    append_lab_repair_record(project, failure_reason="404", solution="docker start")
+    text = lab_repairs_path(project).read_text(encoding="utf-8")
+    assert "404" in text
+    assert "docker start" in text
+
+
+def test_mark_lab_setup_finished_ready_clears_rebuild_flags(project):
     invalidate_lab_for_rebuild(project, "假就绪")
     save_env(
         project,
@@ -497,9 +519,6 @@ def test_mark_lab_setup_finished_ready_resets_rebuild_count(project):
     env = mark_lab_setup_finished(project, via="test")
     assert env.get("setup_finished") is True
     assert "lab_rebuild_requested" not in env
-    assert "lab_rebuild_count" not in env
-    assert lab_rebuild_count(project) == 0
-    assert LAB_REBUILD_MAX == 2
 
 
 def test_lab_round_complete_false_while_rebuild_requested(project):

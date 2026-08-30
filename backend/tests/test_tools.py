@@ -2434,9 +2434,9 @@ def test_request_lab_rebuild_denied_while_setup_in_progress(tmp_env, project):
     assert "已在进行" in out["error"]
 
 
-def test_request_lab_rebuild_capped(tmp_env, project):
+def test_request_lab_rebuild_resets_timeout_streak(tmp_env, project):
     from app.models import Project, SessionLocal
-    from app.services.lab import LAB_REBUILD_MAX, save_env
+    from app.services.lab import lab_setup_timeout_streak, save_env
 
     with SessionLocal() as db:
         proj = db.get(Project, project)
@@ -2450,16 +2450,16 @@ def test_request_lab_rebuild_capped(tmp_env, project):
             "accepted": True,
             "target_url": "http://127.0.0.1:18080",
             "status": "running",
-            "lab_rebuild_count": LAB_REBUILD_MAX,
+            "lab_setup_timeout_streak": 1,
         },
     )
     out = registry.dispatch(
         _ctx(project, "reviewer"),
         "RequestLabRebuild",
-        {"reason": "再次假就绪"},
+        {"reason": "容器不存在"},
     )
-    assert out["ok"] is False
-    assert "多次交回" in out["error"]
+    assert out["ok"] is True
+    assert lab_setup_timeout_streak(project) == 0
 
 
 def test_request_lab_rebuild_acl_blocks_lab_role(tmp_env, project):

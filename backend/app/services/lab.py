@@ -21,7 +21,7 @@ _MAX_NAME_SLUG = 48
 LAB_LABEL_KEY = "vulnhunter"
 LAB_LABEL_VALUE = "1"
 LAB_PROJECT_LABEL_KEY = "vulnhunter.project"
-LAB_REBUILD_MAX = 2
+LAB_REPAIRS_DOC = "lab-repairs.md"
 
 
 def _lab_role_suffix(role: str | None) -> str:
@@ -202,13 +202,6 @@ def lab_rebuild_requested(project_id: int) -> bool:
     return _truthy(load_env(project_id).get("lab_rebuild_requested"))
 
 
-def lab_rebuild_count(project_id: int) -> int:
-    try:
-        return max(0, int(load_env(project_id).get("lab_rebuild_count") or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 def lab_had_docker_lab(project_id: int) -> bool:
     """True when a Docker lab was accepted at least once (metadata still present)."""
     env = load_env(project_id)
@@ -291,6 +284,98 @@ def clear_lab_retry_flags(project_id: int) -> None:
         save_env(project_id, env)
 
 
+def lab_repairs_path(project_id: int) -> Path:
+    return docs_dir(project_id) / LAB_REPAIRS_DOC
+
+
+def lab_setup_timeout_streak(project_id: int) -> int:
+    try:
+        return max(0, int(load_env(project_id).get("lab_setup_timeout_streak") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def reset_lab_setup_timeout_streak(project_id: int) -> dict[str, Any]:
+    env = dict(load_env(project_id) or {})
+    if env.get("lab_setup_timeout_streak"):
+        env.pop("lab_setup_timeout_streak", None)
+        save_env(project_id, env)
+    return env
+
+
+def increment_lab_setup_timeout_streak(project_id: int) -> int:
+    env = dict(load_env(project_id) or {})
+    streak = lab_setup_timeout_streak(project_id) + 1
+    env["lab_setup_timeout_streak"] = streak
+    save_env(project_id, env)
+    return streak
+
+
+def lab_setup_timeouts_exhausted(project_id: int) -> bool:
+    from ..config import settings
+
+    threshold = max(1, int(getattr(settings, "lab_setup_timeouts_before_static", 2) or 2))
+    return lab_setup_timeout_streak(project_id) >= threshold
+
+
+def append_lab_repair_record(
+    project_id: int,
+    *,
+    failure_reason: str,
+    solution: str,
+    source: str = "reviewer",
+) -> Path:
+    """Append one repair history entry for subsequent lab-setup initial context."""
+    path = lab_repairs_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    block = (
+        f"## {ts}（{source}）\n\n"
+        f"### 失效原因\n{failure_reason.strip() or '未记录'}\n\n"
+        f"### 解决方案\n{solution.strip() or '未记录'}\n\n"
+    )
+    prev = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    header = "# 靶场修复记录\n\n" if not prev else ""
+    path.write_text(f"{header}{prev}\n\n{block}".strip() + "\n", encoding="utf-8")
+    env = dict(load_env(project_id) or {})
+    env.pop("pending_lab_repair_failure", None)
+    env.pop("pending_lab_repair_write", None)
+    save_env(project_id, env)
+    return path
+
+
+def format_lab_repairs_for_prompt(project_id: int, *, max_chars: int = 12000) -> str:
+    path = lab_repairs_path(project_id)
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        text = "…\n" + text[-max_chars:]
+    return (
+        "## 历史靶场修复记录（docs/lab-repairs.md）\n"
+        "搭建或修复时参考以往失效原因与解决方案，避免重复踩坑。\n\n"
+        f"{text}\n"
+    )
+
+
+def handoff_lab_for_repair(
+    project_id: int,
+    reason: str,
+    *,
+    source: str = "reviewer",
+) -> dict[str, Any]:
+    """Reopen reviewer-lab with a fresh timeout budget (streak reset on each handoff)."""
+    reset_lab_setup_timeout_streak(project_id)
+    env = invalidate_lab_for_rebuild(project_id, reason)
+    env["lab_repair_handoff_source"] = str(source or "reviewer").strip() or "reviewer"
+    env["pending_lab_repair_failure"] = str(reason or "").strip() or "靶场不可用"
+    env.pop("pending_lab_repair_write", None)
+    save_env(project_id, env)
+    return env
+
+
 def invalidate_lab_for_rebuild(project_id: int, reason: str) -> dict[str, Any]:
     """Mark a false-ready lab as not ready and reopen the dedicated lab-setup round."""
     env = dict(load_env(project_id) or {})
@@ -309,11 +394,6 @@ def invalidate_lab_for_rebuild(project_id: int, reason: str) -> dict[str, Any]:
     env.pop("target_url", None)
     text = str(reason or "").strip() or "审核判定靶场假就绪"
     env["retry_user_message"] = text
-    try:
-        count = max(0, int(env.get("lab_rebuild_count") or 0))
-    except (TypeError, ValueError):
-        count = 0
-    env["lab_rebuild_count"] = count + 1
     prev_notes = str(env.get("notes") or "").strip()
     line = f"reviewer_rebuild: {text}"
     env["notes"] = f"{prev_notes}\n{line}".strip() if prev_notes else line
@@ -378,7 +458,10 @@ def mark_lab_setup_finished(
         env.pop("bring_up_fail_reason", None)
         env.pop("lab_rebuild_requested", None)
         env.pop("rebuild_requested_by", None)
-        env.pop("lab_rebuild_count", None)
+        reset_lab_setup_timeout_streak(project_id)
+        failure = str(env.get("pending_lab_repair_failure") or "").strip()
+        if failure:
+            env["pending_lab_repair_write"] = True
     if notes:
         prev = str(env.get("notes") or "").strip()
         env["notes"] = f"{prev}\n{notes}".strip() if prev else notes

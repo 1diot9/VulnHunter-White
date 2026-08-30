@@ -34,15 +34,13 @@ from ..services.asset_proof import (
     upgrade_project_fingerprints,
 )
 from ..services.lab import (
-    LAB_REBUILD_MAX,
+    append_lab_repair_record,
     clear_lab_bring_up_failed,
-    invalidate_lab_for_rebuild,
+    handoff_lab_for_repair,
     lab_bring_up_failed,
     lab_ready,
-    lab_rebuild_count,
     lab_setup_finished,
     load_env,
-    mark_lab_bring_up_failed,
     mark_lab_setup_finished,
 )
 from ..services.paths import vuln_dir
@@ -839,28 +837,39 @@ def _return_to_worker(ctx, args: dict[str, Any]) -> dict[str, Any]:
 def _request_lab_rebuild(ctx, args: dict[str, Any]) -> dict[str, Any]:
     reason = str(args.get("reason") or "").strip()
     if not reason:
-        return call_fail("交回搭建必须说明假就绪原因 reason")
+        return call_fail("交回搭建必须说明靶场故障原因 reason")
     with SessionLocal() as db:
         proj = db.get(Project, ctx.project_id)
         if not proj or not is_lab_mode(project_verify_mode(proj)):
             return call_fail("仅靶场动态可交回搭建")
     if not lab_setup_finished(ctx.project_id):
         return call_fail("环境搭建轮已在进行")
-    count = lab_rebuild_count(ctx.project_id)
-    if count >= LAB_REBUILD_MAX:
-        return call_fail(
-            f"已多次交回搭建（{count}/{LAB_REBUILD_MAX}）；"
-            "请 static_only 或误报，或等搭建轮 FinishLab(skipped)"
-        )
-    env = invalidate_lab_for_rebuild(ctx.project_id, reason)
+    env = handoff_lab_for_repair(ctx.project_id, reason, source="reviewer")
     ctx.state["review_done"] = True
     ctx.state["review_verdict"] = "lab_rebuild"
     return {
         "ok": True,
         "setup_finished": False,
-        "lab_rebuild_count": env.get("lab_rebuild_count"),
         "reason": reason,
-        "message": "已标记靶场需重建，本轮审核结束，将交回环境搭建 Agent",
+        "message": "已标记靶场需修复，本轮审核结束，将交回环境搭建 Agent（超时计数已重置）",
+    }
+
+
+def _record_lab_repair(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    failure_reason = str(args.get("failure_reason") or args.get("reason") or "").strip()
+    solution = str(args.get("solution") or args.get("fix") or "").strip()
+    if not failure_reason or not solution:
+        return call_fail("须同时提供 failure_reason 与 solution")
+    path = append_lab_repair_record(
+        ctx.project_id,
+        failure_reason=failure_reason,
+        solution=solution,
+        source="reviewer",
+    )
+    return {
+        "ok": True,
+        "path": "docs/lab-repairs.md",
+        "message": "已写入靶场修复记录，可继续漏洞审核",
     }
 
 
@@ -868,27 +877,19 @@ def _finish_lab(ctx, args: dict[str, Any]) -> dict[str, Any]:
     skipped = bool(args.get("skipped"))
     reason = str(args.get("reason") or args.get("notes") or "").strip()
     env = load_env(ctx.project_id)
-    bringup = str(ctx.phase or "") in ("reviewer-lab-bringup", "reviewer_lab_bringup")
     if not skipped and not lab_ready(env):
         return call_fail(
             "靶场尚未 accepted=true 且 status=running。先启动 Docker 并 Write env/env.json，"
             "或 FinishLab(skipped=true, reason=无法搭建的原因)"
         )
-    if bringup and skipped:
-        env = mark_lab_bring_up_failed(
-            ctx.project_id,
-            reason=reason or "拉起轮 FinishLab(skipped)",
-            via="FinishLab-bringup",
-        )
-    else:
-        if bringup and not skipped:
-            clear_lab_bring_up_failed(ctx.project_id)
-        env = mark_lab_setup_finished(
-            ctx.project_id,
-            skipped=skipped,
-            notes=reason or None,
-            via="FinishLab-bringup" if bringup else "FinishLab",
-        )
+    if not skipped:
+        clear_lab_bring_up_failed(ctx.project_id)
+    env = mark_lab_setup_finished(
+        ctx.project_id,
+        skipped=skipped,
+        notes=reason or None,
+        via="FinishLab",
+    )
     ctx.state["lab_done"] = True
     return {
         "ok": True,
@@ -1277,13 +1278,36 @@ def register_reviewer_tools() -> None:
     )
     registry.register(
         ToolSpec(
+            name="RecordLabRepair",
+            description=(
+                "靶场修复成功后，记录本次失效原因与解决方案到 docs/lab-repairs.md。"
+                "须在验证靶场健康后、ConfirmVuln 前调用（修复交回后的首轮审核必填）。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "failure_reason": {
+                        "type": "string",
+                        "description": "本次靶场失效原因（可与 RequestLabRebuild 的 reason 一致或更详）",
+                    },
+                    "solution": {
+                        "type": "string",
+                        "description": "本次如何修复（命令、配置变更、重建步骤等）",
+                    },
+                },
+                "required": ["failure_reason", "solution"],
+            },
+            handler=_record_lab_repair,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="RequestLabRebuild",
             description=(
-                "靶场假就绪时交回环境搭建 Agent：容器在跑但业务入口 404/无法登录、"
-                "依赖 sidecar 已退出、Spring 内核未起来等。"
-                "会改写 env 为未就绪并结束本轮审核；漏洞保持 pending_review。"
-                "系统随后跑搭建轮，搭完或 FinishLab(skipped) 后再审。"
-                "不要自己 docker start/kill Tomcat，也不要用 static_only 硬过闸门。"
+                "靶场故障时交回环境搭建 Agent：容器不存在、假就绪（404/无法登录）、"
+                "依赖 sidecar 退出等。须附 reason；系统重置搭建超时计数并结束本轮审核。"
+                "修复成功后先用 RecordLabRepair 记录失效原因与解决方案，再继续漏洞验证。"
+                "不要自己修 Docker，也不要用 static_only 硬过闸门（除非项目已强制静态）。"
             ),
             parameters={
                 "type": "object",
