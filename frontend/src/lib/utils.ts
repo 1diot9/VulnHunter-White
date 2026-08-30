@@ -33,6 +33,45 @@ export function formatSubmissionTier(value: string | null | undefined): string {
   }
 }
 
+export function formatExposureMode(value: string | null | undefined): string | null {
+  switch (value) {
+    case 'indirect_consumer':
+      return '间接消费型'
+    case 'direct':
+      return '直接暴露'
+    default:
+      return null
+  }
+}
+
+/** Hover tooltip for the exposure-mode badge. */
+export function exposureModeTooltip(
+  mode: string | null | undefined,
+  upstreamChainProven?: boolean | null,
+): string | null {
+  switch (mode) {
+    case 'indirect_consumer':
+      return upstreamChainProven
+        ? [
+            '间接消费型：组件本身无直接 HTTP/RPC 入口，不能单独向该组件发请求完成利用。',
+            '完整利用依赖上游业务应用把攻击者输入传入 sink（例如经 WallFilter 的 SELECT 注入点）。',
+            '已在真实业务 HTTP/API 入口证明完整上游→组件利用链。',
+            '详情见报告「### 触发条件」。',
+          ].join('\n')
+        : [
+            '间接消费型：组件本身无直接 HTTP/RPC 入口，不能单独向该组件发请求完成利用。',
+            '完整利用依赖上游业务应用把攻击者输入传入 sink（例如经 WallFilter 的 SELECT 注入点）。',
+            '未在真实业务入口证明完整上游链；harness/单测直调组件 API 不算。',
+            '评分与价值分层已按间接消费型约束（通常低于可直接远程打穿的 Web 洞）。',
+            '详情见报告「### 触发条件」。',
+          ].join('\n')
+    case 'direct':
+      return '直接暴露：攻击者可通过用户可控入口（HTTP/RPC 等）直接触达漏洞 sink，无需依赖上游应用传入输入。'
+    default:
+      return null
+  }
+}
+
 export function formatTrackingStatus(value: string | null | undefined): string {
   switch (value) {
     case 'submitted':

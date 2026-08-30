@@ -2,105 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronRightIcon, DownloadIcon } from 'lucide-react'
 import { api, type Vuln } from '../api'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import VulnListSignals from './VulnListSignals'
 import { filterVulnGroups, groupVulnsByRootCause, type VulnTierFilter } from '../lib/vulnGroups'
 import {
   cn,
-  formatAttackSurface,
   formatDateTime,
-  formatConfigPremise,
-  formatMiningPath,
-  formatSeverity,
-  formatSeverityScore,
   formatVulnProjectName,
-  formatSubmissionTier,
-  formatTrackingStatus,
-  formatVerifierStatus,
-  formatVulnStatus,
   saveBlob,
-  severityScoreBadgeClass,
 } from '../lib/utils'
-
-function StatusBadges({ v, nested }: { v: Vuln; nested?: boolean }) {
-  const surface = formatAttackSurface(v.attack_surface, v.required_account)
-  const score = formatSeverityScore(v.severity_score, v.severity, v.cvss_vector)
-  const tier = formatSubmissionTier(v.submission_tier)
-  const verifier = formatVerifierStatus(v.verifier_status)
-  const miningPath = formatMiningPath(v.mining_path)
-  const configPremise = formatConfigPremise(v.config_premise)
-  return (
-    <div className={cn('mt-1 flex flex-wrap items-center gap-1.5', nested && 'mt-0.5 gap-1')}>
-      {nested ? (
-        <Badge variant="outline" className="h-4 border-cyan-800/80 bg-cyan-950/40 px-1.5 text-[10px] text-cyan-300/90">
-          子项
-        </Badge>
-      ) : null}
-      <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
-        项目 #{v.project_id}
-      </Badge>
-      <Badge
-        className={nested ? 'h-4 px-1.5 text-[10px] text-slate-400' : undefined}
-        variant={
-          nested
-            ? 'outline'
-            : v.status === 'confirmed' || v.status === 'static_only'
-              ? 'success'
-              : v.status === 'false_positive'
-                ? 'destructive'
-                : 'warning'
-        }
-      >
-        {formatVulnStatus(v.status, v.evidence_level, v.fp_kind)}
-      </Badge>
-      {miningPath ? (
-        <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
-          {miningPath}
-        </Badge>
-      ) : null}
-      {configPremise ? (
-        <Badge className={nested ? 'h-4 px-1.5 text-[10px]' : undefined} variant="outline">
-          {configPremise}
-        </Badge>
-      ) : null}
-      {v.tracking_status === 'submitted' || v.tracking_status === 'ignored' ? (
-        <Badge
-          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
-          variant={v.tracking_status === 'submitted' ? 'success' : 'outline'}
-        >
-          {formatTrackingStatus(v.tracking_status)}
-        </Badge>
-      ) : null}
-      {score ? (
-        <Badge
-          variant="outline"
-          className={cn(severityScoreBadgeClass(v.severity_score, v.cvss_vector), nested && 'h-4 px-1.5 text-[10px]')}
-          title={v.cvss_vector || undefined}
-        >
-          {score}
-        </Badge>
-      ) : null}
-      <Badge
-        className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
-        variant={nested ? 'outline' : v.submission_tier === 'cve_candidate' ? 'info' : 'outline'}
-      >
-        {tier}
-      </Badge>
-      {surface ? (
-        <span className={cn('text-xs text-slate-400', nested && 'text-[11px] text-slate-500')}>{surface}</span>
-      ) : null}
-      {verifier ? (
-        <Badge
-          className={nested ? 'h-4 px-1.5 text-[10px]' : undefined}
-          variant={v.verifier_status === 'verified' ? 'success' : v.verifier_status === 'failed' ? 'destructive' : 'outline'}
-        >
-          {verifier}
-        </Badge>
-      ) : null}
-    </div>
-  )
-}
 
 async function downloadReport(id: number) {
   try {
@@ -140,7 +52,7 @@ function VulnRow({
       >
         {v.title}
       </div>
-      <StatusBadges v={v} nested={nested} />
+      <VulnListSignals v={v} nested={nested} projectName={projectName} />
       {v.verifier_status === 'verified' && v.verifier_verified_url ? (
         <div
           className={cn(
@@ -152,7 +64,7 @@ function VulnRow({
         </div>
       ) : null}
       <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
-        #{v.id} · {formatVulnProjectName(projectName, projectKind ?? v.project_target_kind)} · {v.vuln_type} · {formatSeverity(v.severity)}
+        #{v.id} · {formatVulnProjectName(projectName, projectKind ?? v.project_target_kind)}
         {v.file_path ? ` · ${v.file_path}${v.line_no != null ? `:${v.line_no}` : ''}` : ''} · {formatDateTime(v.created_at)}
       </div>
     </>
@@ -265,7 +177,7 @@ export default function VulnGroupList({
   }
 
   return (
-    <>
+    <TooltipProvider delay={200}>
       {groups.map((group) => {
         const open = expanded.has(group.id)
         const projectName =
@@ -350,6 +262,6 @@ export default function VulnGroupList({
           </div>
         )
       })}
-    </>
+    </TooltipProvider>
   )
 }

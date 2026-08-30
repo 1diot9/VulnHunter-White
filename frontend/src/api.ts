@@ -194,6 +194,8 @@ export type Vuln = {
   evidence_level: string | null
   attack_surface: string | null
   required_account: string | null
+  exposure_mode?: string | null
+  upstream_chain_proven?: boolean
   submission_tier: string | null
   submission_reason: string | null
   /** heuristic | fast | bypass — which mining path submitted this vuln */
@@ -678,13 +680,26 @@ export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
   return params
 }
 
-function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+const DEFAULT_API_TIMEOUT_MS = 30_000
+
+type ApiFetchInit = RequestInit & {
+  /** Omit to use DEFAULT_API_TIMEOUT_MS; null disables the client timeout. */
+  timeoutMs?: number | null
+}
+
+function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   const token = getAccessToken()
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`)
   }
-  return fetch(url, { ...init, headers })
+  const { timeoutMs, signal, ...rest } = init ?? {}
+  let nextSignal = signal
+  if (!nextSignal) {
+    const ms = timeoutMs === null ? null : (timeoutMs ?? DEFAULT_API_TIMEOUT_MS)
+    if (ms != null) nextSignal = AbortSignal.timeout(ms)
+  }
+  return fetch(url, { ...rest, signal: nextSignal, headers })
 }
 
 function errorFromResponse(status: number, text: string, statusText: string): Error {
@@ -698,7 +713,7 @@ function errorFromResponse(status: number, text: string, statusText: string): Er
   return new Error(raw)
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+async function request<T>(url: string, init?: ApiFetchInit): Promise<T> {
   const res = await apiFetch(url, init)
   if (res.status === 401) {
     setAccessToken('')
@@ -1051,6 +1066,7 @@ export const api = {
     ),
   downloadVulns: async (ids: number[]) => {
     const res = await apiFetch('/api/vulns/download', {
+      timeoutMs: 120_000,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
@@ -1061,7 +1077,7 @@ export const api = {
   },
   downloadVulnReport: async (id: number, kind?: 'report' | 'advisory' | 'cve') => {
     const qs = kind ? `?kind=${kind}` : ''
-    const res = await apiFetch(`/api/vulns/${id}/download${qs}`)
+    const res = await apiFetch(`/api/vulns/${id}/download${qs}`, { timeoutMs: 120_000 })
     if (res.status === 401) setAccessToken('')
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     const blob = await res.blob()
@@ -1076,7 +1092,7 @@ export const api = {
     const filename = filenameFromDisposition(res.headers.get('Content-Disposition'), fallback)
     return { blob, filename }
   },
-  authStatus: () => request<{ ok: boolean; required: boolean }>('/api/auth/status'),
+  authStatus: () => request<{ ok: boolean; required: boolean }>('/api/auth/status', { timeoutMs: 15_000 }),
   authLogin: (token: string) =>
     request<{ ok: boolean; required: boolean }>('/api/auth/login', {
       method: 'POST',

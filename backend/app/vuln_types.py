@@ -356,6 +356,10 @@ def normalize_root_cause_key(raw: Any) -> str | None:
     return s[:256]
 
 
+def _has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
 def normalize_submission_decision(
     *,
     submission_tier: Any,
@@ -366,6 +370,8 @@ def normalize_submission_decision(
     reason = str(submission_reason or "").strip()
     if not reason:
         raise ValueError("缺少 submission_reason（须说明为何进入该提交分层）")
+    if not _has_cjk(reason):
+        raise ValueError("submission_reason 须用中文说明分层理由（产品名/类名/CVE 编号可保留英文）")
     root = normalize_root_cause_key(root_cause_key)
     if tier == "duplicate_grouped" and not root:
         raise ValueError("submission_tier=duplicate_grouped 时必须提供 root_cause_key")

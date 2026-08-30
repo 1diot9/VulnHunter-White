@@ -108,6 +108,7 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "CVSS 3.1" in review
     assert "submission_tier" in review
     assert "submission_reason" in review
+    assert "submission_reason（中文）" in review
     assert "root_cause_key" in review
     assert "config_premise" in review
     assert "CVE" in review
@@ -124,6 +125,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "CVSS 3.1" in text
     assert "submission_tier" in text
     assert "submission_reason" in text
+    assert "中文" in text or "须用中文" in text
     assert "root_cause_key" in text
     assert "config_premise" in text
     assert "MergeIntoVuln" in text
@@ -173,6 +175,7 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "MergeIntoVuln" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/reviewer.md")
     assert "原样复用" in load_prompt("initial/reviewer.md")
+    assert "submission_reason（中文）" in load_prompt("initial/reviewer.md")
     assert "audit_mode_hint" in load_prompt("initial/worker.md")
     assert "AppendAffectedLocations" in load_prompt("initial/worker.md")
     assert "audit_mode_hint" in load_prompt("initial/fix.md")
@@ -214,6 +217,20 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     cve_spec = registry.get("SetCveRecordField")
     assert cve_spec is not None
     assert "PR 须与已确认的 attack_surface 一致" in cve_spec.description
+
+
+def test_reviewer_prompt_covers_indirect_consumer_exposure():
+    from app.tools import registry
+
+    reviewer = load_prompt("reviewer.md")
+    cvss = load_prompt("cvss.md")
+    assert "间接消费型" in reviewer
+    assert "触发条件" in reviewer
+    assert "exposure_mode=indirect_consumer" in reviewer
+    assert "间接消费型" in cvss
+    spec = registry.get("ConfirmVuln")
+    assert spec is not None
+    assert "indirect_consumer" in spec.description
 
 
 def test_worker_prompt_requires_default_exploitability():

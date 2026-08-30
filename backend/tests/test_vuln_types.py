@@ -97,7 +97,7 @@ def test_normalize_submission_decision_and_aliases():
 
     low = normalize_submission_decision(
         submission_tier="加固建议",
-        submission_reason="CORS",
+        submission_reason="CORS 配置问题，低危害难利用",
     )
     assert low.tier == "low_impact"
     assert low.tier_label == "低危害难利用"
@@ -109,6 +109,15 @@ def test_normalize_submission_decision_and_aliases():
     )
     assert dup.tier == "duplicate_grouped"
     assert dup.root_cause_key == "ssrf:checkSsrfHttpUrl"
+
+    try:
+        normalize_submission_decision(
+            submission_tier="cve_candidate",
+            submission_reason="Unauthenticated IDOR with sensitive data exposure",
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "中文" in str(exc)
 
     try:
         normalize_submission_decision(

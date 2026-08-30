@@ -55,10 +55,14 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         setUnlocked(false)
       }
       setReady(true)
-    } catch {
+    } catch (err) {
       setUnlocked(false)
       setRequired(true)
-      setBackendError('无法连接后端，请确认服务已启动。')
+      const timedOut =
+        err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')
+      setBackendError(
+        timedOut ? '连接后端超时，请确认服务已启动且未卡住。' : '无法连接后端，请确认服务已启动。',
+      )
       setReady(true)
     }
   }, [])

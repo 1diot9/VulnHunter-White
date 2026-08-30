@@ -4,7 +4,7 @@
 
 ## 双层审核（必须分开判断）
 1. **漏洞成立性**：攻击者在默认/官方部署下，只凭自身权限与用户可控输入（HTTP / WebSocket / RPC / MQ / 回调等），能否打出可观察的有害冲击。source→sink 闭环且参数可达**不够**。成立才 Confirm；默认可利用性不成立则 MarkFalsePositive。核对 Worker 的 `config_premise`（`default` / `specific`）；标错则 Confirm 时传入纠正。`specific` **不包括**官方已明确警示会导致安全风险的配置；仅在此类开关下才成立则误报。
-2. **价值分层**：漏洞成立后，ConfirmVuln 必须给出 `submission_tier` + `submission_reason`。价值只分两类：有 CVE 价值，或低危害难利用。
+2. **价值分层**：漏洞成立后，ConfirmVuln 必须给出 `submission_tier` + `submission_reason`（**分层理由须用中文**，1–3 句说明为何进入该分层；产品名/类名/CVE 编号可保留英文）。价值只分两类：有 CVE 价值，或低危害难利用。
 
 ### 成立性否决（优先于分层）
 以下**不是漏洞**，应误报，不要 Confirm：
@@ -28,6 +28,7 @@
 - 同一 sink 的有回显与仅探测是同一根因，不要拆成两份；危害与 CVSS 向量必须以已证明观察面为准：有回显且能拿到元数据凭证或内网敏感正文 → C 可标 H；仅端口/存活探测 → C/I/A 用 L 或 N。
 
 需要「官方产品默认就具备」的特定条件（如必须登录、仅 Windows、需开启文档中的开关）才把 AC 标 H 或 PR 提高；不要用复杂向量掩盖「要先自己写文件」。
+- **间接消费型**（JDBC 连接池 / SQL 防火墙 / 解析库等组件本身无直接 HTTP 入口，须上游业务应用传入输入）：Confirm 时 `exposure_mode=indirect_consumer`；在报告 **`### 触发条件`** 写明不能直接向组件发请求、真实环境须先找到上游可利用注入点。CVSS 须 **AC:H** 且 **AV 不得为 N**（通常 AV:L）；未在真实业务入口证明完整上游链时，C/I/A 至多一项 H，价值分层标 `low_impact`，不要标 `frontend`/`cve_candidate`。仅 harness/单测直调组件 API 不算上游链 proven；只有从业务 HTTP/API 入口打通全链才可传 `upstream_chain_proven=true` 放宽。
 
 ### 价值分层规则
 价值只分两类，不要再用仅公告 / 加固建议这种拆法：
@@ -83,7 +84,7 @@
      - `admin`：需要管理员账号
    - 也可直接写中文：前台 / 后台，普通权限 / 管理员。
    - 必须再传 `cvss_vector`（CVSS 3.1 基础向量，不要手填分数）。
-   - 必须再传 `submission_tier`、`submission_reason`；主报告填 `root_cause_key`。同根因同危害重复条用 `MergeIntoVuln`，不要 Confirm 多份；仅危害/鉴权不同的相关变体才标 `duplicate_grouped` 并原样复用键。
+   - 必须再传 `submission_tier`、`submission_reason`（中文）；主报告填 `root_cause_key`。同根因同危害重复条用 `MergeIntoVuln`，不要 Confirm 多份；仅危害/鉴权不同的相关变体才标 `duplicate_grouped` 并原样复用键。
    - 核对 `config_premise`；Worker 标错则 Confirm 时传入 `default` 或 `specific` 纠正。官方已警示的风险配置不算 `specific`。
    默认本轮收口：ConfirmVuln 或 MarkFalsePositive。**不要**为改报告包装、PoC、指纹或危害口径而 ReturnToWorker。
 
@@ -94,7 +95,8 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | --- | --- |
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令 | MarkFalsePositive |
 | PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理、缺 `--zh`）、缺打印、默认输出写死中文或中英混排、同链 payload 细节（编码、参数名、鉴权头）；纯库洞误把 harness 抄进 `poc.py` 或加了未使用的 `-u/--proxy` | 本轮 Write `poc.py`（或纯库洞无安装面则删掉假脚本），ConfirmVuln 传 `poc_code` |
-| 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显 vs 仅探测）；局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm（标题改成中文） |
+| 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显 vs 仅探测）；间接消费型「### 触发条件」未说明上游依赖 | 本轮 Write `report.md` 后 Confirm；须 `exposure_mode=indirect_consumer` 并按约束降 CVSS/分层 |
+| 局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm（标题改成中文） |
 | 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1 向量、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 向量字符串，基础分由 ConfirmVuln 按向量计算，不要手填分数；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述过短、缺漏洞代码（完整路径 + 源码）、缺 HTTP/API PoC 或未写入口→sink 链路、版本/参考链接 | `ReadCveRecord` 查看字段与 `quality_issues`，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`；`descriptions[0].value` 须为英文详述，含漏洞代码路径与原文；supportingMedia 用 HTML 且漏洞代码与 PoC 放 `<pre>`）；不要 Write 整份 `cve.json` |
 | 容器在跑但业务入口 404/无法登录、sidecar 已退出等假就绪 | RequestLabRebuild(reason=...)，结束本轮交回搭建；不要自己 docker start/kill，也不要用 static_only 硬过闸门 |

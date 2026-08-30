@@ -641,6 +641,127 @@ def test_confirm_requires_attack_surface(tmp_env, project):
         assert v.attack_surface is None
 
 
+def test_confirm_indirect_consumer_requires_section_and_caps_tier(tmp_env, project):
+    _set_audit_mode(project, "full")
+    indirect_section = (
+        "### 触发条件\n\n"
+        "WallFilter 本身不直接接收 HTTP 请求，须在上游业务应用中找到 SELECT 型 SQL 注入点，"
+        "才能把恶意 SQL 传入 WallFilter；攻击者不能直接向 Druid 发送请求完成利用。"
+    )
+    payload = {
+        "title": "Druid Wall 默认配置放行 INTO OUTFILE",
+        "vuln_type": "sqli",
+        "cwe": "CWE-89",
+        "file_path": "src/wall/MySqlWallVisitor.java",
+        "line_no": 174,
+        "source_sink": "WallFilter -> MySQL",
+        "auth_premise": "依赖上游注入",
+        "http_request": "GET /api/search?q=1 HTTP/1.1\nHost: x\n",
+        "poc_code": (
+            "import argparse\n"
+            "p=argparse.ArgumentParser()\n"
+            "p.add_argument('-u','--url',required=True)\n"
+            "p.add_argument('--proxy',default='')\n"
+            "print(p.parse_args())\n"
+        ),
+        "expected_evidence": "harness 绕过 wall",
+        "config_premise": "default",
+    }
+    out = registry.dispatch(_ctx(project, "worker"), "SubmitVuln", payload)
+    assert out["ok"] is True
+    vuln_id = out["vuln_id"]
+    report_path = vuln_dir(project, vuln_id) / "report.md"
+    report_path.write_text(
+        f"# Druid Wall 绕过\n\n## 漏洞危害\n\n危害说明。\n\n{indirect_section}\n",
+        encoding="utf-8",
+    )
+    reviewer = _ctx(project, "reviewer", vuln_id=vuln_id)
+
+    missing_section = registry.dispatch(
+        reviewer,
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "backend",
+            "required_account": "user",
+            "exposure_mode": "indirect_consumer",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N",
+            "submission_tier": "low_impact",
+            "submission_reason": "须上游 SELECT 注入链",
+        },
+    )
+    assert missing_section["ok"] is False
+    assert "AV" in missing_section["error"]
+
+    report_path = vuln_dir(project, vuln_id) / "report.md"
+    report_path.write_text("# 无触发条件章节\n\n## 漏洞危害\n\n只有危害。\n", encoding="utf-8")
+    no_section = registry.dispatch(
+        reviewer,
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "backend",
+            "required_account": "user",
+            "exposure_mode": "indirect_consumer",
+            "cvss_vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N",
+            "submission_tier": "low_impact",
+            "submission_reason": "须上游 SELECT 注入链",
+        },
+    )
+    assert no_section["ok"] is False
+    assert "触发条件" in no_section["error"]
+    report_path.write_text(
+        f"# Druid Wall 绕过\n\n## 漏洞危害\n\n危害说明。\n\n{indirect_section}\n",
+        encoding="utf-8",
+    )
+
+    bad_tier = registry.dispatch(
+        reviewer,
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "backend",
+            "required_account": "user",
+            "exposure_mode": "indirect_consumer",
+            "cvss_vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "错误分层",
+        },
+    )
+    assert bad_tier["ok"] is False
+    assert "cve_candidate" in bad_tier["error"]
+
+    ok = registry.dispatch(
+        reviewer,
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "backend",
+            "required_account": "user",
+            "exposure_mode": "indirect_consumer",
+            "cvss_vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N",
+            "submission_tier": "low_impact",
+            "submission_reason": "组件缺陷成立但须上游 SELECT 注入链，真实环境难直接利用",
+        },
+    )
+    assert ok["ok"] is True
+    assert ok["exposure_mode"] == "indirect_consumer"
+    assert ok["upstream_chain_proven"] is False
+    assert ok["severity_score"] < 8.1
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        v = db.get(models.Vuln, vuln_id)
+        assert v.exposure_mode == "indirect_consumer"
+        assert v.upstream_chain_proven is False
+        assert v.submission_tier == "low_impact"
+
+
 def test_confirm_requires_severity_factors(tmp_env, project):
     payload = {
         "title": "服务端请求伪造",
@@ -1155,7 +1276,7 @@ def test_bounty_mode_allows_stored_xss_and_source_hardcoded_secret(tmp_env, proj
             "required_account": "admin",
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:U/C:N/I:L/A:N",
             "submission_tier": "cve_candidate",
-            "submission_reason": "1-click CSRF",
+            "submission_reason": "1-click CSRF，打开恶意页面即触发高危操作",
             "root_cause_key": "csrf:PluginController",
         },
     )

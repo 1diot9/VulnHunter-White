@@ -20,6 +20,13 @@ ConfirmVuln / SetCveRecordField 只填基础向量（8 个度量），不要手�
 - 需要登录才能改数据或打接口 → 不是 PR:N。需要管理员账号 → PR:H，不要写成 PR:L。
 - 需要登录不是 AC:H（那是 PR）。
 
+**间接消费型（exposure_mode=indirect_consumer）**
+- 适用：JDBC 连接池 / SQL 防火墙（如 Druid WallFilter）/ 编解码库 / 中间件 consumer 等**本身无直接 HTTP/RPC 入口**，缺陷只在「上游应用把攻击者输入传入组件 API」时才能利用。
+- 报告须在 **`### 触发条件`** 写明不能直接向组件发请求、须在上游业务应用找到可利用注入点（如 SELECT 型 SQLi 且语句经 WallFilter）。
+- **AC 必须 H**（除发现组件缺陷外，还须定位并打通上游链，攻击者无法单独准备）。
+- **AV 不得 N**（组件无直接网络入口）；通常 **AV:L**（经集成方本地调用链触发）。不要用 AV:N 按「远程 SQLi」抬分。
+- 未在真实业务 HTTP/API 入口证明完整上游链（仅 harness/单测直调组件 API）时：**C/I/A 至多一项 H**；价值分层 **low_impact**；不要标 **frontend** / **cve_candidate**。全链 proven 时 Confirm 传 `upstream_chain_proven=true` 才可放宽。
+
 ## 各度量怎么选
 
 **AV 攻击向量**

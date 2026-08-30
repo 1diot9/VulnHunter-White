@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckIcon, CopyIcon, DownloadIcon, Loader2Icon } from 'lucide-react'
 import { api, type VulnDetail, type VulnTrackingStatus } from '../api'
@@ -14,6 +14,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { normalizeDynamicVerifyMode } from './DynamicVerifyToggle'
 import VulnFollowUpPanel from './VulnFollowUpPanel'
+import ExposureModeBadge from './ExposureModeBadge'
 import {
   formatAttackSurface,
   formatDateTime,
@@ -54,6 +55,9 @@ export default function VulnDetailDialog({
   showProjectLink?: boolean
 }) {
   const [detail, setDetail] = useState<VulnDetail | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const activeVulnIdRef = useRef<number | null>(null)
   const [marking, setMarking] = useState(false)
   const [dynamicBusy, setDynamicBusy] = useState(false)
   const [dynamicError, setDynamicError] = useState('')
@@ -64,6 +68,9 @@ export default function VulnDetailDialog({
   useEffect(() => {
     if (vulnId == null) {
       setDetail(null)
+      setLoadError('')
+      setLoading(false)
+      activeVulnIdRef.current = null
       setDynamicError('')
       setDynamicBusy(false)
       setReportKind('report')
@@ -71,14 +78,36 @@ export default function VulnDetailDialog({
       setCveCopied(false)
       return
     }
+    activeVulnIdRef.current = vulnId
+    setDetail(null)
+    setLoadError('')
+    setLoading(true)
     setReportKind('report')
     setAdvisoryCopied(false)
     setCveCopied(false)
     setDynamicError('')
     setDynamicBusy(false)
-    return startVisibilityPoll(() => {
-      api.getVuln(vulnId).then(setDetail).catch(() => setDetail(null))
-    }, 5000)
+
+    async function loadDetail(id: number, initial: boolean) {
+      try {
+        const next = await api.getVuln(id)
+        if (activeVulnIdRef.current !== id) return
+        setDetail(next)
+        setLoadError('')
+      } catch (err) {
+        if (activeVulnIdRef.current !== id) return
+        if (initial) {
+          const text = err instanceof Error ? err.message : String(err || '')
+          setLoadError(text || '加载漏洞详情失败')
+          setDetail(null)
+        }
+      } finally {
+        if (initial && activeVulnIdRef.current === id) setLoading(false)
+      }
+    }
+
+    void loadDetail(vulnId, true)
+    return startVisibilityPoll(() => loadDetail(vulnId, false), 5000)
   }, [vulnId])
 
   const detailSurface = formatAttackSurface(detail?.attack_surface, detail?.required_account)
@@ -217,6 +246,8 @@ export default function VulnDetailDialog({
                 )}
                 {' · '}产出时间 {formatDateTime(detail.created_at)}
               </>
+            ) : loadError ? (
+              '加载失败'
             ) : (
               '加载报告…'
             )}
@@ -225,6 +256,7 @@ export default function VulnDetailDialog({
         <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
           {detail ? (
             <div className="space-y-3">
+              <TooltipProvider delay={200}>
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">项目 #{detail.project_id}</Badge>
                 <Badge variant="outline">{detail.vuln_type}</Badge>
@@ -257,6 +289,10 @@ export default function VulnDetailDialog({
                   <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
                 ) : null}
                 {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
+                <ExposureModeBadge
+                  exposureMode={detail.exposure_mode}
+                  upstreamChainProven={detail.upstream_chain_proven}
+                />
                 {detailVerifier ? (
                   <Badge
                     variant={
@@ -274,6 +310,7 @@ export default function VulnDetailDialog({
                   <span className="text-xs text-slate-400">{detail.verifier_verified_url}</span>
                 ) : null}
               </div>
+              </TooltipProvider>
               {detail.verifier_status === 'awaiting_user' ? (
                 <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/90">
                   互联网复测可能产生危害，正在等待你在「验证确认」页跳过或给出指示后继续。
@@ -519,7 +556,7 @@ export default function VulnDetailDialog({
                 </Suspense>
               )}
               {detail.http_request ? (
-                <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.http_request}</pre>
+                <pre className="overflow-auto rounded bg-black/40 p-3 text-xs text-slate-200">{detail.http_request}</pre>
               ) : null}
               {detail.poc_code ? (
                 <div>
@@ -528,7 +565,7 @@ export default function VulnDetailDialog({
                       'PoC：python poc.py -u <目标>；--proxy 设 HTTP 代理（空则直连）；RCE 可加 -c <命令>，有回显会打印'
                     }
                   </div>
-                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs">{detail.poc_code}</pre>
+                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs text-slate-200">{detail.poc_code}</pre>
                 </div>
               ) : null}
               <VulnFollowUpPanel
@@ -540,8 +577,38 @@ export default function VulnDetailDialog({
                 }}
               />
             </div>
+          ) : loadError ? (
+            <div className="space-y-3 rounded border border-destructive/40 bg-destructive/10 px-3 py-3 text-sm text-destructive">
+              <div>{loadError}</div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (vulnId == null) return
+                  setLoading(true)
+                  setLoadError('')
+                  void api
+                    .getVuln(vulnId)
+                    .then((next) => {
+                      if (activeVulnIdRef.current !== vulnId) return
+                      setDetail(next)
+                      setLoadError('')
+                    })
+                    .catch((err) => {
+                      if (activeVulnIdRef.current !== vulnId) return
+                      const text = err instanceof Error ? err.message : String(err || '')
+                      setLoadError(text || '加载漏洞详情失败')
+                    })
+                    .finally(() => {
+                      if (activeVulnIdRef.current === vulnId) setLoading(false)
+                    })
+                }}
+              >
+                重试
+              </Button>
+            </div>
           ) : (
-            <div className="text-sm text-muted-foreground">加载报告…</div>
+            <div className="text-sm text-muted-foreground">{loading ? '加载报告…' : '暂无数据'}</div>
           )}
         </div>
       </DialogContent>

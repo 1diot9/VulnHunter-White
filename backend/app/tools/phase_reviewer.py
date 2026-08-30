@@ -73,6 +73,17 @@ from ..cvss31 import (
     parse_cvss31,
     stamp_advisory_cvss31,
 )
+from ..exposure_mode import (
+    EXPOSURE_DIRECT,
+    EXPOSURE_INDIRECT_CONSUMER,
+    cvss_indirect_consumer_error,
+    exposure_mode_label,
+    indirect_attack_surface_error,
+    indirect_exposure_section_gap,
+    indirect_submission_tier_error,
+    normalize_exposure_mode,
+    parse_upstream_chain_proven,
+)
 from ..prompts import cvss_scoring_prompt
 from ..services.cve_record import ensure_cve_record, write_cve_record
 from ..vuln_types import (
@@ -142,10 +153,20 @@ def _review_label_body(
     cvss: Cvss31Result,
     submission: SubmissionTierDecision,
     config_premise: str | None = None,
+    *,
+    exposure_mode: str | None = None,
+    upstream_chain_proven: bool = False,
 ) -> str:
     lines = [f"- 攻击面：{_SURFACE_LABELS[surface]}"]
     if surface == "backend" and account:
         lines.append(f"- 所需账号：{_ACCOUNT_LABELS[account]}")
+    mode_label = exposure_mode_label(exposure_mode)
+    if mode_label and exposure_mode != EXPOSURE_DIRECT:
+        lines.append(f"- 暴露模式：{mode_label}（{exposure_mode}）")
+        if upstream_chain_proven:
+            lines.append("- 上游利用链：已在真实业务入口证明")
+        else:
+            lines.append("- 上游利用链：未在真实业务入口证明（评分与分层已按间接消费型约束）")
     premise_label = config_premise_label(config_premise)
     if premise_label:
         lines.append(f"- 配置前提：{premise_label}")
@@ -429,6 +450,30 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     pr_mismatch = cvss_pr_alignment_error(cvss, surface, account)
     if pr_mismatch:
         return {"ok": False, "error": pr_mismatch}
+    try:
+        exposure_mode = normalize_exposure_mode(args.get("exposure_mode"))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    upstream_chain_proven = parse_upstream_chain_proven(args.get("upstream_chain_proven"))
+    if exposure_mode == EXPOSURE_INDIRECT_CONSUMER:
+        cvss_indirect = cvss_indirect_consumer_error(
+            cvss,
+            upstream_chain_proven=upstream_chain_proven,
+        )
+        if cvss_indirect:
+            return {"ok": False, "error": cvss_indirect}
+        surface_indirect = indirect_attack_surface_error(
+            surface,
+            upstream_chain_proven=upstream_chain_proven,
+        )
+        if surface_indirect:
+            return {"ok": False, "error": surface_indirect}
+        tier_indirect = indirect_submission_tier_error(
+            submission.tier,
+            upstream_chain_proven=upstream_chain_proven,
+        )
+        if tier_indirect:
+            return {"ok": False, "error": tier_indirect}
     config_premise = None
     if args.get("config_premise") not in (None, ""):
         try:
@@ -566,6 +611,17 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             if blocked_harness:
                 return {"ok": False, "error": blocked_harness}
 
+    report_path = vuln_dir(ctx.project_id, int(vuln_id)) / "report.md"
+    report_text = (
+        report_path.read_text(encoding="utf-8", errors="ignore")
+        if report_path.is_file()
+        else ""
+    )
+    if exposure_mode == EXPOSURE_INDIRECT_CONSUMER:
+        indirect_gap = indirect_exposure_section_gap(report_text)
+        if indirect_gap:
+            return {"ok": False, "error": indirect_gap}
+
     proof = maybe_enrich_asset_proof(
         ctx.project_id,
         int(vuln_id),
@@ -591,6 +647,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.evidence_level = evidence
         vuln.attack_surface = surface
         vuln.required_account = account
+        vuln.exposure_mode = exposure_mode
+        vuln.upstream_chain_proven = upstream_chain_proven
         vuln.severity = cvss.severity
         vuln.cvss_vector = cvss.vector
         vuln.cvss_score = cvss.score
@@ -626,6 +684,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 cvss,
                 submission,
                 config_premise=vuln.config_premise,
+                exposure_mode=exposure_mode,
+                upstream_chain_proven=upstream_chain_proven,
             ),
         )
         db.commit()
@@ -647,6 +707,9 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "evidence_level": evidence,
         "attack_surface": surface,
         "attack_surface_label": _SURFACE_LABELS[surface],
+        "exposure_mode": exposure_mode,
+        "exposure_mode_label": exposure_mode_label(exposure_mode),
+        "upstream_chain_proven": upstream_chain_proven,
         "required_account": account,
         "severity": cvss.severity,
         "severity_label": cvss.severity_label,
@@ -901,7 +964,7 @@ def register_reviewer_tools() -> None:
                 "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
                 "harness 必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
                 "还必须标注 cvss_vector（CVSS 3.1 基础向量，只填度量不要填分数）、"
-                "submission_tier、submission_reason。"
+                "submission_tier、submission_reason（分层理由须用中文）。"
                 "核对 Worker 的 config_premise；错误则 Confirm 时传入纠正。"
                 "specific 不含官方已明确警示会导致安全风险的配置；仅在此类开关下才成立则误报。"
                 "同一根因同一危害的重复条请用 MergeIntoVuln 并入主报告，不要 Confirm 成多份；"
@@ -913,6 +976,10 @@ def register_reviewer_tools() -> None:
                 "PR 必须与 attack_surface / required_account 一致，否则拒绝确认。"
                 "SSRF 须按观察面确认：有回显才能写可读元数据/内网正文；"
                 "仅状态码/时延/报错差别只算内网端口探测，向量 C/I/A 不要按凭据窃取标 H。"
+                "间接消费型（组件库/JDBC 防火墙/解析器等无直接 HTTP 入口、须上游应用传入输入）"
+                "须 exposure_mode=indirect_consumer，报告「### 触发条件」须写明上游依赖，"
+                "CVSS 须 AC:H 且 AV 不得为 N，未证明完整上游业务链时 C/I/A 至多一项 H、"
+                "不得标 frontend/cve_candidate；harness 直调 API 不算上游链，须传 upstream_chain_proven=true 才能放宽。"
                 "有漏洞环境时若项目指纹仍缺，用 CollectLabFingerprints 升级项目共享指纹，"
                 "再传入 fofa_fingerprint / x_fingerprint；未传且报告仍是占位语句时会写入 docs/app-fingerprints.json 的共享指纹。"
                 "\n\n"
@@ -941,6 +1008,25 @@ def register_reviewer_tools() -> None:
                     "required_account": {
                         "type": "string",
                         "description": "后台必填。user=普通权限账号，admin=管理员账号。也可写中文：普通权限 / 管理员",
+                    },
+                    "exposure_mode": {
+                        "type": "string",
+                        "description": (
+                            "可选，默认 direct。"
+                            "indirect_consumer=间接消费型：组件本身无直接 HTTP/RPC 入口，"
+                            "完整利用依赖上游业务应用把攻击者输入传入 sink（如 Druid WallFilter、JDBC 包装器）。"
+                            "须写报告「### 触发条件」（上游依赖与不能直接向组件发请求），"
+                            "并按间接消费型 CVSS/分层约束。"
+                        ),
+                    },
+                    "upstream_chain_proven": {
+                        "type": "boolean",
+                        "description": (
+                            "仅 exposure_mode=indirect_consumer 时有效。"
+                            "true=已在真实业务 HTTP/API 入口打通上游→组件 sink 全链；"
+                            "false=仅静态/harness 直调组件 API 证明缺陷存在。"
+                            "false 时不得标 frontend/cve_candidate，CVSS 的 C/I/A 至多一项 H。"
+                        ),
                     },
                     "config_premise": {
                         "type": "string",
@@ -975,7 +1061,11 @@ def register_reviewer_tools() -> None:
                     },
                     "submission_reason": {
                         "type": "string",
-                        "description": "必填。说明为何进入该价值分层（有无 CVE 价值、为何算低危害难利用、如何合并）。",
+                        "description": (
+                            "必填。用中文 1–3 句说明为何进入该价值分层"
+                            "（有无 CVE 价值、为何算低危害难利用、如何合并）；"
+                            "产品名/类名/CVE 编号可保留英文。"
+                        ),
                     },
                     "root_cause_key": {
                         "type": "string",

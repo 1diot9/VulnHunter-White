@@ -281,7 +281,7 @@ def test_submit_and_confirm_write_custom_advisory(tmp_env, project):
             "evidence_level": "static_only",
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             "submission_tier": "cve_candidate",
-            "submission_reason": "has cve value",
+            "submission_reason": "有 CVE 价值，未认证可达",
             "advisory_md": "# GitHub Security Advisory\n\n## Title\n\n```\nreviewed title\n```\n",
         },
     )

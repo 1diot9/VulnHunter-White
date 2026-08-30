@@ -263,6 +263,9 @@ class Vuln(Base):
     attack_surface: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # frontend | backend — Reviewer 确认时标注
     required_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    exposure_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # direct | indirect_consumer — 组件无直接攻击面、依赖上游应用传入输入
+    upstream_chain_proven: Mapped[bool] = mapped_column(Boolean, default=False)
     # user | admin — 仅后台漏洞需要
     submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # cve_candidate | low_impact | duplicate_grouped
@@ -491,6 +494,8 @@ def _ensure_columns() -> None:
         "vulns": {
             "attack_surface": "VARCHAR(32)",
             "required_account": "VARCHAR(32)",
+            "exposure_mode": "VARCHAR(32)",
+            "upstream_chain_proven": "BOOLEAN DEFAULT 0",
             "severity_score": "INTEGER",
             "cvss_vector": "VARCHAR(128)",
             "cvss_score": "REAL",

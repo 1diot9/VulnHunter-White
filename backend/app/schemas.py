@@ -469,6 +469,8 @@ class VulnOut(BaseModel):
     evidence_level: str | None = None
     attack_surface: str | None = None
     required_account: str | None = None
+    exposure_mode: str | None = None
+    upstream_chain_proven: bool = False
     submission_tier: str | None = None
     submission_reason: str | None = None
     # heuristic | fast | bypass
