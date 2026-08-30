@@ -1,6 +1,5 @@
 import type { Vuln } from '../api'
 import {
-  exposureModeTooltip,
   formatAttackSurface,
   formatConfigPremise,
   formatEvidenceLevel,
@@ -66,25 +65,6 @@ export function vulnListSecondaryTags(v: Vuln, nested?: boolean): VulnListTag[] 
     })
   }
 
-  const surface = formatAttackSurface(v.attack_surface, v.required_account)
-  if (surface) {
-    tags.push({
-      label: surface,
-      tooltip:
-        v.attack_surface === 'frontend'
-          ? '前台漏洞：公开或未登录即可打到。'
-          : '后台漏洞：须具备相应应用内账号才能利用。',
-    })
-  }
-
-  const exposure = formatExposureMode(v.exposure_mode)
-  if (exposure) {
-    tags.push({
-      label: exposure + (v.exposure_mode === 'indirect_consumer' && v.upstream_chain_proven ? ' · 链已证' : ''),
-      tooltip: exposureModeTooltip(v.exposure_mode, v.upstream_chain_proven),
-    })
-  }
-
   const mining = formatMiningPath(v.mining_path)
   if (mining) {
     const key = (v.mining_path || '').trim().toLowerCase()
@@ -127,7 +107,7 @@ export function vulnListAttributeLines(v: Vuln, projectName?: string): VulnListA
   ]
 
   const surface = formatAttackSurface(v.attack_surface, v.required_account)
-  if (surface) lines.push({ label: '攻击面', value: surface })
+  if (surface) lines.push({ label: '权限要求', value: surface })
 
   const exposure = formatExposureMode(v.exposure_mode)
   if (exposure) {

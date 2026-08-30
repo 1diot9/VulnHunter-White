@@ -2,6 +2,8 @@ import { Fragment } from 'react'
 import { EllipsisIcon } from 'lucide-react'
 import type { Vuln } from '../api'
 import { vulnListAttributeLines, vulnListSecondaryTags } from '../lib/vulnListTags'
+import AttackSurfaceBadge from './AttackSurfaceBadge'
+import ExposureModeBadge from './ExposureModeBadge'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -102,6 +104,16 @@ export default function VulnListSignals({
             {score}
           </Badge>
         ) : null}
+        <AttackSurfaceBadge
+          attackSurface={v.attack_surface}
+          requiredAccount={v.required_account}
+          nested={nested}
+        />
+        <ExposureModeBadge
+          exposureMode={v.exposure_mode}
+          upstreamChainProven={v.upstream_chain_proven}
+          nested={nested}
+        />
       </div>
       {secondary.length > 0 ? (
         <div

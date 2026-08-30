@@ -14,9 +14,9 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { normalizeDynamicVerifyMode } from './DynamicVerifyToggle'
 import VulnFollowUpPanel from './VulnFollowUpPanel'
+import AttackSurfaceBadge from './AttackSurfaceBadge'
 import ExposureModeBadge from './ExposureModeBadge'
 import {
-  formatAttackSurface,
   formatDateTime,
   formatConfigPremise,
   formatMiningPath,
@@ -110,7 +110,6 @@ export default function VulnDetailDialog({
     return startVisibilityPoll(() => loadDetail(vulnId, false), 5000)
   }, [vulnId])
 
-  const detailSurface = formatAttackSurface(detail?.attack_surface, detail?.required_account)
   const detailScore = formatSeverityScore(detail?.severity_score, detail?.severity, detail?.cvss_vector)
   const detailTier = formatSubmissionTier(detail?.submission_tier)
   const detailTracking = formatTrackingStatus(detail?.tracking_status)
@@ -288,7 +287,10 @@ export default function VulnDetailDialog({
                 {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (
                   <Badge variant={detail.tracking_status === 'submitted' ? 'info' : 'outline'}>{detailTracking}</Badge>
                 ) : null}
-                {detailSurface ? <Badge variant="info">{detailSurface}</Badge> : null}
+                <AttackSurfaceBadge
+                  attackSurface={detail.attack_surface}
+                  requiredAccount={detail.required_account}
+                />
                 <ExposureModeBadge
                   exposureMode={detail.exposure_mode}
                   upstreamChainProven={detail.upstream_chain_proven}
