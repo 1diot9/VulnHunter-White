@@ -650,6 +650,25 @@ def _copy_jar_missing_only(source_abs: Path, work_dir: Path, project_id: int) ->
     return work_dir
 
 
+def _cli_arg_path(path: Path | str) -> str:
+    """Absolute path for jadx/Java argv.
+
+    Never pass a ``\\\\?\\`` prefix: Java's file API rejects it on Windows
+    (jadx then exits 1 with no sources). Python I/O still uses
+    ``windows_long_path`` separately.
+    """
+    return os.path.normpath(os.path.abspath(os.fspath(strip_windows_long_path(path))))
+
+
+def _jadx_command(binary: str, output_dir: Path | str, input_path: Path | str) -> list[str]:
+    return [
+        binary,
+        "-d",
+        _cli_arg_path(output_dir),
+        _cli_arg_path(input_path),
+    ]
+
+
 def _run_jadx(cmd: list[str], *, timeout: int, job: DecompileJob) -> subprocess.CompletedProcess[str]:
     if _run_jadx_hook is not None:
         return _run_jadx_hook(cmd, timeout=timeout, job=job)
@@ -752,13 +771,7 @@ def _execute_job(job_id: str) -> None:
                 _persist_entry(job)
                 return
 
-        cmd = [
-            binary,
-            "--quiet",
-            "-d",
-            str(out_abs),
-            str(windows_long_path(input_path)),
-        ]
+        cmd = _jadx_command(binary, job.output_abs, input_path)
         # Prefer only class filters when jadx supports --include-class; keep simple for portability
         timeout = _job_timeout()
         completed = _run_jadx(cmd, timeout=timeout, job=job)
@@ -784,9 +797,9 @@ def _execute_job(job_id: str) -> None:
             return
 
         if count == 0:
-            err = (completed.stderr or completed.stdout or "").strip()[:500]
+            err = re.sub(r"\s+", " ", (completed.stderr or completed.stdout or "").strip())[:500]
             job.status = _STATUS_FAILED
-            job.error = err or f"jadx 退出码 {completed.returncode}，无 .java 产出"
+            job.error = f"jadx 退出码 {completed.returncode}，无 .java 产出" + (f"：{err}" if err else "")
             job.finished_at = time.time()
             _persist_entry(job)
             return

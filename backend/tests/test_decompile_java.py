@@ -224,3 +224,52 @@ def test_skip_when_java_source_exists(tmp_env, project, monkeypatch):
             break
         time.sleep(0.05)
     assert status.get("status") == "skipped"
+
+
+def test_jadx_cli_paths_never_use_extended_prefix(tmp_path):
+    from app.services.paths import windows_long_path
+
+    src = tmp_path / "app.jar"
+    src.write_bytes(b"x")
+    out = tmp_path / "out"
+    cmd = dj._jadx_command("jadx", windows_long_path(out), windows_long_path(src))
+    assert cmd[0] == "jadx"
+    assert cmd[1] == "-d"
+    for arg in cmd[1:]:
+        assert not str(arg).startswith("\\\\?\\"), arg
+    assert Path(cmd[-1]).name == "app.jar"
+    assert Path(cmd[2]).name == "out"
+
+
+def test_decompile_failure_includes_jadx_output(tmp_env, project, monkeypatch):
+    src = src_dir(project)
+    jar = src / "lib" / "app.jar"
+    _write_jar(jar, {"com/demo/Hello.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, *, timeout, job):
+        seen.append(list(cmd))
+        return SimpleNamespace(returncode=1, stdout="", stderr="ERROR: Load files failed: bad path")
+
+    monkeypatch.setattr(dj, "resolve_jadx_binary", lambda: "jadx")
+    monkeypatch.setattr(dj, "jadx_version_string", lambda _b=None: "1.5.5")
+    dj._run_jadx_hook = fake_run
+
+    out = registry.dispatch(_ctx(project), "DecompileJava", {"path": "src/lib/app.jar"})
+    jid = out.get("job_id")
+    deadline = time.time() + 5
+    status = out
+    while time.time() < deadline and jid:
+        status = dj.get_job_status(project, job_id=jid) or status
+        if status.get("status") in ("failed", "ready", "skipped"):
+            break
+        time.sleep(0.05)
+    assert status.get("status") == "failed"
+    err = status.get("error") or ""
+    assert "退出码 1" in err
+    assert "无 .java 产出" in err
+    assert "Load files failed" in err
+    assert seen
+    for arg in seen[0][1:]:
+        assert not str(arg).startswith("\\\\?\\")

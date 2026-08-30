@@ -193,7 +193,7 @@
 | 全局并发 | 进程内线程/进程池，默认 **每主机 1～2** 个 jadx；多项目共享队列。 |
 | 失败 | 混淆严重仍有部分输出 → 有 `.java` 则 `ready`（可带 `partial=true`）；零输出 → `failed`。 |
 | Fallback | 一期 **仅 jadx**，不接 CFR/Procyon。 |
-| Windows | 产物 I/O 走现有 `windows_long_path`。 |
+| Windows | 产物 I/O 走现有 `windows_long_path`。传给 jadx 子进程的 `-d` / 输入路径必须是普通盘符绝对路径，**不要**带 `\\?\`（Java 不认，会退出码 1 且零产出）。 |
 
 ---
 
