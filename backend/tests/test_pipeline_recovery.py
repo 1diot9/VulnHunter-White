@@ -253,6 +253,62 @@ def test_maybe_complete_project(tmp_env, project):
         assert proj.phase == "done"
 
 
+def test_maybe_complete_project_stops_lab(tmp_env, project, monkeypatch):
+    build_file_index(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    from app.services.lab import save_env
+
+    save_env(
+        project,
+        {
+            "container_name": f"demo-{project}",
+            "container_id": "abc123",
+            "status": "running",
+            "accepted": True,
+        },
+    )
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.status = "auditing"
+        for fw in db.query(models.FileWeight).filter(models.FileWeight.project_id == project).all():
+            fw.weight = 10
+            fw.audited = True
+        db.commit()
+
+    calls: list[tuple[int, str]] = []
+
+    def fake_stop(pid: int, *, via: str = "user-stop") -> dict:
+        calls.append((pid, via))
+        return {"ok": True}
+
+    monkeypatch.setattr(pipeline, "stop_lab", fake_stop)
+    monkeypatch.setattr(pipeline, "docker_available", lambda: True)
+
+    class _SyncThread:
+        def __init__(self, target=None, args=(), name=None, daemon=None) -> None:
+            self._target = target
+            self._args = args
+
+        def start(self) -> None:
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(pipeline.threading, "Thread", _SyncThread)
+
+    assert pipeline._maybe_complete_project(project, reviewer_busy=False, fix_busy=False) is True
+    assert calls == [(project, "project-complete")]
+
+
+def test_stop_lab_on_project_complete_skips_without_env(tmp_env, project, monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(pipeline, "stop_lab", lambda pid, **kw: calls.append(pid) or {"ok": True})
+    monkeypatch.setattr(pipeline, "docker_available", lambda: True)
+    pipeline._stop_lab_on_project_complete(project)
+    assert calls == []
+
+
 def test_refresh_project_after_reviewer_reverts_when_queue_empty(tmp_env, project):
     build_file_index(project)
     models = tmp_env["models"]

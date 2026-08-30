@@ -1211,7 +1211,7 @@ def start_lab(project_id: int, *, force_recreate: bool = False) -> dict[str, Any
     return _user_recreate_lab(project_id, force_all=False)
 
 
-def stop_lab(project_id: int) -> dict[str, Any]:
+def stop_lab(project_id: int, *, via: str = "user-stop") -> dict[str, Any]:
     """Stop primary lab container and project sidecars; update env.json status."""
     from .docker_service import docker_service, collect_project_refs
 
@@ -1250,6 +1250,6 @@ def stop_lab(project_id: int) -> dict[str, Any]:
         env = dict(env)
         env["status"] = "exited"
     save_env(project_id, env)
-    write_lab_doc(project_id, env, via="user-stop")
+    write_lab_doc(project_id, env, via=via)
     err = "; ".join(errors) if errors else None
     return lab_status_payload(project_id, env=env, ok=not errors, error=err)

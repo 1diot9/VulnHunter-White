@@ -92,6 +92,7 @@ from ..services.lab import (
     mark_lab_setup_finished,
     recreate_lab,
     reset_lab_setup_for_retry,
+    stop_lab,
 )
 from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
@@ -2395,6 +2396,22 @@ def _ensure_project_fingerprints_once(project_id: int) -> None:
         live_log.error(project_id, f"采集项目应用指纹失败: {e}")
 
 
+def _stop_lab_on_project_complete(project_id: int) -> None:
+    """Best-effort stop of lab web container and compose sidecars after audit finishes."""
+    try:
+        if not docker_available():
+            return
+        if not load_env(project_id):
+            return
+        result = stop_lab(project_id, via="project-complete")
+        if result.get("ok"):
+            live_log.system(project_id, "项目完成，已自动停止靶场容器")
+        elif result.get("error"):
+            live_log.system(project_id, f"自动停止靶场失败: {result['error']}")
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"自动停止靶场异常: {e}")
+
+
 def _maybe_complete_project(
     project_id: int,
     *,
@@ -2422,6 +2439,12 @@ def _maybe_complete_project(
         proj.error = None
         db.commit()
     live_log.system(project_id, "项目审计完成（状态门闩满足）")
+    threading.Thread(
+        target=_stop_lab_on_project_complete,
+        args=(project_id,),
+        name=f"lab-stop-{project_id}",
+        daemon=True,
+    ).start()
     return True
 
 
