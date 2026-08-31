@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any, Callable
 from ..config import settings
 from .ingest import IGNORE_DIR_NAMES, is_test_path
 from .paths import (
+    docs_dir,
     force_rmtree,
     project_root,
     src_dir,
@@ -73,6 +75,8 @@ THIRD_PARTY_PREFIXES = (
 )
 
 _INDEX_NAME = "index.jsonl"
+_BYTECODE_PRESENT_NAME = ".bytecode_present"
+_bytecode_present_mem: dict[int, bool] = {}
 _STATUS_READY = "ready"
 _STATUS_QUEUED = "queued"
 _STATUS_RUNNING = "running"
@@ -84,9 +88,175 @@ _lock = threading.RLock()
 _jobs: dict[str, "DecompileJob"] = {}
 _key_to_job: dict[str, str] = {}  # index_key -> job_id
 _project_cancel: dict[int, threading.Event] = {}
+_ingest_locks: dict[int, threading.Lock] = {}
 _executor: ThreadPoolExecutor | None = None
 # Optional test hook: (cmd, cwd, timeout) -> CompletedProcess-like
 _run_jadx_hook: Callable[..., Any] | None = None
+_INGEST_JARS_PER_CALL = 1
+_INGEST_YIELD_SEC = 0.05
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+# Dedicated sidecar: resume + FileWeight ingest never run on jadx or Agent threads.
+_svc_lock = threading.Lock()
+_svc_cond = threading.Condition(_svc_lock)
+_svc_queue: deque[tuple[str, int, str]] = deque()
+_svc_pending: set[tuple[str, int, str]] = set()
+_svc_thread: threading.Thread | None = None
+_svc_busy = False
+
+
+def _svc_item(kind: str, project_id: int, source: str = "") -> tuple[str, int, str]:
+    return (kind, int(project_id), str(source or "").replace("\\", "/"))
+
+
+def _ensure_svc_thread() -> None:
+    global _svc_thread
+    start: threading.Thread | None = None
+    with _svc_lock:
+        t = _svc_thread
+        if t is not None and t.is_alive():
+            return
+        start = threading.Thread(target=_svc_loop, daemon=True, name="vh-decompile-svc")
+        _svc_thread = start
+    start.start()
+
+
+def _enqueue_svc(kind: str, project_id: int, source: str = "") -> None:
+    item = _svc_item(kind, project_id, source)
+    with _svc_cond:
+        if item in _svc_pending:
+            return
+        _svc_pending.add(item)
+        _svc_queue.append(item)
+        _svc_cond.notify()
+    _ensure_svc_thread()
+
+
+def _drop_project_svc_items(project_id: int) -> None:
+    with _svc_cond:
+        kept: deque[tuple[str, int, str]] = deque()
+        while _svc_queue:
+            item = _svc_queue.popleft()
+            if item[1] != project_id:
+                kept.append(item)
+            else:
+                _svc_pending.discard(item)
+        _svc_queue.extend(kept)
+    try:
+        from .decompile_store import drop_project
+
+        drop_project(project_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def schedule_decompile_resume(project_id: int) -> None:
+    """Queue index re-scan on the decompile sidecar (never on Agent / orchestrator)."""
+    _enqueue_svc("resume", project_id)
+
+
+def schedule_jar_ingest(project_id: int, source_rel: str = "") -> None:
+    """Queue FileWeight ingest on the decompile sidecar (never on jadx / 盖章)."""
+    if source_rel:
+        _enqueue_svc("ingest_one", project_id, source_rel)
+        return
+    _enqueue_svc("ingest_sweep", project_id)
+
+
+def schedule_fileweight_drip(project_id: int) -> None:
+    _enqueue_svc("drip", project_id)
+
+
+def wait_decompile_service_idle(*, timeout: float = 15.0) -> bool:
+    deadline = time.time() + max(0.1, float(timeout))
+    while time.time() < deadline:
+        with _svc_cond:
+            if not _svc_queue and not _svc_busy:
+                return True
+        time.sleep(0.02)
+    return False
+
+
+def reset_decompile_service() -> None:
+    """Test helper: drop queued sidecar work and wait for the current item."""
+    with _svc_cond:
+        _svc_queue.clear()
+        _svc_pending.clear()
+    wait_decompile_service_idle(timeout=8.0)
+    with _svc_cond:
+        _svc_queue.clear()
+        _svc_pending.clear()
+
+
+def _svc_log(project_id: int, message: str) -> None:
+    try:
+        from .live_log import live_log
+
+        live_log.system(project_id, message, phase="recon-mark", role="recon_mark")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _svc_run_item(item: tuple[str, int, str]) -> None:
+    kind, project_id, source = item
+    if kind == "resume":
+        result = resume_orphaned_decompile_jobs(project_id)
+        n = int(result.get("resumed") or 0)
+        if n:
+            _svc_log(project_id, f"已恢复 {n} 个中断的 Java 反编译任务")
+        schedule_fileweight_drip(project_id)
+        return
+    if kind == "ingest_one":
+        result = ingest_decompiled_classes(project_id, source)
+        added = int(result.get("added") or 0)
+        if result.get("ok") and added:
+            _svc_log(project_id, f"业务 jar 反编译类已入库 {added} 个 FileWeight 行")
+        _requeue_drip_if_pending(project_id)
+        return
+    if kind == "ingest_sweep":
+        result = ingest_ready_business_jars(project_id)
+        added = int(result.get("added") or 0)
+        if added:
+            _svc_log(project_id, f"业务 jar 反编译类已入库 {added} 个 FileWeight 行")
+        _requeue_drip_if_pending(project_id)
+        return
+    if kind == "drip":
+        added = drip_pending_fileweights(project_id)
+        if added:
+            _svc_log(project_id, f"业务 jar 反编译类已入库 {added} 个 FileWeight 行")
+        _requeue_drip_if_pending(project_id)
+
+
+def _svc_loop() -> None:
+    global _svc_busy
+    while True:
+        with _svc_cond:
+            while not _svc_queue:
+                _svc_cond.wait(timeout=30.0)
+            if not _svc_queue:
+                continue
+            item = _svc_queue.popleft()
+            _svc_pending.discard(item)
+            _svc_busy = True
+        try:
+            _svc_run_item(item)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            with _svc_cond:
+                _svc_busy = False
+                _svc_cond.notify_all()
+        time.sleep(_INGEST_YIELD_SEC)
+
+
+def _requeue_drip_if_pending(project_id: int) -> None:
+    try:
+        from .decompile_store import pending_count
+
+        if pending_count(project_id) > 0:
+            schedule_fileweight_drip(project_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @dataclass
@@ -125,6 +295,7 @@ def index_file(project_id: int) -> Path:
 def clear_decompiled(project_id: int) -> None:
     """Wipe artifacts after re-import."""
     cancel_project_jobs(project_id)
+    invalidate_bytecode_present(project_id)
     root = workspace_dir(project_id) / "decompiled"
     if root.exists():
         force_rmtree(root)
@@ -150,6 +321,7 @@ def cancel_project_jobs(project_id: int) -> None:
                 _persist_entry(job)
         # Allow future work after a fresh resume/import creates a new event
         _project_cancel[project_id] = threading.Event()
+    _drop_project_svc_items(project_id)
 
 
 def _project_cancelled(project_id: int) -> bool:
@@ -427,6 +599,25 @@ def _persist_entry(job: DecompileJob) -> None:
             "finished_at": job.finished_at,
         }
         _rewrite_index(job.project_id, entries)
+    try:
+        from .decompile_store import upsert_job
+
+        upsert_job(
+            {
+                "job_id": job.job_id,
+                "project_id": job.project_id,
+                "index_key": job.index_key,
+                "source": job.source_rel,
+                "output_root": job.output_rel,
+                "status": job.status,
+                "error": job.error,
+                "class_name": job.class_name,
+                "package": job.package,
+                "class_count": job.class_count,
+            }
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _entry_to_result(entry: dict[str, Any], *, hint: str = "") -> dict[str, Any]:
@@ -669,15 +860,26 @@ def _jadx_command(binary: str, output_dir: Path | str, input_path: Path | str) -
     ]
 
 
+def _lower_jadx_priority() -> None:
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
 def _run_jadx(cmd: list[str], *, timeout: int, job: DecompileJob) -> subprocess.CompletedProcess[str]:
     if _run_jadx_hook is not None:
         return _run_jadx_hook(cmd, timeout=timeout, job=job)
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = _BELOW_NORMAL_PRIORITY_CLASS
+    else:
+        kwargs["preexec_fn"] = _lower_jadx_priority
+    proc = subprocess.Popen(cmd, **kwargs)
     job.proc = proc
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
@@ -808,6 +1010,7 @@ def _execute_job(job_id: str) -> None:
         job.status = _STATUS_READY
         job.finished_at = time.time()
         _persist_entry(job)
+        _maybe_ingest_business_jar(job)
     except Exception as e:  # noqa: BLE001
         job.status = _STATUS_FAILED
         job.error = str(e)[:800]
@@ -856,6 +1059,7 @@ def submit_decompile(
     package: str = "",
     force: bool = False,
     reason: str = "",
+    audit_queue: bool = False,
 ) -> dict[str, Any]:
     try:
         source_rel, source_abs = _normalize_source_rel(project_id, source)
@@ -884,7 +1088,7 @@ def submit_decompile(
             }
 
     third = is_third_party_name(source_abs.name)
-    if third and not force:
+    if third and not force and not audit_queue:
         return {
             "ok": False,
             "status": _STATUS_SKIPPED,
@@ -917,7 +1121,7 @@ def submit_decompile(
             if st == _STATUS_READY and (not out_abs or not out_abs.is_dir()):
                 pass  # re-queue below
             elif st in (_STATUS_QUEUED, _STATUS_RUNNING):
-                return _entry_to_result(entry)
+                pass  # no live executor job (process restart) — re-queue
             elif st == _STATUS_SKIPPED and not force:
                 return _entry_to_result(entry)
             elif st == _STATUS_FAILED and not force:
@@ -1048,3 +1252,590 @@ def format_completion_inject(notices: list[dict[str, Any]]) -> str:
             lines.append(f"  primary_files: {', '.join(n['primary_files'][:5])}")
     lines.append("完整树请 Glob/Grep，并显式传 root=上述 output_root。")
     return "\n".join(lines)
+
+
+_BUSINESS_JARS_DOC = "business-jars.md"
+_INNER_CLASS_RE = re.compile(r"\$\d*\.java$", re.I)
+
+
+def _business_jars_path(project_id: int) -> Path:
+    return docs_dir(project_id) / _BUSINESS_JARS_DOC
+
+
+def _parse_simple_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    meta: dict[str, Any] = {}
+    for line in parts[1].splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if val.startswith("[") and val.endswith("]"):
+            inner = val[1:-1].strip()
+            if not inner:
+                meta[key] = []
+            else:
+                meta[key] = [p.strip().strip('"').strip("'") for p in inner.split(",") if p.strip()]
+        elif val.lower() in ("true", "false"):
+            meta[key] = val.lower() == "true"
+        else:
+            try:
+                meta[key] = int(val)
+            except ValueError:
+                meta[key] = val.strip('"').strip("'")
+    return meta, parts[2]
+
+
+def _truthy(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    return str(val).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def load_business_jar_state(project_id: int) -> dict[str, Any]:
+    path = _business_jars_path(project_id)
+    if not path.is_file():
+        return {"paths": [], "complete": False, "none": False, "ingested": []}
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    meta, _ = _parse_simple_frontmatter(text)
+    paths = meta.get("paths")
+    if isinstance(paths, str):
+        paths = [paths]
+    elif not isinstance(paths, list):
+        paths = []
+    ingested = meta.get("ingested")
+    if isinstance(ingested, str):
+        ingested = [ingested]
+    elif not isinstance(ingested, list):
+        ingested = []
+    return {
+        "paths": [str(p).replace("\\", "/") for p in paths if str(p).strip()],
+        "complete": _truthy(meta.get("complete")),
+        "none": _truthy(meta.get("none")),
+        "ingested": [str(p).replace("\\", "/") for p in ingested if str(p).strip()],
+    }
+
+
+def _write_business_jars_doc(
+    project_id: int,
+    *,
+    paths: list[str],
+    complete: bool,
+    none: bool,
+    ingested: list[str] | None = None,
+    note: str = "",
+) -> Path:
+    path = _business_jars_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = load_business_jar_state(project_id) if path.is_file() else {"ingested": []}
+    ing = ingested if ingested is not None else list(state.get("ingested") or [])
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for p in paths:
+        norm = str(p).replace("\\", "/").strip()
+        if norm and norm not in seen:
+            seen.add(norm)
+            uniq.append(norm)
+    paths_yaml = ", ".join(f'"{p}"' for p in uniq)
+    ing_yaml = ", ".join(f'"{p}"' for p in ing)
+    listed = "、".join(f"`{p}`" for p in uniq) if uniq else "（无）"
+    extra = f"\n\n说明：{note}\n" if note else ""
+    body = (
+        "---\n"
+        "title: 业务字节码覆盖\n"
+        "summary: 侦察点名的业务 jar/class 归档，供反编译后进入定权\n"
+        f"complete: {'true' if complete else 'false'}\n"
+        f"none: {'true' if none else 'false'}\n"
+        f"paths: [{paths_yaml}]\n"
+        f"ingested: [{ing_yaml}]\n"
+        "---\n\n"
+        f"# 业务字节码覆盖\n\n"
+        f"已点名：{listed}。确认结束：{'是' if complete else '否'}。"
+        f"{extra}"
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _bytecode_present_path(project_id: int) -> Path:
+    return workspace_dir(project_id) / "decompiled" / _BYTECODE_PRESENT_NAME
+
+
+def cached_bytecode_present(project_id: int) -> bool | None:
+    """Return memoized bytecode presence; None if this process has not scanned yet."""
+    cached = _bytecode_present_mem.get(int(project_id))
+    if cached is not None:
+        return cached
+    path = _bytecode_present_path(project_id)
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return None
+    if text in {"1", "true", "yes"}:
+        val = True
+    elif text in {"0", "false", "no"}:
+        val = False
+    else:
+        return None
+    _bytecode_present_mem[int(project_id)] = val
+    return val
+
+
+def store_bytecode_present(project_id: int, present: bool) -> None:
+    pid = int(project_id)
+    _bytecode_present_mem[pid] = bool(present)
+    path = _bytecode_present_path(pid)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("1" if present else "0", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def invalidate_bytecode_present(project_id: int) -> None:
+    pid = int(project_id)
+    _bytecode_present_mem.pop(pid, None)
+    try:
+        _bytecode_present_path(pid).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def bytecode_present(project_id: int, *, refresh: bool = False) -> bool:
+    """Whether src/ has a .class/.jar/.war/.ear. Cached after the first walk."""
+    if not refresh:
+        cached = cached_bytecode_present(project_id)
+        if cached is not None:
+            return cached
+    found = bool(list_bytecode(project_id, limit=1))
+    store_bytecode_present(project_id, found)
+    return found
+
+
+def business_jar_map_ready(project_id: int, *, scan: bool = True) -> bool:
+    """True when no bytecode, or Agent declared none/done for business jars.
+
+    ``scan=False`` never walks ``src/``: used by the project list. Cache miss is
+    treated as no bytecode so listing a large tree cannot block the API.
+    """
+    state = load_business_jar_state(project_id)
+    if state.get("complete") or state.get("none"):
+        return True
+    if not scan:
+        cached = cached_bytecode_present(project_id)
+        if cached is None:
+            return True
+        return not cached
+    return not bytecode_present(project_id)
+
+
+def is_marked_business_jar(project_id: int, source_rel: str) -> bool:
+    norm = str(source_rel or "").replace("\\", "/").strip()
+    return norm in set(load_business_jar_state(project_id).get("paths") or [])
+
+
+def mark_business_jars(
+    project_id: int,
+    paths: list[str],
+    *,
+    none: bool = False,
+    done: bool = False,
+    note: str = "",
+) -> dict[str, Any]:
+    state = load_business_jar_state(project_id)
+    existing = list(state.get("paths") or [])
+    conclude = bool(done or none)
+    if none:
+        if not bytecode_present(project_id):
+            _write_business_jars_doc(
+                project_id, paths=[], complete=True, none=True, note=note or "无字节码"
+            )
+            return {
+                "ok": True,
+                "paths": [],
+                "complete": True,
+                "none": True,
+                "hint": "无字节码，已声明结束业务 jar 点名。",
+            }
+        _write_business_jars_doc(
+            project_id,
+            paths=existing,
+            complete=True,
+            none=True,
+            note=note or "无业务 jar 需纳入定权",
+        )
+        return {
+            "ok": True,
+            "paths": existing,
+            "complete": True,
+            "none": True,
+            "hint": "已声明无业务 jar 需覆盖；系统将结束地图门闩中的字节码点名。",
+        }
+
+    if not paths and not conclude:
+        return {
+            "ok": False,
+            "error": "缺少 path/paths；无业务 jar 时用 none=true，全部点完后 done=true",
+        }
+
+    queued: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if paths:
+        store_bytecode_present(project_id, True)
+    merged = list(existing)
+    seen = set(existing)
+    for raw in paths:
+        try:
+            source_rel, _ = _normalize_source_rel(project_id, raw)
+        except ValueError as e:
+            errors.append(f"{raw}: {e}")
+            continue
+        if source_rel not in seen:
+            seen.add(source_rel)
+            merged.append(source_rel)
+        result = submit_decompile(
+            project_id,
+            source_rel,
+            force=True,
+            reason="MarkBusinessJar audit queue",
+            audit_queue=True,
+        )
+        queued.append(result)
+        if not result.get("ok") and result.get("status") not in (_STATUS_QUEUED, _STATUS_RUNNING, _STATUS_READY):
+            errors.append(f"{source_rel}: {result.get('error') or result.get('status')}")
+
+    complete = conclude
+    if conclude and not merged and bytecode_present(project_id):
+        return {
+            "ok": False,
+            "error": "存在字节码但未点名任何业务 jar；请 paths=[...] 或 none=true",
+        }
+
+    _write_business_jars_doc(
+        project_id,
+        paths=merged,
+        complete=complete,
+        none=False,
+        note=note,
+    )
+    out: dict[str, Any] = {
+        "ok": not errors,
+        "paths": merged,
+        "queued": len(queued),
+        "complete": complete,
+        "decompile": queued[:10],
+    }
+    if errors:
+        out["errors"] = errors
+        out["error"] = "; ".join(errors[:5])
+    if complete:
+        out["hint"] = "业务 jar 点名已结束；每个 jar 反编译完成后立刻进入定权索引，盖章不必等全部完成。"
+    else:
+        out["hint"] = (
+            "已记录并排队反编译。继续点名其它业务 jar；全部确认后 MarkBusinessJar(done=true)。"
+            "仅预读用 DecompileJava，不会进入定权。"
+        )
+    return out
+
+
+def _java_rel_to_fqcn(rel: str) -> str:
+    text = rel.replace("\\", "/")
+    for prefix in ("sources/", "src/main/java/", "src/"):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    if text.lower().endswith(".java"):
+        text = text[: -len(".java")]
+    return text.replace("/", ".")
+
+
+def _is_inner_class_java(name: str) -> bool:
+    return bool(_INNER_CLASS_RE.search(name) or (name.count("$") > 0 and name.lower().endswith(".java")))
+
+
+def _project_ingest_lock(project_id: int) -> threading.Lock:
+    with _lock:
+        lk = _ingest_locks.get(project_id)
+        if lk is None:
+            lk = threading.Lock()
+            _ingest_locks[project_id] = lk
+        return lk
+
+
+def _collect_decompiled_java_rels(project_id: int, out_abs: Path) -> tuple[list[str], int]:
+    """Walk jadx output on disk; do not open a DB session here."""
+    root = project_root(project_id)
+    rels: list[str] = []
+    skipped = 0
+    for dirpath, _dns, filenames in os.walk(windows_long_path(out_abs)):
+        for fn in filenames:
+            if not fn.lower().endswith(".java"):
+                continue
+            if _is_inner_class_java(fn):
+                skipped += 1
+                continue
+            full = strip_windows_long_path(Path(dirpath) / fn)
+            try:
+                rel = full.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            fqcn = _java_rel_to_fqcn(rel)
+            if fqcn and source_java_exists(project_id, fqcn):
+                skipped += 1
+                continue
+            rels.append(rel)
+    return rels, skipped
+
+
+def ingest_decompiled_classes(project_id: int, source_rel: str) -> dict[str, Any]:
+    """Queue decompiled .java into the sidecar DB, then drip FileWeight while app.db is idle."""
+    if not is_marked_business_jar(project_id, source_rel):
+        return {"ok": False, "added": 0, "error": "未在业务 jar 点名列表中"}
+    st = get_job_status(project_id, source=source_rel)
+    if not st or st.get("status") != _STATUS_READY:
+        return {"ok": False, "added": 0, "status": st.get("status") if st else "missing"}
+    out_rel = str(st.get("output_root") or "").replace("\\", "/")
+    if not out_rel:
+        return {"ok": False, "added": 0, "error": "无 output_root"}
+    root = project_root(project_id)
+    out_abs = root / out_rel
+    if not out_abs.is_dir():
+        return {"ok": False, "added": 0, "error": "产物目录不存在"}
+
+    from .decompile_store import enqueue_pending
+
+    candidates, skipped = _collect_decompiled_java_rels(project_id, out_abs)
+    enqueue_pending(project_id, source_rel, candidates)
+    added = drip_pending_fileweights(project_id, source_rel=source_rel)
+    return {"ok": True, "added": added, "skipped": skipped, "source": source_rel}
+
+
+def _insert_fileweight_chunk(project_id: int, chunk: list[str]) -> int:
+    from sqlalchemy.exc import OperationalError
+
+    from ..models import FileWeight, SessionLocal
+
+    if not chunk:
+        return 0
+    added = 0
+    with SessionLocal() as db:
+        existing = {
+            r.path
+            for r in db.query(FileWeight.path)
+            .filter(FileWeight.project_id == project_id, FileWeight.path.in_(chunk))
+            .all()
+        }
+        for rel in chunk:
+            if rel in existing:
+                continue
+            db.add(
+                FileWeight(
+                    project_id=project_id,
+                    path=rel,
+                    weight=None,
+                    skipped=False,
+                    audited=False,
+                    has_source=False,
+                )
+            )
+            existing.add(rel)
+            added += 1
+        try:
+            db.commit()
+        except OperationalError:
+            db.rollback()
+            raise
+    return added
+
+
+def _mark_source_ingested(project_id: int, source_rel: str) -> None:
+    from .decompile_store import pending_count
+
+    if pending_count(project_id, source_rel) > 0:
+        return
+    state = load_business_jar_state(project_id)
+    ingested = list(state.get("ingested") or [])
+    norm = source_rel.replace("\\", "/")
+    if norm not in ingested:
+        ingested.append(norm)
+    _write_business_jars_doc(
+        project_id,
+        paths=list(state.get("paths") or []),
+        complete=bool(state.get("complete")),
+        none=bool(state.get("none")),
+        ingested=ingested,
+    )
+
+
+def drip_pending_fileweights(
+    project_id: int,
+    source_rel: str | None = None,
+    *,
+    force: bool = False,
+) -> int:
+    """Insert pending decompiled paths into FileWeight in small idle batches."""
+    from sqlalchemy.exc import OperationalError
+
+    from .decompile_store import (
+        delete_pending,
+        drip_batch_size,
+        is_app_db_write_busy,
+        peek_pending,
+        pending_count,
+    )
+
+    added = 0
+    batch_size = drip_batch_size()
+    drained_sources: set[str] = set()
+    with _project_ingest_lock(project_id):
+        while True:
+            if not force and is_app_db_write_busy():
+                break
+            rows = peek_pending(project_id, limit=batch_size, source_rel=source_rel)
+            if not rows:
+                break
+            chunk = [r.path for r in rows]
+            try:
+                n = _insert_fileweight_chunk(project_id, chunk)
+            except OperationalError as e:
+                if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                    raise
+                break
+            delete_pending([r.id for r in rows])
+            added += n
+            for r in rows:
+                drained_sources.add(str(r.source_rel or "").replace("\\", "/"))
+            if source_rel is None:
+                break
+            time.sleep(_INGEST_YIELD_SEC)
+
+        if source_rel:
+            _mark_source_ingested(project_id, source_rel)
+        else:
+            for src in drained_sources:
+                if src and pending_count(project_id, src) == 0:
+                    _mark_source_ingested(project_id, src)
+    return added
+
+
+def ingest_ready_business_jars(project_id: int, *, limit: int | None = None) -> dict[str, Any]:
+    """Ingest ready jars that are not yet in FileWeight. One jar per call by default.
+
+    Callers (盖章轮) should invoke this repeatedly so each jar yields the DB
+    between commits instead of locking app.db across a whole tree walk.
+    """
+    state = load_business_jar_state(project_id)
+    total_added = 0
+    details: list[dict[str, Any]] = []
+    ingested_set = {str(p).replace("\\", "/") for p in (state.get("ingested") or [])}
+    cap = _INGEST_JARS_PER_CALL if limit is None else max(1, int(limit))
+    n = 0
+    for source_rel in state.get("paths") or []:
+        norm = str(source_rel).replace("\\", "/")
+        if norm in ingested_set:
+            continue
+        st = get_job_status(project_id, source=source_rel)
+        if not st or st.get("status") != _STATUS_READY:
+            continue
+        result = ingest_decompiled_classes(project_id, source_rel)
+        details.append(result)
+        if result.get("ok"):
+            total_added += int(result.get("added") or 0)
+            from .decompile_store import pending_count
+
+            if pending_count(project_id, norm) == 0:
+                ingested_set.add(norm)
+        n += 1
+        if n >= cap:
+            break
+    return {"ok": True, "added": total_added, "details": details}
+
+
+def resume_orphaned_decompile_jobs(project_id: int) -> dict[str, Any]:
+    """Re-queue index / business-jar tasks left queued/running after process death."""
+    resumed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    live_before: set[str]
+    live_sources: set[str]
+    with _lock:
+        live_before = set(_jobs)
+        live_sources = {
+            str(j.source_rel).replace("\\", "/")
+            for j in _jobs.values()
+            if j.project_id == project_id
+        }
+
+    for entry in _load_index(project_id).values():
+        st = str(entry.get("status") or "")
+        if st not in (_STATUS_QUEUED, _STATUS_RUNNING):
+            continue
+        source = str(entry.get("source") or "")
+        if not source:
+            continue
+        norm = source.replace("\\", "/")
+        if norm in live_sources:
+            seen.add(norm)
+            continue
+        result = submit_decompile(
+            project_id,
+            source,
+            class_name=str(entry.get("class_name") or ""),
+            package=str(entry.get("package") or ""),
+            audit_queue=True,
+        )
+        seen.add(norm)
+        live_sources.add(norm)
+        jid = str(result.get("job_id") or "")
+        if jid and jid not in live_before:
+            resumed.append(result)
+
+    state = load_business_jar_state(project_id)
+    ingested = {str(p).replace("\\", "/") for p in (state.get("ingested") or [])}
+    for source_rel in state.get("paths") or []:
+        norm = str(source_rel).replace("\\", "/")
+        if norm in ingested or norm in seen or norm in live_sources:
+            continue
+        st = get_job_status(project_id, source=source_rel)
+        if st and st.get("status") == _STATUS_READY:
+            continue
+        result = submit_decompile(project_id, source_rel, audit_queue=True)
+        jid = str(result.get("job_id") or "")
+        if jid and jid not in live_before:
+            resumed.append(result)
+    return {"ok": True, "resumed": len(resumed), "details": resumed[:20]}
+
+
+def business_jar_decompile_pending(project_id: int) -> bool:
+    state = load_business_jar_state(project_id)
+    if not state.get("paths"):
+        return False
+    for source_rel in state.get("paths") or []:
+        st = get_job_status(project_id, source=source_rel)
+        if st and st.get("status") in (_STATUS_QUEUED, _STATUS_RUNNING):
+            return True
+    return False
+
+
+def wait_business_jar_ingest(project_id: int, *, cancel_check: Callable[[], bool] | None = None) -> dict[str, Any]:
+    """Enqueue ingest of already-ready jars. Does not block Agent / 盖章."""
+    _ = cancel_check
+    schedule_jar_ingest(project_id)
+    return {"ok": True}
+
+
+def _maybe_ingest_business_jar(job: DecompileJob) -> None:
+    if job.status != _STATUS_READY:
+        return
+    if not is_marked_business_jar(job.project_id, job.source_rel):
+        return
+    schedule_jar_ingest(job.project_id, job.source_rel)

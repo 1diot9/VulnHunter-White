@@ -7,6 +7,7 @@ from typing import Any
 from ..services.decompile_java import (
     get_job_status,
     list_bytecode,
+    mark_business_jars,
     submit_decompile,
 )
 from . import ToolSpec, registry
@@ -27,9 +28,13 @@ def _list_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "count": len(files),
         "files": files,
         "hint": (
-            "无字节码则无需 DecompileJava。"
+            "无字节码则无需 DecompileJava / MarkBusinessJar。"
             if not files
-            else "对需要阅读的条目调用 DecompileJava；第三方 jar 默认拒绝，确认后 force=true。"
+            else (
+                "对需要纳入定权与启发式挖掘的业务 jar 调用 MarkBusinessJar(paths=[...])；"
+                "仅临时阅读用 DecompileJava（不入定权）。"
+                "third_party_likely 仅为提示，勿把 spring/ant 等点进 MarkBusinessJar。"
+            )
         ),
     }
 
@@ -71,6 +76,36 @@ def _decompile_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _mark_business_jar_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    if (getattr(ctx, "role", None) or "") != "recon":
+        return call_fail("MarkBusinessJar 仅 recon（地图/鉴权）可用")
+    raw_paths = args.get("paths")
+    if raw_paths is None and args.get("path"):
+        raw_paths = [args.get("path")]
+    paths: list[str] = []
+    if isinstance(raw_paths, str):
+        paths = [raw_paths]
+    elif isinstance(raw_paths, list):
+        paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    none = bool(args.get("none") or args.get("no_findings"))
+    done = bool(args.get("done") or args.get("complete"))
+    note = str(args.get("note") or args.get("reason") or "").strip()
+    result = mark_business_jars(
+        ctx.project_id,
+        paths,
+        none=none,
+        done=done,
+        note=note,
+    )
+    for item in result.get("decompile") or []:
+        jid = item.get("job_id")
+        if jid:
+            watched = ctx.state.setdefault("decompile_jobs", [])
+            if isinstance(watched, list) and jid not in watched:
+                watched.append(jid)
+    return result
+
+
 def register_decompile_tools() -> None:
     registry.register(
         ToolSpec(
@@ -101,6 +136,7 @@ def register_decompile_tools() -> None:
                 "用 jadx 反编译 .class/.jar/.war：索引命中立即返回 output_root；否则异步入队并立刻返回 "
                 "queued/running。整包 jar 有大小上限（默认 80MiB），超限请传 class_name 或 package。"
                 "第三方依赖默认拒绝，确认需要时 force=true 并附 reason。"
+                "仅临时阅读，不会写入 FileWeight；纳入定权请用 MarkBusinessJar（recon）。"
                 "queued 时不要反复同参轮询，去做其它工作；完成后系统会注入通知。也可用 job_id 查询。"
                 "产物在 workspace/decompiled/，Grep/Glob 须显式指定 root。报告中写 jar!class + 反编译路径。"
             ),
@@ -131,6 +167,39 @@ def register_decompile_tools() -> None:
                 },
             },
             handler=_decompile_handler,
+            parallel_safe=True,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="MarkBusinessJar",
+            description=(
+                "点名要纳入定权与启发式挖掘的业务 .jar/.war/.class（仅 recon 地图轮）。"
+                "可 paths 批量；无业务字节码覆盖时用 none=true；全部点完后 done=true。"
+                "点名后系统自动反编译；每个 jar ready 后立刻把该类树 .java 写入 FileWeight，不必等全部完成。"
+                "DecompileJava 只供临时阅读，不会入库。third_party_likely 仅供参考，勿点第三方。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "单个 src/ 下字节码路径"},
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "批量点名",
+                    },
+                    "none": {
+                        "type": "boolean",
+                        "description": "声明无业务 jar 需纳入定权（仍须有字节码时慎用）",
+                    },
+                    "done": {
+                        "type": "boolean",
+                        "description": "业务 jar 已全部点名，结束本门闩",
+                    },
+                    "note": {"type": "string", "description": "可选简短说明"},
+                },
+            },
+            handler=_mark_business_jar_handler,
             parallel_safe=True,
         )
     )

@@ -43,6 +43,7 @@
 | --- | --- |
 | 跨轮次 / 跨阶段 | **允许**。任务挂在**项目级**后台队列，不绑死某次 AgentLoop 的 `timeout_sec`。 |
 | 跨暂停 | **继续跑**已启动的 jadx；新提交在暂停期间仍可排队（若调度器仍处理工具调用）或等续跑后再提交——实现取「暂停不杀已跑子进程」。 |
+| 进程重启 | 内存队列与 jadx 子进程会丢。启动恢复 / 续跑只向反编译 sidecar **投递** resume；任务快照与待入库路径在 `data/decompile.db`，`index.jsonl` 仍作 Agent 查询回放。已 `ready` 的产物在 sidecar 于 app.db **空闲时**滴注入 `FileWeight`。 |
 | 项目取消 | **取消队列中任务**；尽量 terminate 正在跑的 jadx；索引标 `cancelled`。 |
 | Recon 结束时未完成 | **不阻塞**代码地图门闩 / `FinishReconMap`。未完成任务继续在后台跑；Worker / Reviewer 需要时查询索引，命中则用，未命中再补提交。 |
 | `reset-progress` | **保留**反编译索引与产物（与 Semgrep 产物、侦察文档类似，属可复用工件）。 |
@@ -169,7 +170,7 @@
 
 ### 6.5 权重与领取
 
-反编译出的 `.java` **不进入** `FileWeight`，**不被**启发式 Worker 当焦点文件领取，避免与原源码重复挖。需要审计时由 Agent 在补录/地图指引下 `Read`/`Grep`。
+Agent 通过 **`MarkBusinessJar`**（仅 recon 地图轮）点名要纳入定权的业务 jar/class；**每个** jar 反编译 `ready` 后先把 `.java` 路径写入 **`data/decompile.db` 的 pending 队列**，再由 **`vh-decompile-svc`** 在 app.db 空闲时按约 50 行一批滴注入 **`FileWeight`**（路径 `workspace/decompiled/<key>/...`）。jadx 线程、盖章 / Worker / 调度器只投递；Agent `_persist` / 领取期间不写 `file_weights`。反编译不阻塞仓库原文件盖章。`DecompileJava` / `force=true` **不**自动入库。已有 `src/` 同源 `.java` 与内部类 `*$*.java` 机械跳过。
 
 ### 6.6 报告与证据路径
 
@@ -191,6 +192,7 @@
 | 二进制 | 设置页可配 `jadx_path`；未配则 `PATH` 上的 `jadx` / `jadx.bat`。一期**不做** Docker 兜底（可二期对齐 Semgrep）。 |
 | 版本 | 启动任务时记录 `jadx --version`；写入索引。 |
 | 全局并发 | 进程内线程/进程池，默认 **每主机 1～2** 个 jadx；多项目共享队列。 |
+| 资源隔离 | 独立 sidecar `vh-decompile-svc` + 专用库 `data/decompile.db`（任务快照与待入库路径）。FileWeight 仅在 app.db 空闲时小批滴注；jadx 子进程降为低于正常优先级。挖掘轮遇 `database is locked` 保留检查点重试，不自杀线程。 |
 | 失败 | 混淆严重仍有部分输出 → 有 `.java` 则 `ready`（可带 `partial=true`）；零输出 → `failed`。 |
 | Fallback | 一期 **仅 jadx**，不接 CFR/Procyon。 |
 | Windows | 产物 I/O 走现有 `windows_long_path`。传给 jadx 子进程的 `-d` / 输入路径必须是普通盘符绝对路径，**不要**带 `\\?\`（Java 不认，会退出码 1 且零产出）。 |
@@ -201,7 +203,7 @@
 
 | 区域 | 建议 |
 | --- | --- |
-| 服务 | [`backend/app/services/decompile_java.py`](../backend/app/services/decompile_java.py)（队列、索引、调 jadx） |
+| 服务 | [`backend/app/services/decompile_java.py`](../backend/app/services/decompile_java.py)（队列、索引、调 jadx）+ [`decompile_store.py`](../backend/app/services/decompile_store.py)（`data/decompile.db`） |
 | 工具 | [`backend/app/tools/phase_decompile.py`](../backend/app/tools/phase_decompile.py) + `ROLE_ACL` / `PARALLEL_SAFE` |
 | Shell 拦截 | [`backend/app/tools/sandbox.py`](../backend/app/tools/sandbox.py) |
 | 循环注入 | [`backend/app/agent/loop.py`](../backend/app/agent/loop.py)（下轮模型前注入完成通知） |
