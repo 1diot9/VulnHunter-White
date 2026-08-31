@@ -517,7 +517,36 @@ summary: {args.get('source_sink', '')[:200]}
 详见项目文档 `docs/lab.md`。
 
 ### 漏洞触发操作
--
+（按实际验证方式填写，删去不适用的部分。）
+
+#### 局部验证（harness）
+
+harness 脚本（`harness.py`）在沙箱中执行结果如下（粘贴 stdout 关键输出，截取关键行）：
+
+```text
+
+```
+
+**为何 harness 能证明漏洞存在**：分析 harness 如何构造输入、调用了哪些源码函数、最终观察到了什么运行时行为（如异常/返回值的危险变化、状态篡改、敏感数据外泄等），说明该行为在源码层面与漏洞根因的对应关系。不要写 PoC 的使用方法。
+
+#### 动态验证（靶场 PoC）
+
+关键利用 HTTP 请求（`Host` 用 `TARGET`；body 中长字符串用占位符）：
+
+```http
+
+```
+
+PoC 使用方法（`python poc.py -u <目标>`；RCE 另 `-c/--cmd`；代理用 `--proxy`）：
+
+```text
+python poc.py -u http://TARGET:PORT
+python poc.py -u http://TARGET:PORT --zh
+python poc.py -u http://TARGET:PORT --proxy http://127.0.0.1:8080
+python poc.py -u http://TARGET:PORT -c "id"
+```
+
+**为何 PoC 能利用该漏洞**：分析请求中哪一字段/参数为攻击者可控输入，经过源码哪条链路最终到达 sink，造成何种危害。说明 PoC 输出的实际结果（响应正文、日志、文件或权限变化）与危害的对应关系。
 
 ### 预期证据
 {args.get('expected_evidence')}
