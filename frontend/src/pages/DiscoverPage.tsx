@@ -9,8 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatDateTime, formatTargetKind, type TargetKind } from '@/lib/utils'
+import { readJsonCache, writeJsonCache } from '../lib/listCache'
 
 const DEFAULT_LIMIT = 5
+const DISCOVER_CACHE_KEY = 'vh:discoveries'
 
 function kindBadgeClass(kind: string): string {
   if (kind === 'library') return 'border-sky-500/40 bg-sky-500/10 text-sky-200'
@@ -113,10 +115,11 @@ function CandidateCard({
 }
 
 export default function DiscoverPage() {
-  const [items, setItems] = useState<GithubCandidate[]>([])
-  const [total, setTotal] = useState(0)
+  const cached = readJsonCache<{ items: GithubCandidate[]; total: number }>(DISCOVER_CACHE_KEY)
+  const [items, setItems] = useState<GithubCandidate[]>(cached?.items ?? [])
+  const [total, setTotal] = useState(cached?.total ?? 0)
   const [limit, setLimit] = useState(DEFAULT_LIMIT)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cached)
   const [searching, setSearching] = useState(false)
   const [dismissingId, setDismissingId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -143,6 +146,7 @@ export default function DiscoverPage() {
       .then((data) => {
         setItems(data.items)
         setTotal(data.total)
+        writeJsonCache(DISCOVER_CACHE_KEY, { items: data.items, total: data.total })
         setError('')
       })
       .catch((e) => setError(String(e)))

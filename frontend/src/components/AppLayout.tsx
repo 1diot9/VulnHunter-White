@@ -28,7 +28,7 @@ export default function AppLayout() {
           .verifierConsentCount()
           .then((r) => setConsentCount(Number(r.count) || 0))
           .catch(() => {})
-      }, 5000),
+      }, 10000),
     [],
   )
 

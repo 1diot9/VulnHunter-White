@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, XIcon } from 'lucide-react'
 import { api, type ProjectName, type Vuln, type VulnDetail, type VulnTrackingStatus } from '../api'
@@ -12,6 +12,7 @@ import VulnDetailDialog from '../components/VulnDetailDialog'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
 import { formatVulnType, saveBlob, VULN_TYPE_OPTIONS } from '../lib/utils'
+import { readJsonCache, writeJsonCache } from '../lib/listCache'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PAGE_SIZE = 50
@@ -81,8 +82,22 @@ export default function VulnsPage() {
     return () => window.clearTimeout(timer)
   }, [searchInput])
 
-  const refresh = () =>
+  useEffect(() => {
+    let cancelled = false
     api
+      .listProjectNames()
+      .then((names) => {
+        if (!cancelled) setProjects(names)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refresh = useCallback(() => {
+    const cacheKey = `vh:vulns:${page}:${JSON.stringify(listQuery)}`
+    return api
       .listVulns({
         ...listQuery,
         limit: PAGE_SIZE,
@@ -91,50 +106,22 @@ export default function VulnsPage() {
       .then((data) => {
         setVulns(data.items)
         setTotal(data.total)
+        writeJsonCache(cacheKey, { items: data.items, total: data.total })
         const nextPageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
         if (page >= nextPageCount) setPage(Math.max(0, nextPageCount - 1))
       })
       .catch(() => {})
+  }, [listQuery, page])
 
   useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const names = await api.listProjectNames()
-        if (cancelled) return
-        const missingKind = names.some((p) => !p.target_kind)
-        if (!missingKind) {
-          setProjects(names)
-          return
-        }
-        const kinds = new Map<number, NonNullable<ProjectName['target_kind']>>()
-        let offset = 0
-        let total = Infinity
-        while (offset < total) {
-          const page = await api.listProjects({ limit: 100, offset })
-          total = page.total
-          for (const p of page.items) kinds.set(p.id, p.target_kind)
-          offset += page.items.length
-          if (!page.items.length) break
-        }
-        if (cancelled) return
-        setProjects(
-          names.map((p) => ({
-            ...p,
-            target_kind: kinds.get(p.id) ?? p.target_kind,
-          })),
-        )
-      } catch {
-        /* ignore transient */
-      }
+    const cacheKey = `vh:vulns:${page}:${JSON.stringify(listQuery)}`
+    const cached = readJsonCache<{ items: Vuln[]; total: number }>(cacheKey)
+    if (cached) {
+      setVulns(cached.items)
+      setTotal(cached.total)
     }
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => startVisibilityPoll(refresh, 5000), [listQuery, page])
+    return startVisibilityPoll(refresh, 5000)
+  }, [listQuery, page, refresh])
 
   useEffect(() => {
     setPage(0)

@@ -28,6 +28,7 @@ import {
   formatVerifierStatus,
   formatVerifierTargetStatus,
   formatVulnStatus,
+  harnessTierTooltip,
   saveBlob,
   severityScoreBadgeClass,
 } from '../lib/utils'
@@ -277,17 +278,26 @@ export default function VulnDetailDialog({
                   <Badge variant="warning">{formatSeverity(detail.severity)}</Badge>
                 ) : null}
                 <Badge variant={detail.submission_tier === 'cve_candidate' ? 'info' : 'outline'}>{detailTier}</Badge>
-                <Badge
-                  variant={
-                    detail.status === 'confirmed' || detail.status === 'static_only'
-                      ? 'success'
-                      : detail.status === 'false_positive'
-                        ? 'destructive'
-                        : 'info'
-                  }
-                >
-                  {formatVulnStatus(detail.status, detail.evidence_level, detail.fp_kind, detail.harness_depth)}
-                </Badge>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="inline" />}>
+                    <Badge
+                      variant={
+                        detail.status === 'confirmed' || detail.status === 'static_only'
+                          ? 'success'
+                          : detail.status === 'false_positive'
+                            ? 'destructive'
+                            : 'info'
+                      }
+                    >
+                      {formatVulnStatus(detail.status, detail.evidence_level, detail.fp_kind, detail.harness_depth)}
+                    </Badge>
+                  </TooltipTrigger>
+                  {harnessTierTooltip(detail.evidence_level, detail.harness_depth) ? (
+                    <TooltipContent side="top" className="max-w-xs">
+                      {harnessTierTooltip(detail.evidence_level, detail.harness_depth)}
+                    </TooltipContent>
+                  ) : null}
+                </Tooltip>
                 {detailMiningPath ? <Badge variant="outline">{detailMiningPath}</Badge> : null}
                 {detailConfigPremise ? <Badge variant="outline">{detailConfigPremise}</Badge> : null}
                 {detail.tracking_status === 'submitted' || detail.tracking_status === 'ignored' ? (

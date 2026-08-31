@@ -97,6 +97,24 @@ export function harnessVerificationTier(
   return null
 }
 
+/** Returns the L1/L2/L3 tooltip text for confirmed vulns with harness/dynamic evidence.
+ * L1: mock harness 直调 sink；L2: mock harness 调模块层；L3: 集成验证起服务并跑 poc.py。 */
+export function harnessTierTooltip(
+  evidenceLevel?: string | null,
+  harnessDepth?: string | null,
+): string | null {
+  const tier = harnessVerificationTier(evidenceLevel, harnessDepth)
+  const evidence = (evidenceLevel || '').trim().toLowerCase()
+  if (evidence === 'harness') {
+    if (tier === 'L2')
+      return 'L2：局部验证（模块层）。mock harness 调用模块层函数，覆盖多条路径，验证深度优于 L1。'
+    return 'L1：局部验证（sink 层）。mock harness 直调漏洞 sink 函数，验证根因可利用，无需靶场环境。'
+  }
+  if (evidence === 'dynamic' && tier === 'L3')
+    return 'L3：集成验证。在沙箱起服务并运行 poc.py，验证完整入口→sink 链路，与靶场动态等效。'
+  return null
+}
+
 export function formatEvidenceLevel(
   value: string | null | undefined,
   harnessDepth?: string | null,
@@ -335,13 +353,24 @@ export function formatAuditModeHint(
   return AUDIT_MODE_OPTIONS.find((o) => o.value === value)?.hint ?? AUDIT_MODE_OPTIONS[0].hint
 }
 
+export function projectRunBucket(
+  status: string | null | undefined,
+  projectPaused?: boolean,
+): 'running' | 'paused' | 'completed' | 'stopped' {
+  if (status === 'completed') return 'completed'
+  if (status === 'paused' || projectPaused) return 'paused'
+  if (status === 'cancelled' || status === 'error') return 'stopped'
+  return 'running'
+}
+
 export function formatProjectRunStatus(
   status: string | null | undefined,
   projectPaused?: boolean,
 ): '运行中' | '已暂停' | '已停止' | '已完成' {
-  if (status === 'completed') return '已完成'
-  if (status === 'paused' || projectPaused) return '已暂停'
-  if (status === 'cancelled' || status === 'error') return '已停止'
+  const bucket = projectRunBucket(status, projectPaused)
+  if (bucket === 'completed') return '已完成'
+  if (bucket === 'paused') return '已暂停'
+  if (bucket === 'stopped') return '已停止'
   return '运行中'
 }
 
@@ -372,10 +401,12 @@ export function formatProjectStatus(status: string | null | undefined): string {
 
 export function projectStatusBadgeVariant(
   status: string | null | undefined,
+  projectPaused?: boolean,
 ): 'info' | 'success' | 'warning' | 'destructive' {
-  if (status === 'completed') return 'success'
-  if (status === 'paused') return 'warning'
-  if (status === 'cancelled' || status === 'error') return 'destructive'
+  const run = formatProjectRunStatus(status, projectPaused)
+  if (run === '已完成') return 'success'
+  if (run === '已暂停') return 'warning'
+  if (run === '已停止') return 'destructive'
   return 'info'
 }
 

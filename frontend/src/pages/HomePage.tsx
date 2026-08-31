@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
-import { api, type Project, type ProjectRunStatusCounts } from '../api'
+import { api, formatProjectsListError, type Project, type ProjectRunStatusCounts } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { GithubLink } from '../components/GithubLink'
+import { ProjectRunButtons } from '../components/ProjectRunButtons'
 import { normalizeDynamicVerifyMode } from '../components/DynamicVerifyToggle'
 import PhaseFlow from '../components/PhaseFlow'
 import { WeightExtBadges } from '../components/WeightExtBadges'
@@ -14,7 +15,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { githubRepoHref } from '../lib/github'
-import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTargetKind, formatTokenUsage } from '../lib/utils'
+import {
+  overlayProjectRun,
+  PROJECT_LIST_CHANGED_EVENT,
+  projectPreviewCacheKey,
+  readJsonCache,
+  rememberProjectRun,
+  writeJsonCache,
+} from '../lib/listCache'
+import { formatAuditMode, formatDateTime, formatMiningPaths, formatMiningProgress, formatProjectRunStatus, formatTargetKind, formatTokenUsage, projectRunBucket } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PAGE_SIZE = 5
@@ -59,27 +68,44 @@ export default function HomePage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
+  const etagRef = useRef('')
+  const etagQueryRef = useRef('')
+  const loadGenRef = useRef(0)
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageRef = useRef(page)
+  pageRef.current = page
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput), 300)
     return () => window.clearTimeout(timer)
   }, [searchInput])
 
-  const applyListData = useCallback(
-    (data: Awaited<ReturnType<typeof api.listProjects>>) => {
-      setProjects(data.items)
-      setTotal(data.total)
-      setStatusCounts(data.status_counts)
-      const nextPageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
-      if (page >= nextPageCount) setPage(Math.max(0, nextPageCount - 1))
-    },
-    [page],
-  )
+  const applyListData = useCallback((data: Awaited<ReturnType<typeof api.listProjects>>, fromNetwork = false) => {
+    const raw = fromNetwork ? data.items : data.items.map(overlayProjectRun)
+    const items =
+      statusFilter === 'all'
+        ? raw
+        : raw.filter((item) => projectRunBucket(item.status, item.project_paused) === statusFilter)
+    if (fromNetwork) {
+      for (const item of data.items) rememberProjectRun(item)
+    }
+    setProjects(items)
+    setTotal(data.total)
+    setStatusCounts(data.status_counts)
+    setError('')
+    for (const item of items) {
+      writeJsonCache(projectPreviewCacheKey(item.id), item)
+    }
+    const nextPageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
+    if (pageRef.current >= nextPageCount) setPage(Math.max(0, nextPageCount - 1))
+  }, [statusFilter])
 
   const fetchProjects = useCallback(
     (showLoading = false) => {
+      const cacheKey = `vh:projects:${PAGE_SIZE}:${page}:${search}:${statusFilter}`
+      etagRef.current = ''
+      etagQueryRef.current = cacheKey
       if (showLoading) setLoading(true)
       return api
         .listProjects({
@@ -88,8 +114,17 @@ export default function HomePage() {
           q: search,
           run_status: statusFilter,
         })
-        .then(applyListData)
-        .catch((e) => setError(String(e)))
+        .then((data) => {
+          if (data.notModified) return
+          etagRef.current = data.etag || ''
+          etagQueryRef.current = cacheKey
+          applyListData(data, true)
+          writeJsonCache(cacheKey, data)
+        })
+        .catch((e) => {
+          const cached = readJsonCache(cacheKey)
+          setError(formatProjectsListError(e, Boolean(cached)))
+        })
         .finally(() => {
           if (showLoading) setLoading(false)
         })
@@ -97,36 +132,52 @@ export default function HomePage() {
     [page, search, statusFilter, applyListData],
   )
 
-  useLayoutEffect(() => {
-    setLoading(true)
-  }, [page, search, statusFilter])
-
   useEffect(() => {
     let cancelled = false
+    const gen = ++loadGenRef.current
+    const cacheKey = `vh:projects:${PAGE_SIZE}:${page}:${search}:${statusFilter}`
+    const cached = readJsonCache<Awaited<ReturnType<typeof api.listProjects>>>(cacheKey)
+    const hasCache = Boolean(cached && !cached.notModified && !cached.unchanged)
+    if (etagQueryRef.current !== cacheKey) {
+      etagRef.current = hasCache && cached?.etag ? cached.etag : ''
+      etagQueryRef.current = cacheKey
+    }
+    if (hasCache && cached) {
+      applyListData(cached)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
 
-    const load = (showLoading: boolean) =>
+    const load = () =>
       api
-        .listProjects({
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
-          q: search,
-          run_status: statusFilter,
-        })
+        .listProjects(
+          {
+            limit: PAGE_SIZE,
+            offset: page * PAGE_SIZE,
+            q: search,
+            run_status: statusFilter,
+          },
+          { etag: etagQueryRef.current === cacheKey ? etagRef.current || undefined : undefined },
+        )
         .then((data) => {
-          if (!cancelled) applyListData(data)
+          if (cancelled) return
+          if (data.notModified) return
+          etagRef.current = data.etag || ''
+          etagQueryRef.current = cacheKey
+          applyListData(data, true)
+          writeJsonCache(cacheKey, data)
         })
         .catch((e) => {
-          if (!cancelled) setError(String(e))
+          if (!cancelled) setError(formatProjectsListError(e, hasCache))
         })
         .finally(() => {
-          if (!cancelled && showLoading) setLoading(false)
+          if (loadGenRef.current === gen) setLoading(false)
         })
-
-    load(true)
 
     const stopPoll = startVisibilityPoll(() => {
       if (cancelled) return
-      return load(false)
+      return load()
     }, 4000)
 
     return () => {
@@ -134,6 +185,18 @@ export default function HomePage() {
       stopPoll()
     }
   }, [page, search, statusFilter, applyListData])
+
+  useEffect(() => {
+    const onListChanged = () => {
+      etagRef.current = ''
+      const cacheKey = `vh:projects:${PAGE_SIZE}:${page}:${search}:${statusFilter}`
+      const cached = readJsonCache<Awaited<ReturnType<typeof api.listProjects>>>(cacheKey)
+      if (cached && !cached.notModified && !cached.unchanged) applyListData(cached)
+      void fetchProjects(false)
+    }
+    window.addEventListener(PROJECT_LIST_CHANGED_EVENT, onListChanged)
+    return () => window.removeEventListener(PROJECT_LIST_CHANGED_EVENT, onListChanged)
+  }, [page, search, statusFilter, applyListData, fetchProjects])
 
   return (
     <div className="w-full space-y-6">
@@ -190,8 +253,11 @@ export default function HomePage() {
               key={key}
               variant={statusFilter === key ? 'default' : 'outline'}
               onClick={() => {
+                if (key === statusFilter) return
                 setPage(0)
                 setStatusFilter(key)
+                setProjects([])
+                setLoading(true)
               }}
             >
               {label} {statusCounts[key]}
@@ -242,7 +308,7 @@ export default function HomePage() {
                 </CardDescription>
               </div>
               <CardAction>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <GithubLink project={p} variant="button" />
                   <Badge
                     variant={
@@ -257,6 +323,7 @@ export default function HomePage() {
                   >
                     {runStatus}
                   </Badge>
+                  <ProjectRunButtons project={p} />
                   <DeleteProjectButton
                     projectId={p.id}
                     projectName={p.name}
@@ -280,7 +347,7 @@ export default function HomePage() {
                 vulnPending={p.vuln_pending}
                 reconSubphases={p.recon_subphases}
                 labSetupDone={p.lab_setup_done}
-                manualLab={Boolean(p.manual_lab_prompt)}
+                manualLab={Boolean(p.manual_lab)}
                 dynamicVerifyEnabled={p.dynamic_verify_enabled}
                 dynamicVerifyMode={normalizeDynamicVerifyMode(p.dynamic_verify_mode, p.dynamic_verify_enabled)}
                 verifierEnabled={p.verifier_enabled}

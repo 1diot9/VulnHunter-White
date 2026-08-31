@@ -17,9 +17,9 @@ export type Project = {
   target_kind: 'web' | 'library' | 'mixed'
   custom_audit_mode_id: number | null
   custom_audit_mode_name: string
-  custom_audit_prompt: string
+  custom_audit_prompt?: string
   manual_lab: boolean
-  manual_lab_prompt: string
+  manual_lab_prompt?: string
   verifier_enabled: boolean
   attack_chain_enabled: boolean
   attack_chain_done: boolean
@@ -32,8 +32,8 @@ export type Project = {
   bypass_enabled: boolean
   bypass_queue_frozen: boolean
   llm_model: string
-  worker_hint: string
-  recon_hint: string
+  worker_hint?: string
+  recon_hint?: string
   max_token_usage: number
   error: string | null
   worker_concurrency: number | null
@@ -64,6 +64,9 @@ export type Project = {
   lab_setup_done?: boolean
   lab_setup_retryable?: boolean
   verifier_pending?: number
+  etag?: string
+  unchanged?: boolean
+  notModified?: boolean
 }
 
 export type ProjectLab = {
@@ -107,6 +110,9 @@ export type ProjectList = {
   limit: number
   offset: number
   status_counts: ProjectRunStatusCounts
+  etag?: string
+  unchanged?: boolean
+  notModified?: boolean
 }
 
 export type ProjectListQuery = {
@@ -673,6 +679,19 @@ export function subscribeAuth(listener: AuthListener): () => void {
   }
 }
 
+export function isTimeoutError(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
+}
+
+export function formatProjectsListError(e: unknown, hasCached: boolean): string {
+  if (isTimeoutError(e)) {
+    return hasCached
+      ? '项目列表刷新超时，已显示最近一次成功结果。'
+      : '项目列表加载超时，请稍后重试。'
+  }
+  return String(e instanceof Error ? e.message : e)
+}
+
 export function notifyAuthChanged() {
   authListeners.forEach((fn) => fn())
 }
@@ -684,6 +703,7 @@ export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
 }
 
 const DEFAULT_API_TIMEOUT_MS = 30_000
+const PROJECT_READ_TIMEOUT_MS = 60_000
 const UPLOAD_TIMEOUT_MIN_MS = 120_000
 const UPLOAD_TIMEOUT_MAX_MS = 3_600_000
 const UPLOAD_TIMEOUT_BASE_MS = 60_000
@@ -755,17 +775,35 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 }
 
 export const api = {
-  listProjects: (query?: ProjectListQuery) => {
+  listProjects: (query?: ProjectListQuery, opts?: { etag?: string }) => {
     const params = new URLSearchParams()
     if (query?.limit != null) params.set('limit', String(query.limit))
     if (query?.offset != null) params.set('offset', String(query.offset))
     if (query?.q) params.set('q', query.q)
     if (query?.run_status) params.set('run_status', query.run_status)
+    const stamp = (opts?.etag || '').replace(/"/g, '')
+    if (stamp) params.set('since', stamp)
     const s = params.toString()
-    return request<ProjectList>(`/api/projects${s ? `?${s}` : ''}`)
+    return request<ProjectList>(`/api/projects${s ? `?${s}` : ''}`, {
+      timeoutMs: PROJECT_READ_TIMEOUT_MS,
+    }).then((data) => ({
+      ...data,
+      notModified: Boolean(data.unchanged),
+    }))
   },
   listProjectNames: () => request<ProjectName[]>('/api/projects/names'),
-  getProject: (id: number) => request<Project>(`/api/projects/${id}`),
+  getProject: (id: number, since?: string) => {
+    const stamp = (since || '').replace(/"/g, '')
+    const params = new URLSearchParams()
+    if (stamp) params.set('since', stamp)
+    const s = params.toString()
+    return request<Project>(`/api/projects/${id}${s ? `?${s}` : ''}`, {
+      timeoutMs: PROJECT_READ_TIMEOUT_MS,
+    }).then((data) => ({
+      ...data,
+      notModified: Boolean(data.unchanged),
+    }))
+  },
   listDiscoveries: (query?: { limit?: number; offset?: number }) => {
     const params = new URLSearchParams()
     if (query?.limit != null) params.set('limit', String(query.limit))

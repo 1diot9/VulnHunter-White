@@ -26,9 +26,11 @@ import { normalizeTargetKind, type TargetKind } from '@/lib/utils'
 export function ProjectSettingsButton({
   project,
   onSaved,
+  disabled = false,
 }: {
   project: Project
   onSaved: (project: Project) => void
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
@@ -121,7 +123,12 @@ export function ProjectSettingsButton({
 
   return (
     <>
-      <Button variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        title={disabled ? '项目详情加载中' : undefined}
+        onClick={() => setOpen(true)}
+      >
         项目配置
       </Button>
       <Dialog

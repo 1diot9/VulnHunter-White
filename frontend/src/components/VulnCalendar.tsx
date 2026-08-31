@@ -105,7 +105,7 @@ export default function VulnCalendar({
         .getVulnCalendar(year, month, projectId)
         .then((body) => setDays(body.days))
         .catch(() => {})
-    return startVisibilityPoll(refresh, 5000)
+    return startVisibilityPoll(refresh, 30000)
   }, [year, month, projectId])
 
   useEffect(() => {

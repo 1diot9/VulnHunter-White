@@ -7,10 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { formatDateTime, formatSeverity, formatSeverityScore, severityScoreBadgeClass } from '../lib/utils'
+import { readJsonCache, writeJsonCache } from '../lib/listCache'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
+const CONSENT_CACHE_KEY = 'vh:verifier-consent'
+
 export default function VerifierConsentPage() {
-  const [items, setItems] = useState<VerifierConsentItem[]>([])
+  const cached = readJsonCache<VerifierConsentItem[]>(CONSENT_CACHE_KEY)
+  const [items, setItems] = useState<VerifierConsentItem[]>(cached ?? [])
   const [instructions, setInstructions] = useState<Record<number, string>>({})
   const [busyId, setBusyId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -18,7 +22,10 @@ export default function VerifierConsentPage() {
   const refresh = () =>
     api
       .listVerifierConsent()
-      .then(setItems)
+      .then((rows) => {
+        setItems(rows)
+        writeJsonCache(CONSENT_CACHE_KEY, rows)
+      })
       .catch(() => {})
 
   useEffect(() => startVisibilityPoll(refresh, 4000), [])

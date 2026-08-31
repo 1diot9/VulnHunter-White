@@ -24,6 +24,7 @@ import {
   formatAuditModeHint,
   formatMiningPaths,
   formatMiningProgress,
+  formatProjectRunStatus,
   formatProjectStatus,
   formatTargetKind,
   formatTargetKindHint,
@@ -31,6 +32,13 @@ import {
   projectStatusBadgeVariant,
   tokenBudgetReached,
 } from '../lib/utils'
+import {
+  applyProjectRunToListCaches,
+  projectDetailCacheKey,
+  readProjectSnapshot,
+  rememberProjectRun,
+  writeJsonCache,
+} from '../lib/listCache'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PhaseReportsPanel = lazy(() => import('../components/PhaseReportsPanel'))
@@ -99,18 +107,28 @@ function defaultPhaseTab(phase: string, status: string): string {
   return 'recon'
 }
 
+function cachedProject(id: number) {
+  if (!Number.isFinite(id) || id <= 0) return null
+  return readProjectSnapshot<Project>(id)
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const projectId = Number(id)
-  const [project, setProject] = useState<Project | null>(null)
+  const initial = cachedProject(projectId)
+  const [project, setProject] = useState<Project | null>(initial?.project ?? null)
+  const [detailReady, setDetailReady] = useState(() => Boolean(initial && !initial.partial))
+  const [metaReady, setMetaReady] = useState(() => Boolean(initial))
   const [customModes, setCustomModes] = useState<CustomAuditMode[]>([])
   const [events, setEvents] = useState<LogEvent[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
   const [vulnsLoading, setVulnsLoading] = useState(false)
   const [detailVulnId, setDetailVulnId] = useState<number | null>(null)
   const [tab, setTab] = useState<'logs' | 'reports' | 'vulns'>('logs')
-  const [phaseFilter, setPhaseFilter] = useState('recon')
+  const [phaseFilter, setPhaseFilter] = useState(() =>
+    initial?.project ? defaultPhaseTab(initial.project.phase, initial.project.status) : 'recon',
+  )
   const [hasOlder, setHasOlder] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [revealLimit, setRevealLimit] = useState(LOG_PAGE)
@@ -119,15 +137,31 @@ export default function ProjectDetailPage() {
   const [displaySession, setDisplaySession] = useState(1)
   const [sessionCount, setSessionCount] = useState(1)
   const [actionError, setActionError] = useState('')
+  const [runBusy, setRunBusy] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const oldestRef = useRef(0)
   const fileEndRef = useRef(0)
   const phaseRef = useRef(phaseFilter)
-  const syncedPhase = useRef(false)
+  const syncedPhase = useRef(Boolean(initial))
+  const etagRef = useRef(initial && !initial.partial ? initial.project.etag || '' : '')
   const loadingOlderRef = useRef(false)
   const atTopRef = useRef(false)
   const followLiveRef = useRef(true)
   const displaySessionRef = useRef(1)
   const sessionCountRef = useRef(1)
+
+  const applyProject = (next: Project) => {
+    setProject(next)
+    setDetailReady(true)
+    if (next.etag) etagRef.current = next.etag
+    writeJsonCache(projectDetailCacheKey(projectId), next)
+    rememberProjectRun(next)
+  }
+
+  const applyRunChange = (next: Project) => {
+    applyProjectRunToListCaches(next)
+    applyProject(next)
+  }
 
   const selectPhase = (p: string) => {
     if (p === phaseFilter) return
@@ -145,7 +179,13 @@ export default function ProjectDetailPage() {
   }, [phaseFilter])
 
   useEffect(() => {
-    syncedPhase.current = false
+    const snap = cachedProject(projectId)
+    setProject(snap?.project ?? null)
+    setDetailReady(Boolean(snap && !snap.partial))
+    setMetaReady(Boolean(snap))
+    syncedPhase.current = Boolean(snap)
+    etagRef.current = snap && !snap.partial ? snap.project.etag || '' : ''
+    setPhaseFilter(snap?.project ? defaultPhaseTab(snap.project.phase, snap.project.status) : 'recon')
     fileEndRef.current = 0
     oldestRef.current = 0
     followLiveRef.current = true
@@ -160,6 +200,7 @@ export default function ProjectDetailPage() {
     setLogSession(null)
     setDisplaySession(1)
     setSessionCount(1)
+    setLoadError('')
   }, [projectId])
 
   useEffect(() => {
@@ -171,18 +212,30 @@ export default function ProjectDetailPage() {
     let alive = true
     const refreshMeta = async () => {
       try {
-        const p = await api.getProject(projectId)
+        const p = await api.getProject(projectId, etagRef.current || undefined)
         if (!alive) return
+        if (p.notModified || p.unchanged) return
+        etagRef.current = p.etag || ''
         setProject(p)
+        setDetailReady(true)
+        setMetaReady(true)
+        writeJsonCache(projectDetailCacheKey(projectId), p)
+        rememberProjectRun(p)
         if (!syncedPhase.current) {
           syncedPhase.current = true
           selectPhase(defaultPhaseTab(p.phase, p.status))
         }
-      } catch {
-        /* ignore transient */
+        setLoadError('')
+      } catch (err) {
+        if (!alive) return
+        if (!etagRef.current) {
+          const timedOut =
+            err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')
+          setLoadError(timedOut ? '项目详情加载超时，请稍后重试。' : '项目详情加载失败，请稍后重试。')
+        }
       }
     }
-    const stop = startVisibilityPoll(refreshMeta, 3000)
+    const stop = startVisibilityPoll(refreshMeta, 5000)
     return () => {
       alive = false
       stop()
@@ -211,7 +264,7 @@ export default function ProjectDetailPage() {
   }, [projectId, tab])
 
   useEffect(() => {
-    if (!projectId) return
+    if (!projectId || !metaReady) return
     let alive = true
     oldestRef.current = 0
     setHasOlder(false)
@@ -242,7 +295,7 @@ export default function ProjectDetailPage() {
     return () => {
       alive = false
     }
-  }, [projectId, phaseFilter, logSession])
+  }, [projectId, phaseFilter, logSession, metaReady])
 
   useEffect(() => {
     if (!projectId || streamFrom == null) return
@@ -271,15 +324,16 @@ export default function ProjectDetailPage() {
           const nextStatus = typeof data.status === 'string' ? data.status : undefined
           const nextPhase = typeof data.phase === 'string' ? data.phase : undefined
           if (nextStatus || nextPhase) {
-            setProject((cur) =>
-              cur
-                ? {
-                    ...cur,
-                    status: nextStatus ?? cur.status,
-                    phase: nextPhase ?? cur.phase,
-                  }
-                : cur,
-            )
+            setProject((cur) => {
+              if (!cur) return cur
+              const next = {
+                ...cur,
+                status: nextStatus ?? cur.status,
+                phase: nextPhase ?? cur.phase,
+              }
+              rememberProjectRun(next)
+              return next
+            })
           }
           return
         }
@@ -374,7 +428,13 @@ export default function ProjectDetailPage() {
       })
   }
 
-  if (!project) return <div className="text-slate-400">加载中…</div>
+  if (!project) {
+    return (
+      <div className="text-slate-400">
+        {loadError ? <p className="text-sm text-red-300">{loadError}</p> : '加载中…'}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -401,7 +461,7 @@ export default function ProjectDetailPage() {
               vulnPending={project.vuln_pending}
               reconSubphases={project.recon_subphases}
               labSetupDone={project.lab_setup_done}
-              manualLab={Boolean(project.manual_lab_prompt)}
+              manualLab={Boolean(project.manual_lab)}
               dynamicVerifyEnabled={project.dynamic_verify_enabled}
               dynamicVerifyMode={normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled)}
               verifierEnabled={project.verifier_enabled}
@@ -430,25 +490,40 @@ export default function ProjectDetailPage() {
           <div className="flex flex-wrap justify-end gap-2">
             <ProjectSettingsButton
               project={project}
+              disabled={!detailReady}
               onSaved={(next) => {
-                setProject(next)
+                applyProject(next)
                 setActionError('')
               }}
             />
             <Button
               variant="outline"
-              disabled={project.status === 'completed'}
+              disabled={runBusy || project.status === 'completed'}
               title={project.status === 'completed' ? '已完成项目不可暂停' : undefined}
               onClick={() => {
                 setActionError('')
-                void api.pause(projectId).catch((e) => setActionError(String(e)))
+                const prev = project
+                const next = { ...project, status: 'paused', project_paused: true }
+                applyRunChange(next)
+                setRunBusy(true)
+                void api
+                  .pause(projectId)
+                  .then(() => api.getProject(projectId))
+                  .then((fresh) => {
+                    if (!fresh.notModified && !fresh.unchanged) applyRunChange(fresh)
+                  })
+                  .catch((e) => {
+                    applyRunChange(prev)
+                    setActionError(String(e instanceof Error ? e.message : e))
+                  })
+                  .finally(() => setRunBusy(false))
               }}
             >
               全部暂停
             </Button>
             <Button
               variant="outline"
-              disabled={tokenBudgetReached(project)}
+              disabled={runBusy || tokenBudgetReached(project)}
               title={
                 tokenBudgetReached(project)
                   ? '已达到 Token 上限，请在项目配置中提高上限后再续跑'
@@ -456,12 +531,32 @@ export default function ProjectDetailPage() {
               }
               onClick={() => {
                 setActionError('')
-                void api.resume(projectId).catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+                const prev = project
+                const running = project.recon_done
+                const next = {
+                  ...project,
+                  status: running ? 'auditing' : 'recon',
+                  phase: running ? (project.phase === 'pending' || project.phase === 'recon' ? 'worker' : project.phase) : 'recon',
+                  project_paused: false,
+                }
+                applyRunChange(next)
+                setRunBusy(true)
+                void api
+                  .resume(projectId)
+                  .then(() => api.getProject(projectId))
+                  .then((fresh) => {
+                    if (!fresh.notModified && !fresh.unchanged) applyRunChange(fresh)
+                  })
+                  .catch((e) => {
+                    applyRunChange(prev)
+                    setActionError(String(e instanceof Error ? e.message : e))
+                  })
+                  .finally(() => setRunBusy(false))
               }}
             >
               全部续跑
             </Button>
-            <ResetProgressButton project={project} onReset={setProject} />
+            <ResetProgressButton project={project} onReset={applyProject} />
             <Button variant="destructive" onClick={() => api.cancel(projectId)}>
               停止
             </Button>
@@ -480,10 +575,12 @@ export default function ProjectDetailPage() {
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-          <Badge variant={projectStatusBadgeVariant(project.status)}>
-            {formatProjectStatus(project.status)}
+          <Badge variant={projectStatusBadgeVariant(project.status, project.project_paused)}>
+            {formatProjectRunStatus(project.status, project.project_paused) === '运行中'
+              ? formatProjectStatus(project.status)
+              : formatProjectRunStatus(project.status, project.project_paused)}
           </Badge>
-          {project.status === 'paused' || project.status === 'completed' ? (
+          {project.status === 'paused' || project.project_paused || project.status === 'completed' ? (
             <AuditModeSelect
               value={project.audit_mode}
               customModeId={project.custom_audit_mode_id}
@@ -502,7 +599,7 @@ export default function ProjectDetailPage() {
                     body.custom_audit_mode_id = id
                   }
                   const next = await api.updateProject(projectId, body)
-                  setProject(next)
+                  applyProject(next)
                 } catch {
                   /* ignore */
                 }
@@ -514,7 +611,7 @@ export default function ProjectDetailPage() {
                     audit_mode: 'custom',
                     custom_audit_mode_id: id,
                   })
-                  setProject(next)
+                  applyProject(next)
                 } catch {
                   /* ignore */
                 }
@@ -557,7 +654,7 @@ export default function ProjectDetailPage() {
           {project.bypass_enabled
             ? ' 历史漏洞绕过以收集到的历史漏洞文档为输入，每轮尝试绕过一条。'
             : ''}
-          {project.status === 'paused' || project.status === 'completed'
+          {project.status === 'paused' || project.project_paused || project.status === 'completed'
             ? ' 暂停或完成后可更改挖掘模式；挖掘路径请到项目配置中修改。续跑后按新规则生效。'
             : ''}
         </p>

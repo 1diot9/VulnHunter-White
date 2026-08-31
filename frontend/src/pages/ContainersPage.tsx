@@ -85,8 +85,10 @@ export default function ContainersPage() {
 
   const refresh = useCallback(async () => {
     const gen = ++refreshGen.current
+    const containersP = api.listContainers(runningOnly)
+    const imagesP = api.listDockerImages()
     try {
-      const list = await api.listContainers(runningOnly)
+      const list = await containersP
       if (gen !== refreshGen.current) return
       setContainers(list)
       setContainersReady(true)
@@ -102,7 +104,7 @@ export default function ContainersPage() {
       return
     }
     try {
-      const imageList = await api.listDockerImages()
+      const imageList = await imagesP
       if (gen !== refreshGen.current) return
       setImages(imageList)
       setUsage(usageFromImages(imageList))

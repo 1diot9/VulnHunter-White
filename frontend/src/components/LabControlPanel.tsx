@@ -105,10 +105,16 @@ export function LabControlPanel({ project }: LabControlPanelProps) {
   }
 
   useEffect(() => {
-    void refresh()
-    return startVisibilityPoll(() => {
-      void refresh()
-    }, 5000)
+    let stop: (() => void) | undefined
+    const timer = window.setTimeout(() => {
+      stop = startVisibilityPoll(() => {
+        void refresh()
+      }, 8000)
+    }, 400)
+    return () => {
+      window.clearTimeout(timer)
+      stop?.()
+    }
   }, [project.id])
 
   async function runAction(action: 'start' | 'stop') {

@@ -11,6 +11,7 @@ import {
   formatSeverityScore,
   formatVulnType,
   formatVulnStatus,
+  harnessTierTooltip,
   severityScoreBadgeClass,
 } from '@/lib/utils'
 
@@ -87,9 +88,18 @@ export default function VulnListSignals({
   return (
     <div className={cn('mt-1 space-y-0.5', nested && 'mt-0.5')}>
       <div className={cn('flex flex-wrap items-center gap-1.5', nested && 'gap-1')}>
-        <Badge className={compact} variant={statusVariant}>
-          {formatVulnStatus(v.status, v.evidence_level, v.fp_kind, v.harness_depth)}
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline" />}>
+            <Badge className={compact} variant={statusVariant}>
+              {formatVulnStatus(v.status, v.evidence_level, v.fp_kind, v.harness_depth)}
+            </Badge>
+          </TooltipTrigger>
+          {harnessTierTooltip(v.evidence_level, v.harness_depth) ? (
+            <TooltipContent side="top" className="max-w-xs">
+              {harnessTierTooltip(v.evidence_level, v.harness_depth)}
+            </TooltipContent>
+          ) : null}
+        </Tooltip>
         {vulnType ? (
           <Badge className={compact} variant="outline">
             {vulnType}
