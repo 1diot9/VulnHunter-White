@@ -20,7 +20,7 @@ from ..services.ghsa_service import search_advisories
 from ..services.fingerprint_search import web_search_results
 from ..services.github_issues import search_github_issues
 from ..services.http_client import http_client
-from ..services.ingest import IGNORE_DIR_NAMES
+from ..services.ingest import IGNORE_DIR_NAMES, IGNORE_FILE_SUFFIXES
 from ..services.lab import write_lab_doc_if_ready
 from ..services.paths import (
     env_dir,
@@ -218,15 +218,21 @@ def _display_rel(ctx, path: Path) -> str:
         return str(path)
 
 
+def _rel_is_src_root(rel: str) -> bool:
+    """True only for the src tree root, not src/subdir or srcfoo."""
+    normalized = rel.replace("\\", "/").strip().strip("/")
+    return normalized in ("", ".", "src")
+
+
 def _search_root(ctx, root_rel: str | None) -> Path:
     ws = _workspace_root(ctx)
     rel = (root_rel or "").strip() or ("." if ws is not None else "src")
     if ws is not None:
-        if rel in (".", "", "src") or rel.startswith("src"):
+        if _rel_is_src_root(rel):
             return ws
         root = _readable(ctx, rel)
         return root.parent if root.is_file() else root
-    if rel == "src" or rel.startswith("src"):
+    if _rel_is_src_root(rel):
         return src_dir(ctx.project_id)
     root = assert_readable(ctx.project_id, rel)
     return root.parent if root.is_file() else root
@@ -452,28 +458,117 @@ def _grep_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
         rx = re.compile(pattern, flags)
     except re.error as e:
         return call_fail(f"正则无效: {e}")
+
+    # Without a caller-supplied glob, scope to a default text-ext set so we don't
+    # walk .png/.gif/.jar/.sign etc. (a 1 GB / 45 k-file repo will otherwise block
+    # one Grep for 15+ minutes). Pass glob="*" or glob="**/*" to scan everything
+    # (e.g. binary reverse-engineering tasks).
+    user_set_glob = "glob" in args and str(args.get("glob") or "").strip() not in ("", "*")
+    default_exts = settings.grep_default_exts
+    skip_text_ext_filter = user_set_glob or glob_pat == "**/*"
+    per_file_cap = settings.grep_max_file_bytes
+    total_cap = settings.grep_max_total_bytes
+    try:
+        if "max_file_bytes" in args and args["max_file_bytes"] not in (None, ""):
+            per_file_cap = max(1024, int(args["max_file_bytes"]))
+    except (TypeError, ValueError):
+        pass
+    try:
+        if "max_total_bytes" in args and args["max_total_bytes"] not in (None, ""):
+            total_cap = max(1024, int(args["max_total_bytes"]))
+    except (TypeError, ValueError):
+        pass
+
     try:
         root = _search_root(ctx, root_rel)
         files = list(_iter_files(root, glob_pat))
     except SandboxError as e:
         return local_fail(str(e))
 
-    hits = []
+    limit = max(1, int(args.get("limit") or 100))
+    hits: list[dict[str, Any]] = []
+    skipped_binary = 0
+    skipped_size = 0
+    bytes_scanned = 0
+    hit_limit = False
+    byte_limit = False
     for fp in files:
         try:
             _readable(ctx, str(fp))
         except SandboxError:
             continue
         try:
-            text = windows_long_path(fp).read_text(encoding="utf-8", errors="ignore")
+            st = windows_long_path(fp).stat()
         except OSError:
+            continue
+        size = int(st.st_size)
+        if size <= 0:
+            continue
+        if size > per_file_cap:
+            skipped_size += 1
+            continue
+        if not skip_text_ext_filter:
+            ext = fp.suffix.lower()
+            if ext and ext not in default_exts:
+                skipped_binary += 1
+                continue
+        try:
+            with windows_long_path(fp).open("rb") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        # Cheap binary heuristic: NUL byte in the first chunk = not text.
+        if b"\x00" in raw[:4096]:
+            skipped_binary += 1
+            continue
+        # Don't start scanning a file that already busts the total budget.
+        if bytes_scanned > 0 and bytes_scanned + len(raw) > total_cap:
+            byte_limit = True
+            break
+        bytes_scanned += len(raw)
+        try:
+            text = raw.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if rx.search(line):
                 hits.append({"path": _display_rel(ctx, fp), "line": i, "text": line[:500]})
-                if len(hits) >= int(args.get("limit") or 100):
-                    return {"ok": True, "hits": hits, "truncated": True}
-    return {"ok": True, "hits": hits, "truncated": False}
+                if len(hits) >= limit:
+                    hit_limit = True
+                    break
+        if hit_limit:
+            break
+        if bytes_scanned >= total_cap:
+            byte_limit = True
+            break
+
+    truncated = hit_limit or byte_limit
+    out: dict[str, Any] = {"ok": True, "hits": hits, "truncated": truncated}
+    if truncated or skipped_binary or skipped_size:
+        out["stats"] = {
+            "bytes_scanned": bytes_scanned,
+            "files_with_hits": len({h["path"] for h in hits}),
+            "skipped_binary": skipped_binary,
+            "skipped_size": skipped_size,
+        }
+    if hit_limit:
+        out["hint"] = (
+            f"已命中 limit={limit}；如需更多结果，调大 limit 并缩小 glob/root（例 glob=*.java）。"
+        )
+    elif byte_limit:
+        out["hint"] = (
+            f"扫描已超过 max_total_bytes={total_cap} 字节后中止。"
+            "请传更窄的 root（例 src/<module>）或更精确的 glob（例 **/*.java、**/*.jsp），"
+            "并按需调大 max_total_bytes。"
+        )
+    elif skipped_binary or skipped_size:
+        # Default-scoped only — tell the caller what got skipped.
+        if not skip_text_ext_filter:
+            out["hint"] = (
+                f"已默认跳过 {skipped_binary} 个非文本扩展名与 {skipped_size} 个超大文件"
+                f"（>{per_file_cap // 1024} KB）。需要扫描全部文件时显式传 glob=**/* 并调大 max_total_bytes。"
+            )
+    return out
 
 
 def _kill_process_tree(proc: subprocess.Popen) -> None:
@@ -1184,18 +1279,37 @@ def register_common_tools() -> None:
     registry.register(
         ToolSpec(
             name="Grep",
-            description="在源码中搜索正则（自动跳过 node_modules/target/dist/build 等）",
+            description=(
+                "在源码中搜索正则（自动跳过 node_modules/target/dist/build 等目录，"
+                "且默认只扫文本扩展名：Java/Kotlin/JS/TS/Python/Go/Ruby/PHP/C#/JSP/Vue/Clojure/Scala/Rust"
+                "等源码 + 模板/映射/配置；图片/字体/压缩包/字节码等会被跳过）。"
+                "命中按行号返回前 limit 条（默认 100），truncated=true 表示还有更多。"
+                "为避免单次扫 1 GB 仓库卡住：默认 max_file_bytes=1 MB、max_total_bytes=32 MB；"
+                "想要扫描全部文件时显式传 glob=**/* 并按需调大 max_total_bytes。"
+                "扫描范围尽量窄：传 root=<子模块> 与 glob=*.java（/jsp/py 等）会显著提速。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {
+                        "type": "string",
+                        "description": "搜索根目录，相对工作区（如 src/<module>）。省略时从源码根开始，会扫到全部模块。",
+                    },
                     "glob": {
                         "type": "string",
-                        "description": "文件名或相对路径 glob，如 *.java 或 **/*.java；默认 *",
+                        "description": "文件名或相对路径 glob，如 *.java 或 **/*.java。省略时仅扫默认文本扩展名集合。",
                     },
                     "i": {"type": "boolean"},
                     "limit": {"type": "integer"},
+                    "max_file_bytes": {
+                        "type": "integer",
+                        "description": "单文件字节上限，默认 1 MB。更大文件将被跳过。",
+                    },
+                    "max_total_bytes": {
+                        "type": "integer",
+                        "description": "本次扫描累计字节上限，默认 32 MB；超出后返回 truncated=true 并提示缩范围。",
+                    },
                 },
                 "required": ["pattern"],
             },

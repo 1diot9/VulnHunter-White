@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     timeout_recon: int = 3600
     timeout_recon_mark_round: int = 1800
     recon_mark_batch_size: int = 150
+    # Sub-batch size to avoid LLM input truncation when batch is large.
+    # Each sub-batch runs as a separate loop iteration to keep prompt under context limits.
+    recon_mark_sub_batch_size: int = 75
     timeout_worker_round: int = 7200
     timeout_reviewer_static: int = 2700
     # One-shot wall-clock extension when reviewer is wrapping up docs after verify.
@@ -70,6 +73,76 @@ class Settings(BaseSettings):
     # reviewer-lab: consecutive timeouts (each timeout_reviewer_static) before project-wide static review.
     lab_setup_timeouts_before_static: int = 2
     file_inject_max_bytes: int = 80 * 1024
+    # Grep defaults: skip files outside this extension set unless caller overrides
+    # `glob`. Without this, a default `Grep(pattern=...)` over a 1 GB tree (45 k files)
+    # walks every .png/.gif/.jar/.sign and never returns in time.
+    grep_default_exts: tuple[str, ...] = (
+        # Source code
+        ".java",
+        ".kt",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".py",
+        ".php",
+        ".go",
+        ".rb",
+        ".cs",
+        ".aspx",
+        ".jsp",
+        ".jspx",
+        ".vue",
+        ".clj",
+        ".cljs",
+        ".cljc",
+        ".scala",
+        ".groovy",
+        ".rs",
+        # Templates / mappings / config that may carry sinks
+        ".ftl",
+        ".ftlh",
+        ".vm",
+        ".xml",
+        ".html",
+        ".htm",
+        ".xhtml",
+        ".properties",
+        ".yml",
+        ".yaml",
+        ".sql",
+        ".json",
+        ".twig",
+        ".erb",
+        ".ejs",
+        ".hbs",
+        ".mustache",
+        ".jinja",
+        ".j2",
+        ".njk",
+        ".phtml",
+        # Build scripts referenced from code
+        ".gradle",
+        ".kts",
+        # Plain text
+        ".md",
+        ".txt",
+        ".cfg",
+        ".conf",
+        ".ini",
+        ".sh",
+        ".bat",
+        ".ps1",
+    )
+    # Per-file size cap for Grep (skip larger files unless caller overrides).
+    # 1 MB comfortably covers JSP / Java / JS source; anything bigger is almost
+    # always generated or binary.
+    grep_max_file_bytes: int = 1 * 1024 * 1024
+    # Total bytes Grep will scan in one call before returning truncated. Catches
+    # runaway walks on 1 GB / 45 k-file repos where one Grep blocks for 15+ min.
+    grep_max_total_bytes: int = 32 * 1024 * 1024
     worker_round_history: int = 10
     todo_inject_interval: int = 50
     recon_doc_inject_max_chars: int = 32 * 1024
