@@ -21,6 +21,9 @@ def test_auth_status_open_when_unset(tmp_env):
 
 def test_env_token_gates_api(tmp_env, monkeypatch):
     monkeypatch.setattr("app.config.settings.access_token", "env-secret")
+    from app.services.access_token import clear_access_token_cache
+
+    clear_access_token_cache()
     from app.main import app
 
     with TestClient(app) as client:
@@ -56,6 +59,9 @@ def test_env_token_gates_api(tmp_env, monkeypatch):
 
 def test_settings_override_env_and_require_current(tmp_env, monkeypatch):
     monkeypatch.setattr("app.config.settings.access_token", "from-env")
+    from app.services.access_token import clear_access_token_cache
+
+    clear_access_token_cache()
     Session = tmp_env["Session"]
     models = tmp_env["models"]
     with Session() as db:

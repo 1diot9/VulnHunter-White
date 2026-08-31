@@ -268,6 +268,21 @@ def test_hydrate_if_used_opens_next_page(tmp_env, project, monkeypatch, tmp_path
     assert live_log.begin_session(project, "fix", if_used=True) == 1
 
 
+def test_hydrate_uses_round_filenames_not_bodies(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "legacy.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+    worker_dir = tmp_path / "live-events" / "worker"
+    worker_dir.mkdir(parents=True)
+    for i in range(1, 6):
+        (worker_dir / f"round-{i}.jsonl").write_text(
+            '{"kind":"agent","text":"x","phase":"worker"}\n',
+            encoding="utf-8",
+        )
+    assert live_log.current_session(project, "worker") == 5
+    assert live_log.begin_session(project, "worker", if_used=True) == 6
+
+
 def test_subphase_sessions_are_independent(tmp_env, project, monkeypatch, tmp_path):
     path = tmp_path / "live.events.jsonl"
     monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import threading
 from urllib.parse import parse_qs
 
 from ..config import settings
 from ..models import AppSettings, SessionLocal
+
+_hash_lock = threading.Lock()
+_cached_hash: str | None = None
+_hash_loaded = False
 
 MIN_TOKEN_LEN = 4
 AUTH_HEADER = "authorization"
@@ -24,19 +29,43 @@ def _load_row() -> AppSettings | None:
         return db.query(AppSettings).first()
 
 
+def clear_access_token_cache() -> None:
+    """Drop the in-process hash cache (tests + settings updates)."""
+    global _cached_hash, _hash_loaded
+    with _hash_lock:
+        _cached_hash = None
+        _hash_loaded = False
+
+
+def _hash_from_row(row: AppSettings | None) -> str:
+    stored = getattr(row, "access_token_hash", None) if row is not None else None
+    if stored is not None:
+        return str(stored).strip()
+    env = (settings.access_token or "").strip()
+    return hash_token(env) if env else ""
+
+
 def configured_token_hash(row: AppSettings | None = None) -> str:
     """SHA-256 hex of the active token, or empty if the gate is off.
 
     DB ``access_token_hash`` None = fall back to ``VULNHUNTER_ACCESS_TOKEN``.
     A stored hash (including after a settings change) overrides env.
     """
-    if row is None:
-        row = _load_row()
-    stored = getattr(row, "access_token_hash", None) if row is not None else None
-    if stored is not None:
-        return str(stored).strip()
-    env = (settings.access_token or "").strip()
-    return hash_token(env) if env else ""
+    global _cached_hash, _hash_loaded
+    if row is not None:
+        digest = _hash_from_row(row)
+        with _hash_lock:
+            _cached_hash = digest
+            _hash_loaded = True
+        return digest
+    with _hash_lock:
+        if _hash_loaded:
+            return _cached_hash or ""
+    digest = _hash_from_row(_load_row())
+    with _hash_lock:
+        _cached_hash = digest
+        _hash_loaded = True
+    return digest
 
 
 def is_access_token_configured(row: AppSettings | None = None) -> bool:
@@ -87,7 +116,9 @@ def update_access_token_hash(row: AppSettings, current_token: str, new_token: st
         raise ValueError("当前令牌不正确")
     if not new:
         row.access_token_hash = None
+        clear_access_token_cache()
         return
     if len(new) < MIN_TOKEN_LEN:
         raise ValueError(f"新令牌至少 {MIN_TOKEN_LEN} 个字符")
     row.access_token_hash = hash_token(new)
+    clear_access_token_cache()

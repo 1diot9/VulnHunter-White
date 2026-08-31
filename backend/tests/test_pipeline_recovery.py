@@ -142,6 +142,28 @@ def test_release_stale_claims(tmp_env, project, monkeypatch):
         assert fw.claimed_by is None
 
 
+def test_release_stale_claims_lookup_uses_own_session(tmp_env, project, monkeypatch):
+    """resumable_file_paths opens SessionLocal; must not nest inside the write session."""
+    build_file_index(project)
+    monkeypatch.setattr(settings, "claim_stale_sec", 60)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        fw = db.query(models.FileWeight).filter(models.FileWeight.project_id == project).first()
+        fw.weight = 40
+        fw.claimed_by = "stale"
+        fw.claimed_at = utcnow() - timedelta(seconds=120)
+        db.commit()
+
+    def lookup(pid):
+        with Session() as db:
+            assert db.query(models.FileWeight).filter(models.FileWeight.project_id == pid).count() >= 1
+        return set()
+
+    monkeypatch.setattr(pipeline, "resumable_file_paths", lookup)
+    assert pipeline._release_stale_claims(project) == 1
+
+
 def test_recon_gates_no_default_weight(tmp_env, project):
     build_file_index(project)
     _mark_all_weighted(project)
@@ -360,6 +382,22 @@ def test_reviewer_force_new_is_not_open_work(tmp_env, project):
     assert pipeline._reviewer_has_review_work(project, pending=0) is False
 
 
+def test_prepare_resume_abandons_zombie_phase_runs(tmp_env, project):
+    from app.agent.checkpoint import checkpoint_exists, clear_checkpoint
+
+    run_id = pipeline._new_phase_run(project, "worker", "worker", file_path="src/a.java")
+    clear_checkpoint(project, run_id)
+    assert checkpoint_exists(project, run_id) is False
+    pipeline._prepare_project_resume(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        pr = db.get(models.PhaseRun, run_id)
+        assert pr is not None
+        assert pr.status == "failed"
+        assert "无检查点" in (pr.error or "")
+
+
 def test_reviewer_loop_retries_sqlite_locked_project_check(tmp_env, project, monkeypatch):
     errors: list[str] = []
 
@@ -397,6 +435,93 @@ def test_reviewer_loop_retries_sqlite_locked_project_check(tmp_env, project, mon
     pipeline._run_reviewer_loop(project)
 
     assert errors == []
+
+
+def test_worker_loop_retries_sqlite_locked_project_check(tmp_env, project, monkeypatch):
+    errors: list[str] = []
+    notes: list[str] = []
+
+    class FakeCancel:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def is_set(self) -> bool:
+            return self.n >= 2
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.n += 1
+            return True
+
+    class LockedSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, model, project_id):
+            raise OperationalError(
+                "SELECT projects.id FROM projects WHERE projects.id = ?",
+                (project_id,),
+                sqlite3.OperationalError("database is locked"),
+            )
+
+    cancel = FakeCancel()
+    monkeypatch.setattr(pipeline, "_cancel_event", lambda pid: cancel)
+    monkeypatch.setattr(pipeline, "_loop_cancel", lambda pid, phase: cancel)
+    monkeypatch.setattr(pipeline, "SessionLocal", lambda: LockedSession())
+    monkeypatch.setattr(pipeline.live_log, "error", lambda pid, text, **kwargs: errors.append(text))
+    monkeypatch.setattr(pipeline.live_log, "system", lambda pid, text, **kwargs: notes.append(text))
+
+    pipeline._run_worker_loop(project, "worker-1")
+
+    assert errors == []
+    assert any("数据库忙" in t for t in notes) or cancel.n >= 1
+
+
+def test_worker_loop_reenters_after_inner_returns(tmp_env, project, monkeypatch):
+    calls = {"n": 0}
+    notes: list[str] = []
+
+    def inner(pid, wid, cancel):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            cancel.set()
+
+    monkeypatch.setattr(pipeline, "_run_worker_loop_inner", inner)
+    monkeypatch.setattr(pipeline, "_project_is_terminal", lambda pid: False)
+    monkeypatch.setattr(pipeline, "_phase_is_paused", lambda pid, phase: False)
+    monkeypatch.setattr(pipeline, "_DB_LOCK_RETRY_SECONDS", 0)
+    monkeypatch.setattr(pipeline.live_log, "system", lambda pid, text, **kwargs: notes.append(text))
+
+    pipeline._run_worker_loop(project, "w1")
+    assert calls["n"] >= 2
+    assert any("重新进入" in t for t in notes)
+
+
+def test_finish_worker_round_db_locked_keeps_checkpoint(tmp_env, project):
+    from app.agent.checkpoint import LoopCheckpoint, checkpoint_exists, save_checkpoint
+    from app.agent.loop import LoopResult
+
+    run_id = pipeline._new_phase_run(project, "worker", "worker", file_path="src/a.java")
+    save_checkpoint(
+        LoopCheckpoint(
+            project_id=project,
+            phase_run_id=run_id,
+            role="worker",
+            phase="worker",
+            system_prompt="s",
+            user_prompt="u",
+            messages=[{"role": "user", "content": "hi"}],
+            file_path="src/a.java",
+        )
+    )
+    result = LoopResult(ok=False, state={})
+    result.cancelled = True
+    result.stop_reason = "db_locked"
+    action = pipeline._finish_worker_round(project, "w1", "src/a.java", run_id, result)
+    assert action == "restart"
+    assert checkpoint_exists(project, run_id) is True
 
 
 def test_finish_round_then_summary_injection(tmp_env, project):
@@ -1566,3 +1691,19 @@ def test_reviewer_force_static_prompt_requires_static_only_close(tmp_env, projec
     lab_gate = pipeline._reviewer_verify_gate(force_static=False, mode="lab")
     assert "不要用 static_only 跳过" in lab_gate
     assert "才用 debug MCP 动态调试" in lab_gate
+
+
+def test_recover_hydrates_pause_flags(tmp_env, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "start_ingest_and_audit", lambda *_a, **_k: None)
+    with SessionLocal() as db:
+        row = Project(name="paused-restart", source_type="zip", status="paused")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        pid = row.id
+    assert pipeline.is_project_paused(pid) is False
+    pipeline.recover_inflight_projects()
+    assert pipeline.is_project_paused(pid) is True

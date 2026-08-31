@@ -436,3 +436,53 @@ def test_identical_tool_loop_redirects_then_aborts(tmp_env, project, monkeypatch
     assert dispatched["n"] == 5
     assert chats["n"] == 10
     assert loop.watchdog.identical_threshold_hits == 5
+
+
+def test_enforce_token_budget_tolerates_locked_db(tmp_env, project, monkeypatch):
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+    )
+
+    def boom(_pid):
+        raise OperationalError(
+            "SELECT",
+            {},
+            sqlite3.OperationalError("database is locked"),
+        )
+
+    monkeypatch.setattr("app.services.token_budget.maybe_pause_for_token_budget", boom)
+    assert loop._enforce_token_budget() is False
+
+
+def test_run_loop_sqlite_lock_keeps_round_alive(tmp_env, project, monkeypatch):
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+    )
+
+    def boom(self):
+        raise OperationalError(
+            "SELECT",
+            {},
+            sqlite3.OperationalError("database is locked"),
+        )
+
+    monkeypatch.setattr(AgentLoop, "_run_loop_inner", boom)
+    result = loop._run_loop()
+    assert result.cancelled is True
+    assert result.stop_reason == "db_locked"

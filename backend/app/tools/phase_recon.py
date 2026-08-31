@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from ..models import FileWeight, Project, SessionLocal, Source
-from ..services.ingest import EXTRA_SOURCE_EXTS, INDEX_SKIP_NAMES, expand_file_index
+from ..services.ingest import EXTRA_SOURCE_EXTS, INDEX_SKIP_NAMES, SOURCE_EXTS, expand_file_index, normalize_source_ext
 from ..services.old_vuln_crawl import save_crawl_spec
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
@@ -26,9 +26,13 @@ def _doc_nonempty(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
-def recon_map_ready(project_id: int) -> bool:
+def recon_map_ready(project_id: int, *, scan: bool = True) -> bool:
     docs = docs_dir(project_id)
-    return _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
+    if not (_doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")):
+        return False
+    from ..services.decompile_java import business_jar_map_ready
+
+    return business_jar_map_ready(project_id, scan=scan)
 
 
 # Map/auth refresh: session stays open until FinishReconMap clears the token.
@@ -133,6 +137,8 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
         )
         if not _doc_nonempty(path)
     ]
+    map_docs_ok = not map_missing
+    map_done = recon_map_ready(project_id)
     old_index = _old_vuln_index_path(project_id)
     old_index_ready = _doc_nonempty(old_index)
     old_done = recon_old_vulns_ready(project_id)
@@ -155,6 +161,14 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     errors: list[str] = []
     if map_missing:
         errors.append(f"缺少代码地图/鉴权文档: {', '.join(map_missing)}")
+    elif map_docs_ok and not map_done:
+        from ..services.decompile_java import bytecode_present
+
+        if bytecode_present(project_id):
+            errors.append(
+                "存在字节码但尚未结束业务 jar 点名；请 MarkBusinessJar(paths=[...])，"
+                "全部点完后 MarkBusinessJar(done=true)，无业务覆盖则 none=true"
+            )
     if ext_missing:
         errors.append("尚未检查额外源码扩展名；请用 AddSourceExt 追加模板/映射，或 AddSourceExt(none=true)")
     elif not ext_done:
@@ -178,7 +192,7 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
     subphases = _recon_subphase_rows(
-        map_done=not map_missing,
+        map_done=map_done,
         ext_done=ext_done,
         old_done=old_done,
         mark_done=mark_done,
@@ -206,12 +220,28 @@ def recon_docs_ready(project_id: int) -> bool:
 def recon_subphases(project_id: int, unmarked: int | None = None) -> list[dict[str, Any]]:
     if unmarked is None:
         return list(recon_gates_status(project_id).get("subphases") or [])
-    docs = docs_dir(project_id)
-    map_done = _doc_nonempty(docs / "code-map.md") and _doc_nonempty(docs / "auth.md")
     return _recon_subphase_rows(
-        map_done=map_done,
+        map_done=recon_map_ready(project_id, scan=False),
         ext_done=recon_source_ext_ready(project_id),
         old_done=recon_old_vulns_ready(project_id),
+        mark_done=unmarked == 0,
+    )
+
+
+def recon_subphases_for_list(project_id: int, unmarked: int) -> list[dict[str, Any]]:
+    """List-card gates: nonempty docs only — no frontmatter parse, no src walk."""
+    docs = docs_dir(project_id)
+    from ..services.decompile_java import business_jar_map_ready
+
+    map_done = (
+        _doc_nonempty(docs / "code-map.md")
+        and _doc_nonempty(docs / "auth.md")
+        and business_jar_map_ready(project_id, scan=False)
+    )
+    return _recon_subphase_rows(
+        map_done=map_done,
+        ext_done=_doc_nonempty(_source_exts_path(project_id)),
+        old_done=_doc_nonempty(_old_vuln_index_path(project_id)),
         mark_done=unmarked == 0,
     )
 
@@ -233,6 +263,8 @@ def weight_path_candidates(path: str) -> list[str]:
     p = normalize_weight_path(path)
     if not p:
         return []
+    if p.startswith("workspace/"):
+        return [p]
     out = [p]
     if p.startswith("src/"):
         rest = p[4:]
@@ -313,6 +345,21 @@ def skip_non_source_weight_rows(project_id: int) -> int:
         if n:
             db.commit()
     return n
+
+
+def has_unmarked_files(project_id: int) -> bool:
+    """Cheap existence check; do not sort the unmarked set."""
+    with SessionLocal() as db:
+        row = (
+            db.query(FileWeight.id)
+            .filter(
+                FileWeight.project_id == project_id,
+                FileWeight.skipped.is_(False),
+                FileWeight.weight.is_(None),
+            )
+            .first()
+        )
+    return row is not None
 
 
 def pick_unmarked_batch(project_id: int, limit: int) -> list[str]:
@@ -573,12 +620,22 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
         extra = [str(x) for x in raw if str(x).strip()]
     else:
         extra = []
+
+    # Support removing extensions
+    raw_remove = args.get("remove_exts") or args.get("remove_ext") or args.get("remove")
+    if isinstance(raw_remove, str):
+        to_remove = [raw_remove]
+    elif isinstance(raw_remove, list):
+        to_remove = [str(x) for x in raw_remove if str(x).strip()]
+    else:
+        to_remove = []
+
     none = bool(args.get("none") or args.get("no_extra") or args.get("no_findings"))
     conclude = bool(args.get("done") or args.get("complete") or none)
-    if not extra and not conclude:
+    if not extra and not to_remove and not conclude:
         return {
             "ok": False,
-            "error": "缺少 ext/exts；无需追加时用 AddSourceExt(none=true)，全部确认后 AddSourceExt(done=true)",
+            "error": "缺少 ext/exts 或 remove_exts；无需追加时用 AddSourceExt(none=true)，全部确认后 AddSourceExt(done=true)",
         }
 
     prev_exts, prev_added, _ = _load_source_exts_state(ctx.project_id)
@@ -600,10 +657,20 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 "rejected": rejected,
             }
 
+    # Normalize remove list
+    removed: list[str] = []
+    for raw_ext in to_remove:
+        ext = normalize_source_ext(raw_ext)
+        if ext and ext in prev_exts:
+            removed.append(ext)
+
+    # Merge: add new extensions, remove specified ones
     merged: list[str] = []
     seen: set[str] = set()
     for ext in prev_exts + accepted:
         if ext in seen:
+            continue
+        if ext in removed:
             continue
         seen.add(ext)
         merged.append(ext)
@@ -615,11 +682,22 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
         complete=conclude,
         note=str(args.get("note") or "").strip(),
     )
+
+    # If concluding, trigger final file scan
+    scanned = 0
+    if conclude:
+        from ..services.ingest import build_file_index_with_exts
+
+        final_exts = list(SOURCE_EXTS) + merged
+        scanned = build_file_index_with_exts(ctx.project_id, final_exts)
+
     if conclude:
         hint = _SOURCE_EXT_DONE_HINT
         if none and not merged:
             hint = "无需追加扩展名，系统将结束本会话。"
-    elif added:
+        if scanned > 0:
+            hint += f" 已入库 {scanned} 个文件。"
+    elif added or removed:
         hint = _SOURCE_EXT_WRITE_HINT
     else:
         hint = "未发现新文件（可能已入库或位于忽略目录）。" + _SOURCE_EXT_WRITE_HINT
@@ -627,14 +705,18 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
         hint += f" 其中 {skipped_test} 个测试路径已自动跳过。"
     if rejected:
         hint += f" 已忽略不在白名单的扩展名: {rejected}。"
+    if removed:
+        hint += f" 已移除扩展名: {', '.join(removed)}。"
     return {
         "ok": True,
         "exts": merged,
         "added_count": len(added),
         "added_total": added_count,
+        "removed_exts": removed,
         "skipped_test": skipped_test,
         "rejected": rejected,
         "added_sample": added[:_ADDED_SAMPLE],
+        "scanned": scanned,
         "done": conclude,
         "none": none,
         "path": "docs/source-exts.md",
@@ -957,7 +1039,10 @@ def _finish_recon_map(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not recon_map_ready(ctx.project_id):
         return {
             "ok": False,
-            "error": "请先用 Write 更新并保留非空的 docs/code-map.md 与 docs/auth.md",
+            "error": (
+                "请先用 Write 更新并保留非空的 docs/code-map.md 与 docs/auth.md；"
+                "若存在字节码还须 MarkBusinessJar(done=true) 或 none=true"
+            ),
         }
     clear_map_refresh(ctx.project_id)
     return {
@@ -1065,10 +1150,11 @@ def register_recon_tools() -> None:
         ToolSpec(
             name="AddSourceExt",
             description=(
-                "根据代码地图追加源码扩展名并入库（不删除已有文件标记）。"
-                "用于模板/映射等默认未索引类型，例如 Freemarker .ftl、MyBatis .xml。"
-                "逐次追加不会结束本会话；全部确认后设 done=true。"
+                "根据代码地图追加或移除源码扩展名。用于模板/映射等默认未索引类型，例如 Freemarker .ftl、MyBatis .xml。"
+                "也用于移除噪音扩展名（如过多且不重要的 .json/.xml/.properties）。"
+                "逐次追加/移除不会结束本会话；全部确认后设 done=true。"
                 "无需追加时设 none=true。不要为图片、压缩包、第三方静态资源加扩展名。"
+                "结束时会入库扩展名对应文件（跳过无效文件），防止落盘无效文件。"
             ),
             parameters={
                 "type": "object",
@@ -1079,9 +1165,18 @@ def register_recon_tools() -> None:
                         "items": {"type": "string"},
                         "description": "多个扩展名，如 [\".ftl\", \".xml\"]",
                     },
+                    "remove_ext": {
+                        "type": "string",
+                        "description": "单个要移除的扩展名，如 .json",
+                    },
+                    "remove_exts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多个要移除的扩展名，如 [\".json\", \".xml\"]",
+                    },
                     "done": {
                         "type": "boolean",
-                        "description": "扩展名已全部确认时为 true，结束本会话；逐次追加时不要设",
+                        "description": "扩展名已全部确认时为 true，结束本会话并入库文件；逐次追加时不要设",
                     },
                     "none": {
                         "type": "boolean",

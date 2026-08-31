@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, cast, func, or_
+from sqlalchemy.orm import load_only
 from sqlalchemy.types import String
 
 from ..audit_mode import (
@@ -60,6 +63,7 @@ from ..schemas import (
     PhaseReportList,
     PhaseRunOut,
     ProjectCreate,
+    ProjectListItemOut,
     ProjectListOut,
     ProjectNameOut,
     ProjectOut,
@@ -133,10 +137,43 @@ from ..services.pipeline import (
 )
 from ..services.verifier import enqueue_confirmed_frontend
 from ..services.shutdown import is_shutting_down, wait_or_shutdown
-from ..tools.phase_recon import recon_subphases
+from ..tools.phase_recon import recon_subphases_for_list
 from ..tools.phase_worker import project_complete_gates
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+_PROJECT_LIST_LOAD = (
+    Project.id,
+    Project.name,
+    Project.source_type,
+    Project.source_url,
+    Project.identity,
+    Project.status,
+    Project.phase,
+    Project.recon_done,
+    Project.audit_mode,
+    Project.target_kind,
+    Project.custom_audit_mode_id,
+    Project.custom_audit_mode_name,
+    Project.manual_lab,
+    Project.verifier_enabled,
+    Project.attack_chain_enabled,
+    Project.attack_chain_done,
+    Project.dynamic_verify_enabled,
+    Project.dynamic_verify_mode,
+    Project.heuristic_enabled,
+    Project.heuristic_lite,
+    Project.fast_enabled,
+    Project.fast_queue_frozen,
+    Project.bypass_enabled,
+    Project.bypass_queue_frozen,
+    Project.llm_model,
+    Project.max_token_usage,
+    Project.error,
+    Project.worker_concurrency,
+    Project.created_at,
+    Project.updated_at,
+)
 
 
 def _empty_project_summary() -> dict[str, int]:
@@ -359,12 +396,160 @@ def _project_out(
         tokens_output=summary["tokens_output"],
         tokens_cached=summary["tokens_cached"],
         tokens_total=summary["tokens_total"],
-        recon_subphases=recon_subphases(p.id, summary["files_unmarked"]),
+        recon_subphases=recon_subphases_for_list(p.id, summary["files_unmarked"]),
         lab_setup_done=lab_done,
         lab_setup_retryable=is_lab_mode(verify_mode) and lab_failed,
         verifier_pending=int(summary.get("verifier_pending") or 0),
         **phase_fields,
     )
+
+
+def _project_list_out(
+    p: Project,
+    summary: dict[str, int] | None,
+    weight_exts: list,
+) -> ProjectListItemOut:
+    summary = summary or _empty_project_summary()
+    verify_mode = project_verify_mode(p)
+    lab_done, lab_failed = lab_setup_state(p.id)
+    return ProjectListItemOut(
+        id=p.id,
+        name=p.name,
+        source_type=p.source_type,
+        source_url=p.source_url,
+        identity=p.identity,
+        status=p.status,
+        phase=p.phase,
+        recon_done=p.recon_done,
+        audit_mode=normalize_audit_mode(p.audit_mode),
+        target_kind=normalize_target_kind(getattr(p, "target_kind", None)),
+        custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),
+        custom_audit_mode_name=(getattr(p, "custom_audit_mode_name", None) or "").strip(),
+        manual_lab=bool(p.manual_lab),
+        verifier_enabled=bool(p.verifier_enabled),
+        attack_chain_enabled=bool(getattr(p, "attack_chain_enabled", False)),
+        attack_chain_done=bool(getattr(p, "attack_chain_done", False)),
+        dynamic_verify_enabled=verify_mode_enabled(verify_mode),
+        dynamic_verify_mode=verify_mode,
+        heuristic_enabled=bool(getattr(p, "heuristic_enabled", True)),
+        heuristic_lite=bool(getattr(p, "heuristic_lite", False)),
+        fast_enabled=bool(getattr(p, "fast_enabled", False)),
+        fast_queue_frozen=bool(getattr(p, "fast_queue_frozen", False)),
+        bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
+        bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
+        llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
+        max_token_usage=int(getattr(p, "max_token_usage", 0) or 0),
+        error=p.error,
+        worker_concurrency=p.worker_concurrency,
+        created_at=p.created_at,
+        updated_at=p.updated_at,
+        vuln_confirmed=summary["vuln_confirmed"],
+        vuln_false_positive=summary["vuln_false_positive"],
+        vuln_pending=summary["vuln_pending"],
+        files_total=summary["files_total"],
+        files_weighted=summary["files_weighted"],
+        files_skipped=summary["files_skipped"],
+        files_audited=summary["files_audited"],
+        files_weight100=int(summary.get("files_weight100") or 0),
+        files_weight100_audited=int(summary.get("files_weight100_audited") or 0),
+        sinks_queued=int(summary.get("sinks_queued") or 0),
+        sinks_done=int(summary.get("sinks_done") or 0),
+        bypass_queued=int(summary.get("bypass_queued") or 0),
+        bypass_done=int(summary.get("bypass_done") or 0),
+        weight_exts=weight_exts,
+        worker_rounds=summary["worker_rounds"],
+        tokens_input=summary["tokens_input"],
+        tokens_output=summary["tokens_output"],
+        tokens_cached=summary["tokens_cached"],
+        tokens_total=summary["tokens_total"],
+        project_paused=is_project_paused(p.id),
+        recon_subphases=recon_subphases_for_list(p.id, summary["files_unmarked"]),
+        lab_setup_done=lab_done,
+        lab_setup_retryable=is_lab_mode(verify_mode) and lab_failed,
+        verifier_pending=int(summary.get("verifier_pending") or 0),
+    )
+
+
+def _iso_stamp(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _project_list_etag(
+    db,
+    *,
+    q: str,
+    run_status: str,
+    limit: int,
+    offset: int,
+    page_ids: list[int],
+    status_counts: ProjectRunStatusCounts,
+) -> str:
+    chunks = [
+        q or "",
+        run_status,
+        str(limit),
+        str(offset),
+        str(status_counts.all),
+        str(status_counts.running),
+        str(status_counts.paused),
+        str(status_counts.completed),
+        ",".join(str(i) for i in page_ids),
+        ",".join("1" if is_project_paused(pid) else "0" for pid in page_ids),
+    ]
+    if page_ids:
+        chunks.append(
+            _iso_stamp(db.query(func.max(Project.updated_at)).filter(Project.id.in_(page_ids)).scalar())
+        )
+        # Avoid MAX(updated_at) on file_weights: large projects + SQLite write
+        # locks make list/detail polls miss the 30s frontend timeout.
+        # Worker progress still invalidates via TokenUsage / PhaseRun ids.
+        chunks.append(
+            _iso_stamp(db.query(func.max(Vuln.updated_at)).filter(Vuln.project_id.in_(page_ids)).scalar())
+        )
+        chunks.append(
+            _iso_stamp(db.query(func.max(Sink.updated_at)).filter(Sink.project_id.in_(page_ids)).scalar())
+        )
+        chunks.append(
+            _iso_stamp(
+                db.query(func.max(BypassTarget.updated_at))
+                .filter(BypassTarget.project_id.in_(page_ids))
+                .scalar()
+            )
+        )
+        chunks.append(
+            str(db.query(func.max(TokenUsage.id)).filter(TokenUsage.project_id.in_(page_ids)).scalar() or 0)
+        )
+        chunks.append(
+            str(
+                db.query(func.max(PhaseRun.id))
+                .filter(PhaseRun.project_id.in_(page_ids), PhaseRun.phase == "worker")
+                .scalar()
+                or 0
+            )
+        )
+    digest = hashlib.sha256("|".join(chunks).encode("utf-8")).hexdigest()
+    return digest
+
+
+def _project_detail_etag(db, p: Project) -> str:
+    base = _project_list_etag(
+        db,
+        q="",
+        run_status="detail",
+        limit=1,
+        offset=0,
+        page_ids=[p.id],
+        status_counts=ProjectRunStatusCounts(all=1),
+    )
+    try:
+        extra = json.dumps(get_phase_states(p.id), sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001
+        extra = ""
+    return hashlib.sha256(f"{base}|{extra}".encode("utf-8")).hexdigest()
 
 
 def _apply_project_search(query, q: str):
@@ -435,6 +620,7 @@ def list_projects(
     offset: int = Query(0, ge=0),
     q: str = Query(""),
     run_status: str = Query("all", pattern="^(all|running|paused|completed)$"),
+    since: str = Query(""),
 ) -> ProjectListOut:
     with SessionLocal() as db:
         query = _apply_project_search(db.query(Project.id, Project.status), q)
@@ -442,6 +628,25 @@ def list_projects(
         filtered_ids, status_counts = _filter_project_ids(id_status_rows, run_status)
         total = len(filtered_ids)
         page_ids = filtered_ids[offset : offset + limit]
+        etag = _project_list_etag(
+            db,
+            q=q,
+            run_status=run_status,
+            limit=limit,
+            offset=offset,
+            page_ids=page_ids,
+            status_counts=status_counts,
+        )
+        if since.strip().strip('"') == etag:
+            return ProjectListOut(
+                items=[],
+                total=total,
+                limit=limit,
+                offset=offset,
+                status_counts=status_counts,
+                etag=etag,
+                unchanged=True,
+            )
         if not page_ids:
             return ProjectListOut(
                 items=[],
@@ -449,20 +654,20 @@ def list_projects(
                 limit=limit,
                 offset=offset,
                 status_counts=status_counts,
+                etag=etag,
             )
-        loaded = db.query(Project).filter(Project.id.in_(page_ids)).all()
+        loaded = (
+            db.query(Project)
+            .options(load_only(*_PROJECT_LIST_LOAD))
+            .filter(Project.id.in_(page_ids))
+            .all()
+        )
         by_id = {p.id: p for p in loaded}
         page_rows = [by_id[pid] for pid in page_ids if pid in by_id]
         summaries = _project_summaries(db, page_ids)
         exts = indexed_weight_exts(db, page_ids)
         items = [
-            _project_out(
-                db,
-                p,
-                summaries.get(p.id),
-                exts.get(p.id, []),
-                include_phase_states=False,
-            )
+            _project_list_out(p, summaries.get(p.id), exts.get(p.id, []))
             for p in page_rows
         ]
         return ProjectListOut(
@@ -471,6 +676,7 @@ def list_projects(
             limit=limit,
             offset=offset,
             status_counts=status_counts,
+            etag=etag,
         )
 
 
@@ -504,12 +710,31 @@ def list_project_names() -> list[ProjectNameOut]:
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
-def get_project(project_id: int) -> ProjectOut:
+def get_project(
+    project_id: int,
+    since: str = Query(""),
+) -> ProjectOut:
     with SessionLocal() as db:
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "项目不存在")
-        return _project_out(db, p)
+        etag = _project_detail_etag(db, p)
+        if since.strip().strip('"') == etag:
+            return ProjectOut(
+                id=p.id,
+                name=p.name,
+                source_type=p.source_type,
+                status=p.status,
+                phase=p.phase,
+                recon_done=p.recon_done,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+                etag=etag,
+                unchanged=True,
+            )
+        out = _project_out(db, p)
+        out.etag = etag
+        return out
 
 
 @router.post("", response_model=ProjectOut)

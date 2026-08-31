@@ -38,31 +38,58 @@ def strip_windows_long_path(path: Path | str) -> Path:
 
 
 def force_rmtree(path: Path, attempts: int = 8) -> None:
-    """Remove a directory tree, including Windows read-only .git files."""
+    """Remove a directory tree, including Windows read-only .git files.
 
-    def _handle(func, p, _exc) -> None:  # noqa: ANN001
-        try:
-            os.chmod(p, stat.S_IWRITE)
-            func(p)
-        except OSError:
-            pass
+    On Windows, every filesystem operation is performed with the ``\\\\?\\``
+    prefix so that deeply-nested trees (e.g. decompiled Java bytecode) that
+    exceed MAX_PATH (260) are still reachable.  ``shutil.rmtree`` alone
+    does not reliably handle this; we walk and delete files/dirs ourselves.
+    """
+
+    def _delete_tree(target: Path) -> None:
+        """Recursively delete everything under target using long-path-aware I/O."""
+
+        def on_error(func, p: str) -> None:
+            try:
+                os.chmod(p, stat.S_IWRITE)
+                func(p)
+            except OSError:
+                pass
+
+        if os.name == "nt":
+            # Walk bottom-up: delete files first, then empty dirs.
+            for dirpath, dirnames, filenames in os.walk(target, topdown=False):
+                lp_dir = windows_long_path(dirpath)
+                for name in filenames:
+                    lp_file = windows_long_path(Path(dirpath) / name)
+                    try:
+                        os.chmod(lp_file, stat.S_IWRITE)
+                        os.remove(lp_file)
+                    except OSError:
+                        on_error(os.remove, lp_file)
+                try:
+                    os.rmdir(lp_dir)
+                except OSError:
+                    on_error(os.rmdir, lp_dir)
+        else:
+            shutil.rmtree(target, onexc=lambda f, p, e: on_error(f, p))
 
     target = windows_long_path(path)
     if not target.exists():
         return
-    for i in range(attempts):
-        try:
-            shutil.rmtree(target, onexc=_handle)
-        except TypeError:
-            shutil.rmtree(target, onerror=lambda fn, p, err: _handle(fn, p, err))
-        except OSError:
-            pass
-        if not target.exists():
-            return
-        time.sleep(0.3 * (i + 1))
-    shutil.rmtree(target, ignore_errors=True)
+
+    _delete_tree(target)
+    # Retry on Windows if anything survived (e.g. held by another process).
     if target.exists():
-        raise RuntimeError(f"无法删除目录: {target}")
+        for i in range(attempts - 1):
+            time.sleep(0.3 * (i + 1))
+            _delete_tree(target)
+            if not target.exists():
+                return
+        # Last resort: ignore_errors
+        shutil.rmtree(target, ignore_errors=True)
+        if target.exists():
+            raise RuntimeError(f"无法删除目录: {strip_windows_long_path(target)}")
 
 
 def project_dir(project_id: int) -> Path:

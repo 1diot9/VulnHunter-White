@@ -140,6 +140,15 @@ RECON_SOURCE_EXT_PERSIST_NUDGE = (
     "不要改写 code-map/auth，不要标权重。"
 )
 
+RECON_BUSINESS_JAR_PERSIST_NUDGE = (
+    "看门狗提醒：侦察（地图）已连续 {n} 轮未调用 MarkBusinessJar。"
+    "请根据 docs/code-map.md 与 ListBytecode 立刻点名业务 jar——"
+    "每确认一批立刻 MarkBusinessJar(paths=[...])（每个 jar 反编译完成后立刻进入定权，不会结束本会话）；"
+    "仅临时阅读用 DecompileJava，不要指望它入库；"
+    "第三方/spring/ant 等不要点；无业务 jar 覆盖时 MarkBusinessJar(none=true)；"
+    "全部点完后 MarkBusinessJar(done=true)。"
+)
+
 WORKER_FINISH_INTERVAL = 50
 
 WORKER_FINISH_NUDGE = (
@@ -181,6 +190,7 @@ CLI_INDEXER_FINISH_NUDGE = (
 
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
+    "recon": frozenset({"MarkBusinessJar"}),
     "recon-old-vuln": frozenset({"WriteOldVuln"}),
     "recon-old-vuln-ghsa": frozenset({"WriteOldVuln"}),
     "recon-source-ext": frozenset({"AddSourceExt"}),
@@ -199,6 +209,7 @@ class AgentWatchdog:
     persist_nudge_interval: int = RECON_PERSIST_INTERVAL
     worker_finish_interval: int = WORKER_FINISH_INTERVAL
     phase: str = ""
+    project_id: int = 0
     turn_count: int = 0
     idle_turns: int = 0
     consecutive_no_tool_turns: int = 0
@@ -214,7 +225,19 @@ class AgentWatchdog:
             return self.worker_finish_interval
         if self.phase in RECON_PERSIST_PHASES:
             return self.persist_nudge_interval
+        if self.phase == "recon":
+            return self.persist_nudge_interval
         return 0
+
+    def _recon_needs_business_jar_nudge(self) -> bool:
+        if self.phase != "recon" or not self.project_id:
+            return False
+        try:
+            from ..services.decompile_java import business_jar_map_ready, bytecode_present
+
+            return bytecode_present(self.project_id) and not business_jar_map_ready(self.project_id)
+        except Exception:  # noqa: BLE001
+            return False
 
     def note_turn(self, tool_names: list[str] | None = None) -> str | None:
         """Count a model turn. Persist/FinishFile idle resets if a target tool was called."""
@@ -239,6 +262,8 @@ class AgentWatchdog:
                 return TRIAGE_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "cli-indexer":
                 return CLI_INDEXER_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase == "recon" and self._recon_needs_business_jar_nudge():
+                return RECON_BUSINESS_JAR_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
                 return RECON_OLD_VULN_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln-ghsa":
@@ -259,6 +284,8 @@ class AgentWatchdog:
             return f"看门狗：Sink 筛选连续 {n} 轮未 FinishSinkTriage，已提醒立刻提交决策"
         if self.phase == "cli-indexer":
             return f"看门狗：CLI 索引连续 {n} 轮未 FinishIndex，已提醒立刻落盘描述"
+        if self.phase == "recon":
+            return f"看门狗：侦察（地图）连续 {n} 轮未 MarkBusinessJar，已提醒立即点名业务 jar"
         if self.phase == "recon-old-vuln":
             return f"看门狗：侦察（历史漏洞）连续 {n} 轮未 WriteOldVuln，已提醒立即落盘"
         if self.phase == "recon-old-vuln-ghsa":
@@ -313,6 +340,7 @@ class AgentWatchdog:
     def snapshot(self) -> dict[str, Any]:
         return {
             "phase": self.phase,
+            "project_id": self.project_id,
             "turn_count": self.turn_count,
             "idle_turns": self.idle_turns,
             "consecutive_no_tool_turns": self.consecutive_no_tool_turns,
@@ -337,6 +365,7 @@ class AgentWatchdog:
             persist_nudge_interval=int(data.get("persist_nudge_interval") or RECON_PERSIST_INTERVAL),
             worker_finish_interval=int(data.get("worker_finish_interval") or WORKER_FINISH_INTERVAL),
             phase=str(data.get("phase") or ""),
+            project_id=int(data.get("project_id") or 0),
             turn_count=int(data.get("turn_count") or 0),
             idle_turns=int(data.get("idle_turns") or 0),
             consecutive_no_tool_turns=int(data.get("consecutive_no_tool_turns") or 0),

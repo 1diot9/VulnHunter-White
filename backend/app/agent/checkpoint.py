@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,7 +87,21 @@ def save_checkpoint(cp: LoopCheckpoint, *, status: str = "running") -> None:
     path = checkpoint_path(cp.project_id, cp.phase_run_id)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(cp.to_dict(), ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    last_err: OSError | None = None
+    for attempt in range(4):
+        try:
+            tmp.replace(path)
+            last_err = None
+            break
+        except OSError as e:
+            last_err = e
+            time.sleep(0.05 * (attempt + 1))
+    if last_err is not None:
+        try:
+            path.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            raise last_err from None
     _touch_phase_run(cp, status=status)
 
 
@@ -134,8 +149,10 @@ def resumable_file_paths(project_id: int) -> set[str]:
     paths: set[str] = set()
     for phase in ("worker", "fast-worker", "bypass-worker"):
         for pr in list_resumable_runs(project_id, phase):
-            cp = load_checkpoint(project_id, pr.id)
-            path = (cp.file_path if cp else None) or pr.file_path
+            path = pr.file_path
+            if not path:
+                cp = load_checkpoint(project_id, pr.id)
+                path = cp.file_path if cp else None
             if path:
                 paths.add(path)
     return paths

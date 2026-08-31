@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -16,6 +17,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import DB_PATH
 
@@ -430,14 +432,19 @@ REQUIRED_TABLES = (
 )
 
 SQLITE_BUSY_TIMEOUT_MS = 30000
+_schema_lock = threading.Lock()
 
 # Windows: use forward slashes so sqlite3 does not mis-parse drive paths.
+# NullPool: check_same_thread=False otherwise selects QueuePool(5+10). Nested
+# SessionLocal (stale-claim release, ensure_schema inspect+begin) then deadlocks
+# the pool — /api/projects hangs while in-memory routes like llm-threads still work.
 engine = create_engine(
     f"sqlite:///{DB_PATH.resolve().as_posix()}",
     connect_args={
         "check_same_thread": False,
         "timeout": SQLITE_BUSY_TIMEOUT_MS / 1000,
     },
+    poolclass=NullPool,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -664,25 +671,26 @@ def _backfill_fp_kind_timeout() -> None:
 
 def ensure_schema() -> None:
     """Idempotent: create missing tables/columns. Safe to call from worker threads."""
-    DATA_DIR = DB_PATH.parent
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
-    _ensure_columns()
-    _migrate_submission_tiers()
-    _backfill_tracking_status()
-    _backfill_verifier_status()
-    _backfill_dynamic_verify_mode()
-    _backfill_parent_root_cause_keys()
-    _backfill_fp_kind_timeout()
-    existing = set(inspect(engine).get_table_names())
-    missing = [t for t in REQUIRED_TABLES if t not in existing]
-    if missing:
-        # Retry once after create_all — handles rare SQLite lock races.
+    with _schema_lock:
+        DATA_DIR = DB_PATH.parent
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(bind=engine)
+        _ensure_columns()
+        _migrate_submission_tiers()
+        _backfill_tracking_status()
+        _backfill_verifier_status()
+        _backfill_dynamic_verify_mode()
+        _backfill_parent_root_cause_keys()
+        _backfill_fp_kind_timeout()
         existing = set(inspect(engine).get_table_names())
         missing = [t for t in REQUIRED_TABLES if t not in existing]
         if missing:
-            raise RuntimeError(f"数据库缺少表: {', '.join(missing)}（路径 {DB_PATH}）")
+            # Retry once after create_all — handles rare SQLite lock races.
+            Base.metadata.create_all(bind=engine)
+            existing = set(inspect(engine).get_table_names())
+            missing = [t for t in REQUIRED_TABLES if t not in existing]
+            if missing:
+                raise RuntimeError(f"数据库缺少表: {', '.join(missing)}（路径 {DB_PATH}）")
 
 
 def init_db() -> None:

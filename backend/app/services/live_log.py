@@ -72,7 +72,6 @@ CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
 }
-_MIXED_LOG_DIRS = frozenset({"recon", "worker"})
 _SESSION_START_MARK = "新开对话"
 
 _CST = timezone(timedelta(hours=8))
@@ -171,17 +170,16 @@ class LiveLog:
             return _sessions.get((project_id, lp), 1)
 
     def _hydrate_sessions(self, project_id: int) -> None:
+        """Restore per-phase page numbers from round-*.jsonl names, not file contents.
+
+        Loading every historical jsonl on process start blocked Worker emit for minutes
+        on large projects (thousands of rounds) and looked like mining died after one round.
+        """
         path_key = str(_live_events_dir(project_id))
         with _session_lock:
             if path_key in _hydrated_paths:
                 return
-            seen: set[str] = set()
-        parsed = _load_project_events(project_id, None)
-        maxes = _annotate_sessions(parsed)
-        for _, ev in parsed:
-            lp = log_phase_of(str(ev.get("phase") or ev.get("role") or ""))
-            if lp:
-                seen.add(lp)
+        maxes, used = _session_state_from_disk(project_id)
         with _session_lock:
             if path_key in _hydrated_paths:
                 return
@@ -191,7 +189,7 @@ class LiveLog:
                 del _session_used[key]
             for lp, n in maxes.items():
                 _sessions[(project_id, lp)] = n
-                _session_used[(project_id, lp)] = lp in seen
+                _session_used[(project_id, lp)] = lp in used
             _hydrated_paths.add(path_key)
 
     def emit(self, project_id: int, event: dict[str, Any]) -> None:
@@ -770,18 +768,62 @@ def _matching_session_max_in_dir(root: Path, log_phase: str) -> int:
     return _annotate_sessions(events).get(log_phase, 1)
 
 
+def _session_state_from_disk(project_id: int) -> tuple[dict[str, int], set[str]]:
+    """Max session per log phase + which phases already have events, without reading jsonl bodies."""
+    maxes = {lp: 1 for lp in LOG_PHASES}
+    used: set[str] = set()
+    base = _live_events_dir(project_id)
+    if base.is_dir():
+        try:
+            children = list(base.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if not child.is_dir():
+                continue
+            lp = log_phase_of(child.name) or (child.name if child.name in LOG_PHASES else None)
+            if not lp:
+                continue
+            n = _round_max_in_dir(child)
+            maxes[lp] = max(maxes.get(lp, 1), n)
+            latest = child / f"round-{n}.jsonl"
+            try:
+                if latest.is_file() and latest.stat().st_size > 0:
+                    used.add(lp)
+            except OSError:
+                pass
+    legacy = live_events_path(project_id)
+    if legacy.is_file():
+        _, parsed, _ = _load_cached_events(legacy)
+        annotated = _annotate_sessions(parsed)
+        seen_lp: set[str] = set()
+        for _, ev in parsed:
+            lp = log_phase_of(str(ev.get("phase") or ev.get("role") or ""))
+            if lp:
+                seen_lp.add(lp)
+        for lp, n in annotated.items():
+            if lp not in LOG_PHASES:
+                continue
+            maxes[lp] = max(maxes.get(lp, 1), n)
+            if lp in seen_lp:
+                used.add(lp)
+    return maxes, used
+
+
 def _session_count_log_phase(project_id: int, log_phase: str) -> int:
     base = _live_events_dir(project_id)
     dedicated = base / _safe_phase_dir(log_phase)
-    n = 1
-    if log_phase in _MIXED_LOG_DIRS:
-        n = max(n, _matching_session_max_in_dir(dedicated, log_phase))
-    else:
-        n = max(n, _round_max_in_dir(dedicated))
-        n = max(n, _matching_session_max_in_dir(dedicated, log_phase))
+    n = max(1, _round_max_in_dir(dedicated))
     control = control_phase_of(log_phase)
     if control and control != log_phase:
-        n = max(n, _matching_session_max_in_dir(base / _safe_phase_dir(control), log_phase))
+        parent = base / _safe_phase_dir(control)
+        dedicated_has = False
+        try:
+            dedicated_has = dedicated.is_dir() and any(dedicated.glob("round-*.jsonl"))
+        except OSError:
+            dedicated_has = False
+        if not dedicated_has and parent.is_dir():
+            n = max(n, _matching_session_max_in_dir(parent, log_phase))
     if log_phase in ("fast-worker", "sink-triage", "bypass-worker"):
         n = max(n, _matching_session_max_in_dir(base / "system", log_phase))
     return max(n, _legacy_session_max(project_id, log_phase))

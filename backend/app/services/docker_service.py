@@ -18,7 +18,6 @@ from .lab import (
     LAB_LABEL_VALUE,
     LAB_PROJECT_LABEL_KEY,
     lab_name_prefixes,
-    load_env,
     name_matches_lab_prefix,
 )
 from .sandbox_exec import sandbox_image
@@ -45,26 +44,16 @@ def collect_project_refs() -> list[ProjectRef]:
     from ..models import Project, SessionLocal
 
     with SessionLocal() as db:
-        rows = db.query(Project).all()
-        items = [(int(p.id), str(p.name or "")) for p in rows]
+        items = [(int(p.id), str(p.name or "")) for p in db.query(Project.id, Project.name).all()]
     refs: list[ProjectRef] = []
     for pid, name in items:
-        env = load_env(pid)
-        ids: list[str] = []
-        names: list[str] = []
-        cid = str(env.get("container_id") or "").strip()
-        cname = str(env.get("container_name") or "").strip().lstrip("/")
-        if cid:
-            ids.append(cid)
-        if cname:
-            names.append(cname)
         refs.append(
             ProjectRef(
                 id=pid,
                 name=name,
                 prefixes=tuple(lab_name_prefixes(pid, project_name=name)),
-                container_ids=tuple(ids),
-                container_names=tuple(names),
+                container_ids=(),
+                container_names=(),
             )
         )
     return refs

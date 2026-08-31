@@ -69,7 +69,14 @@ from ..target_kind import (
     target_kind_label,
 )
 from ..services.custom_audit_modes import project_custom_overlay
-from ..services.ingest import backfill_missing_source_exts, build_file_index, clone_github, extract_zip
+from ..services.ingest import (
+    backfill_missing_source_exts,
+    build_file_index,
+    build_file_index_with_exts,
+    clone_github,
+    extract_zip,
+    prefilter_extensions,
+)
 from ..services.lab import (
     clear_lab_bring_up_failed,
     clear_lab_retry_flags,
@@ -98,7 +105,7 @@ from ..services.live_log import live_log
 from ..services.llm_settings import get_settings_row, resolve_llm
 from ..services.mcp_router import reviewer_debug_plan
 from ..services.sandbox_exec import harness_debug_plan
-from ..services.paths import ensure_project_dirs, src_dir, summaries_dir, workspace_dir
+from ..services.paths import ensure_project_dirs, project_root, src_dir, summaries_dir, workspace_dir
 from ..services.poc_script import read_poc_code
 from ..services.vuln_followup import archive_reviewer_checkpoint, latest_reviewer_context
 from ..tools import register_all_tools
@@ -108,6 +115,7 @@ from ..tools.phase_recon import (
     clear_map_refresh,
     clear_old_vuln_completion,
     paths_fully_marked,
+    has_unmarked_files,
     pick_unmarked_batch,
     skip_non_source_weight_rows,
     recon_gates_met,
@@ -131,6 +139,7 @@ _force_new_run: set[tuple[int, str]] = set()
 _pending_inject: dict[tuple[int, str], list[dict[str, Any]]] = {}
 _threads: dict[int, list[threading.Thread]] = {}
 _recon_threads: dict[int, threading.Thread] = {}
+_recon_mark_threads: dict[int, threading.Thread] = {}
 _recon_rerun_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
 _verifier_threads: dict[int, threading.Thread] = {}
@@ -172,7 +181,8 @@ WORKER_PROGRESS_RESET_STATUSES = ("paused", "completed", "cancelled", "error")
 
 
 def _is_sqlite_locked(exc: BaseException) -> bool:
-    return "database is locked" in str(exc).lower()
+    text = str(exc).lower()
+    return "database is locked" in text or "database is busy" in text
 
 
 class CombinedEvent:
@@ -301,6 +311,7 @@ def reset_runtime_state() -> None:
         _pending_inject.clear()
         _threads.clear()
         _recon_threads.clear()
+        _recon_mark_threads.clear()
         _recon_rerun_threads.clear()
         _reviewer_threads.clear()
         _verifier_threads.clear()
@@ -1111,7 +1122,10 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
     control = control_phase(phase)
     if control == "recon":
         t = _recon_threads.get(project_id)
-        return t is not None and t.is_alive()
+        if t is not None and t.is_alive():
+            return True
+        mt = _recon_mark_threads.get(project_id)
+        return mt is not None and mt.is_alive()
     if control == "reviewer":
         t = _reviewer_threads.get(project_id)
         return t is not None and t.is_alive()
@@ -1142,7 +1156,6 @@ def _new_phase_run(
 
     from ..models import ensure_schema
 
-    ensure_schema()
     for attempt in range(2):
         try:
             with SessionLocal() as db:
@@ -1205,7 +1218,11 @@ def _fix_concurrency() -> int:
 
 
 def _read_file_snippet(project_id: int, rel: str) -> str:
-    path = src_dir(project_id) / rel
+    norm = str(rel or "").replace("\\", "/").lstrip("/")
+    if norm.startswith("workspace/"):
+        path = project_root(project_id) / norm
+    else:
+        path = src_dir(project_id) / norm
     if not path.exists():
         return f"（文件不存在: {rel}）"
     data = path.read_bytes()[: settings.file_inject_max_bytes]
@@ -1258,6 +1275,9 @@ def _release_claim_if_unfinished(project_id: int, path: str, worker_id: str, *, 
 
 def _release_stale_claims(project_id: int) -> int:
     cutoff = utcnow() - timedelta(seconds=max(60, int(settings.claim_stale_sec)))
+    # resumable_file_paths opens its own SessionLocal; do not nest inside the write session.
+    protected = resumable_file_paths(project_id)
+    released: list[tuple[str, str]] = []
     with SessionLocal() as db:
         rows = (
             db.query(FileWeight)
@@ -1270,21 +1290,22 @@ def _release_stale_claims(project_id: int) -> int:
             )
             .all()
         )
-        protected = resumable_file_paths(project_id)
         n = 0
         for row in rows:
             if row.path in protected:
                 continue
-            live_log.system(
-                project_id,
-                f"回收陈旧认领: {row.path} (by={row.claimed_by})",
-                phase="worker",
-            )
+            released.append((row.path, str(row.claimed_by or "")))
             row.claimed_by = None
             row.claimed_at = None
             n += 1
         if n:
             db.commit()
+    for path, by in released:
+        live_log.system(
+            project_id,
+            f"回收陈旧认领: {path} (by={by})",
+            phase="worker",
+        )
     n += _release_stale_sink_claims(project_id, cutoff)
     n += _release_stale_bypass_claims(project_id, cutoff)
     return n
@@ -1337,15 +1358,41 @@ def _reset_fixing_to_returned(project_id: int, except_ids: set[int] | None = Non
         return n
 
 
+def _abandon_zombie_phase_runs(project_id: int) -> int:
+    """Mark running/paused PhaseRuns with no checkpoint as failed (process-death leftovers)."""
+    from ..agent.checkpoint import checkpoint_exists
+
+    n = 0
+    with SessionLocal() as db:
+        rows = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.status.in_(("running", "paused")),
+            )
+            .all()
+        )
+        for pr in rows:
+            if checkpoint_exists(project_id, pr.id):
+                continue
+            pr.status = "failed"
+            pr.error = "进程中断且无检查点"
+            n += 1
+        if n:
+            db.commit()
+    return n
+
+
 def _prepare_project_resume(project_id: int) -> None:
+    n_zombies = _abandon_zombie_phase_runs(project_id)
     keep_paths = resumable_file_paths(project_id)
     keep_vulns = resumable_vuln_ids(project_id, "fix")
     n_claims = _release_claims(project_id, except_paths=keep_paths)
     n_fix = _reset_fixing_to_returned(project_id, except_ids=keep_vulns)
-    if n_claims or n_fix:
+    if n_claims or n_fix or n_zombies:
         live_log.system(
             project_id,
-            f"恢复准备：清认领 {n_claims}，fixing→returned {n_fix}",
+            f"恢复准备：清认领 {n_claims}，fixing→returned {n_fix}，丢弃无检查点轮次 {n_zombies}",
         )
     n_cp = len(list_resumable_runs(project_id))
     if n_cp:
@@ -1353,42 +1400,42 @@ def _prepare_project_resume(project_id: int) -> None:
 
 
 def _pick_next_file(project_id: int, worker_id: str) -> FileWeight | None:
+    from .decompile_store import app_db_write
+
     protected = resumable_file_paths(project_id)
-    with SessionLocal() as db:
-        proj = db.get(Project, project_id)
-        lite = heuristic_lite_active(
-            heuristic_enabled=bool(getattr(proj, "heuristic_enabled", True)) if proj else True,
-            heuristic_lite=bool(getattr(proj, "heuristic_lite", False)) if proj else False,
-        )
-        q = db.query(FileWeight).filter(
-            FileWeight.project_id == project_id,
-            FileWeight.skipped.is_(False),
-            FileWeight.audited.is_(False),
-            FileWeight.weight.isnot(None),
-            FileWeight.claimed_by.is_(None),
-        )
-        if lite:
-            q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
-        q = q.order_by(
-            FileWeight.audit_attempts.asc(),
-            FileWeight.has_source.desc(),
-            FileWeight.weight.desc(),
-            FileWeight.path.asc(),
-        )
-        row = None
-        for cand in q.all():
-            if cand.path in protected:
-                continue
-            row = cand
-            break
-        if not row:
-            return None
-        row.claimed_by = worker_id
-        row.claimed_at = utcnow()
-        db.commit()
-        db.refresh(row)
-        db.expunge(row)
-        return row
+    with app_db_write():
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            lite = heuristic_lite_active(
+                heuristic_enabled=bool(getattr(proj, "heuristic_enabled", True)) if proj else True,
+                heuristic_lite=bool(getattr(proj, "heuristic_lite", False)) if proj else False,
+            )
+            q = db.query(FileWeight).filter(
+                FileWeight.project_id == project_id,
+                FileWeight.skipped.is_(False),
+                FileWeight.audited.is_(False),
+                FileWeight.weight.isnot(None),
+                FileWeight.claimed_by.is_(None),
+            )
+            if lite:
+                q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
+            if protected:
+                q = q.filter(~FileWeight.path.in_(list(protected)))
+            q = q.order_by(
+                FileWeight.audit_attempts.asc(),
+                FileWeight.has_source.desc(),
+                FileWeight.weight.desc(),
+                FileWeight.path.asc(),
+            )
+            row = q.first()
+            if not row:
+                return None
+            row.claimed_by = worker_id
+            row.claimed_at = utcnow()
+            db.commit()
+            db.refresh(row)
+            db.expunge(row)
+            return row
 
 
 def _sources_for_file(project_id: int, path: str) -> list[str]:
@@ -2190,27 +2237,29 @@ def _adopt_resumable(
 ) -> LoopCheckpoint | None:
     if _should_skip_checkpoint(project_id, phase):
         return None
-    with _lock:
-        for pr in list_resumable_runs(project_id, phase):
-            key = (project_id, pr.id)
+    for pr in list_resumable_runs(project_id, phase):
+        key = (project_id, pr.id)
+        if vuln_id is not None and pr.vuln_id != vuln_id:
+            continue
+        with _lock:
             if key in _adopted_phase_runs:
                 continue
-            if vuln_id is not None and pr.vuln_id != vuln_id:
-                continue
-            cp = load_checkpoint(project_id, pr.id)
-            if not cp:
-                continue
             _adopted_phase_runs.add(key)
-            if worker_id:
-                set_phase_run_worker(pr.id, worker_id, file_path=cp.file_path)
-                cp.worker_id = worker_id
-            set_phase_run_status(pr.id, "running")
-            live_log.system(
-                project_id,
-                f"从检查点接续上下文 phase={phase} run={pr.id}",
-                phase=phase,
-            )
-            return cp
+        cp = load_checkpoint(project_id, pr.id)
+        if not cp:
+            with _lock:
+                _adopted_phase_runs.discard(key)
+            continue
+        if worker_id:
+            set_phase_run_worker(pr.id, worker_id, file_path=cp.file_path)
+            cp.worker_id = worker_id
+        set_phase_run_status(pr.id, "running")
+        live_log.system(
+            project_id,
+            f"从检查点接续上下文 phase={phase} run={pr.id}",
+            phase=phase,
+        )
+        return cp
     return None
 
 
@@ -2222,16 +2271,19 @@ def _release_adopted(project_id: int, run_id: int | None) -> None:
 
 
 def _reclaim_file(project_id: int, path: str, worker_id: str) -> None:
-    with SessionLocal() as db:
-        row = (
-            db.query(FileWeight)
-            .filter(FileWeight.project_id == project_id, FileWeight.path == path)
-            .first()
-        )
-        if row and not row.audited:
-            row.claimed_by = worker_id
-            row.claimed_at = utcnow()
-            db.commit()
+    from .decompile_store import app_db_write
+
+    with app_db_write():
+        with SessionLocal() as db:
+            row = (
+                db.query(FileWeight)
+                .filter(FileWeight.project_id == project_id, FileWeight.path == path)
+                .first()
+            )
+            if row and not row.audited:
+                row.claimed_by = worker_id
+                row.claimed_at = utcnow()
+                db.commit()
 
 
 def _loop_from_checkpoint(
@@ -2342,15 +2394,28 @@ def start_audit(project_id: int) -> None:
         alive = [t for t in _threads.get(project_id, []) if t.is_alive() and t.name == name]
         if alive:
             live_log.system(project_id, "调度器已在运行，跳过重复启动")
-            return
-        t = threading.Thread(
-            target=_orchestrate,
-            args=(project_id,),
-            daemon=True,
-            name=name,
-        )
-        _threads.setdefault(project_id, []).append(t)
+            already = True
+        else:
+            already = False
+            t = threading.Thread(
+                target=_orchestrate,
+                args=(project_id,),
+                daemon=True,
+                name=name,
+            )
+            _threads.setdefault(project_id, []).append(t)
+    if already:
+        _resume_orphaned_decompile(project_id)
+        return
     t.start()
+    _resume_orphaned_decompile(project_id)
+
+
+def _resume_orphaned_decompile(project_id: int) -> None:
+    """Ask the decompile sidecar to re-queue leftover jadx jobs."""
+    from .decompile_java import schedule_decompile_resume
+
+    schedule_decompile_resume(project_id)
 
 
 def recover_inflight_projects() -> None:
@@ -2359,12 +2424,17 @@ def recover_inflight_projects() -> None:
 
     ensure_schema()
     with SessionLocal() as db:
+        paused_ids = [
+            int(pid) for (pid,) in db.query(Project.id).filter(Project.status == "paused").all()
+        ]
         projects = (
             db.query(Project)
             .filter(Project.status.in_(("recon", "auditing", "reviewing", "ingesting")))
             .all()
         )
         ids = [(p.id, p.status) for p in projects]
+    for pid in paused_ids:
+        _pause_event(pid).set()
     for pid, status in ids:
         try:
             if status == "ingesting":
@@ -2547,6 +2617,44 @@ def _ensure_recon(project_id: int, cancel: threading.Event) -> None:
         _threads.setdefault(project_id, []).append(rt)
     live_log.system(project_id, "拉起 Recon 线程")
     rt.start()
+
+
+def _ensure_recon_marking(project_id: int) -> None:
+    """Stamp newly ingested files (e.g. late decompiled classes) even after recon_done."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return
+        recon_done = bool(proj.recon_done)
+    if _phase_is_paused(project_id, "recon"):
+        return
+    if not recon_done and not recon_old_vulns_ready(project_id):
+        return
+    if not has_unmarked_files(project_id):
+        return
+    if recon_done:
+        from .llm_thread import llm_thread_limiter
+
+        used, limit, waiting = llm_thread_limiter.snapshot()
+        if waiting > 0 or used >= max(1, int(limit) - 1):
+            return
+    with _lock:
+        rt = _recon_threads.get(project_id)
+        if rt is not None and rt.is_alive():
+            return
+        mt = _recon_mark_threads.get(project_id)
+        if mt is not None and mt.is_alive():
+            return
+        t = threading.Thread(
+            target=_run_recon_marking,
+            args=(project_id, _cancel_event(project_id)),
+            daemon=True,
+            name=f"vh-recon-mark-{project_id}",
+        )
+        _recon_mark_threads[project_id] = t
+        _threads.setdefault(project_id, []).append(t)
+    live_log.system(project_id, "拉起盖章（待标记文件，含新入库反编译类）", phase="recon-mark", role="recon_mark")
+    t.start()
 
 
 def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
@@ -2836,7 +2944,7 @@ def _ensure_workers(
         )
         if lite:
             q = q.filter(FileWeight.weight == HEURISTIC_LITE_WEIGHT)
-        unaudited_weighted = q.count()
+        unaudited_weighted = q.limit(1).first() is not None
     if _phase_is_paused(project_id, "worker"):
         return [t for t in active_workers if t.is_alive()]
 
@@ -2849,7 +2957,7 @@ def _ensure_workers(
     if project_complete_gates(project_id):
         return alive
     if (
-        unaudited_weighted <= 0
+        not unaudited_weighted
         and not list_resumable_runs(project_id, "worker")
         and not _pending_inject.get((project_id, "worker"))
         and not _should_skip_checkpoint(project_id, "worker")
@@ -3059,6 +3167,7 @@ def _orchestrate(project_id: int) -> None:
                         proj = db.get(Project, project_id)
                         if proj and not proj.recon_done:
                             _ensure_recon(project_id, cancel)
+                _ensure_recon_marking(project_id)
 
                 returned_ids: list[int] = []
                 pending_vulns = 0
@@ -3137,17 +3246,80 @@ def _orchestrate(project_id: int) -> None:
         live_log.system(project_id, "调度器退出")
 
 
+def _wait_business_jar_ingest_gate(project_id: int, cancel: threading.Event) -> bool:
+    """Nudge the decompile sidecar; marking proceeds on already-indexed files."""
+    from .decompile_java import (
+        business_jar_decompile_pending,
+        business_jar_map_ready,
+        load_business_jar_state,
+        schedule_decompile_resume,
+        schedule_jar_ingest,
+    )
+
+    if cancel.is_set():
+        return False
+    if not business_jar_map_ready(project_id):
+        return True
+    state = load_business_jar_state(project_id)
+    paths = list(state.get("paths") or [])
+    if not paths:
+        return True
+    schedule_decompile_resume(project_id)
+    schedule_jar_ingest(project_id)
+    pending = business_jar_decompile_pending(project_id)
+    leftover = max(0, len(paths) - len(load_business_jar_state(project_id).get("ingested") or []))
+    if leftover or pending:
+        extra = f"，其余 {leftover} 个仍待入库，盖章先处理已有文件" if leftover else "，盖章先处理已有文件"
+        live_log.system(
+            project_id,
+            f"已点名 {len(paths)} 个业务 jar，入库由反编译服务异步完成{extra}",
+            phase="recon-mark",
+            role="recon_mark",
+        )
+    return True
+
+
 def _run_recon(project_id: int) -> None:
     """Run recon sub-phases strictly in series: map/auth → source-ext → old vulns → mark."""
     cancel = _cancel_event(project_id)
     try:
-        filled = backfill_missing_source_exts(project_id)
-        if filled.get("added_count"):
+        # Step 1: Code-based pre-filtering with broader extension coverage
+        prefilt = prefilter_extensions(project_id)
+        active_exts = prefilt.get("active_exts", [])
+        noisy_exts = prefilt.get("noisy_exts", [])
+        skipped_count = prefilt.get("skipped_count", 0)
+
+        if prefilt.get("counts"):
+            counts_msg = ", ".join(
+                f"{ext}: {cnt}" for ext, cnt in sorted(prefilt["counts"].items(), key=lambda x: -x[1])[:10]
+            )
+            if len(prefilt["counts"]) > 10:
+                counts_msg += "..."
             live_log.system(
                 project_id,
-                f"已补齐默认源码索引 {filled['added_count']} 个文件（{', '.join(filled.get('exts') or [])}）",
-                phase="recon",
+                f"扩展名预筛选：有效 {len(active_exts)} 种，噪音 {len(noisy_exts)} 种，跳过 {skipped_count} 个文件",
+                phase="recon-source-ext",
             )
+        if prefilt.get("noisy_exts"):
+            live_log.system(
+                project_id,
+                f"噪音扩展名（Agent 可恢复）：{', '.join(noisy_exts)}",
+                phase="recon-source-ext",
+            )
+
+        # Build initial file index with pre-filtered extensions
+        if active_exts:
+            from ..services.ingest import SOURCE_EXTS
+
+            final_exts = list(SOURCE_EXTS) + active_exts
+            initial_count = build_file_index_with_exts(project_id, final_exts)
+            if initial_count > 0:
+                live_log.system(
+                    project_id,
+                    f"预筛选入库 {initial_count} 个文件",
+                    phase="recon-source-ext",
+                )
+
         if _maybe_mark_recon_done(project_id):
             return
         if recon_map_ready(project_id):
@@ -3171,6 +3343,8 @@ def _run_recon(project_id: int) -> None:
             return
         if _maybe_mark_recon_done(project_id):
             live_log.system(project_id, "Recon 完成")
+            return
+        if not _wait_business_jar_ingest_gate(project_id, cancel):
             return
         _run_recon_marking(project_id, cancel)
         if _maybe_mark_recon_done(project_id):
@@ -3462,6 +3636,11 @@ def _run_recon_gated_session(
             _release_adopted(project_id, cp.phase_run_id)
 
 
+def _chunk_list(paths: list[str], chunk_size: int) -> list[list[str]]:
+    """Split a list into chunks of at most chunk_size elements."""
+    return [paths[i : i + chunk_size] for i in range(0, len(paths), chunk_size)]
+
+
 def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
     system = load_prompt("recon-mark.md")
     tk = _target_kind_overlay(project_id)
@@ -3469,6 +3648,7 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
         system = f"{system.rstrip()}\n\n{tk}\n"
     llm = resolve_llm("recon", project_id=project_id)
     batch_size = max(1, int(settings.recon_mark_batch_size))
+    sub_batch_size = max(1, int(settings.recon_mark_sub_batch_size))
     while not cancel.is_set():
         if not _wait_if_paused(project_id, _loop_cancel(project_id, "recon"), "recon"):
             return
@@ -3480,6 +3660,9 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
                 phase="recon-mark",
                 role="recon_mark",
             )
+        from .decompile_java import schedule_jar_ingest
+
+        schedule_jar_ingest(project_id)
         if recon_gates_met(project_id):
             return
         cp = _adopt_resumable(project_id, "recon-mark")
@@ -3527,70 +3710,92 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
         unmarked = int(status.get("unmarked") or 0)
         total = int(status.get("total") or 0)
         marked = max(0, total - unmarked)
-        lines = "\n".join(f"- {p}" for p in batch)
-        user = _prompt_with_summary(
-            "recon-mark",
-            project_id,
-            _initial_prompt(
-                "recon-mark.md",
+        # Split into sub-batches to avoid LLM input truncation.
+        sub_batches = _chunk_list(batch, sub_batch_size)
+        for sub_idx, sub_batch in enumerate(sub_batches):
+            if cancel.is_set():
+                return
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "recon"), "recon"):
+                return
+            sub_lines = "\n".join(f"- {p}" for p in sub_batch)
+            user = _prompt_with_summary(
+                "recon-mark",
+                project_id,
+                _initial_prompt(
+                    "recon-mark.md",
+                    project_id=project_id,
+                    marked=marked,
+                    total=total,
+                    batch_count=len(sub_batch),
+                    paths=sub_lines,
+                    **_target_kind_vars(project_id),
+                ),
+            )
+            sub_extra = f"盖章 {len(sub_batch)} 个文件（{sub_idx + 1}/{len(sub_batches)}），剩余 {unmarked}"
+            run_id = _new_phase_run(project_id, "recon-mark", "recon_mark")
+            if sub_idx == 0:
+                _consume_force_new(project_id, "recon")
+            _start_log_session(
+                project_id,
+                "recon-mark",
+                extra=sub_extra,
+                role="recon_mark",
+            )
+            loop = AgentLoop(
                 project_id=project_id,
-                marked=marked,
-                total=total,
-                batch_count=len(batch),
-                paths=lines,
-                **_target_kind_vars(project_id),
-            ),
-        )
-        run_id = _new_phase_run(project_id, "recon-mark", "recon_mark")
-        _consume_force_new(project_id, "recon")
-        _start_log_session(
+                role="recon_mark",
+                phase="recon-mark",
+                system_prompt=system,
+                user_prompt=user,
+                phase_run_id=run_id,
+                cancel_event=_loop_cancel(project_id, "recon"),
+                pause_event=_combined_pause(project_id, "recon"),
+                timeout_sec=settings.timeout_recon_mark_round,
+                context_window=_context_window(),
+                stop_when=lambda st, paths=list(sub_batch): paths_fully_marked(project_id, paths),
+                llm=llm,
+            )
+            loop.state["mark_paths"] = list(sub_batch)
+            result = loop.run()
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            if result.cancelled:
+                _finish_phase_run(run_id, "cancelled")
+                return
+            done = paths_fully_marked(project_id, sub_batch)
+            _finish_phase_run(
+                run_id,
+                "completed" if done else ("cancelled" if result.cancelled else "failed"),
+                None if done else (result.error or result.stop_reason),
+            )
+            if not done:
+                live_log.system(
+                    project_id,
+                    f"侦察盖章子批次未完成（{result.stop_reason}），未标记文件将在下一轮再注入",
+                    phase="recon-mark",
+                    role="recon_mark",
+                )
+                return
+            # Update marked count for next sub-batch prompt.
+            status = recon_gates_status(project_id)
+            unmarked = int(status.get("unmarked") or 0)
+            marked = max(0, total - unmarked)
+        live_log.system(
             project_id,
-            "recon-mark",
-            extra=f"盖章 {len(batch)} 个文件，剩余 {unmarked}",
-            role="recon_mark",
-        )
-        loop = AgentLoop(
-            project_id=project_id,
-            role="recon_mark",
+            f"侦察盖章轮完成：{len(batch)} 个文件（{len(sub_batches)} 个子批次）",
             phase="recon-mark",
-            system_prompt=system,
-            user_prompt=user,
-            phase_run_id=run_id,
-            cancel_event=_loop_cancel(project_id, "recon"),
-            pause_event=_combined_pause(project_id, "recon"),
-            timeout_sec=settings.timeout_recon_mark_round,
-            context_window=_context_window(),
-            stop_when=lambda st, paths=list(batch): paths_fully_marked(project_id, paths),
-            llm=llm,
+            role="recon_mark",
         )
-        loop.state["mark_paths"] = list(batch)
-        result = loop.run()
-        if result.stop_reason == "auth_error":
-            _pause_for_auth(project_id, result.error or "auth_error")
-            return
-        if result.cancelled:
-            _finish_phase_run(run_id, "cancelled")
-            return
-        done = paths_fully_marked(project_id, batch)
-        _finish_phase_run(
-            run_id,
-            "completed" if done else ("cancelled" if result.cancelled else "failed"),
-            None if done else (result.error or result.stop_reason),
-        )
-        if done:
-            live_log.system(
-                project_id,
-                f"侦察盖章轮完成：{len(batch)} 个文件",
-                phase="recon-mark",
-                role="recon_mark",
-            )
-        else:
-            live_log.system(
-                project_id,
-                f"侦察盖章轮未完成（{result.stop_reason}），未标记文件将在下一轮再注入",
-                phase="recon-mark",
-                role="recon_mark",
-            )
+
+
+def _project_is_terminal(project_id: int) -> bool:
+    try:
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            return not proj or proj.status in ("completed", "cancelled", "error")
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _finish_worker_round(
@@ -3605,18 +3810,21 @@ def _finish_worker_round(
         _pause_for_auth(project_id, result.error or "auth_error")
         return "interrupt"
     phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    # Keep the checkpoint: db lock / generation bump / LLM slot wait cancelled
+    # the in-memory loop, not the round. Clearing it made resume pick a new file
+    # and look like "only the startup round" after restart.
+    if result.stop_reason == "db_locked" or phase_restart:
+        return "restart"
     failed = not (result.ok and result.state.get("round_finished"))
-    if path and not phase_restart:
+    if path:
         _release_claim_if_unfinished(project_id, path, worker_id, failed=failed)
     _finish_phase_run(
         run_id,
         "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
-        "用户新跑" if phase_restart else result.error,
+        result.error,
     )
     if result.cancelled and _cancel_event(project_id).is_set():
         return "cancel"
-    if phase_restart:
-        return "restart"
     return "next"
 
 
@@ -3650,19 +3858,81 @@ def _bind_worker_round_id(loop: AgentLoop, project_id: int, *, new_round: bool) 
 
 def _run_worker_loop(project_id: int, worker_id: str) -> None:
     cancel = _cancel_event(project_id)
+    while not cancel.is_set():
+        try:
+            _run_worker_loop_inner(project_id, worker_id, cancel)
+        except OperationalError as e:
+            if not _is_sqlite_locked(e):
+                live_log.error(project_id, f"Worker={worker_id} 异常: {e}", phase="worker")
+                try:
+                    _release_claims(project_id, worker_id=worker_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                continue
+            live_log.system(
+                project_id,
+                "挖掘轮数据库忙，保留检查点稍后继续",
+                phase="worker",
+            )
+            cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+            continue
+        except Exception as e:  # noqa: BLE001
+            if _is_sqlite_locked(e):
+                live_log.system(
+                    project_id,
+                    "挖掘轮数据库忙，保留检查点稍后继续",
+                    phase="worker",
+                )
+                cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                continue
+            live_log.error(project_id, f"Worker={worker_id} 异常: {e}", phase="worker")
+            try:
+                _release_claims(project_id, worker_id=worker_id)
+            except Exception:  # noqa: BLE001
+                pass
+            cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+            continue
+        if cancel.is_set():
+            return
+        if _project_is_terminal(project_id):
+            return
+        if _phase_is_paused(project_id, "worker"):
+            if not _wait_if_paused(project_id, cancel, "worker"):
+                return
+            continue
+        live_log.system(
+            project_id,
+            "挖掘循环还要继续，重新进入下一轮",
+            phase="worker",
+        )
+        cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+
+
+def _run_worker_loop_inner(
+    project_id: int, worker_id: str, cancel: threading.Event
+) -> None:
     current_run_id: int | None = None
     try:
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
                 break
-            with SessionLocal() as db:
-                proj = db.get(Project, project_id)
-                if not proj or proj.status in ("completed", "cancelled", "error"):
-                    return
-            if not recon_old_vulns_ready(project_id):
+            try:
+                with SessionLocal() as db:
+                    proj = db.get(Project, project_id)
+                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                        return
+                old_ready = recon_old_vulns_ready(project_id)
+                heur_done = heuristic_complete(project_id)
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
+            if not old_ready:
                 cancel.wait(timeout=5.0)
                 continue
-            if heuristic_complete(project_id) and not _pending_inject.get((project_id, "worker")):
+            if heur_done and not _pending_inject.get((project_id, "worker")):
                 cancel.wait(timeout=5.0)
                 continue
 
@@ -3673,6 +3943,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                     _reclaim_file(project_id, path, worker_id)
                 current_run_id = cp.phase_run_id
                 try:
+                    _start_log_session(project_id, "worker", extra=path or "接续")
                     loop = _loop_from_checkpoint(
                         cp,
                         cancel=cancel,
@@ -3681,7 +3952,18 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                     )
                     loop.worker_id = worker_id
                     _bind_worker_round_id(loop, project_id, new_round=False)
-                    result = loop.run()
+                    try:
+                        result = loop.run()
+                    except OperationalError as e:
+                        if not _is_sqlite_locked(e):
+                            raise
+                        live_log.system(
+                            project_id,
+                            "挖掘轮数据库忙，保留检查点稍后继续",
+                            phase="worker",
+                        )
+                        cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                        continue
                     action = _finish_worker_round(
                         project_id, worker_id, path, cp.phase_run_id, result
                     )
@@ -3694,13 +3976,21 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                     current_run_id = None
                 continue
 
-            fw = _take_inject_file(project_id, worker_id) or _pick_next_file(project_id, worker_id)
+            try:
+                fw = _take_inject_file(project_id, worker_id) or _pick_next_file(project_id, worker_id)
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
             if fw is None:
                 cancel.wait(timeout=5.0)
                 continue
 
             sources = _sources_for_file(project_id, fw.path)
             snippet = _read_file_snippet(project_id, fw.path)
+            fp_norm = str(fw.path).replace("\\", "/")
+            file_path_display = fp_norm if fp_norm.startswith("workspace/") else f"src/{fp_norm}"
             system = _phase_system_prompt(project_id, "worker.md")
             run_id = _new_phase_run(
                 project_id, "worker", "worker", worker_id=worker_id, file_path=fw.path
@@ -3714,6 +4004,7 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 worker_id=worker_id,
                 round_id=round_id,
                 file_path=fw.path,
+                file_path_display=file_path_display,
                 weight=fw.weight,
                 has_source=fw.has_source,
                 sources=", ".join(sources) if sources else "（无）",
@@ -3737,14 +4028,37 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
                 file_path=fw.path,
             )
             loop.state["round_id"] = round_id
-            result = loop.run()
+            try:
+                result = loop.run()
+            except OperationalError as e:
+                if not _is_sqlite_locked(e):
+                    raise
+                live_log.system(
+                    project_id,
+                    "挖掘轮数据库忙，保留检查点稍后继续",
+                    phase="worker",
+                )
+                cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                continue
             action = _finish_worker_round(project_id, worker_id, fw.path, run_id, result)
             current_run_id = None
             if action in ("interrupt", "cancel"):
                 return
             if action == "restart":
                 continue
+    except OperationalError as e:
+        if _is_sqlite_locked(e):
+            raise
+        live_log.error(project_id, f"Worker={worker_id} 异常: {e}", phase="worker")
+        try:
+            if current_run_id:
+                _finish_phase_run(current_run_id, "failed", str(e))
+            _release_claims(project_id, worker_id=worker_id)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as e:  # noqa: BLE001
+        if _is_sqlite_locked(e):
+            raise
         live_log.error(project_id, f"Worker={worker_id} 异常: {e}", phase="worker")
         try:
             if current_run_id:
@@ -3924,8 +4238,10 @@ def _finish_fast_round(project_id: int, worker_id: str, sink_id: int | None, run
         _pause_for_auth(project_id, result.error or "auth_error")
         return "interrupt"
     phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    if result.stop_reason == "db_locked" or phase_restart:
+        return "restart"
     finished = bool(result.state.get("sink_finished"))
-    if sink_id and not finished and not phase_restart:
+    if sink_id and not finished:
         release_sink_claim(project_id, sink_id, worker_id)
     if finished and sink_id:
         with SessionLocal() as db:
@@ -3935,12 +4251,10 @@ def _finish_fast_round(project_id: int, worker_id: str, sink_id: int | None, run
     _finish_phase_run(
         run_id,
         "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
-        "用户新跑" if phase_restart else result.error,
+        result.error,
     )
     if result.cancelled and _cancel_event(project_id).is_set():
         return "cancel"
-    if phase_restart:
-        return "restart"
     return "next"
 
 
@@ -4074,18 +4388,18 @@ def _finish_bypass_round(project_id: int, worker_id: str, bypass_id: int | None,
         _pause_for_auth(project_id, result.error or "auth_error")
         return "interrupt"
     phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    if result.stop_reason == "db_locked" or phase_restart:
+        return "restart"
     finished = bool(result.state.get("bypass_finished"))
-    if bypass_id and not finished and not phase_restart:
+    if bypass_id and not finished:
         release_bypass_claim(project_id, bypass_id, worker_id)
     _finish_phase_run(
         run_id,
         "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
-        "用户新跑" if phase_restart else result.error,
+        result.error,
     )
     if result.cancelled and _cancel_event(project_id).is_set():
         return "cancel"
-    if phase_restart:
-        return "restart"
     return "next"
 
 

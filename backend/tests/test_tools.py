@@ -81,7 +81,7 @@ def test_mark_source_indexes_clojure_paths(tmp_env, project):
     assert out["count"] == 1
 
 
-def test_recon_gates_requires_docs_and_weights(tmp_env, project):
+def test_recon_gates_requires_docs_and_weights(tmp_env, project, monkeypatch):
     from app.tools.phase_recon import (
         apply_recon_done,
         recon_docs_ready,
@@ -136,6 +136,15 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project):
     assert recon_gates_met(project) is False
     none = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"none": True})
     assert none["ok"] is True
+    assert recon_gates_met(project) is True
+    monkeypatch.setattr(
+        "app.services.decompile_java.business_jar_decompile_pending",
+        lambda pid: True,
+    )
+    pending_status = recon_gates_status(project)
+    assert pending_status["ok"] is True
+    assert not any("仍在反编译" in e for e in pending_status["errors"])
+    assert {s["id"]: s["done"] for s in pending_status["subphases"]}["mark"] is True
     assert recon_gates_met(project) is True
     assert apply_recon_done(project) is True
     with Session() as db:
@@ -1969,6 +1978,92 @@ def test_grep_path_glob_matches_nested_java(tmp_env, project):
     assert not py_only.get("hits")
 
 
+def test_grep_default_skips_binary_extensions(tmp_env, project):
+    """Default Grep (no glob) must skip .png/.jar/.gif etc. so a 1 GB / 45 k-file
+    repo doesn't block the worker round for 15+ minutes per call.
+    """
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    big_img = src / "app" / "logo.png"
+    # 6 bytes: PNG signature. Just enough to be a non-empty file with the ext.
+    big_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    big_jar = src / "app" / "lib.jar"
+    big_jar.write_bytes(b"PK\x03\x04fake jar payload for the binary skip test")
+    (src / "app" / "Util.java").write_text(
+        "class Util { void sink() { System.out.println(\"unique-marker-xyz\"); } }\n",
+        encoding="utf-8",
+    )
+
+    # Without glob, default-text extension filter applies: .png/.jar skipped, .java kept.
+    out = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "unique-marker-xyz", "root": "src"},
+    )
+    assert out["ok"] is True
+    paths = [h["path"].replace("\\", "/") for h in out.get("hits") or []]
+    assert any(p.endswith("app/Util.java") for p in paths)
+    assert not any(p.endswith(".png") or p.endswith(".jar") for p in paths)
+    stats = out.get("stats") or {}
+    assert stats.get("skipped_binary", 0) >= 2
+
+    # Caller can opt out by glob=**/* — every file is scanned.
+    out_all = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "unique-marker-xyz", "root": "src", "glob": "**/*"},
+    )
+    assert out_all["ok"] is True
+    # No text hits inside .png/.jar; stats.skipped_binary should be 0 since
+    # the caller explicitly asked to scan everything.
+    assert (out_all.get("stats") or {}).get("skipped_binary", 0) == 0
+
+
+def test_grep_caps_total_bytes_and_reports_truncated(tmp_env, project):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    target_dir = src / "app"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    pad = "a" * 200 + " "
+    # 200 files × ~600 bytes each ≈ 120 KB, well over a 4 KB cap.
+    for i in range(200):
+        (target_dir / f"F{i:03d}.java").write_text(f"// marker-{i}\n{pad}\n", encoding="utf-8")
+
+    out = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {
+            "pattern": "marker-",
+            "root": "src",
+            "max_total_bytes": 4096,
+            "max_file_bytes": 1024 * 1024,
+        },
+    )
+    assert out["ok"] is True
+    assert out["truncated"] is True
+    assert (out.get("stats") or {}).get("bytes_scanned", 0) <= 4096
+    assert out.get("hint")
+
+
+def test_grep_skips_oversized_files(tmp_env, project):
+    from app.services.paths import src_dir
+
+    src = src_dir(project)
+    target = src / "app" / "Big.java"
+    target.write_text("x" * (2 * 1024 * 1024) + "\nclass Big {}\n", encoding="utf-8")
+
+    out = registry.dispatch(
+        _ctx(project, "recon"),
+        "Grep",
+        {"pattern": "class Big", "root": "src", "max_file_bytes": 64 * 1024},
+    )
+    assert out["ok"] is True
+    assert not out.get("hits")
+    assert (out.get("stats") or {}).get("skipped_size", 0) >= 1
+
+
 def test_shell_timeout_kills_process(tmp_env, project):
     tool = native_shell_tool()
     command = "Start-Sleep -Seconds 30" if tool == "PowerShell" else "sleep 30"
@@ -2254,6 +2349,40 @@ def test_recon_cannot_mark_weight(tmp_env, project):
     out = registry.dispatch(_ctx(project, "recon"), "MarkWeight", {"path": "app/Main.java", "weight": 10})
     assert out["ok"] is False
     assert "无权" in out["error"]
+
+
+def test_chunk_list_splits_batch(tmp_env, project):
+    """Verify _chunk_list splits large batches into smaller sub-batches."""
+    from app.services.pipeline import _chunk_list
+
+    # Empty list
+    assert _chunk_list([], 75) == []
+
+    # Exact division
+    assert _chunk_list(["a", "b", "c", "d"], 2) == [["a", "b"], ["c", "d"]]
+
+    # Remainder
+    assert _chunk_list(["a", "b", "c", "d", "e"], 2) == [["a", "b"], ["c", "d"], ["e"]]
+
+    # Single chunk
+    assert _chunk_list(["a", "b"], 5) == [["a", "b"]]
+
+    # 150 files split into 75-per-sub-batch
+    paths = [f"path/to/file_{i}.java" for i in range(150)]
+    chunks = _chunk_list(paths, 75)
+    assert len(chunks) == 2
+    assert len(chunks[0]) == 75
+    assert len(chunks[1]) == 75
+    assert chunks[0][0] == "path/to/file_0.java"
+    assert chunks[1][74] == "path/to/file_149.java"
+
+    # 151 files split into 75+75+1
+    paths = [f"path/to/file_{i}.java" for i in range(151)]
+    chunks = _chunk_list(paths, 75)
+    assert len(chunks) == 3
+    assert len(chunks[0]) == 75
+    assert len(chunks[1]) == 75
+    assert len(chunks[2]) == 1
 
 
 def test_recon_old_vuln_cannot_write(tmp_env, project):

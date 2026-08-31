@@ -437,6 +437,8 @@ class ProjectOut(BaseModel):
     lab_setup_done: bool = False
     lab_setup_retryable: bool = False
     verifier_pending: int = 0
+    etag: str = ""
+    unchanged: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -448,12 +450,75 @@ class ProjectRunStatusCounts(BaseModel):
     completed: int = 0
 
 
+class ProjectListItemOut(BaseModel):
+    """List-card payload: no hint/prompt blobs or phase_states."""
+
+    id: int
+    name: str
+    source_type: str
+    source_url: str | None = None
+    identity: str | None = None
+    status: str
+    phase: str
+    recon_done: bool
+    audit_mode: str = "bounty"
+    target_kind: str = "web"
+    custom_audit_mode_id: int | None = None
+    custom_audit_mode_name: str = ""
+    manual_lab: bool = False
+    verifier_enabled: bool = False
+    attack_chain_enabled: bool = False
+    attack_chain_done: bool = False
+    dynamic_verify_enabled: bool = False
+    dynamic_verify_mode: str = "off"
+    heuristic_enabled: bool = True
+    heuristic_lite: bool = False
+    fast_enabled: bool = False
+    fast_queue_frozen: bool = False
+    bypass_enabled: bool = False
+    bypass_queue_frozen: bool = False
+    llm_model: str = ""
+    max_token_usage: int = 0
+    error: str | None = None
+    worker_concurrency: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    vuln_confirmed: int = 0
+    vuln_false_positive: int = 0
+    vuln_pending: int = 0
+    files_total: int = 0
+    files_weighted: int = 0
+    files_skipped: int = 0
+    files_audited: int = 0
+    files_weight100: int = 0
+    files_weight100_audited: int = 0
+    sinks_queued: int = 0
+    sinks_done: int = 0
+    bypass_queued: int = 0
+    bypass_done: int = 0
+    weight_exts: list[WeightExtOut] = Field(default_factory=list)
+    worker_rounds: int = 0
+    tokens_input: int = 0
+    tokens_output: int = 0
+    tokens_cached: int = 0
+    tokens_total: int = 0
+    project_paused: bool = False
+    recon_subphases: list[dict[str, Any]] = Field(default_factory=list)
+    lab_setup_done: bool = False
+    lab_setup_retryable: bool = False
+    verifier_pending: int = 0
+
+    model_config = {"from_attributes": True}
+
+
 class ProjectListOut(BaseModel):
-    items: list[ProjectOut] = Field(default_factory=list)
+    items: list[ProjectListItemOut] = Field(default_factory=list)
     total: int = 0
     limit: int = 5
     offset: int = 0
     status_counts: ProjectRunStatusCounts = Field(default_factory=ProjectRunStatusCounts)
+    etag: str = ""
+    unchanged: bool = False
 
 
 class ProjectNameOut(BaseModel):

@@ -21,7 +21,17 @@ ToolHandler = Callable[["ToolContext", dict[str, Any]], dict[str, Any]]
 
 # Tools that may run in parallel within one assistant turn
 PARALLEL_SAFE = frozenset(
-    {"Read", "Grep", "Glob", "SearchOldVuln", "SearchTools", "WebSearch", "ListBytecode", "DecompileJava"}
+    {
+        "Read",
+        "Grep",
+        "Glob",
+        "SearchOldVuln",
+        "SearchTools",
+        "WebSearch",
+        "ListBytecode",
+        "DecompileJava",
+        "MarkBusinessJar",
+    }
 )
 
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
@@ -73,6 +83,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishReconMap",
             "ListBytecode",
             "DecompileJava",
+            "MarkBusinessJar",
         }
     ),
     "recon_source_ext": frozenset(
@@ -446,7 +457,7 @@ class ToolRegistry:
             events.tool(ctx.project_id, name, {}, result, phase=ctx.phase, role=ctx.role)
             return result
 
-        if name in ("Bash", "PowerShell"):
+        if not getattr(ctx, "silent", False):
             events.tool(ctx.project_id, name, arguments, None, phase=ctx.phase, role=ctx.role, started=True)
 
         started = time.time()

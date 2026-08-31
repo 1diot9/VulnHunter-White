@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from sqlalchemy import case, func
+from sqlalchemy import func
 
 from ..models import FileWeight, Project, SessionLocal
 from .paths import (
@@ -92,6 +92,25 @@ INDEX_SKIP_NAMES = frozenset(
         "settings.gradle.kts",
     }
 )
+
+# Extensions that are too numerous and not important - skip by default
+# These are high-volume/low-value file types that clutter the index
+NOISY_EXTS = frozenset(
+    {
+        # Configuration files that are rarely security-relevant
+        ".properties",
+        ".yml",
+        ".yaml",
+        # Data/interchange formats
+        ".json",
+        ".xml",
+        ".sql",
+    }
+)
+
+# Broad scan extensions - used for initial pre-filtering only
+# Includes SOURCE_EXTS + template/mapping files + extended coverage
+BROAD_SCAN_EXTS = SOURCE_EXTS | EXTRA_SOURCE_EXTS
 
 _EXT_RE = re.compile(r"\.[a-z0-9]{1,12}$")
 WORKER_ADDED_WEIGHT = 50
@@ -186,28 +205,48 @@ def path_source_ext(path: str) -> str | None:
     return suffix or None
 
 
+_INDEXED_EXTS = SOURCE_EXTS | EXTRA_SOURCE_EXTS
+_weight_exts_cache: dict[int, tuple[int, list[dict[str, Any]]]] = {}
+
+
+def reset_indexed_weight_exts_cache() -> None:
+    _weight_exts_cache.clear()
+
+
 def indexed_weight_exts(db, project_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
     """Distinct FileWeight suffixes per project; extras beyond SOURCE_EXTS are Agent-added."""
     ids = list(dict.fromkeys(int(i) for i in project_ids))
     out: dict[int, list[dict[str, Any]]] = {pid: [] for pid in ids}
     if not ids:
         return out
-    known_exts = tuple(sorted(SOURCE_EXTS | EXTRA_SOURCE_EXTS, key=lambda e: (-len(e), e)))
-    ext_expr = case(
-        *((FileWeight.path.ilike(f"%{ext}"), ext) for ext in known_exts),
-        else_=None,
-    )
+    file_counts = {
+        int(pid): int(n or 0)
+        for pid, n in (
+            db.query(FileWeight.project_id, func.count(FileWeight.id))
+            .filter(FileWeight.project_id.in_(ids))
+            .group_by(FileWeight.project_id)
+        )
+    }
+    pending: list[int] = []
+    for pid in ids:
+        n = file_counts.get(pid, 0)
+        cached = _weight_exts_cache.get(pid)
+        if cached and cached[0] == n:
+            out[pid] = cached[1]
+        elif n:
+            pending.append(pid)
+    if not pending:
+        return out
     counts: dict[int, Counter[str]] = defaultdict(Counter)
-    for pid, ext, n in (
-        db.query(FileWeight.project_id, ext_expr, func.count(FileWeight.id))
-        .filter(FileWeight.project_id.in_(ids))
-        .group_by(FileWeight.project_id, ext_expr)
-        .all()
+    for pid, path in (
+        db.query(FileWeight.project_id, FileWeight.path).filter(FileWeight.project_id.in_(pending)).all()
     ):
-        if not ext:
+        ext = path_source_ext(path)
+        if not ext or ext not in _INDEXED_EXTS:
             continue
-        counts[int(pid)][str(ext)] += int(n or 0)
-    for pid, counter in counts.items():
+        counts[int(pid)][ext] += 1
+    for pid in pending:
+        counter = counts.get(pid) or Counter()
         rows = [
             {
                 "ext": ext,
@@ -218,6 +257,7 @@ def indexed_weight_exts(db, project_ids: list[int]) -> dict[int, list[dict[str, 
         ]
         rows.sort(key=lambda r: (bool(r["agent_added"]), -int(r["files"]), str(r["ext"])))
         out[pid] = rows
+        _weight_exts_cache[pid] = (file_counts.get(pid, 0), rows)
     return out
 
 
@@ -480,3 +520,104 @@ def backfill_missing_source_exts(project_id: int) -> dict:
     if not missing:
         return {"added": [], "added_count": 0, "skipped_test": 0, "exts": [], "rejected": []}
     return expand_file_index(project_id, missing)
+
+
+def _count_exts(src_root: Path, exts: frozenset[str]) -> dict[str, int]:
+    """Count files per extension in the given set."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    if not src_root.exists():
+        return dict(counts)
+    for dirpath, dirnames, filenames in _walk(src_root):
+        dirnames[:] = [d for d in dirnames if not _should_ignore_dir(d)]
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            if _should_ignore_file(p):
+                continue
+            ext = p.suffix.lower()
+            if ext in exts:
+                counts[ext] += 1
+    return dict(counts)
+
+
+# Threshold for skipping noisy extensions: if an extension has more files than this, skip it by default
+NOISY_EXT_THRESHOLD = 500
+
+
+def prefilter_extensions(project_id: int) -> dict[str, Any]:
+    """Code-based pre-filtering of extensions before Agent review.
+
+    Returns:
+        - active_exts: extensions to scan (SOURCE_EXTS + validated EXTRA_SOURCE_EXTS, minus noisy)
+        - noisy_exts: extensions skipped due to high volume
+        - counts: file counts per extension
+        - skipped_count: total files skipped due to noisy extensions
+    """
+    ensure_project_dirs(project_id)
+    root = src_dir(project_id)
+
+    # Count all files with BROAD_SCAN_EXTS
+    all_counts = _count_exts(root, BROAD_SCAN_EXTS)
+
+    # Determine which noisy extensions to skip
+    noisy: list[str] = []
+    active: list[str] = []
+    skipped_count = 0
+
+    for ext, count in sorted(all_counts.items(), key=lambda x: -x[1]):
+        if count > NOISY_EXT_THRESHOLD and ext in NOISY_EXTS:
+            noisy.append(ext)
+            skipped_count += count
+        else:
+            active.append(ext)
+
+    # For SOURCE_EXTS, always include them (they are important source files)
+    # Only noisy non-source extensions are skipped
+    source_exts_list = list(SOURCE_EXTS)
+    for ext in source_exts_list:
+        if ext in noisy:
+            noisy.remove(ext)
+            skipped_count -= all_counts.get(ext, 0)
+            active.append(ext)
+
+    return {
+        "active_exts": sorted(active),
+        "noisy_exts": sorted(noisy),
+        "counts": all_counts,
+        "skipped_count": skipped_count,
+        "threshold": NOISY_EXT_THRESHOLD,
+    }
+
+
+def build_file_index_with_exts(project_id: int, exts: list[str]) -> int:
+    """Build FileWeight rows for specified extensions only. Returns count."""
+    ensure_project_dirs(project_id)
+    root = src_dir(project_id)
+    allowed = frozenset(exts)
+    files = _collect(root, allowed)
+    added = 0
+    with SessionLocal() as db:
+        existing = {
+            str(r[0])
+            for r in db.query(FileWeight.path).filter(FileWeight.project_id == project_id).all()
+        }
+        for fp in files:
+            rel = str(fp.relative_to(root)).replace("\\", "/")
+            if rel in existing:
+                continue
+            skip = is_test_path(rel)
+            db.add(
+                FileWeight(
+                    project_id=project_id,
+                    path=rel,
+                    weight=None if not skip else 0,
+                    skipped=skip,
+                    audited=False,
+                    has_source=False,
+                )
+            )
+            added += 1
+            existing.add(rel)
+        db.commit()
+    return added

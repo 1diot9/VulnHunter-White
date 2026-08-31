@@ -64,7 +64,13 @@ def test_render_prompt_substitutes_placeholders():
 
 def test_render_prompt_does_not_rescan_values():
     snippet = "price = ${project_id} + {$not_a_placeholder}"
-    text = render_prompt("initial/worker.md", snippet=snippet, project_id=7, file_path="a.py")
+    text = render_prompt(
+        "initial/worker.md",
+        snippet=snippet,
+        project_id=7,
+        file_path="a.py",
+        file_path_display="src/a.py",
+    )
     assert "price = ${project_id} + {$not_a_placeholder}" in text
     assert "当前焦点文件: src/a.py" in text
 

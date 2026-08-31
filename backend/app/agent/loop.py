@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from sqlalchemy.exc import OperationalError
+
 from ..config import settings
 from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
 from ..services.http_client import chat_http_client, chat_http_timeout, conclude_http_timeout
@@ -280,7 +282,7 @@ class AgentLoop:
         self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id or None)
         self._slot_handle: SlotHandle | None = None
         self.state: dict[str, Any] = {}
-        self.watchdog = AgentWatchdog(phase=phase)
+        self.watchdog = AgentWatchdog(phase=phase, project_id=project_id)
         self._last_prompt_tokens = 0
         self._initial_messages = messages
         self._resumed = resumed
@@ -356,6 +358,8 @@ class AgentLoop:
         )
         loop.state = dict(cp.state or {})
         loop.watchdog = AgentWatchdog.restore(cp.watchdog)
+        if not loop.watchdog.project_id:
+            loop.watchdog.project_id = cp.project_id
         loop._last_prompt_tokens = cp.last_prompt_tokens
         loop._rate_limit_retries = cp.rate_limit_retries
         loop._transient_retries = cp.transient_retries
@@ -393,30 +397,41 @@ class AgentLoop:
     def _persist(self, messages: list[dict[str, Any]], *, status: str = "running") -> None:
         if not self.phase_run_id:
             return
+        from ..services.decompile_store import app_db_write
+
         try:
-            save_checkpoint(
-                LoopCheckpoint(
-                    project_id=self.project_id,
-                    phase_run_id=self.phase_run_id,
-                    role=self.role,
+            with app_db_write():
+                save_checkpoint(
+                    LoopCheckpoint(
+                        project_id=self.project_id,
+                        phase_run_id=self.phase_run_id,
+                        role=self.role,
+                        phase=self.phase,
+                        system_prompt=self.system_prompt,
+                        user_prompt=self.user_prompt,
+                        messages=list(messages),
+                        state=dict(self.state),
+                        worker_id=self.worker_id,
+                        vuln_id=self.vuln_id,
+                        file_path=self.file_path,
+                        watchdog=self.watchdog.snapshot(),
+                        last_prompt_tokens=self._last_prompt_tokens,
+                        timeout_sec=self.timeout_sec,
+                        rate_limit_retries=self._rate_limit_retries,
+                        transient_retries=self._transient_retries,
+                    ),
+                    status=status,
+                )
+        except Exception as e:  # noqa: BLE001
+            try:
+                self._live.system(
+                    self.project_id,
+                    f"检查点保存失败（已跳过，本轮继续）: {e}",
                     phase=self.phase,
-                    system_prompt=self.system_prompt,
-                    user_prompt=self.user_prompt,
-                    messages=list(messages),
-                    state=dict(self.state),
-                    worker_id=self.worker_id,
-                    vuln_id=self.vuln_id,
-                    file_path=self.file_path,
-                    watchdog=self.watchdog.snapshot(),
-                    last_prompt_tokens=self._last_prompt_tokens,
-                    timeout_sec=self.timeout_sec,
-                    rate_limit_retries=self._rate_limit_retries,
-                    transient_retries=self._transient_retries,
-                ),
-                status=status,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+                    role=self.role,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _maybe_grant_review_wrapup_grace(
         self, messages: list[dict[str, Any]], remaining: float
@@ -464,6 +479,23 @@ class AgentLoop:
             register_loop(self)
         try:
             return self._run_loop_inner()
+        except OperationalError as e:
+            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                raise
+            try:
+                self._live.system(
+                    self.project_id,
+                    "数据库忙，本轮保留检查点稍后继续",
+                    phase=self.phase,
+                    role=self.role,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            result = LoopResult(ok=False, state=self.state)
+            result.cancelled = True
+            result.error = str(e)
+            result.stop_reason = "db_locked"
+            return result
         finally:
             if not self.silent:
                 unregister_loop(self)
@@ -674,7 +706,7 @@ class AgentLoop:
                 self._live.reasoning(self.project_id, reasoning, phase=self.phase, role=self.role)
             if content:
                 self._live.agent(self.project_id, content, phase=self.phase, role=self.role)
-            elif tool_names:
+            if tool_names:
                 self._live.agent(
                     self.project_id,
                     "调用工具: " + ", ".join(tool_names),
@@ -1293,9 +1325,12 @@ class AgentLoop:
         """Pause the project when input+output spend hits the configured cap."""
         if self.silent or not self.project_id:
             return False
-        from ..services.token_budget import maybe_pause_for_token_budget
+        try:
+            from ..services.token_budget import maybe_pause_for_token_budget
 
-        return maybe_pause_for_token_budget(self.project_id)
+            return maybe_pause_for_token_budget(self.project_id)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _accumulate_tokens(self, result: LoopResult, usage: dict[str, int]) -> None:
         result.tokens_input += usage.get("prompt_tokens", 0)
@@ -1304,28 +1339,31 @@ class AgentLoop:
         result.tokens_total = result.tokens_input + result.tokens_output
         if self.silent or not self.project_id:
             return
+        from ..services.decompile_store import app_db_write
+
         try:
-            with SessionLocal() as db:
-                db.add(
-                    TokenUsage(
-                        project_id=self.project_id,
-                        phase=self.phase,
-                        role=self.role,
-                        tokens_input=usage.get("prompt_tokens", 0),
-                        tokens_output=usage.get("completion_tokens", 0),
-                        tokens_cached=usage.get("cached_tokens", 0),
-                        tokens_total=usage.get("total_tokens", 0)
-                        or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)),
+            with app_db_write():
+                with SessionLocal() as db:
+                    db.add(
+                        TokenUsage(
+                            project_id=self.project_id,
+                            phase=self.phase,
+                            role=self.role,
+                            tokens_input=usage.get("prompt_tokens", 0),
+                            tokens_output=usage.get("completion_tokens", 0),
+                            tokens_cached=usage.get("cached_tokens", 0),
+                            tokens_total=usage.get("total_tokens", 0)
+                            or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)),
+                        )
                     )
-                )
-                if self.phase_run_id:
-                    pr = db.get(PhaseRun, self.phase_run_id)
-                    if pr:
-                        pr.tokens_input = (pr.tokens_input or 0) + usage.get("prompt_tokens", 0)
-                        pr.tokens_output = (pr.tokens_output or 0) + usage.get("completion_tokens", 0)
-                        pr.tokens_cached = (pr.tokens_cached or 0) + usage.get("cached_tokens", 0)
-                        pr.tokens_total = (pr.tokens_input or 0) + (pr.tokens_output or 0)
-                db.commit()
+                    if self.phase_run_id:
+                        pr = db.get(PhaseRun, self.phase_run_id)
+                        if pr:
+                            pr.tokens_input = (pr.tokens_input or 0) + usage.get("prompt_tokens", 0)
+                            pr.tokens_output = (pr.tokens_output or 0) + usage.get("completion_tokens", 0)
+                            pr.tokens_cached = (pr.tokens_cached or 0) + usage.get("cached_tokens", 0)
+                            pr.tokens_total = (pr.tokens_input or 0) + (pr.tokens_output or 0)
+                    db.commit()
         except Exception:  # noqa: BLE001
             pass
 
@@ -1447,6 +1485,15 @@ class AgentLoop:
             timeout_budget = float(
                 settings.timeout_conclude_rescue if rescue else settings.timeout_conclude
             )
+            try:
+                self._live.system(
+                    self.project_id,
+                    "正在压缩上下文",
+                    phase=self.phase,
+                    role=self.role,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             if is_anthropic_wire(self.llm.wire_api):
                 url = anthropic_url(self.llm.base_url)
                 headers = anthropic_headers(self.llm.api_key)

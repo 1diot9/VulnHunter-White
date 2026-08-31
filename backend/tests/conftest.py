@@ -115,6 +115,14 @@ def tmp_env(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
     monkeypatch.setattr("app.config.settings.access_token", "")
+    access_token.clear_access_token_cache()
+    ingest.reset_indexed_weight_exts_cache()
+
+    from app.services import decompile_java as decompile_java
+    from app.services import decompile_store as decompile_store
+
+    decompile_store.reset_engine()
+    decompile_java._bytecode_present_mem.clear()
 
     assert inspect(engine).has_table("projects")
     assert inspect(engine).has_table("vulns")

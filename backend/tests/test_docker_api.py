@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.services.docker_service import (
     ProjectRef,
+    collect_project_refs,
     docker_service,
     match_container,
     match_image,
@@ -270,6 +271,18 @@ def test_list_containers_and_images_filters_owned(tmp_env, project, monkeypatch)
 
         refused = client.post("/api/docker/containers/missing/stop")
         assert refused.status_code in {404, 500}
+
+
+def test_collect_project_refs_skips_env_json(tmp_env, project, monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("collect_project_refs should not read env.json")
+
+    monkeypatch.setattr("app.services.lab.load_env", boom)
+    refs = collect_project_refs()
+    hit = next(r for r in refs if r.id == project)
+    assert hit.container_ids == ()
+    assert hit.container_names == ()
+    assert hit.prefixes
 
 
 def test_docker_unavailable_returns_503(tmp_env, monkeypatch):

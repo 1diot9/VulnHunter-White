@@ -46,8 +46,8 @@ from ..services.report import stamp_produced_at
 from ..services.cve_record import format_cve_record_json
 from ..services import vuln_followup
 from ..services.verifier import (
+    VERIFIER_AWAITING_USER,
     awaiting_user_verifier_count,
-    list_awaiting_user_vulns,
     parse_verifier_targets,
     resolve_verifier_consent,
 )
@@ -402,7 +402,7 @@ def list_vulns(
             .all()
         )
         return VulnListOut(
-            items=[_vuln_out(r) for r in rows],
+            items=[_vuln_out(r, read_report=False) for r in rows],
             total=total,
             limit=limit,
             offset=offset,
@@ -442,36 +442,31 @@ def vuln_calendar(
 
 @router.get("/verifier-consent", response_model=list[VerifierConsentItem])
 def list_verifier_consent(project_id: int | None = None) -> list[VerifierConsentItem]:
-    rows = list_awaiting_user_vulns(project_id)
-    out: list[VerifierConsentItem] = []
     with SessionLocal() as db:
-        for v in rows:
-            # Re-attach project name; list_awaiting_user_vulns expunges rows.
-            name = ""
-            fresh = db.get(Vuln, v.id)
-            if fresh and fresh.project is not None:
-                name = fresh.project.name or ""
-            elif fresh:
-                from ..models import Project
-
-                proj = db.get(Project, fresh.project_id)
-                name = proj.name if proj else ""
-            out.append(
-                VerifierConsentItem(
-                    id=v.id,
-                    project_id=v.project_id,
-                    project_name=name,
-                    title=v.title or "",
-                    vuln_type=v.vuln_type,
-                    severity=v.severity,
-                    severity_score=_report_score(fresh) if fresh else None,
-                    cvss_vector=(fresh.cvss_vector if fresh else None) or getattr(v, "cvss_vector", None),
-                    verifier_ask_reason=getattr(v, "verifier_ask_reason", None),
-                    verifier_status=v.verifier_status or "awaiting_user",
-                    updated_at=v.updated_at,
-                )
+        q = (
+            db.query(Vuln, Project.name)
+            .outerjoin(Project, Project.id == Vuln.project_id)
+            .filter(Vuln.verifier_status == VERIFIER_AWAITING_USER)
+        )
+        if project_id is not None:
+            q = q.filter(Vuln.project_id == int(project_id))
+        rows = q.order_by(Vuln.id.asc()).all()
+        return [
+            VerifierConsentItem(
+                id=v.id,
+                project_id=v.project_id,
+                project_name=name or "",
+                title=v.title or "",
+                vuln_type=v.vuln_type,
+                severity=v.severity,
+                severity_score=_report_score(v, read_report=False),
+                cvss_vector=getattr(v, "cvss_vector", None),
+                verifier_ask_reason=getattr(v, "verifier_ask_reason", None),
+                verifier_status=v.verifier_status or "awaiting_user",
+                updated_at=v.updated_at,
             )
-    return out
+            for v, name in rows
+        ]
 
 
 @router.get("/verifier-consent/count")

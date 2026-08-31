@@ -459,6 +459,161 @@ def test_projects_list_run_status_skips_phase_states(tmp_env, monkeypatch):
         names_lib = client.get("/api/projects/names").json()
         assert {row["id"]: row["target_kind"] for row in names_lib}[running_id] == "library"
 
+        listed = client.get("/api/projects", params={"limit": 100})
+        assert listed.status_code == 200
+        slim = listed.json()["items"][0]
+        assert "worker_hint" not in slim
+        assert "recon_hint" not in slim
+        assert "custom_audit_prompt" not in slim
+        assert "manual_lab_prompt" not in slim
+        assert "phase_states" not in slim
+        assert "manual_lab" in slim
+        stamp = listed.json()["etag"]
+        assert stamp
+        again = client.get(
+            "/api/projects",
+            params={"limit": 100, "since": stamp},
+        )
+        assert again.status_code == 200
+        assert again.json()["unchanged"] is True
+        paused_again = client.get(
+            "/api/projects",
+            params={"run_status": "paused", "limit": 100, "since": stamp},
+        )
+        assert paused_again.status_code == 200
+        assert paused_again.json()["unchanged"] is False
+        assert {p["name"] for p in paused_again.json()["items"]} == {"run-live", "paused-db"}
+
+
+def test_projects_list_skips_bytecode_walk(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services.paths import docs_dir
+
+    def boom(*_a, **_k):
+        raise AssertionError("list_projects should not walk src/ for bytecode")
+
+    monkeypatch.setattr("app.services.decompile_java.list_bytecode", boom)
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        row = Project(name="mapped", source_type="zip", status="auditing", recon_done=True)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        pid = row.id
+
+    docs = docs_dir(pid)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "code-map.md").write_text("# map\n", encoding="utf-8")
+    (docs / "auth.md").write_text("# auth\n", encoding="utf-8")
+
+    with TestClient(app) as client:
+        body = client.get("/api/projects", params={"limit": 5}).json()
+        assert body["total"] == 1
+        assert body["items"][0]["name"] == "mapped"
+        subs = {s["id"]: s["done"] for s in body["items"][0]["recon_subphases"]}
+        assert subs["map"] is True
+
+
+def test_projects_list_skips_recon_frontmatter(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services.paths import docs_dir
+
+    def boom(*_a, **_k):
+        raise AssertionError("list_projects should not parse recon frontmatter")
+
+    monkeypatch.setattr("app.tools.phase_recon.recon_source_ext_ready", boom)
+    monkeypatch.setattr("app.tools.phase_recon.recon_old_vulns_ready", boom)
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        row = Project(name="docs-only", source_type="zip", status="auditing")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        pid = row.id
+
+    docs = docs_dir(pid)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "source-exts.md").write_text("---\ncomplete: true\n---\n", encoding="utf-8")
+    (docs / "old-vulns").mkdir(parents=True, exist_ok=True)
+    (docs / "old-vulns" / "index.md").write_text("---\ncomplete: true\n---\n", encoding="utf-8")
+
+    with TestClient(app) as client:
+        body = client.get("/api/projects", params={"limit": 5}).json()
+        assert body["total"] == 1
+        subs = {s["id"]: s["done"] for s in body["items"][0]["recon_subphases"]}
+        assert subs["source_ext"] is True
+        assert subs["old_vulns"] is True
+        detail = client.get(f"/api/projects/{pid}").json()
+        detail_subs = {s["id"]: s["done"] for s in detail["recon_subphases"]}
+        assert detail_subs["source_ext"] is True
+        assert detail_subs["old_vulns"] is True
+
+
+def test_projects_list_etag_ignores_fileweight_mtime(tmp_env, monkeypatch):
+    from datetime import datetime, timezone
+
+    from app.main import app
+    from app.models import FileWeight, Project, SessionLocal
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        row = Project(name="etag-fw", source_type="zip", status="paused")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        pid = row.id
+        db.add(FileWeight(project_id=pid, path="app/Main.java", weight=80))
+        db.commit()
+
+    with TestClient(app) as client:
+        first = client.get("/api/projects", params={"limit": 5})
+        assert first.status_code == 200
+        stamp = first.json()["etag"]
+        assert stamp
+        with SessionLocal() as db:
+            fw = db.query(FileWeight).filter(FileWeight.project_id == pid).one()
+            fw.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        again = client.get("/api/projects", params={"limit": 5, "since": stamp})
+        assert again.status_code == 200
+        assert again.json()["unchanged"] is True
+        assert again.json()["etag"] == stamp
+
+
+def test_project_detail_since_skips_summaries(tmp_env, monkeypatch):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    def boom(*_a, **_k):
+        raise AssertionError("unchanged get_project should not scan FileWeight")
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+
+    with SessionLocal() as db:
+        row = Project(name="detail-etag", source_type="zip", status="paused")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        pid = row.id
+
+    with TestClient(app) as client:
+        first = client.get(f"/api/projects/{pid}")
+        assert first.status_code == 200
+        stamp = first.json()["etag"]
+        assert stamp
+        assert first.json()["unchanged"] is False
+        monkeypatch.setattr("app.api.projects._project_summaries", boom)
+        monkeypatch.setattr("app.api.projects.indexed_weight_exts", boom)
+        again = client.get(f"/api/projects/{pid}", params={"since": stamp})
+        assert again.status_code == 200
+        assert again.json()["unchanged"] is True
+        assert again.json()["etag"] == stamp
+
 
 def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
     from app.main import app
@@ -1739,7 +1894,9 @@ def test_vulns_list_filters_attack_surface_and_score(tmp_env, project):
         assert hard_id in front_ids
         assert back_id not in front_ids
         assert next(v for v in front_rows if v["id"] == front_id)["severity_score"] == 4
-        assert next(v for v in front_rows if v["id"] == legacy_id)["severity_score"] == -1
+        assert next(v for v in front_rows if v["id"] == legacy_id)["severity_score"] is None
+        detail = client.get(f"/api/vulns/{legacy_id}").json()
+        assert detail["severity_score"] == -1
 
         back_rows = _vuln_items(client.get(f"/api/vulns?project_id={project}&attack_surface=backend"))
         assert [v["id"] for v in back_rows] == [back_id]
