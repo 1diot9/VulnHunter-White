@@ -130,7 +130,9 @@ from ..tools.phase_worker import heuristic_complete, mining_complete, project_co
 
 register_all_tools()
 
-_lock = threading.Lock()
+# RLock: _ensure_recon_marking (and similar) call _cancel_event while already holding
+# this lock. A plain Lock deadlocks every list_projects poll via is_project_paused.
+_lock = threading.RLock()
 _cancel_events: dict[int, threading.Event] = {}
 _pause_flags: dict[int, threading.Event] = {}
 _phase_pause_flags: dict[tuple[int, str], threading.Event] = {}
@@ -2638,6 +2640,7 @@ def _ensure_recon_marking(project_id: int) -> None:
         used, limit, waiting = llm_thread_limiter.snapshot()
         if waiting > 0 or used >= max(1, int(limit) - 1):
             return
+    cancel = _cancel_event(project_id)
     with _lock:
         rt = _recon_threads.get(project_id)
         if rt is not None and rt.is_alive():
@@ -2647,7 +2650,7 @@ def _ensure_recon_marking(project_id: int) -> None:
             return
         t = threading.Thread(
             target=_run_recon_marking,
-            args=(project_id, _cancel_event(project_id)),
+            args=(project_id, cancel),
             daemon=True,
             name=f"vh-recon-mark-{project_id}",
         )

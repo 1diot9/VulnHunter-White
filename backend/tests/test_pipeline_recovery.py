@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import timedelta
 
 from sqlalchemy.exc import OperationalError
@@ -162,6 +163,22 @@ def test_release_stale_claims_lookup_uses_own_session(tmp_env, project, monkeypa
 
     monkeypatch.setattr(pipeline, "resumable_file_paths", lookup)
     assert pipeline._release_stale_claims(project) == 1
+
+
+def test_cancel_event_nested_lock_does_not_deadlock(tmp_env, project):
+    """_ensure_recon_marking used to call _cancel_event while holding _lock (non-reentrant)."""
+    done = threading.Event()
+
+    def nested():
+        with pipeline._lock:
+            pipeline._cancel_event(project)
+        done.set()
+
+    t = threading.Thread(target=nested, name="vh-nested-lock")
+    t.start()
+    t.join(timeout=2)
+    assert done.is_set()
+    assert not t.is_alive()
 
 
 def test_recon_gates_no_default_weight(tmp_env, project):
