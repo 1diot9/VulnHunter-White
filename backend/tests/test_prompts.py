@@ -43,6 +43,7 @@ INITIAL_DOCS = (
     "verifier.md",
     "fast_worker.md",
     "bypass_worker.md",
+    "unconstrained-worker.md",
     "sink_triage.md",
     "cli_indexer.md",
 )
@@ -549,6 +550,24 @@ def test_bypass_worker_prompts():
     assert "vuln-report-bypass.md" in initial
     assert "补丁绕过简析" in initial
     assert "简短" not in initial
+
+
+def test_unconstrained_worker_prompts():
+    worker = load_prompt("worker-unconstrained.md")
+    initial = load_prompt("initial/unconstrained-worker.md")
+    overlay = load_prompt("mining_paths/unconstrained.md")
+    assert "无约束扫描" in worker
+    assert "不注入" in worker
+    assert "FinishRound" in worker
+    assert "不要求" in worker
+    assert "不要为了结束路径而硬写成" in worker
+    assert "赏金闸门" in overlay
+    assert "rce_effect=true" in overlay
+    assert "不由 `vuln_type`" in overlay
+    assert "FinishFile" in initial
+    assert "FinishRound" in initial
+    assert "侦察文档" in initial
+    assert "docs/code-map.md" in overlay
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():

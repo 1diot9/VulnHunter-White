@@ -7,10 +7,9 @@ from typing import Any
 
 AUDIT_MODE_BOUNTY = "bounty"
 AUDIT_MODE_FULL = "full"
-AUDIT_MODE_UNCONSTRAINED = "unconstrained"
 AUDIT_MODE_CUSTOM = "custom"
 DEFAULT_AUDIT_MODE = AUDIT_MODE_BOUNTY
-ALLOWED_AUDIT_MODES = frozenset({AUDIT_MODE_BOUNTY, AUDIT_MODE_FULL, AUDIT_MODE_UNCONSTRAINED, AUDIT_MODE_CUSTOM})
+ALLOWED_AUDIT_MODES = frozenset({AUDIT_MODE_BOUNTY, AUDIT_MODE_FULL, AUDIT_MODE_CUSTOM})
 AUDIT_MODE_EDITABLE_STATUSES = frozenset({"paused", "completed"})
 
 CUSTOM_AUDIT_NAME_MAX = 128
@@ -19,7 +18,6 @@ CUSTOM_AUDIT_PROMPT_MAX = 16000
 AUDIT_MODE_LABELS: dict[str, str] = {
     AUDIT_MODE_BOUNTY: "赏金模式",
     AUDIT_MODE_FULL: "全量模式",
-    AUDIT_MODE_UNCONSTRAINED: "无约束扫描",
     AUDIT_MODE_CUSTOM: "自定义模式",
 }
 
@@ -30,9 +28,6 @@ _AUDIT_MODE_ALIASES: dict[str, str] = {
     "full": AUDIT_MODE_FULL,
     "全量": AUDIT_MODE_FULL,
     "全量模式": AUDIT_MODE_FULL,
-    "unconstrained": AUDIT_MODE_UNCONSTRAINED,
-    "无约束": AUDIT_MODE_UNCONSTRAINED,
-    "无约束扫描": AUDIT_MODE_UNCONSTRAINED,
     "custom": AUDIT_MODE_CUSTOM,
     "自定义": AUDIT_MODE_CUSTOM,
     "自定义模式": AUDIT_MODE_CUSTOM,
@@ -105,7 +100,7 @@ def parse_audit_mode(raw: Any) -> str:
     if found not in ALLOWED_AUDIT_MODES:
         allowed = "、".join(
             f"{k}（{AUDIT_MODE_LABELS[k]}）"
-            for k in (AUDIT_MODE_BOUNTY, AUDIT_MODE_FULL, AUDIT_MODE_UNCONSTRAINED, AUDIT_MODE_CUSTOM)
+            for k in (AUDIT_MODE_BOUNTY, AUDIT_MODE_FULL, AUDIT_MODE_CUSTOM)
         )
         raise ValueError(f"audit_mode 无效，可选: {allowed}")
     return found
@@ -162,16 +157,6 @@ def initial_hint(mode: str, *, custom_name: str | None = None) -> str:
             "无赏金模式代码硬闸门。若与上文基座提示冲突，以自定义条款为准。"
             "本节仅约束漏洞收录与确认标准，不改变工具权限或 ACL。"
         )
-    if normalized == AUDIT_MODE_UNCONSTRAINED:
-        return (
-            f"当前为{AUDIT_MODE_LABELS[normalized]}：漏洞收录范围参考赏金模式，只报 "
-            + BOUNTY_TYPE_LABELS
-            + "。CORS、反射 XSS、DOM XSS、缺速率限制、安全头、普通 CSRF（仅缺 token / 低危状态变更）等低危害项不要提交或确认。"
-            "阶段与启发式扫描隔离，不注入权重文件；依赖模型自身能力挖掘前台可利用漏洞。"
-            "单轮结束标准：产出 RCE 漏洞或触发超时总结。"
-            "阶段结束标准：产出任意 RCE 漏洞。发现其他类型前台漏洞也需提交，但不作为结束标准。"
-            "靶场/局部验证同赏金模式。"
-        )
     return (
         f"当前为{AUDIT_MODE_LABELS[normalized]}：按现行规则提交，含难以利用项"
         "（缺速率限制、反射 XSS、CORS/安全头等），由 Reviewer 标为低危害难利用。"
@@ -196,6 +181,14 @@ def format_custom_overlay(*, name: str, body: str) -> str:
         "本节仅约束漏洞收录与确认标准，不改变工具权限。\n\n"
         f"{text}\n"
     )
+
+
+def uses_bounty_gates(*, audit_mode: Any = None, mining_path: Any = None) -> bool:
+    """Bounty hard gates apply to built-in bounty mode and the unconstrained mining path."""
+    path = str(mining_path or "").strip().lower()
+    if path == "unconstrained":
+        return True
+    return is_bounty_mode(audit_mode)
 
 
 def bounty_submit_block_reason(vuln_type: str, *, file_path: str = "") -> str | None:

@@ -27,11 +27,13 @@ from ..agent.compression import (
     inject_summary_block,
     inject_fast_prior_block,
     inject_bypass_prior_block,
+    inject_unconstrained_prior_block,
     inject_security_policy_block,
     inject_worker_prior_block,
     latest_summary,
     max_fast_round_report_no,
     max_bypass_round_report_no,
+    max_unconstrained_round_report_no,
     max_round_report_no,
 )
 from ..agent.loop import AgentLoop
@@ -126,7 +128,7 @@ from ..tools.phase_recon import (
     recon_old_vulns_ready,
     recon_source_ext_ready,
 )
-from ..tools.phase_worker import heuristic_complete, mining_complete, project_complete_gates
+from ..tools.phase_worker import heuristic_complete, mining_complete, project_complete_gates, unconstrained_complete
 
 register_all_tools()
 
@@ -165,7 +167,7 @@ REVIEWER_POOL = 1
 CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
-    "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker"),
+    "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker", "unconstrained-worker"),
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
@@ -257,6 +259,9 @@ def control_phase(phase: str) -> str:
         "bypass-worker",
         "bypass_worker",
         "bypass",
+        "unconstrained-worker",
+        "unconstrained_worker",
+        "unconstrained",
     ):
         return "worker"
     if p in ("reviewer", "reviewer-lab", "reviewer_lab"):
@@ -392,6 +397,7 @@ def note_mining_paths_changed(
     heuristic_enabled: bool,
     fast_enabled: bool,
     bypass_enabled: bool = False,
+    unconstrained_enabled: bool = False,
     heuristic_lite: bool = False,
 ) -> None:
     """Keep paused; next resume uses the new mining paths."""
@@ -400,7 +406,7 @@ def note_mining_paths_changed(
     _bump_phase_generation(project_id, "worker")
     live_log.system(
         project_id,
-        f"挖掘路径已改为{mining_path_label(heuristic_enabled=heuristic_enabled, fast_enabled=fast_enabled, bypass_enabled=bypass_enabled, heuristic_lite=heuristic_lite)}，续跑后按新路径调度",
+        f"挖掘路径已改为{mining_path_label(heuristic_enabled=heuristic_enabled, fast_enabled=fast_enabled, bypass_enabled=bypass_enabled, unconstrained_enabled=unconstrained_enabled, heuristic_lite=heuristic_lite)}，续跑后按新路径调度",
         phase="worker",
     )
 
@@ -1746,12 +1752,12 @@ def _target_kind_overlay(project_id: int) -> str:
 
 
 _POC_PROMPT_PHASES = frozenset(
-    {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md", "verifier.md"}
+    {"worker.md", "fast_worker.md", "bypass_worker.md", "worker-unconstrained.md", "reviewer.md", "verifier.md"}
 )
 _REPORT_FORMAT_PHASES = frozenset(
-    {"worker.md", "fast_worker.md", "bypass_worker.md", "reviewer.md"}
+    {"worker.md", "fast_worker.md", "bypass_worker.md", "worker-unconstrained.md", "reviewer.md"}
 )
-_WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker"})
+_WORKER_HINT_PHASES = frozenset({"worker", "fast-worker", "bypass-worker", "unconstrained-worker"})
 _RECON_HINT_PHASES = frozenset(
     {"recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"}
 )
@@ -1765,6 +1771,15 @@ def _phase_system_prompt(
     verify_mode: str | None = None,
 ) -> str:
     base = load_prompt(name).rstrip()
+    if name == "worker-unconstrained.md":
+        overlay = load_prompt("modes/bounty.md").strip()
+        path_overlay = load_prompt("mining_paths/unconstrained.md").strip()
+        parts = [base, overlay, path_overlay, _target_kind_overlay(project_id)]
+        if name in _POC_PROMPT_PHASES:
+            parts.append(load_prompt("poc.md").strip())
+        if name in _REPORT_FORMAT_PHASES:
+            parts.append(load_prompt("report-formats.md").strip())
+        return "\n\n".join(p for p in parts if p) + "\n"
     mode = _read_audit_mode(project_id)
     if mode == AUDIT_MODE_CUSTOM:
         with SessionLocal() as db:
@@ -2193,7 +2208,7 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     kwargs.setdefault("target_kind_hint", target_kind_initial_hint("web"))
     kwargs.setdefault("prior_basis", "static_only")
     kwargs.setdefault("prior_conclusion", "静态结论")
-    kwargs.setdefault("verify_gate", _LAB_VERIFY_GATE)
+    kwargs.setdefault("unconstrained_note", "")
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -2202,10 +2217,19 @@ def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bo
     # Also try rescue / round variants for worker
     if not summary and phase == "worker":
         summary = latest_summary(project_id, "worker-rescue") or latest_summary(project_id, "worker-round")
+    if not summary and phase == "unconstrained-worker":
+        summary = (
+            latest_summary(project_id, "unconstrained-worker-rescue")
+            or latest_summary(project_id, "unconstrained-round")
+        )
     block = inject_summary_block(summary, for_file=for_file)
     text = f"{block}{body}" if block else body
     if phase == "worker" and for_file:
         prior = inject_worker_prior_block(project_id)
+        if prior:
+            text = f"{prior}{text}"
+    if phase == "unconstrained-worker":
+        prior = inject_unconstrained_prior_block(project_id)
         if prior:
             text = f"{prior}{text}"
     if phase == "reviewer":
@@ -3131,6 +3155,49 @@ def _ensure_bypass_workers(
     return alive
 
 
+def _ensure_unconstrained_workers(
+    project_id: int,
+    active_workers: list[threading.Thread],
+) -> list[threading.Thread]:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return [t for t in active_workers if t.is_alive()]
+        unconstrained_on = bool(getattr(proj, "unconstrained_enabled", False))
+        status = proj.status
+    if _phase_is_paused(project_id, "worker"):
+        return [t for t in active_workers if t.is_alive()]
+    alive = [t for t in active_workers if t.is_alive()]
+    if not unconstrained_on:
+        return alive
+    if not recon_old_vulns_ready(project_id):
+        return alive
+    if unconstrained_complete(project_id) and not list_resumable_runs(project_id, "unconstrained-worker"):
+        return alive
+    if project_complete_gates(project_id):
+        return alive
+    while len(alive) < 1:
+        wid = f"unconstrained-{uuid.uuid4().hex[:6]}"
+        wt = threading.Thread(
+            target=_run_unconstrained_worker_loop,
+            args=(project_id, wid),
+            daemon=True,
+            name=f"vh-{wid}",
+        )
+        alive.append(wt)
+        with _lock:
+            _threads.setdefault(project_id, []).append(wt)
+        live_log.system(project_id, f"启动无约束扫描 Worker {wid}", phase="unconstrained-worker")
+        wt.start()
+    if status == "recon":
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and proj.status == "recon":
+                proj.status = "auditing"
+                db.commit()
+    return alive
+
+
 def _orchestrate(project_id: int) -> None:
     from ..models import ensure_schema
 
@@ -3144,6 +3211,7 @@ def _orchestrate(project_id: int) -> None:
     active_workers: list[threading.Thread] = []
     active_fast_workers: list[threading.Thread] = []
     active_bypass_workers: list[threading.Thread] = []
+    active_unconstrained_workers: list[threading.Thread] = []
     fix_pool = ThreadPoolExecutor(
         max_workers=_fix_concurrency(),
         thread_name_prefix=f"vh-fix-{project_id}-",
@@ -3199,6 +3267,9 @@ def _orchestrate(project_id: int) -> None:
                 active_fast_workers = _ensure_fast_workers(project_id, active_fast_workers)
                 _ensure_bypass_prepare(project_id)
                 active_bypass_workers = _ensure_bypass_workers(project_id, active_bypass_workers)
+                active_unconstrained_workers = _ensure_unconstrained_workers(
+                    project_id, active_unconstrained_workers
+                )
 
                 for vid in returned_ids:
                     if _phase_is_paused(project_id, "worker"):
@@ -4071,6 +4142,165 @@ def _run_worker_loop_inner(
             pass
 
 
+def _next_unconstrained_round_id(project_id: int) -> int:
+    from ..agent.compression import list_recent_unconstrained_round_summaries
+
+    n_rep = max_unconstrained_round_report_no(project_id)
+    summaries = list_recent_unconstrained_round_summaries(project_id, limit=-1)
+    n_sum = summaries[-1][0] if summaries else 0
+    return max(n_rep, n_sum) + 1
+
+
+def _finish_unconstrained_round(project_id: int, worker_id: str, run_id: int, result) -> str:
+    if result.stop_reason == "auth_error":
+        _pause_for_auth(project_id, result.error or "auth_error")
+        return "interrupt"
+    phase_restart = bool(result.cancelled) and not _cancel_event(project_id).is_set()
+    if result.stop_reason == "db_locked" or phase_restart:
+        return "restart"
+    _finish_phase_run(
+        run_id,
+        "completed" if result.ok else ("cancelled" if result.cancelled else "failed"),
+        result.error,
+    )
+    if result.cancelled and _cancel_event(project_id).is_set():
+        return "cancel"
+    return "next"
+
+
+def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
+    cancel = _cancel_event(project_id)
+    current_run_id: int | None = None
+    try:
+        while not cancel.is_set():
+            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            try:
+                with SessionLocal() as db:
+                    proj = db.get(Project, project_id)
+                    if not proj or proj.status in ("completed", "cancelled", "error"):
+                        return
+                    unconstrained_on = bool(getattr(proj, "unconstrained_enabled", False))
+                old_ready = recon_old_vulns_ready(project_id)
+                path_done = unconstrained_complete(project_id)
+            except OperationalError as e:
+                if _is_sqlite_locked(e):
+                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    continue
+                raise
+            if not unconstrained_on:
+                return
+            if not old_ready:
+                cancel.wait(timeout=5.0)
+                continue
+
+            cp = _adopt_resumable(project_id, "unconstrained-worker", worker_id=worker_id)
+            if cp:
+                current_run_id = cp.phase_run_id
+                try:
+                    _start_log_session(project_id, "unconstrained-worker", extra="接续")
+                    loop = _loop_from_checkpoint(
+                        cp,
+                        cancel=cancel,
+                        stop_when=lambda st: bool(st.get("round_finished")),
+                        timeout_sec=settings.timeout_worker_round,
+                    )
+                    loop.worker_id = worker_id
+                    try:
+                        result = loop.run()
+                    except OperationalError as e:
+                        if not _is_sqlite_locked(e):
+                            raise
+                        live_log.system(
+                            project_id,
+                            "无约束扫描轮数据库忙，保留检查点稍后继续",
+                            phase="unconstrained-worker",
+                        )
+                        cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                        continue
+                    action = _finish_unconstrained_round(
+                        project_id, worker_id, cp.phase_run_id, result
+                    )
+                    if action in ("interrupt", "cancel"):
+                        return
+                    if action == "restart":
+                        continue
+                finally:
+                    _release_adopted(project_id, cp.phase_run_id)
+                    current_run_id = None
+                continue
+
+            if path_done:
+                return
+
+            system = _phase_system_prompt(project_id, "worker-unconstrained.md")
+            run_id = _new_phase_run(
+                project_id, "unconstrained-worker", "unconstrained_worker", worker_id=worker_id
+            )
+            current_run_id = run_id
+            _consume_force_new(project_id, "worker")
+            _start_log_session(project_id, "unconstrained-worker", extra="自主巡航")
+            round_id = _next_unconstrained_round_id(project_id)
+            body = _initial_prompt(
+                "unconstrained-worker.md",
+                worker_id=worker_id,
+                round_id=round_id,
+                **_agent_prompt_vars(project_id),
+            )
+            user = _prompt_with_summary("unconstrained-worker", project_id, body)
+            loop = AgentLoop(
+                project_id=project_id,
+                role="unconstrained_worker",
+                phase="unconstrained-worker",
+                system_prompt=system,
+                user_prompt=user,
+                phase_run_id=run_id,
+                worker_id=worker_id,
+                cancel_event=_loop_cancel(project_id, "worker"),
+                pause_event=_combined_pause(project_id, "worker"),
+                timeout_sec=settings.timeout_worker_round,
+                context_window=_context_window(),
+                stop_when=lambda st: bool(st.get("round_finished")),
+            )
+            loop.state["round_id"] = round_id
+            try:
+                result = loop.run()
+            except OperationalError as e:
+                if not _is_sqlite_locked(e):
+                    raise
+                live_log.system(
+                    project_id,
+                    "无约束扫描轮数据库忙，保留检查点稍后继续",
+                    phase="unconstrained-worker",
+                )
+                cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                continue
+            action = _finish_unconstrained_round(project_id, worker_id, run_id, result)
+            current_run_id = None
+            if action in ("interrupt", "cancel"):
+                return
+            if action == "restart":
+                continue
+    except OperationalError as e:
+        if _is_sqlite_locked(e):
+            raise
+        live_log.error(project_id, f"无约束 Worker={worker_id} 异常: {e}", phase="unconstrained-worker")
+        try:
+            if current_run_id:
+                _finish_phase_run(current_run_id, "failed", str(e))
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        if _is_sqlite_locked(e):
+            raise
+        live_log.error(project_id, f"无约束 Worker={worker_id} 异常: {e}", phase="unconstrained-worker")
+        try:
+            if current_run_id:
+                _finish_phase_run(current_run_id, "failed", str(e))
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _indexed_extensions(project_id: int) -> list[str]:
     with SessionLocal() as db:
         rows = db.query(FileWeight.path).filter(FileWeight.project_id == project_id).all()
@@ -4915,7 +5145,16 @@ def _run_reviewer_once(project_id: int) -> None:
                 "auth_premise": vuln.auth_premise,
                 "config_premise": vuln.config_premise,
                 "source_sink": vuln.source_sink,
+                "mining_path": vuln.mining_path,
             }
+            unconstrained_note = ""
+            if (vuln.mining_path or "").strip().lower() == "unconstrained":
+                unconstrained_note = (
+                    "本条来自无约束扫描。ConfirmVuln 必须传 rce_effect=true|false："
+                    "由你判定是否达成前台 RCE 效果，不要只看 vuln_type。"
+                    "true 且前台确认后该路径结束（当前 Worker 轮仍会跑完）。"
+                    "本条始终走赏金闸门，即使项目是全量/自定义模式。"
+                )
 
         if _give_up_exhausted_review(project_id, vuln_id):
             return
@@ -4950,6 +5189,7 @@ def _run_reviewer_once(project_id: int) -> None:
                 force_static=force_static,
                 mode=VERIFY_MODE_OFF if force_static else _read_dynamic_verify_mode(project_id),
             ),
+            unconstrained_note=unconstrained_note,
             **_agent_prompt_vars(project_id),
         )
         user = body if force_static else _prompt_with_summary("reviewer", project_id, body)

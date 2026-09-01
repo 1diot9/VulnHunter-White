@@ -33,13 +33,15 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
         {"recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"}
     ),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
-    "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass-worker", "bypass_worker"}),
+    "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass-worker", "bypass_worker", "unconstrained-worker", "unconstrained_worker"}),
     "mine": frozenset({"worker"}),
     "fast": frozenset({"fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
     "fast-worker": frozenset({"fast-worker", "fast_worker"}),
     "sink-triage": frozenset({"sink-triage", "sink_triage"}),
     "bypass": frozenset({"bypass-worker", "bypass_worker"}),
     "bypass-worker": frozenset({"bypass-worker", "bypass_worker"}),
+    "unconstrained": frozenset({"unconstrained-worker", "unconstrained_worker"}),
+    "unconstrained-worker": frozenset({"unconstrained-worker", "unconstrained_worker"}),
     "fix": frozenset({"fix"}),
     "reviewer": frozenset({"reviewer", "reviewer-lab", "reviewer_lab"}),
     "reviewer-lab": frozenset({"reviewer-lab", "reviewer_lab"}),
@@ -59,6 +61,7 @@ LOG_PHASES = (
     "fast-worker",
     "sink-triage",
     "bypass-worker",
+    "unconstrained-worker",
     "fix",
     "reviewer-lab",
     "reviewer",
@@ -67,7 +70,7 @@ LOG_PHASES = (
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
-    "worker": ("worker", "fast-worker", "sink-triage", "bypass-worker", "fix"),
+    "worker": ("worker", "fast-worker", "sink-triage", "bypass-worker", "unconstrained-worker", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
@@ -528,7 +531,7 @@ class LiveLog:
 
 
 def event_matches_phase(ev: dict[str, Any], phase: str | None) -> bool:
-    """phase 为空不过滤。recon=侦察子阶段；worker=挖掘+修复；mine=启发式；fast=快速扫描；bypass=历史漏洞绕过。"""
+    """phase 为空不过滤。recon=侦察子阶段；worker=挖掘+修复；mine=启发式；fast=快速扫描；bypass=历史漏洞绕过；unconstrained=无约束扫描。"""
     if not phase:
         return True
     wanted = PHASE_GROUPS.get(phase, frozenset({phase}))
@@ -557,6 +560,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "sink-triage"
     if p in ("bypass-worker", "bypass_worker", "bypass"):
         return "bypass-worker"
+    if p in ("unconstrained-worker", "unconstrained_worker", "unconstrained"):
+        return "unconstrained-worker"
     if p == "fix":
         return "fix"
     if p in ("reviewer-lab", "reviewer_lab"):
@@ -590,6 +595,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return ("fast-worker", "sink-triage")
     if phase in ("bypass", "bypass-worker", "bypass_worker"):
         return ("bypass-worker",)
+    if phase in ("unconstrained", "unconstrained-worker", "unconstrained_worker"):
+        return ("unconstrained-worker",)
     lp = log_phase_of(phase)
     if lp:
         return (lp,)
@@ -616,7 +623,7 @@ def control_phase_of_filter(phase: str | None) -> str | None:
         return None
     if phase in ("recon", "recon-map", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"):
         return "recon"
-    if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass", "bypass-worker", "bypass_worker"):
+    if phase in ("worker", "mine", "fix", "fast", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass", "bypass-worker", "bypass_worker", "unconstrained", "unconstrained-worker", "unconstrained_worker"):
         return "worker"
     if phase in ("reviewer", "reviewer-lab", "reviewer_lab", "reviewer-review"):
         return "reviewer"

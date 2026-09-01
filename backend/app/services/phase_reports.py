@@ -11,16 +11,18 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|unconstrained-worker|unconstrained-round|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain)"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
 _ROUND_NAME = re.compile(r"^round-(?P<n>\d+)\.md$")
 _FAST_ROUND_NAME = re.compile(r"^fast-round-(?P<n>\d+)\.md$")
 _BYPASS_ROUND_NAME = re.compile(r"^bypass-round-(?P<n>\d+)\.md$")
+_UNCONSTRAINED_ROUND_NAME = re.compile(r"^unconstrained-round-(?P<n>\d+)\.md$")
 _ROUND_TITLE = "单轮挖掘方向"
 _FAST_ROUND_TITLE = "快速 Sink 回推"
 _BYPASS_ROUND_TITLE = "历史漏洞绕过"
+_UNCONSTRAINED_ROUND_TITLE = "无约束扫描"
 
 # filename phase -> (control phase, control label, subphase id)
 _PHASE_META: dict[str, tuple[str, str, str]] = {
@@ -31,6 +33,8 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "recon-mark": ("recon", "侦察", "mark"),
     "fast-worker": ("worker", "挖掘", "fast"),
     "bypass-worker": ("worker", "挖掘", "bypass"),
+    "unconstrained-worker": ("worker", "挖掘", "unconstrained"),
+    "unconstrained-round": ("worker", "挖掘", "unconstrained"),
     "sink-triage": ("worker", "挖掘", "fast"),
     "worker": ("worker", "挖掘", "mine"),
     "fix": ("worker", "挖掘", "fix"),
@@ -55,6 +59,7 @@ _SUB_LABEL = {
     "mine": "启发式",
     "fast": "快速扫描",
     "bypass": "历史漏洞绕过",
+    "unconstrained": "无约束扫描",
     "fix": "修复",
     "lab": "环境搭建",
     "reviewer": "审核",
@@ -303,6 +308,19 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
                 title=_BYPASS_ROUND_TITLE,
                 content=content,
             )
+        um = _UNCONSTRAINED_ROUND_NAME.match(path.name)
+        if um:
+            n = int(um.group("n"))
+            return _item(
+                rel=rel,
+                path=path,
+                control="worker",
+                subphase="unconstrained",
+                kind="round",
+                round_no=n,
+                title=_UNCONSTRAINED_ROUND_TITLE,
+                content=content,
+            )
         raise FileNotFoundError(rel)
     if rel.startswith("docs/attack-chains/"):
         return _item(
@@ -425,6 +443,22 @@ def _collect_phase_report_candidates(project_id: int) -> list[_ReportCandidate]:
                 kind="round",
                 round_no=n,
                 title=_BYPASS_ROUND_TITLE,
+            )
+            if item is not None:
+                items.append(item)
+        for path in rounds.glob("unconstrained-round-*.md"):
+            m = _UNCONSTRAINED_ROUND_NAME.match(path.name)
+            if not m:
+                continue
+            n = int(m.group("n"))
+            item = _candidate(
+                rel=f"workspace/rounds/{path.name}",
+                path=path,
+                control="worker",
+                subphase="unconstrained",
+                kind="round",
+                round_no=n,
+                title=_UNCONSTRAINED_ROUND_TITLE,
             )
             if item is not None:
                 items.append(item)

@@ -31,6 +31,8 @@ export type Project = {
   fast_queue_frozen: boolean
   bypass_enabled: boolean
   bypass_queue_frozen: boolean
+  unconstrained_enabled: boolean
+  unconstrained_done: boolean
   llm_model: string
   worker_hint?: string
   recon_hint?: string
@@ -207,8 +209,10 @@ export type Vuln = {
   upstream_chain_proven?: boolean
   submission_tier: string | null
   submission_reason: string | null
-  /** heuristic | fast | bypass — which mining path submitted this vuln */
+  /** heuristic | fast | bypass | unconstrained — which mining path submitted this vuln */
   mining_path?: string | null
+  /** Reviewer-judged RCE effect; required for unconstrained vulns */
+  rce_effect?: boolean | null
   /** default | specific — default config vs specific app config */
   config_premise?: string | null
   root_cause_key: string | null
@@ -836,6 +840,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      unconstrained_enabled?: boolean
       llm_model?: string
       worker_hint?: string
       recon_hint?: string
@@ -862,6 +867,7 @@ export const api = {
         heuristic_lite: Boolean(opts.heuristic_lite),
         fast_enabled: Boolean(opts.fast_enabled),
         bypass_enabled: Boolean(opts.bypass_enabled),
+        unconstrained_enabled: Boolean(opts.unconstrained_enabled),
         llm_model: (opts.llm_model || '').trim(),
         worker_hint: opts.worker_hint || '',
         recon_hint: opts.recon_hint || '',
@@ -885,6 +891,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      unconstrained_enabled?: boolean
       llm_model?: string
       worker_hint?: string
       recon_hint?: string
@@ -912,6 +919,7 @@ export const api = {
     fd.append('heuristic_lite', opts.heuristic_lite ? 'true' : 'false')
     fd.append('fast_enabled', opts.fast_enabled ? 'true' : 'false')
     fd.append('bypass_enabled', opts.bypass_enabled ? 'true' : 'false')
+    fd.append('unconstrained_enabled', opts.unconstrained_enabled ? 'true' : 'false')
     fd.append('llm_model', (opts.llm_model || '').trim())
     fd.append('worker_hint', opts.worker_hint || '')
     fd.append('recon_hint', opts.recon_hint || '')
@@ -938,6 +946,7 @@ export const api = {
       heuristic_lite?: boolean
       fast_enabled?: boolean
       bypass_enabled?: boolean
+      unconstrained_enabled?: boolean
       llm_model?: string
       worker_hint?: string
       recon_hint?: string

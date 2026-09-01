@@ -62,6 +62,7 @@ export function CreateProjectDialog({
   const [heuristicLite, setHeuristicLite] = useState(false)
   const [fastEnabled, setFastEnabled] = useState(false)
   const [bypassEnabled, setBypassEnabled] = useState(false)
+  const [unconstrainedEnabled, setUnconstrainedEnabled] = useState(false)
   const [llmModel, setLlmModel] = useState('')
   const [workerHint, setWorkerHint] = useState('')
   const [reconHint, setReconHint] = useState('')
@@ -135,6 +136,7 @@ export function CreateProjectDialog({
       heuristic_lite: heuristicLite,
       fast_enabled: fastEnabled,
       bypass_enabled: bypassEnabled,
+      unconstrained_enabled: unconstrainedEnabled,
       llm_model: llmModel,
       worker_hint: workerHint,
       recon_hint: reconHint,
@@ -242,11 +244,19 @@ export function CreateProjectDialog({
                 heuristicLite={heuristicLite}
                 fastEnabled={fastEnabled}
                 bypassEnabled={bypassEnabled}
-                onChange={({ heuristicEnabled: nextH, heuristicLite: nextL, fastEnabled: nextF, bypassEnabled: nextB }) => {
+                unconstrainedEnabled={unconstrainedEnabled}
+                onChange={({
+                  heuristicEnabled: nextH,
+                  heuristicLite: nextL,
+                  fastEnabled: nextF,
+                  bypassEnabled: nextB,
+                  unconstrainedEnabled: nextU,
+                }) => {
                   setHeuristicEnabled(nextH)
                   setHeuristicLite(nextL)
                   setFastEnabled(nextF)
                   setBypassEnabled(nextB)
+                  setUnconstrainedEnabled(nextU)
                 }}
               />
               <DynamicVerifyToggle
@@ -285,6 +295,7 @@ export function CreateProjectDialog({
               heuristicLite={heuristicLite}
               fastEnabled={fastEnabled}
               bypassEnabled={bypassEnabled}
+              unconstrainedEnabled={unconstrainedEnabled}
             />
           </div>
         </div>

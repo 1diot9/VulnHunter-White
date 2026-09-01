@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_submit_block_reason, normalize_audit_mode
+from ..audit_mode import bounty_submit_block_reason, normalize_audit_mode, uses_bounty_gates
 from ..mining_paths import (
     HEURISTIC_LITE_WEIGHT,
     heuristic_lite_active,
@@ -178,6 +178,9 @@ def mining_complete(project_id: int) -> bool:
             )
             if open_n > 0:
                 return False
+        if bool(getattr(proj, "unconstrained_enabled", False)):
+            if not bool(getattr(proj, "unconstrained_done", False)):
+                return False
         bounced = (
             db.query(Vuln)
             .filter(
@@ -187,6 +190,30 @@ def mining_complete(project_id: int) -> bool:
             .count()
         )
         return bounced == 0
+
+
+def unconstrained_complete(project_id: int) -> bool:
+    """Unconstrained path done, or the path is off."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return False
+        if not bool(getattr(proj, "unconstrained_enabled", False)):
+            return True
+        return bool(getattr(proj, "unconstrained_done", False))
+
+
+def mark_unconstrained_done(project_id: int) -> bool:
+    """Set unconstrained_done; current round is not cancelled."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not bool(getattr(proj, "unconstrained_enabled", False)):
+            return False
+        if bool(getattr(proj, "unconstrained_done", False)):
+            return False
+        proj.unconstrained_done = True
+        db.commit()
+        return True
 
 
 def project_complete_gates(project_id: int) -> bool:
@@ -292,7 +319,8 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     with SessionLocal() as db:
         proj = db.get(Project, ctx.project_id)
         mode = normalize_audit_mode(None if not proj else proj.audit_mode)
-        if mode == AUDIT_MODE_BOUNTY:
+        mining_path = _resolve_mining_path(ctx)
+        if uses_bounty_gates(audit_mode=mode, mining_path=mining_path):
             blocked = bounty_submit_block_reason(vtype, file_path=file_path)
             if blocked:
                 return {"ok": False, "error": blocked}
@@ -579,9 +607,13 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not paths:
         return {"ok": False, "error": "缺少 path/paths"}
     done = []
+    unconstrained = (ctx.role or "").strip().lower() == "unconstrained_worker"
     with SessionLocal() as db:
         for p in paths:
             p = _norm_audit_path(p)
+            if unconstrained:
+                done.append(p)
+                continue
             fw = (
                 db.query(FileWeight)
                 .filter(FileWeight.project_id == ctx.project_id, FileWeight.path == p)
@@ -596,6 +628,15 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
         db.commit()
     ctx.state.setdefault("finished_files_this_round", [])
     ctx.state["finished_files_this_round"].extend(done)
+    if unconstrained:
+        return {
+            "ok": True,
+            "finished": done,
+            "count": len(done),
+            "message": (
+                "已记下本路径看过的文件（不改启发式定权队列）。FinishFile 不等于结束本轮，请继续挖前台洞。"
+            ),
+        }
     return {
         "ok": True,
         "finished": done,
@@ -605,11 +646,12 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _finish_round(ctx, args: dict[str, Any]) -> dict[str, Any]:
+    unconstrained = (ctx.role or "").strip().lower() == "unconstrained_worker"
     finished = ctx.state.get("finished_files_this_round") or []
-    if not finished:
+    if not unconstrained and not finished:
         return {"ok": False, "error": FINISH_ROUND_NEED_FILE}
     injected = _injected_path(ctx)
-    if injected:
+    if injected and not unconstrained:
         finished_norm = {_norm_audit_path(p) for p in finished}
         if injected not in finished_norm:
             return {"ok": False, "error": FINISH_ROUND_NEED_ENTRY.format(injected=injected)}
@@ -618,7 +660,13 @@ def _finish_round(ctx, args: dict[str, Any]) -> dict[str, Any]:
         from ..agent.compression import strip_followup_section
         from .sandbox import assert_writable
 
-        path = assert_writable(ctx.project_id, f"workspace/rounds/round-{ctx.state.get('round_id', 0)}.md")
+        round_id = ctx.state.get("round_id", 0)
+        rel = (
+            f"workspace/rounds/unconstrained-round-{round_id}.md"
+            if unconstrained
+            else f"workspace/rounds/round-{round_id}.md"
+        )
+        path = assert_writable(ctx.project_id, rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(strip_followup_section(str(report)), encoding="utf-8")
     ctx.state["round_finished"] = True

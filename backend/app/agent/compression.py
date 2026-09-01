@@ -65,6 +65,7 @@ _SUMMARY_REST = re.compile(r"^(rescue-|round-)?\d+\.md$")
 _ROUND_FILE = re.compile(r"^round-(\d+)\.md$")
 _FAST_ROUND_FILE = re.compile(r"^fast-round-(\d+)\.md$")
 _BYPASS_ROUND_FILE = re.compile(r"^bypass-round-(\d+)\.md$")
+_UNCONSTRAINED_ROUND_FILE = re.compile(r"^unconstrained-round-(\d+)\.md$")
 _WORKER_ROUND_SUMMARY = re.compile(r"^(\d+)\.md$")
 _FOLLOWUP_HEADING = re.compile(r"^##[ \t]*建议后续方向[ \t]*\r?$", re.MULTILINE)
 _NEXT_H2 = re.compile(r"^##[ \t]+\S", re.MULTILINE)
@@ -313,6 +314,62 @@ def inject_bypass_prior_block(project_id: int) -> str:
     if not parts:
         return ""
     return "\n".join(parts).strip() + "\n\n"
+
+
+def list_recent_unconstrained_round_reports(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    cap = settings.worker_round_history if limit is None else limit
+    rounds = workspace_dir(project_id) / "rounds"
+    if not rounds.is_dir():
+        return []
+    found = _numbered_markdown(list(rounds.glob("unconstrained-round-*.md")), _UNCONSTRAINED_ROUND_FILE)
+    return found[-cap:] if cap >= 0 else found
+
+
+def max_unconstrained_round_report_no(project_id: int) -> int:
+    found = list_recent_unconstrained_round_reports(project_id, limit=-1)
+    return found[-1][0] if found else 0
+
+
+def inject_unconstrained_prior_block(project_id: int) -> str:
+    """Recon docs plus this path's round reports; never heuristic worker-round files."""
+    parts: list[str] = []
+    _append_recon_doc_parts(project_id, parts, worker_detail=True)
+    reports = list_recent_unconstrained_round_reports(project_id)
+    summaries = list_recent_unconstrained_round_summaries(project_id)
+    if reports or summaries:
+        parts.append(
+            "## 本路径最近轮次（不要重复）\n"
+            "以下仅为本路径无约束扫描摘要，与启发式挖掘隔离。已排除方向不要再走。\n"
+        )
+        round_cap = settings.round_report_inject_max_chars
+        seen: set[int] = set()
+        for num, path in reports:
+            seen.add(num)
+            text = _read_round_for_inject(path, round_cap)
+            parts.append(f"### 无约束轮 {num} · workspace/rounds/{path.name}\n{text}\n")
+        for num, path in summaries:
+            if num in seen:
+                continue
+            text = _read_round_for_inject(path, round_cap)
+            parts.append(f"### 无约束摘要 {num} · {path.name}\n{text}\n")
+    if not parts:
+        return ""
+    return "\n".join(parts).strip() + "\n\n"
+
+
+def list_recent_unconstrained_round_summaries(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:
+    cap = settings.worker_round_history if limit is None else limit
+    files = _phase_summary_files(summaries_dir(project_id), "unconstrained-round", rescue=False)
+    found: list[tuple[int, Path]] = []
+    prefix = "unconstrained-round-"
+    for path in files:
+        rest = path.name[len(prefix) :]
+        match = _WORKER_ROUND_SUMMARY.match(rest)
+        if not match or not path.is_file() or path.stat().st_size <= 0:
+            continue
+        found.append((int(match.group(1)), path))
+    found.sort(key=lambda item: item[0])
+    return found[-cap:] if cap >= 0 else found
 
 
 def list_recent_worker_round_summaries(project_id: int, limit: int | None = None) -> list[tuple[int, Path]]:

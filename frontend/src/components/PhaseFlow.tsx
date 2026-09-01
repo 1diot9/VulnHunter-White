@@ -12,7 +12,7 @@ const PHASES = [
   {
     id: 'worker',
     label: '挖掘',
-    hint: '启发式在历史漏洞收集完毕后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。开启的路径都结束后才算挖掘完成。',
+    hint: '启发式在历史漏洞收集完毕后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
   },
   {
     id: 'reviewer',
@@ -90,6 +90,8 @@ type FlowState = {
   bypassQueueFrozen?: boolean
   bypassQueued?: number
   bypassDone?: number
+  unconstrainedEnabled?: boolean
+  unconstrainedDone?: boolean
 }
 
 type BranchItem = {
@@ -120,8 +122,13 @@ function bypassFinished(s: FlowState): boolean {
   return (s.bypassDone ?? 0) >= (s.bypassQueued ?? 0)
 }
 
+function unconstrainedFinished(s: FlowState): boolean {
+  if (s.unconstrainedEnabled !== true) return true
+  return s.unconstrainedDone === true
+}
+
 function workerFinished(s: FlowState): boolean {
-  return heuristicFinished(s) && fastFinished(s) && bypassFinished(s)
+  return heuristicFinished(s) && fastFinished(s) && bypassFinished(s) && unconstrainedFinished(s)
 }
 
 function heuristicTone(s: FlowState): Tone {
@@ -144,6 +151,13 @@ function bypassTone(s: FlowState): Tone {
   if (s.bypassEnabled !== true) return 'neutral'
   if (bypassFinished(s)) return 'success'
   if (s.phase === 'worker' || s.status === 'auditing' || s.bypassQueueFrozen || s.reconDone) return 'info'
+  return 'neutral'
+}
+
+function unconstrainedTone(s: FlowState): Tone {
+  if (s.unconstrainedEnabled !== true) return 'neutral'
+  if (unconstrainedFinished(s)) return 'success'
+  if (s.phase === 'worker' || s.status === 'auditing' || s.reconDone) return 'info'
   return 'neutral'
 }
 
@@ -282,6 +296,8 @@ export default function PhaseFlow({
   bypassQueueFrozen,
   bypassQueued,
   bypassDone,
+  unconstrainedEnabled,
+  unconstrainedDone,
   onSelect,
 }: FlowState & { onSelect?: (id: string) => void }) {
   const state: FlowState = {
@@ -314,6 +330,8 @@ export default function PhaseFlow({
     bypassQueueFrozen,
     bypassQueued,
     bypassDone,
+    unconstrainedEnabled,
+    unconstrainedDone,
   }
   const subs = reconSubphases ?? []
 
@@ -373,6 +391,18 @@ export default function PhaseFlow({
             <Badge variant={badgeVariant(bypassTone(state))}>
               历史漏洞绕过
               {state.bypassQueueFrozen ? ` ${progressed}/${queued}` : ' 等待历史漏洞'}
+              {done ? ' ✓' : ''}
+            </Badge>
+          ),
+        })
+      }
+      if (state.unconstrainedEnabled === true) {
+        const done = unconstrainedFinished(state)
+        items.push({
+          id: 'unconstrained',
+          node: (
+            <Badge variant={badgeVariant(unconstrainedTone(state))}>
+              无约束扫描
               {done ? ' ✓' : ''}
             </Badge>
           ),
@@ -440,6 +470,7 @@ export default function PhaseFlow({
     mine: '历史漏洞收集完毕后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
     bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
+    unconstrained: '历史漏洞收集完毕后启动，只注入代码地图与鉴权。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
   }
 
   return (

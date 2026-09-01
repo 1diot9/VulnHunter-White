@@ -12,6 +12,7 @@ from app.audit_mode import (
     is_user_modifiable_secret_path,
     normalize_audit_mode,
     parse_audit_mode,
+    uses_bounty_gates,
 )
 
 
@@ -84,3 +85,13 @@ def test_bounty_gates_allow_stored_xss_and_source_secrets():
     assert bounty_confirm_block_reason(vuln_type="xss", submission_tier="cve_candidate")
     low = bounty_confirm_block_reason(vuln_type="rce", submission_tier="low_impact")
     assert low and "MarkFalsePositive" in low
+
+
+def test_uses_bounty_gates_for_unconstrained_even_on_full():
+    assert uses_bounty_gates(audit_mode="bounty") is True
+    assert uses_bounty_gates(audit_mode="full") is False
+    assert uses_bounty_gates(audit_mode="custom") is False
+    assert uses_bounty_gates(audit_mode="full", mining_path="unconstrained") is True
+    assert uses_bounty_gates(audit_mode="custom", mining_path="unconstrained") is True
+    assert uses_bounty_gates(audit_mode="full", mining_path="heuristic") is False
+    assert uses_bounty_gates(audit_mode="bounty", mining_path="heuristic") is True

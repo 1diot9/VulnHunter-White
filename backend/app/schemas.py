@@ -345,6 +345,7 @@ class ProjectCreate(BaseModel):
     heuristic_lite: bool = False
     fast_enabled: bool = False
     bypass_enabled: bool = False
+    unconstrained_enabled: bool = False
     llm_model: str = Field(default="", max_length=256)
     worker_hint: str = Field(default="", max_length=WORKER_HINT_MAX)
     recon_hint: str = Field(default="", max_length=RECON_HINT_MAX)
@@ -365,6 +366,7 @@ class ProjectUpdate(BaseModel):
     heuristic_lite: bool | None = None
     fast_enabled: bool | None = None
     bypass_enabled: bool | None = None
+    unconstrained_enabled: bool | None = None
     llm_model: str | None = Field(default=None, max_length=256)
     worker_hint: str | None = Field(default=None, max_length=WORKER_HINT_MAX)
     recon_hint: str | None = Field(default=None, max_length=RECON_HINT_MAX)
@@ -404,6 +406,8 @@ class ProjectOut(BaseModel):
     fast_queue_frozen: bool = False
     bypass_enabled: bool = False
     bypass_queue_frozen: bool = False
+    unconstrained_enabled: bool = False
+    unconstrained_done: bool = False
     llm_model: str = ""
     worker_hint: str = ""
     recon_hint: str = ""
@@ -477,6 +481,8 @@ class ProjectListItemOut(BaseModel):
     fast_queue_frozen: bool = False
     bypass_enabled: bool = False
     bypass_queue_frozen: bool = False
+    unconstrained_enabled: bool = False
+    unconstrained_done: bool = False
     llm_model: str = ""
     max_token_usage: int = 0
     error: str | None = None
@@ -553,8 +559,9 @@ class VulnOut(BaseModel):
     upstream_chain_proven: bool = False
     submission_tier: str | None = None
     submission_reason: str | None = None
-    # heuristic | fast | bypass
+    # heuristic | fast | bypass | unconstrained
     mining_path: str | None = None
+    rce_effect: bool | None = None
     root_cause_key: str | None = None
     merged_into_id: int | None = None
     review_rounds: int = 0

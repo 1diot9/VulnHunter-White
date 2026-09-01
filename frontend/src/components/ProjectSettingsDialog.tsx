@@ -44,6 +44,7 @@ export function ProjectSettingsButton({
   const [heuristicLite, setHeuristicLite] = useState(project.heuristic_lite === true)
   const [fastEnabled, setFastEnabled] = useState(project.fast_enabled === true)
   const [bypassEnabled, setBypassEnabled] = useState(project.bypass_enabled === true)
+  const [unconstrainedEnabled, setUnconstrainedEnabled] = useState(project.unconstrained_enabled === true)
   const [llmModel, setLlmModel] = useState(project.llm_model || '')
   const [workerHint, setWorkerHint] = useState(project.worker_hint || '')
   const [reconHint, setReconHint] = useState(project.recon_hint || '')
@@ -63,6 +64,7 @@ export function ProjectSettingsButton({
     setHeuristicLite(project.heuristic_lite === true)
     setFastEnabled(project.fast_enabled === true)
     setBypassEnabled(project.bypass_enabled === true)
+    setUnconstrainedEnabled(project.unconstrained_enabled === true)
     setLlmModel(project.llm_model || '')
     setWorkerHint(project.worker_hint || '')
     setReconHint(project.recon_hint || '')
@@ -79,6 +81,7 @@ export function ProjectSettingsButton({
     project.heuristic_lite,
     project.fast_enabled,
     project.bypass_enabled,
+    project.unconstrained_enabled,
     project.llm_model,
     project.worker_hint,
     project.recon_hint,
@@ -109,7 +112,13 @@ export function ProjectSettingsButton({
         max_token_usage: parseMaxTokenUsageInput(maxTokenUsage),
         ...(canEditKind ? { target_kind: targetKind } : {}),
         ...(canEditPaths
-          ? { heuristic_enabled: heuristicEnabled, heuristic_lite: heuristicLite, fast_enabled: fastEnabled, bypass_enabled: bypassEnabled }
+          ? {
+              heuristic_enabled: heuristicEnabled,
+              heuristic_lite: heuristicLite,
+              fast_enabled: fastEnabled,
+              bypass_enabled: bypassEnabled,
+              unconstrained_enabled: unconstrainedEnabled,
+            }
           : {}),
       })
       onSaved(next)
@@ -160,12 +169,20 @@ export function ProjectSettingsButton({
               heuristicLite={heuristicLite}
               fastEnabled={fastEnabled}
               bypassEnabled={bypassEnabled}
+              unconstrainedEnabled={unconstrainedEnabled}
               disabled={project.status !== 'paused' && project.status !== 'completed'}
-              onChange={({ heuristicEnabled: nextH, heuristicLite: nextL, fastEnabled: nextF, bypassEnabled: nextB }) => {
+              onChange={({
+                heuristicEnabled: nextH,
+                heuristicLite: nextL,
+                fastEnabled: nextF,
+                bypassEnabled: nextB,
+                unconstrainedEnabled: nextU,
+              }) => {
                 setHeuristicEnabled(nextH)
                 setHeuristicLite(nextL)
                 setFastEnabled(nextF)
                 setBypassEnabled(nextB)
+                setUnconstrainedEnabled(nextU)
               }}
             />
             <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />

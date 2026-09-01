@@ -6,6 +6,7 @@ type MiningPathValue = {
   heuristicLite: boolean
   fastEnabled: boolean
   bypassEnabled: boolean
+  unconstrainedEnabled: boolean
 }
 
 type Props = {
@@ -13,6 +14,7 @@ type Props = {
   heuristicLite?: boolean
   fastEnabled: boolean
   bypassEnabled?: boolean
+  unconstrainedEnabled?: boolean
   onChange: (next: MiningPathValue) => void
   disabled?: boolean
 }
@@ -22,24 +24,47 @@ export function MiningPathSelect({
   heuristicLite = false,
   fastEnabled,
   bypassEnabled = false,
+  unconstrainedEnabled = false,
   onChange,
   disabled = false,
 }: Props) {
+  const emit = (next: Partial<MiningPathValue>) =>
+    onChange({
+      heuristicEnabled,
+      heuristicLite,
+      fastEnabled,
+      bypassEnabled,
+      unconstrainedEnabled,
+      ...next,
+    })
+
+  const othersOn = (except: 'heuristic' | 'fast' | 'bypass' | 'unconstrained') => {
+    if (except !== 'heuristic' && heuristicEnabled) return true
+    if (except !== 'fast' && fastEnabled) return true
+    if (except !== 'bypass' && bypassEnabled) return true
+    if (except !== 'unconstrained' && unconstrainedEnabled) return true
+    return false
+  }
+
   const setHeuristic = (next: boolean) => {
-    if (!next && !fastEnabled && !bypassEnabled) return
-    onChange({ heuristicEnabled: next, heuristicLite, fastEnabled, bypassEnabled })
+    if (!next && !othersOn('heuristic')) return
+    emit({ heuristicEnabled: next, heuristicLite: next ? heuristicLite : false })
   }
   const setLite = (next: boolean) => {
     if (!heuristicEnabled) return
-    onChange({ heuristicEnabled, heuristicLite: next, fastEnabled, bypassEnabled })
+    emit({ heuristicLite: next })
   }
   const setFast = (next: boolean) => {
-    if (!next && !heuristicEnabled && !bypassEnabled) return
-    onChange({ heuristicEnabled, heuristicLite, fastEnabled: next, bypassEnabled })
+    if (!next && !othersOn('fast')) return
+    emit({ fastEnabled: next })
   }
   const setBypass = (next: boolean) => {
-    if (!next && !heuristicEnabled && !fastEnabled) return
-    onChange({ heuristicEnabled, heuristicLite, fastEnabled, bypassEnabled: next })
+    if (!next && !othersOn('bypass')) return
+    emit({ bypassEnabled: next })
+  }
+  const setUnconstrained = (next: boolean) => {
+    if (!next && !othersOn('unconstrained')) return
+    emit({ unconstrainedEnabled: next })
   }
 
   return (
@@ -98,6 +123,20 @@ export function MiningPathSelect({
           <span className="font-medium">历史漏洞绕过</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
             历史漏洞收集完毕后，每轮注入一条历史漏洞文档，尝试绕过补丁、打出变体，或确认未修复洞仍可利用。
+          </span>
+        </span>
+      </Label>
+      <Label className="items-start font-normal">
+        <Checkbox
+          className="mt-0.5"
+          checked={unconstrainedEnabled}
+          disabled={disabled}
+          onCheckedChange={(checked) => setUnconstrained(checked === true)}
+        />
+        <span className="min-w-0">
+          <span className="font-medium">无约束扫描</span>
+          <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
+            历史漏洞收集完毕后启动，固定 1 个 Worker。只注入代码地图与鉴权文档，不派发定权文件。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束本路径。
           </span>
         </span>
       </Label>

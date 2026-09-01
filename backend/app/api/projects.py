@@ -167,6 +167,8 @@ _PROJECT_LIST_LOAD = (
     Project.fast_queue_frozen,
     Project.bypass_enabled,
     Project.bypass_queue_frozen,
+    Project.unconstrained_enabled,
+    Project.unconstrained_done,
     Project.llm_model,
     Project.max_token_usage,
     Project.error,
@@ -369,6 +371,8 @@ def _project_out(
         fast_queue_frozen=bool(getattr(p, "fast_queue_frozen", False)),
         bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
         bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
+        unconstrained_enabled=bool(getattr(p, "unconstrained_enabled", False)),
+        unconstrained_done=bool(getattr(p, "unconstrained_done", False)),
         llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
         worker_hint=(getattr(p, "worker_hint", None) or "").strip(),
         recon_hint=(getattr(p, "recon_hint", None) or "").strip(),
@@ -437,6 +441,8 @@ def _project_list_out(
         fast_queue_frozen=bool(getattr(p, "fast_queue_frozen", False)),
         bypass_enabled=bool(getattr(p, "bypass_enabled", False)),
         bypass_queue_frozen=bool(getattr(p, "bypass_queue_frozen", False)),
+        unconstrained_enabled=bool(getattr(p, "unconstrained_enabled", False)),
+        unconstrained_done=bool(getattr(p, "unconstrained_done", False)),
         llm_model=normalize_project_llm_model(getattr(p, "llm_model", None)) or "",
         max_token_usage=int(getattr(p, "max_token_usage", 0) or 0),
         error=p.error,
@@ -751,10 +757,11 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
         worker_hint = normalize_worker_hint(body.worker_hint)
         recon_hint = normalize_recon_hint(body.recon_hint)
         max_token_usage = parse_max_token_usage(body.max_token_usage)
-        heuristic_enabled, fast_enabled, bypass_enabled = parse_mining_paths(
+        heuristic_enabled, fast_enabled, bypass_enabled, unconstrained_enabled = parse_mining_paths(
             heuristic_enabled=body.heuristic_enabled,
             fast_enabled=body.fast_enabled,
             bypass_enabled=body.bypass_enabled,
+            unconstrained_enabled=body.unconstrained_enabled,
         )
         heuristic_lite = parse_heuristic_lite(body.heuristic_lite)
         verify_mode_arg = body.dynamic_verify_mode
@@ -793,6 +800,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             heuristic_lite=heuristic_lite,
             fast_enabled=fast_enabled,
             bypass_enabled=bypass_enabled,
+            unconstrained_enabled=unconstrained_enabled,
             llm_model=normalize_project_llm_model(body.llm_model),
             worker_hint=worker_hint or None,
             recon_hint=recon_hint or None,
@@ -838,6 +846,7 @@ async def create_project_zip(
     heuristic_lite: str = Form("false"),
     fast_enabled: str = Form("false"),
     bypass_enabled: str = Form("false"),
+    unconstrained_enabled: str = Form("false"),
     llm_model: str = Form(""),
     worker_hint: str = Form(""),
     recon_hint: str = Form(""),
@@ -851,10 +860,11 @@ async def create_project_zip(
         hint = normalize_worker_hint(worker_hint)
         recon = normalize_recon_hint(recon_hint)
         token_cap = parse_max_token_usage(max_token_usage)
-        heuristic_on, fast_on, bypass_on = parse_mining_paths(
+        heuristic_on, fast_on, bypass_on, unconstrained_on = parse_mining_paths(
             heuristic_enabled=heuristic_enabled,
             fast_enabled=fast_enabled,
             bypass_enabled=bypass_enabled,
+            unconstrained_enabled=unconstrained_enabled,
         )
         lite_on = parse_heuristic_lite(heuristic_lite)
         verify_mode_arg = dynamic_verify_mode or None
@@ -897,6 +907,7 @@ async def create_project_zip(
             heuristic_lite=lite_on,
             fast_enabled=fast_on,
             bypass_enabled=bypass_on,
+            unconstrained_enabled=unconstrained_on,
             llm_model=normalize_project_llm_model(llm_model),
             worker_hint=hint or None,
             recon_hint=recon or None,
@@ -941,6 +952,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.heuristic_lite is None
         and body.fast_enabled is None
         and body.bypass_enabled is None
+        and body.unconstrained_enabled is None
         and body.llm_model is None
         and body.worker_hint is None
         and body.recon_hint is None
@@ -987,6 +999,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_lite = bool(getattr(p, "heuristic_lite", False))
         old_fast = bool(getattr(p, "fast_enabled", False))
         old_bypass = bool(getattr(p, "bypass_enabled", False))
+        old_unconstrained = bool(getattr(p, "unconstrained_enabled", False))
         old_llm_model = normalize_project_llm_model(getattr(p, "llm_model", None))
         old_worker_hint = (getattr(p, "worker_hint", None) or "").strip()
         old_recon_hint = (getattr(p, "recon_hint", None) or "").strip()
@@ -999,18 +1012,25 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             body.heuristic_enabled is not None
             or body.fast_enabled is not None
             or body.bypass_enabled is not None
+            or body.unconstrained_enabled is not None
             or body.heuristic_lite is not None
         ):
             if p.status not in MINING_PATH_EDITABLE_STATUSES:
                 raise HTTPException(400, "挖掘路径仅在项目暂停或完成后可更改")
             try:
-                heuristic_on, fast_on, bypass_on = parse_mining_paths(
+                heuristic_on, fast_on, bypass_on, unconstrained_on = parse_mining_paths(
                     heuristic_enabled=old_heuristic if body.heuristic_enabled is None else body.heuristic_enabled,
                     fast_enabled=old_fast if body.fast_enabled is None else body.fast_enabled,
                     bypass_enabled=old_bypass if body.bypass_enabled is None else body.bypass_enabled,
+                    unconstrained_enabled=(
+                        old_unconstrained
+                        if body.unconstrained_enabled is None
+                        else body.unconstrained_enabled
+                    ),
                     default_heuristic=old_heuristic,
                     default_fast=old_fast,
                     default_bypass=old_bypass,
+                    default_unconstrained=old_unconstrained,
                 )
             except MiningPathError as exc:
                 raise HTTPException(400, str(exc)) from exc
@@ -1022,10 +1042,14 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.heuristic_lite = lite_on
             p.fast_enabled = fast_on
             p.bypass_enabled = bypass_on
+            p.unconstrained_enabled = unconstrained_on
+            if unconstrained_on and not old_unconstrained:
+                p.unconstrained_done = False
             paths_changed = (
                 heuristic_on != old_heuristic
                 or fast_on != old_fast
                 or bypass_on != old_bypass
+                or unconstrained_on != old_unconstrained
                 or lite_on != old_lite
             )
         next_mode = mode if mode is not None else old_mode
@@ -1183,6 +1207,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             heuristic_enabled=bool(out.heuristic_enabled),
             fast_enabled=bool(out.fast_enabled),
             bypass_enabled=bool(out.bypass_enabled),
+            unconstrained_enabled=bool(out.unconstrained_enabled),
             heuristic_lite=bool(out.heuristic_lite),
         )
         if out.status == "completed" and not project_complete_gates(project_id):

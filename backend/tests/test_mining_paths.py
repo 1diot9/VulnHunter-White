@@ -21,15 +21,19 @@ def _ctx(project_id: int, role: str, **kwargs) -> ToolContext:
 
 
 def test_parse_mining_paths_requires_one():
-    assert parse_mining_paths() == (True, False, False)
-    assert parse_mining_paths(heuristic_enabled=False, fast_enabled=True) == (False, True, False)
+    assert parse_mining_paths() == (True, False, False, False)
+    assert parse_mining_paths(heuristic_enabled=False, fast_enabled=True) == (False, True, False, False)
     assert parse_mining_paths(heuristic_enabled=False, fast_enabled=False, bypass_enabled=True) == (
         False,
         False,
         True,
+        False,
     )
     with pytest.raises(MiningPathError, match="至少开启"):
         parse_mining_paths(heuristic_enabled=False, fast_enabled=False, bypass_enabled=False)
+    assert parse_mining_paths(
+        heuristic_enabled=False, fast_enabled=False, bypass_enabled=False, unconstrained_enabled=True
+    ) == (False, False, False, True)
     assert parse_heuristic_lite() is False
     assert parse_heuristic_lite("true") is True
     assert mining_path_label(heuristic_enabled=True, fast_enabled=False, heuristic_lite=True) == "启发式轻量"
@@ -45,11 +49,21 @@ def test_parse_mining_paths_requires_one():
         mining_path_label(heuristic_enabled=True, fast_enabled=True, bypass_enabled=True)
         == "启发式挖掘 + 快速扫描 + 历史漏洞绕过"
     )
+    assert (
+        mining_path_label(
+            heuristic_enabled=False,
+            fast_enabled=False,
+            unconstrained_enabled=True,
+        )
+        == "无约束扫描"
+    )
     assert mining_path_from_role("worker") == "heuristic"
     assert mining_path_from_role("fast_worker") == "fast"
     assert mining_path_from_role("bypass_worker") == "bypass"
+    assert mining_path_from_role("unconstrained_worker") == "unconstrained"
     assert mining_path_from_role("fix") is None
     assert mining_path_display("fast") == "快速扫描"
+    assert mining_path_display("unconstrained") == "无约束扫描"
     assert mining_path_display("unknown") is None
 
 
@@ -68,6 +82,8 @@ def test_create_github_mining_path_defaults(tmp_env, monkeypatch):
         assert body["heuristic_lite"] is False
         assert body["fast_enabled"] is False
         assert body["bypass_enabled"] is False
+        assert body["unconstrained_enabled"] is False
+        assert body["unconstrained_done"] is False
         assert body["sinks_queued"] == 0
         assert body["sinks_done"] == 0
         assert body["bypass_queued"] == 0
@@ -120,6 +136,21 @@ def test_create_github_mining_path_defaults(tmp_env, monkeypatch):
         assert lite.json()["heuristic_enabled"] is True
         assert lite.json()["heuristic_lite"] is True
         assert lite.json()["fast_enabled"] is False
+        unconstrained_only = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/unconstrained",
+                "heuristic_enabled": False,
+                "unconstrained_enabled": True,
+            },
+        )
+        assert unconstrained_only.status_code == 200
+        assert unconstrained_only.json()["heuristic_enabled"] is False
+        assert unconstrained_only.json()["fast_enabled"] is False
+        assert unconstrained_only.json()["bypass_enabled"] is False
+        assert unconstrained_only.json()["unconstrained_enabled"] is True
+        assert unconstrained_only.json()["unconstrained_done"] is False
 
 
 def test_patch_mining_paths_only_when_paused_or_completed(tmp_env, project):
@@ -151,6 +182,10 @@ def test_patch_mining_paths_only_when_paused_or_completed(tmp_env, project):
         assert lite.status_code == 200
         assert lite.json()["heuristic_lite"] is True
         assert lite.json()["heuristic_enabled"] is True
+        unconstrained = client.patch(f"/api/projects/{project}", json={"unconstrained_enabled": True})
+        assert unconstrained.status_code == 200
+        assert unconstrained.json()["unconstrained_enabled"] is True
+        assert unconstrained.json()["unconstrained_done"] is False
 
 
 def test_mining_complete_heuristic_fast_and_dual(tmp_env, project):
@@ -356,6 +391,24 @@ def test_bypass_worker_acl_has_finish_bypass_not_finish_file():
     assert "Read" in ROLE_ACL["bypass_worker"]
     names = {t["function"]["name"] for t in registry.openai_tools_for_role("bypass_worker")}
     assert names == set(ROLE_ACL["bypass_worker"])
+
+
+def test_unconstrained_worker_acl_has_finish_file_and_round():
+    from app.tools import native_shell_tool
+
+    assert "FinishFile" in ROLE_ACL["unconstrained_worker"]
+    assert "FinishRound" in ROLE_ACL["unconstrained_worker"]
+    assert "FinishFix" not in ROLE_ACL["unconstrained_worker"]
+    assert "FinishSink" not in ROLE_ACL["unconstrained_worker"]
+    assert "FinishBypass" not in ROLE_ACL["unconstrained_worker"]
+    assert "Read" in ROLE_ACL["unconstrained_worker"]
+    names = {t["function"]["name"] for t in registry.openai_tools_for_role("unconstrained_worker")}
+    native = native_shell_tool()
+    expected = {
+        n for n in ROLE_ACL["unconstrained_worker"] if n not in {"Bash", "PowerShell"} or n == native
+    }
+    assert names == expected
+    assert native in names
 
 
 def test_heuristic_lite_complete_and_pick_entry(tmp_env, project):
@@ -579,4 +632,216 @@ def test_mining_complete_waits_on_bypass_queue(tmp_env, project):
         db.commit()
     assert mining_complete(project) is True
     assert project_complete_gates(project) is True
+
+
+_UNCONSTRAINED_SUBMIT = {
+    "title": "前台命令注入",
+    "vuln_type": "sqli",
+    "cwe": "CWE-89",
+    "file_path": "app/Main.java",
+    "line_no": 1,
+    "source_sink": "login -> query",
+    "auth_premise": "未授权",
+    "http_request": "GET /login?id=1 HTTP/1.1\nHost: x\n",
+    "poc_code": "print('poc')\n",
+    "expected_evidence": "error based",
+    "config_premise": "default",
+}
+_CONFIRM_SEVERITY = {
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "submission_tier": "cve_candidate",
+    "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
+}
+
+
+def test_unconstrained_finish_file_does_not_mark_fileweight(tmp_env, project):
+    from app.models import FileWeight, SessionLocal
+    from app.services.ingest import build_file_index
+    from app.services.paths import workspace_dir
+
+    build_file_index(project)
+    with SessionLocal() as db:
+        fw = (
+            db.query(FileWeight)
+            .filter(FileWeight.project_id == project, FileWeight.path == "app/Main.java")
+            .one()
+        )
+        fw.audited = False
+        db.commit()
+    ctx = _ctx(project, "unconstrained_worker")
+    ctx.state["round_id"] = 1
+    marked = registry.dispatch(ctx, "FinishFile", {"path": "app/Main.java"})
+    assert marked["ok"] is True
+    assert "不改启发式" in marked["message"]
+    with SessionLocal() as db:
+        fw = (
+            db.query(FileWeight)
+            .filter(FileWeight.project_id == project, FileWeight.path == "app/Main.java")
+            .one()
+        )
+        assert fw.audited is False
+    fresh = _ctx(project, "unconstrained_worker")
+    fresh.state["round_id"] = 2
+    done = registry.dispatch(
+        fresh,
+        "FinishRound",
+        {
+            "report": (
+                "## 本轮入口\n自主选择登录\n\n## 本轮挖掘方向\n\n"
+                "## 已尝试\n\n## 已排除（后续轮不要再走）\n"
+            )
+        },
+    )
+    assert done["ok"] is True
+    round_path = workspace_dir(project) / "rounds" / "unconstrained-round-2.md"
+    assert round_path.is_file()
+
+
+def test_unconstrained_submit_uses_bounty_gates_on_full_mode(tmp_env, project):
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.audit_mode = "full"
+        db.commit()
+    blocked = registry.dispatch(
+        _ctx(project, "unconstrained_worker"),
+        "SubmitVuln",
+        {**_UNCONSTRAINED_SUBMIT, "title": "反射 XSS", "vuln_type": "xss"},
+    )
+    assert blocked["ok"] is False
+    assert "赏金模式" in blocked["error"]
+    heuristic = registry.dispatch(
+        _ctx(project, "worker"),
+        "SubmitVuln",
+        {
+            **_UNCONSTRAINED_SUBMIT,
+            "title": "全量反射 XSS",
+            "vuln_type": "xss",
+            "file_path": "app/Xss.java",
+        },
+    )
+    assert heuristic["ok"] is True
+
+
+def test_unconstrained_confirm_rce_effect_ends_path(tmp_env, project):
+    from app.models import FileWeight, Project, SessionLocal, Vuln
+    from app.services.ingest import build_file_index
+
+    build_file_index(project)
+    with SessionLocal() as db:
+        for fw in db.query(FileWeight).filter(FileWeight.project_id == project).all():
+            if fw.skipped:
+                continue
+            fw.audited = True
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = False
+        proj.audit_mode = "full"
+        db.commit()
+    assert mining_complete(project) is False
+
+    submitted = registry.dispatch(
+        _ctx(project, "unconstrained_worker"),
+        "SubmitVuln",
+        _UNCONSTRAINED_SUBMIT,
+    )
+    assert submitted["ok"] is True
+    assert submitted["mining_path"] == "unconstrained"
+    vuln_id = submitted["vuln_id"]
+
+    missing = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            **_CONFIRM_SEVERITY,
+        },
+    )
+    assert missing["ok"] is False
+    assert "rce_effect" in missing["error"]
+
+    backend = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "backend",
+            "required_account": "user",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+            "submission_tier": "cve_candidate",
+            "submission_reason": "后台可利用但仍非前台 RCE 效果",
+            "rce_effect": True,
+        },
+    )
+    assert backend["ok"] is False
+    assert "前台" in backend["error"]
+
+    no_end = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "rce_effect": False,
+            **_CONFIRM_SEVERITY,
+        },
+    )
+    assert no_end["ok"] is True
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.unconstrained_done is False
+        row = db.get(Vuln, vuln_id)
+        assert row.rce_effect is False
+        row.status = "pending_review"
+        db.commit()
+
+    ended = registry.dispatch(
+        _ctx(project, "reviewer"),
+        "ConfirmVuln",
+        {
+            "vuln_id": vuln_id,
+            "evidence_level": "static_only",
+            "attack_surface": "frontend",
+            "rce_effect": True,
+            **_CONFIRM_SEVERITY,
+        },
+    )
+    assert ended["ok"] is True
+    assert ended["unconstrained_path_done"] is True
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.unconstrained_done is True
+        row = db.get(Vuln, vuln_id)
+        assert row.rce_effect is True
+        assert row.vuln_type == "sqli"
+    assert mining_complete(project) is True
+
+
+def test_reenable_unconstrained_clears_done(tmp_env, project):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.status = "paused"
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = True
+        db.commit()
+    with TestClient(app) as client:
+        off = client.patch(f"/api/projects/{project}", json={"unconstrained_enabled": False})
+        assert off.status_code == 200
+        assert off.json()["unconstrained_enabled"] is False
+        on = client.patch(f"/api/projects/{project}", json={"unconstrained_enabled": True})
+        assert on.status_code == 200
+        assert on.json()["unconstrained_enabled"] is True
+        assert on.json()["unconstrained_done"] is False
 

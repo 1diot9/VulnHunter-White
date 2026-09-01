@@ -169,6 +169,8 @@ export function formatMiningPath(value: string | null | undefined): string | nul
       return '快速扫描'
     case 'bypass':
       return '历史漏洞绕过'
+    case 'unconstrained':
+      return '无约束扫描'
     default:
       return null
   }
@@ -531,15 +533,18 @@ export function formatMiningPaths(p: {
   heuristic_lite?: boolean | null
   fast_enabled?: boolean | null
   bypass_enabled?: boolean | null
+  unconstrained_enabled?: boolean | null
 }): string {
   const heuristicOn = p.heuristic_enabled !== false
   const liteOn = heuristicOn && p.heuristic_lite === true
   const fastOn = p.fast_enabled === true
   const bypassOn = p.bypass_enabled === true
+  const unconstrainedOn = p.unconstrained_enabled === true
   const parts: string[] = []
   if (heuristicOn) parts.push(liteOn ? '启发式轻量' : '启发式挖掘')
   if (fastOn) parts.push('快速扫描')
   if (bypassOn) parts.push('历史漏洞绕过')
+  if (unconstrainedOn) parts.push('无约束扫描')
   return parts.join(' + ') || '启发式挖掘'
 }
 
@@ -548,6 +553,8 @@ export function formatMiningProgress(p: {
   heuristic_lite?: boolean | null
   fast_enabled?: boolean | null
   bypass_enabled?: boolean | null
+  unconstrained_enabled?: boolean | null
+  unconstrained_done?: boolean | null
   files_audited?: number | null
   files_weighted?: number | null
   files_skipped?: number | null
@@ -563,6 +570,7 @@ export function formatMiningProgress(p: {
   const liteOn = heuristicOn && p.heuristic_lite === true
   const fastOn = p.fast_enabled === true
   const bypassOn = p.bypass_enabled === true
+  const unconstrainedOn = p.unconstrained_enabled === true
   const parts: string[] = []
   if (heuristicOn && liteOn) {
     parts.push(`轻量入口 ${p.files_weight100_audited ?? 0}/${p.files_weight100 ?? 0}`)
@@ -571,6 +579,9 @@ export function formatMiningProgress(p: {
   }
   if (fastOn) parts.push(formatSinkProgress(p))
   if (bypassOn) parts.push(formatBypassProgress(p))
+  if (unconstrainedOn) {
+    parts.push(p.unconstrained_done ? '无约束扫描 已达成' : '无约束扫描')
+  }
   return parts.join(' · ')
 }
 

@@ -114,6 +114,9 @@ class Project(Base):
     # 历史漏洞绕过：收集完毕后按文档逐条尝试绕过
     bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     bypass_queue_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 无约束扫描：不注入权重，自主挖前台洞；Reviewer 判定达成 RCE 效果后结束
+    unconstrained_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    unconstrained_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # 项目级模型；空则使用设置页全局 default_model
     llm_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 挖掘 Worker 额外人工提示：注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息
@@ -278,8 +281,10 @@ class Vuln(Base):
     submission_tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # cve_candidate | low_impact | duplicate_grouped
     submission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # heuristic | fast | bypass — SubmitVuln 时按 Worker 角色写入
+    # heuristic | fast | bypass | unconstrained — SubmitVuln 时按 Worker 角色写入
     mining_path: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Reviewer：本条是否达成前台 RCE 效果（无约束扫描结束条件由 Reviewer 判定）
+    rce_effect: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     root_cause_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 同根因合并键，如 idor:SysCommentController / ssrf:checkSsrfHttpUrl
     merged_into_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -500,6 +505,8 @@ def _ensure_columns() -> None:
             "fast_queue_frozen": "BOOLEAN DEFAULT 0",
             "bypass_enabled": "BOOLEAN DEFAULT 0",
             "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
+            "unconstrained_enabled": "BOOLEAN DEFAULT 0",
+            "unconstrained_done": "BOOLEAN DEFAULT 0",
             "llm_model": "VARCHAR(256)",
             "worker_hint": "TEXT",
             "recon_hint": "TEXT",
@@ -516,6 +523,7 @@ def _ensure_columns() -> None:
             "submission_tier": "VARCHAR(64)",
             "submission_reason": "TEXT",
             "mining_path": "VARCHAR(32)",
+            "rce_effect": "BOOLEAN",
             "config_premise": "VARCHAR(32)",
             "root_cause_key": "VARCHAR(256)",
             "merged_into_id": "INTEGER",

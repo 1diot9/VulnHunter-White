@@ -29,6 +29,7 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
     ['mine', '启发式'],
     ['fast', '快速扫描'],
     ['bypass', '历史漏洞绕过'],
+    ['unconstrained', '无约束扫描'],
     ['fix', '修复'],
   ],
   reviewer: [

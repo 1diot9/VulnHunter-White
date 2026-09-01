@@ -946,7 +946,10 @@ class AgentLoop:
                 result.ok = True
                 result.stop_reason = "stop_when"
                 result.state = self.state
-                if self.state.get("round_finished") and self.phase == "worker":
+                if self.state.get("round_finished") and self.phase in (
+                    "worker",
+                    "unconstrained-worker",
+                ):
                     path, summary = self._conclude_round(messages)
                     result.summary_path = path
                     result.round_summary = summary
@@ -956,7 +959,10 @@ class AgentLoop:
             # Terminal tool flags
             if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished") or self.state.get("round_finished") or self.state.get("index_done"):
                 # round_finished alone shouldn't end entire worker process — scheduler decides
-                if self.state.get("round_finished") and self.phase == "worker":
+                if self.state.get("round_finished") and self.phase in (
+                    "worker",
+                    "unconstrained-worker",
+                ):
                     result.ok = True
                     result.stop_reason = "round_finished"
                     path, summary = self._conclude_round(messages)
@@ -1533,7 +1539,8 @@ class AgentLoop:
         """Compress finished worker round for next-round handoff."""
         try:
             summary = self._request_summary(messages)
-            path = self._store_summary("conclude" if self.silent else "worker-round", summary)
+            prefix = "unconstrained-round" if self.phase == "unconstrained-worker" else "worker-round"
+            path = self._store_summary("conclude" if self.silent else prefix, summary)
             self._live.system(self.project_id, f"本轮结束，上下文已压缩落盘: {path}", phase=self.phase)
             return path, summary
         except Exception as e:  # noqa: BLE001

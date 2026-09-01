@@ -62,11 +62,17 @@ const RECON_LOG_TABS = [
   ['recon-mark', '盖章', 'mark'],
 ] as const
 
-function workerLogTabs(project: { heuristic_enabled?: boolean; fast_enabled?: boolean; bypass_enabled?: boolean }) {
+function workerLogTabs(project: {
+  heuristic_enabled?: boolean
+  fast_enabled?: boolean
+  bypass_enabled?: boolean
+  unconstrained_enabled?: boolean
+}) {
   const tabs: [string, string][] = []
   if (project.heuristic_enabled !== false) tabs.push(['mine', '启发式'])
   if (project.fast_enabled === true) tabs.push(['fast', '快速扫描'])
   if (project.bypass_enabled === true) tabs.push(['bypass', '历史漏洞绕过'])
+  if (project.unconstrained_enabled === true) tabs.push(['unconstrained', '无约束扫描'])
   tabs.push(['fix', '修复'])
   return tabs
 }
@@ -103,6 +109,9 @@ function defaultPhaseTab(phase: string, status: string): string {
   if (status === 'completed' || phase === 'done' || phase === 'reviewer' || status === 'reviewing') {
     return 'reviewer'
   }
+  if (phase === 'unconstrained-worker' || phase === 'unconstrained') return 'unconstrained'
+  if (phase === 'fast-worker' || phase === 'fast') return 'fast'
+  if (phase === 'bypass-worker' || phase === 'bypass') return 'bypass'
   if (phase === 'worker' || phase === 'fix' || status === 'auditing') return 'worker'
   return 'recon'
 }
@@ -478,6 +487,8 @@ export default function ProjectDetailPage() {
               bypassQueueFrozen={project.bypass_queue_frozen}
               bypassQueued={project.bypass_queued}
               bypassDone={project.bypass_done}
+              unconstrainedEnabled={project.unconstrained_enabled}
+              unconstrainedDone={project.unconstrained_done}
               onSelect={(pid) => {
                 setTab('logs')
                 if (pid !== 'done') selectPhase(pid)
@@ -653,6 +664,9 @@ export default function ProjectDetailPage() {
             : ''}
           {project.bypass_enabled
             ? ' 历史漏洞绕过以收集到的历史漏洞文档为输入，每轮尝试绕过一条。'
+            : ''}
+          {project.unconstrained_enabled
+            ? ' 无约束扫描只注入代码地图与鉴权，始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束该路径。'
             : ''}
           {project.status === 'paused' || project.project_paused || project.status === 'completed'
             ? ' 暂停或完成后可更改挖掘模式；挖掘路径请到项目配置中修改。续跑后按新规则生效。'

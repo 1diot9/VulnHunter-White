@@ -364,6 +364,8 @@ export default function HomePage() {
                 bypassQueueFrozen={p.bypass_queue_frozen}
                 bypassQueued={p.bypass_queued}
                 bypassDone={p.bypass_done}
+                unconstrainedEnabled={p.unconstrained_enabled}
+                unconstrainedDone={p.unconstrained_done}
               />
               <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                 <span>确认 {p.vuln_confirmed}</span>

@@ -27,6 +27,7 @@ const MINING_TOOLTIPS: Record<string, string> = {
   heuristic: '由启发式 Worker 在 Recon 完成后按文件挖掘产出。',
   fast: '由快速扫描路径（Semgrep → SinkTriage → Fast Worker）产出。',
   bypass: '由历史漏洞绕过路径尝试补丁绕过或未修复确认产出。',
+  unconstrained: '由无约束扫描路径产出。该路径始终走赏金闸门；Reviewer 可判定是否达成 RCE 效果。',
 }
 
 const CONFIG_TOOLTIPS: Record<string, string> = {

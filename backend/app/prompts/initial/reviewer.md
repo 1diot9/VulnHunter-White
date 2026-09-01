@@ -2,6 +2,7 @@
 审计对象：${target_kind_label}。${target_kind_hint}
 审核漏洞 ID=${vuln_id}
 元数据: ${payload}
+${unconstrained_note}
 ${lab_note}
 动态验证计划: ${debug_plan}
 本轮只审核漏洞，不要再搭建 Docker 靶场（环境轮已结束，见 docs/lab.md）。**第一步先验证靶场健康**（Read docs/lab.md、探测 target_url）；若刚完成修复，须先调用 RecordLabRepair 写入 docs/lab-repairs.md（失效原因+解决方案），再开始漏洞验证。靶场故障时调用 RequestLabRebuild(reason=...)，不要自己修 Docker。

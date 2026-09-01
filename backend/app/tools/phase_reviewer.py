@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from ..audit_mode import AUDIT_MODE_BOUNTY, bounty_confirm_block_reason, normalize_audit_mode
+from ..audit_mode import bounty_confirm_block_reason, normalize_audit_mode, uses_bounty_gates
 from ..config import settings
 from ..dynamic_verify import (
     EVIDENCE_DYNAMIC,
@@ -28,6 +28,7 @@ from ..harness_depth import (
     parse_harness_depth,
 )
 from ..models import Project, SessionLocal, Vuln
+from ..mining_paths import MINING_PATH_UNCONSTRAINED, normalize_mining_path
 from ..services.cli_tool_index import search_cli_tools
 from ..services.affected_locations import (
     append_affected_locations,
@@ -433,6 +434,19 @@ def _merge_into_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def _parse_rce_effect(raw: Any) -> bool | None:
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return None
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("rce_effect 须为 true 或 false")
+
+
 def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
@@ -540,7 +554,30 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             integration_verified=False,
         )
         audit_mode = normalize_audit_mode(None if not proj else proj.audit_mode)
-        if audit_mode == AUDIT_MODE_BOUNTY:
+        mining_path = normalize_mining_path(None if not vuln else vuln.mining_path)
+        try:
+            rce_effect = _parse_rce_effect(args.get("rce_effect"))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if mining_path == MINING_PATH_UNCONSTRAINED:
+            if rce_effect is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "无约束扫描产出须标注 rce_effect=true|false。"
+                        "由你判定本条前台漏洞是否达成 RCE 效果（不必看 vuln_type 是否为 rce）；"
+                        "true 且前台确认后路径结束，当前挖掘轮仍会跑完。"
+                    ),
+                }
+            if rce_effect and surface != "frontend":
+                return {
+                    "ok": False,
+                    "error": (
+                        "无约束扫描结束条件只计前台可利用且达成 RCE 效果的漏洞。"
+                        "后台请标 rce_effect=false。"
+                    ),
+                }
+        if uses_bounty_gates(audit_mode=audit_mode, mining_path=mining_path):
             blocked = bounty_confirm_block_reason(
                 vuln_type=str(vuln.vuln_type or ""),
                 submission_tier=submission.tier,
@@ -736,6 +773,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         vuln.root_cause_key = submission.root_cause_key
         if config_premise:
             vuln.config_premise = config_premise
+        if rce_effect is not None:
+            vuln.rce_effect = rce_effect
         stamp_root_cause_on_parent(db, vuln)
         if poc_code:
             vuln.poc_code = str(poc_code)
@@ -768,6 +807,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
         db.commit()
         status = vuln.status
+        mining_path = normalize_mining_path(vuln.mining_path)
+        surface_saved = vuln.attack_surface
     queued = False
     skip_reason = ""
     if surface == "frontend" and status in ("confirmed", "static_only"):
@@ -778,6 +819,24 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         skip_reason = str(result.get("reason") or "")
     ctx.state["review_done"] = True
     ctx.state["review_verdict"] = status
+    unconstrained_ended = False
+    if (
+        mining_path == MINING_PATH_UNCONSTRAINED
+        and rce_effect
+        and surface_saved == "frontend"
+        and status in ("confirmed", "static_only")
+    ):
+        from .phase_worker import mark_unconstrained_done
+        from ..services.live_log import live_log
+
+        unconstrained_ended = mark_unconstrained_done(ctx.project_id)
+        if unconstrained_ended:
+            live_log.system(
+                ctx.project_id,
+                f"无约束扫描：漏洞 #{int(vuln_id)} 经 Reviewer 判定达成前台 RCE 效果，"
+                "当前挖掘轮结束后不再新开本路径",
+                phase="unconstrained-worker",
+            )
     out: dict[str, Any] = {
         "ok": True,
         "vuln_id": int(vuln_id),
@@ -797,6 +856,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "submission_tier_label": submission.tier_label,
         "submission_reason": submission.reason,
         "root_cause_key": submission.root_cause_key,
+        "rce_effect": rce_effect,
         "verifier_queued": queued,
         "asset_proof_updated": bool(proof.get("updated")),
     }
@@ -817,6 +877,10 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     elif skip_reason:
         out["verifier_skip_reason"] = skip_reason
         out["message"] = f"已确认前台漏洞。未做互联网复测：{skip_reason}"
+    if unconstrained_ended:
+        out["unconstrained_path_done"] = True
+        extra = "无约束扫描路径将在当前挖掘轮结束后关闭。"
+        out["message"] = f"{out['message']} {extra}" if out.get("message") else extra
     if account:
         out["required_account_label"] = _ACCOUNT_LABELS[account]
     return out
@@ -1053,6 +1117,9 @@ def register_reviewer_tools() -> None:
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次 Confirm 会提醒复查合并；"
                 "确认危害/鉴权不同仍要单独确认时，再次调用并传 confirm_not_duplicate=true"
                 "（仅本会话提醒过一次后才接受）。"
+                "无约束扫描产出必须传 rce_effect=true|false：由你判定本条前台漏洞是否达成 RCE 效果"
+                "（不必看 vuln_type 是否为 rce）；true 且前台确认后该路径结束，当前挖掘轮仍会跑完。"
+                "无约束扫描产出始终走赏金闸门。"
                 "严重度按 CVSS 3.1 向量由系统计分，不要手填分数，也不要按漏洞类型映射。"
                 "PR 必须与 attack_surface / required_account 一致，否则拒绝确认。"
                 "SSRF 须按观察面确认：有回显才能写可读元数据/内网正文；"
@@ -1162,6 +1229,13 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "疑似重复提醒后仍确认单独 Confirm 时传 true。"
                             "仅本会话已因同一指纹被提醒过一次后才接受；首次带上会被拒绝。"
+                        ),
+                    },
+                    "rce_effect": {
+                        "type": "boolean",
+                        "description": (
+                            "无约束扫描产出必填。本条前台漏洞是否达成 RCE 效果，由 Reviewer 判定，"
+                            "不由 vuln_type 是否为 rce 决定。true 且 attack_surface=frontend 时结束该路径。"
                         ),
                     },
                     "fofa_fingerprint": {

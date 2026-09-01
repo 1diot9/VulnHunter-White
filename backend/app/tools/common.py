@@ -830,6 +830,8 @@ def todo_relpath(ctx) -> str:
         return "workspace/todos-recon-source-ext.json"
     if role == "worker":
         return f"workspace/todos-worker-{_todo_slug(getattr(ctx, 'worker_id', None), 'default')}.json"
+    if role in ("unconstrained_worker", "unconstrained-worker"):
+        return "workspace/todos-unconstrained-worker.json"
     if role == "reviewer":
         vid = getattr(ctx, "vuln_id", None)
         return f"workspace/todos-reviewer-{_todo_slug(str(vid) if vid is not None else None, 'current')}.json"

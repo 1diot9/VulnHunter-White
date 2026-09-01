@@ -583,6 +583,14 @@ def test_submit_vuln_sets_mining_path_by_role(tmp_env, project):
     )
     assert bypass["ok"] is True
     assert bypass["mining_path"] == "bypass"
+
+    unconstrained = registry.dispatch(
+        _ctx(project, "unconstrained_worker"),
+        "SubmitVuln",
+        payload("无约束扫描洞", "app/Free.java"),
+    )
+    assert unconstrained["ok"] is True
+    assert unconstrained["mining_path"] == "unconstrained"
     bypass_report = (vuln_dir(project, bypass["vuln_id"]) / "report.md").read_text(encoding="utf-8")
     assert "### 补丁绕过简析" in bypass_report
     tech_idx = bypass_report.index("## 漏洞技术细节")

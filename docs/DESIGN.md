@@ -104,7 +104,7 @@ VulnHunter-White 的特点：
 
 ## 4. VulnHunter-White 设计分析
 
-以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。
+以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。
 
 ### 4.1 工具集
 
@@ -273,7 +273,7 @@ Java 字节码反编译（设计已拍板、实现见后续迭代）：Recon 用
 
 **创新点：按定权文件排队，而非 Agent 自由选点。** 权重从高到低，每文件一轮；每轮产出 `worker-round-N.md` 摘要，后续轮注入最近 10 轮摘要，避免重复尝试。
 
-**轻量开关**：只把权重 100 的文件当入口，降低 token 消耗。每项目可配置 `worker_hint`，注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息。
+**轻量开关**：只把权重 100 的文件当入口，降低 token 消耗。每项目可配置 `worker_hint`，注入启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描每轮用户消息。
 
 **AppendAffectedLocations**：同根因多受影响点合并为父子报告集合，避免重复报告又不丢信息。
 
@@ -309,7 +309,20 @@ Java 字节码反编译（设计已拍板、实现见后续迭代）：Recon 用
 
 三步流水线：**Semgrep（纯代码，最多 200 条）→ Agent 精筛（最多 60 条）→ 按 Sink 回推 source**。快速路径覆盖 SAST Sink；鉴权 / IDOR / 业务逻辑仍靠启发式。
 
-#### 4.5.4 报告修复（fix）
+#### 4.5.4 无约束扫描（unconstrained_worker）
+
+| 工具 | 用途 |
+| --- | --- |
+| SearchOldVuln | 与历史洞 / 已提交报告去重 |
+| SubmitVuln | 提交待审核漏洞（始终走赏金闸门） |
+| ReadCveRecord / SetCveRecordField | 提交后填写 CVE JSON |
+| AppendAffectedLocations | 追加同根因受影响点 |
+| FinishFile | 记下本路径已看文件，**不**改启发式 `FileWeight.audited` |
+| FinishRound | 结束本轮；不要求先 FinishFile |
+
+与启发式隔离：只注入 `docs/code-map.md` 与 `docs/auth.md`，不派发定权焦点。固定并发 1。历史漏洞收集完毕后启动。Submit/Confirm 始终走赏金闸门。路径结束由 Reviewer 对前台产出标 `rce_effect=true` 决定，不看 `vuln_type` 是否为 rce；当前轮仍跑完。
+
+#### 4.5.5 报告修复（fix）
 
 Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与报告包装由 Reviewer 收口，一般不打回 Worker 改 PoC。Fix Worker 用于纠正分析债务，工具含 `SearchOldVuln`、`SubmitVuln`、`ReadCveRecord` / `SetCveRecordField`、`AppendAffectedLocations`、`FinishFix`。
 
@@ -416,11 +429,13 @@ flowchart LR
     D --> E[启发式 Worker]
     D --> F[快速扫描]
     D --> G[历史漏洞绕过]
+    C --> U[无约束扫描]
   end
   subgraph Review
     E --> H[Reviewer]
     F --> H
     G --> H
+    U --> H
   end
   H --> I{可选}
   I --> J[Verifier]

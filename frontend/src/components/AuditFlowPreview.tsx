@@ -21,6 +21,7 @@ type PreviewProps = {
   heuristicLite?: boolean
   fastEnabled?: boolean
   bypassEnabled?: boolean
+  unconstrainedEnabled?: boolean
   className?: string
 }
 
@@ -45,6 +46,7 @@ function buildNodes({
   heuristicLite = false,
   fastEnabled = false,
   bypassEnabled = false,
+  unconstrainedEnabled = false,
 }: PreviewProps): FlowNode[] {
   const bounty = auditMode !== 'full'
   const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
@@ -55,9 +57,15 @@ function buildNodes({
   const liteOn = heuristicOn && heuristicLite === true
   const fastOn = fastEnabled === true
   const bypassOn = bypassEnabled === true
+  const unconstrainedOn = unconstrainedEnabled === true
   const scopeChip = bounty
     ? { id: 'scope', label: '只报高危害', hint: 'RCE、注入、任意文件操作、越权、存储型 XSS、1-click CSRF、有服务端机密危害的硬编码密钥等。' }
     : { id: 'scope', label: '含低危害难利用', hint: 'CORS、反射 XSS、缺速率限制、安全头等由 Reviewer 分层。' }
+  const unconstrainedScopeChip = {
+    id: 'scope',
+    label: '只报高危害',
+    hint: '本路径始终走赏金闸门，与项目全量 / 自定义模式无关。',
+  }
 
   const mines: FlowNode[] = []
   if (heuristicOn) {
@@ -102,12 +110,22 @@ function buildNodes({
       chips: [scopeChip],
     })
   }
+  if (unconstrainedOn) {
+    mines.push({
+      id: 'unconstrained',
+      title: '无约束扫描',
+      tag: '赏金',
+      body: '只注入代码地图与鉴权，不派发定权文件。固定 1 个 Worker，始终走赏金闸门。Reviewer 判定前台洞达成 RCE 效果后结束本路径；其他前台洞也要交。',
+      hint: '历史漏洞收集完毕后启动，与启发式隔离。结束条件由 Reviewer 判定 RCE 效果，不看 vuln_type。',
+      chips: [unconstrainedScopeChip],
+    })
+  }
 
   return [
     {
       id: 'recon',
       title: '侦察',
-      body: '摸清结构与鉴权，补齐扩展名、收录历史漏洞并给文件定权。启发式和历史漏洞绕过在历史漏洞收集完毕后开始；快速扫描等四步（含定权）全部完成。',
+      body: '摸清结构与鉴权，补齐扩展名、收录历史漏洞并给文件定权。启发式、历史漏洞绕过与无约束扫描在历史漏洞收集完毕后开始；快速扫描等四步（含定权）全部完成。',
       hint: '导入后先跑侦察：代码地图、源码扩展名、历史漏洞、文件定权。启发式不等待定权全部结束。',
       chips: [...RECON_STEPS],
     },
@@ -284,13 +302,13 @@ function FlowFork({ nodes }: { nodes: FlowNode[] }) {
       <div
         className={cn(
           'relative grid gap-2',
-          nodes.length >= 3 ? 'grid-cols-3' : 'grid-cols-2',
+          nodes.length >= 4 ? 'grid-cols-2' : nodes.length >= 3 ? 'grid-cols-3' : 'grid-cols-2',
         )}
       >
         <div
           className={cn(
             'pointer-events-none absolute top-0 h-px bg-slate-600',
-            nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
+            nodes.length >= 4 ? 'left-1/4 right-1/4' : nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
           )}
           aria-hidden
         />
@@ -306,7 +324,7 @@ function FlowFork({ nodes }: { nodes: FlowNode[] }) {
         <div
           className={cn(
             'pointer-events-none absolute bottom-0 h-px bg-slate-600',
-            nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
+            nodes.length >= 4 ? 'left-1/4 right-1/4' : nodes.length >= 3 ? 'left-[16.67%] right-[16.67%]' : 'left-1/4 right-1/4',
           )}
           aria-hidden
         />
@@ -316,7 +334,7 @@ function FlowFork({ nodes }: { nodes: FlowNode[] }) {
 }
 
 function isMineNode(id: string) {
-  return id === 'heuristic' || id === 'fast' || id === 'bypass'
+  return id === 'heuristic' || id === 'fast' || id === 'bypass' || id === 'unconstrained'
 }
 
 function summaryText({
@@ -330,6 +348,7 @@ function summaryText({
   heuristicLite = false,
   fastEnabled = false,
   bypassEnabled = false,
+  unconstrainedEnabled = false,
 }: PreviewProps): string {
   const mode = formatAuditMode(auditMode)
   const paths = formatMiningPaths({
@@ -337,9 +356,13 @@ function summaryText({
     heuristic_lite: heuristicLite,
     fast_enabled: fastEnabled,
     bypass_enabled: bypassEnabled,
+    unconstrained_enabled: unconstrainedEnabled,
   })
   const onCount =
-    (heuristicEnabled !== false ? 1 : 0) + (fastEnabled === true ? 1 : 0) + (bypassEnabled === true ? 1 : 0)
+    (heuristicEnabled !== false ? 1 : 0) +
+    (fastEnabled === true ? 1 : 0) +
+    (bypassEnabled === true ? 1 : 0) +
+    (unconstrainedEnabled === true ? 1 : 0)
   const mine = onCount > 1 ? `${mode} · ${paths.replaceAll(' + ', ' ∥ ')}` : `${mode} · ${paths}`
   const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
   const review =
@@ -389,7 +412,7 @@ export function AuditFlowPreview(props: PreviewProps) {
           ))}
         </div>
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          历史漏洞收集完毕后启发式与历史漏洞绕过可与定权并行；快速扫描等侦察四步完成。开启的挖掘路径并行推进，并与审核并行：一边挖一边审。明显误报本轮丢弃；PoC 与报告包装由 Reviewer 改完确认；仅根因分析错了才打回 Fix 再审。开启的挖掘路径都结束后项目才完成。
+          历史漏洞收集完毕后启发式、历史漏洞绕过与无约束扫描可与定权并行；快速扫描等侦察四步完成。开启的挖掘路径并行推进，并与审核并行：一边挖一边审。明显误报本轮丢弃；PoC 与报告包装由 Reviewer 改完确认；仅根因分析错了才打回 Fix 再审。开启的挖掘路径都结束后项目才完成。
         </p>
       </section>
     </TooltipProvider>

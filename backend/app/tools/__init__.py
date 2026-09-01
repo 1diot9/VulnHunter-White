@@ -168,6 +168,26 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishBypass",
         }
     ),
+    "unconstrained_worker": frozenset(
+        {
+            "Read",
+            "Grep",
+            "Glob",
+            "Write",
+            "Bash",
+            "PowerShell",
+            "TodoWrite",
+            "SearchOldVuln",
+            "SubmitVuln",
+            "ReadCveRecord",
+            "SetCveRecordField",
+            "AppendAffectedLocations",
+            "FinishFile",
+            "FinishRound",
+            "ListBytecode",
+            "DecompileJava",
+        }
+    ),
     "sink_triage": frozenset({"FinishSinkTriage"}),
     "reviewer": frozenset(
         {
