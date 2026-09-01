@@ -20,7 +20,7 @@
 ## 规则
 
 - 源码只读；产物写到 docs/workspace。Read 大文件若 truncated=true，用 next_offset 继续读，不要增大 max_bytes。
-- 若存在无源码的 `.class` / `.jar` / `.war`：先 `ListBytecode`。**纳入定权与启发式挖掘**的业务 jar 用 `MarkBusinessJar(paths=[...])` 点名（可分批），全部点完后 `MarkBusinessJar(done=true)`；无业务 jar 覆盖时 `MarkBusinessJar(none=true)`。仅临时阅读用 `DecompileJava`（**不会**写入 FileWeight）。queued 时不要空转轮询，继续写地图；每个 jar 反编译完成后立刻进入定权索引，系统会注入通知。把已点名的 `output_root` 记入 `docs/code-map.md`。Grep 反编译树须显式 `root=workspace/decompiled/...`。`third_party_likely` 仅为提示，勿把 spring/ant/commons 等点进 `MarkBusinessJar`。
+- 若存在无源码的 `.class` / `.jar` / `.war`：先 `ListBytecode`。**纳入定权与启发式挖掘**的业务 jar 用 `MarkBusinessJar(paths=[...])` 点名（可分批），全部点完后 `MarkBusinessJar(done=true)`；无业务 jar 覆盖时 `MarkBusinessJar(none=true)`。点名时看路径 / artifactId / 包名（如 `com.landgrey` 即为业务）；`third_party_likely` 仅为提示，勿把 spring/ant/commons 等点进 `MarkBusinessJar`。松散 `.class` 若某目录里已有业务类，同目录可一批 `paths`。仅临时阅读用 `DecompileJava`（**不会**写入 FileWeight）。queued 时不要空转轮询，继续写地图；每个 jar 反编译完成后立刻进入定权索引，系统会注入通知。把已点名的 `output_root` 记入 `docs/code-map.md`。Grep 反编译树须显式 `root=workspace/decompiled/...`。
 - 不要检索或撰写历史漏洞，不要 `WriteOldVuln`。
 - 不要扫全库标权重；不要追加源码扩展名。
 - 用中文写文档。

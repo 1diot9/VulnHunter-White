@@ -9,4 +9,4 @@ Worker=${worker_id} 轮次=${round_id}
 FinishFile 可用来记下本路径已看完的文件，不会改启发式队列，也不会结束本轮。FinishRound 不要求先 FinishFile。report 对齐 templates/round-report.md。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。
 有 HTTP 面时 poc_code 必须可对任意目标复测：`python poc.py -u <url>`，必须支持 `--proxy`（空则直连），RCE 加 `-c/--cmd` 并打印回显；脚本输出默认英语、须 `--zh` 切中文。SSRF 须标明观察面。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`。提交后用 ReadCveRecord / SetCveRecordField 填写 CVE JSON。
-Grep 必须尽量缩 `root`、指明 `glob`；禁止只传 `Grep(pattern=...)` 不带 root/glob。
+Grep 必须尽量缩 `root`、指明 `glob`；禁止只传 `Grep(pattern=...)` 不带 root/glob。需要看无源码 class/jar 时用 ListBytecode / DecompileJava（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 root=workspace/decompiled/...。

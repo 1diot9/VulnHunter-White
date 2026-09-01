@@ -84,12 +84,16 @@ _STATUS_FAILED = "failed"
 _STATUS_SKIPPED = "skipped"
 _STATUS_CANCELLED = "cancelled"
 
+_LANE_BATCH = "batch"
+_LANE_INTERACTIVE = "interactive"
+
 _lock = threading.RLock()
 _jobs: dict[str, "DecompileJob"] = {}
 _key_to_job: dict[str, str] = {}  # index_key -> job_id
 _project_cancel: dict[int, threading.Event] = {}
 _ingest_locks: dict[int, threading.Lock] = {}
-_executor: ThreadPoolExecutor | None = None
+_batch_executor: ThreadPoolExecutor | None = None
+_interactive_executor: ThreadPoolExecutor | None = None
 # Optional test hook: (cmd, cwd, timeout) -> CompletedProcess-like
 _run_jadx_hook: Callable[..., Any] | None = None
 _INGEST_JARS_PER_CALL = 1
@@ -179,6 +183,7 @@ def wait_decompile_service_idle(*, timeout: float = 15.0) -> bool:
 
 def reset_decompile_service() -> None:
     """Test helper: drop queued sidecar work and wait for the current item."""
+    _reset_jadx_executors()
     with _svc_cond:
         _svc_queue.clear()
         _svc_pending.clear()
@@ -280,6 +285,7 @@ class DecompileJob:
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     proc: subprocess.Popen[Any] | None = None
+    lane: str = _LANE_INTERACTIVE
 
 
 def decompiled_root(project_id: int) -> Path:
@@ -597,6 +603,7 @@ def _persist_entry(job: DecompileJob) -> None:
             "class_count": job.class_count,
             "primary_files": job.primary_files[:20],
             "finished_at": job.finished_at,
+            "lane": job.lane,
         }
         _rewrite_index(job.project_id, entries)
     try:
@@ -707,13 +714,59 @@ def _job_timeout() -> int:
     return max(60, int(getattr(settings, "decompile_timeout_sec", 1800) or 1800))
 
 
-def _pool() -> ThreadPoolExecutor:
-    global _executor
+def _decompile_concurrency() -> int:
+    return max(1, min(4, int(getattr(settings, "decompile_concurrency", 2) or 2)))
+
+
+def jadx_lane_workers() -> dict[str, int]:
+    """Batch vs interactive pool sizes. interactive=0 means both lanes share batch."""
+    n = _decompile_concurrency()
+    if n < 2:
+        return {_LANE_BATCH: n, _LANE_INTERACTIVE: 0}
+    return {_LANE_BATCH: n - 1, _LANE_INTERACTIVE: 1}
+
+
+def _normalize_lane(lane: str | None, *, audit_queue: bool) -> str:
+    text = str(lane or "").strip().lower()
+    if text in {_LANE_BATCH, _LANE_INTERACTIVE}:
+        return text
+    return _LANE_BATCH if audit_queue else _LANE_INTERACTIVE
+
+
+def _reset_jadx_executors() -> None:
+    global _batch_executor, _interactive_executor
     with _lock:
-        if _executor is None:
-            workers = max(1, min(4, int(getattr(settings, "decompile_concurrency", 2) or 2)))
-            _executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vh-jadx")
-        return _executor
+        for ex in (_batch_executor, _interactive_executor):
+            if ex is None:
+                continue
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001
+                pass
+        _batch_executor = None
+        _interactive_executor = None
+
+
+def _pool_for(lane: str) -> ThreadPoolExecutor:
+    global _batch_executor, _interactive_executor
+    sizes = jadx_lane_workers()
+    with _lock:
+        if _batch_executor is None:
+            _batch_executor = ThreadPoolExecutor(
+                max_workers=max(1, int(sizes[_LANE_BATCH])),
+                thread_name_prefix="vh-jadx",
+            )
+        interactive_n = int(sizes[_LANE_INTERACTIVE])
+        if interactive_n <= 0:
+            return _batch_executor
+        if _interactive_executor is None:
+            _interactive_executor = ThreadPoolExecutor(
+                max_workers=interactive_n,
+                thread_name_prefix="vh-jadx-w",
+            )
+        if lane == _LANE_INTERACTIVE:
+            return _interactive_executor
+        return _batch_executor
 
 
 def _scan_output(output_abs: Path, project_id: int) -> tuple[int, list[str], bool]:
@@ -1060,6 +1113,7 @@ def submit_decompile(
     force: bool = False,
     reason: str = "",
     audit_queue: bool = False,
+    lane: str | None = None,
 ) -> dict[str, Any]:
     try:
         source_rel, source_abs = _normalize_source_rel(project_id, source)
@@ -1149,13 +1203,14 @@ def submit_decompile(
             package=(package or "").strip(),
             status=_STATUS_QUEUED,
             forced_third_party=bool(third and force),
+            lane=_normalize_lane(lane, audit_queue=audit_queue),
         )
         if third and force and reason:
             job.error = f"force: {reason[:200]}"
         _jobs[job_id] = job
         _key_to_job[index_key] = job_id
         _persist_entry(job)
-        _pool().submit(_execute_job, job_id)
+        _pool_for(job.lane).submit(_execute_job, job_id)
         return _job_to_result(job)
 
 
@@ -1233,7 +1288,7 @@ def enqueue_heuristic_candidates(project_id: int, *, limit: int = 8) -> list[dic
             # still allow non-third-party jar at repo root-ish
             if path.count("/") > 4:
                 continue
-        result = submit_decompile(project_id, path)
+        result = submit_decompile(project_id, path, lane=_LANE_BATCH)
         queued.append(result)
         if len(queued) >= limit:
             break
@@ -1786,12 +1841,18 @@ def resume_orphaned_decompile_jobs(project_id: int) -> dict[str, Any]:
         if norm in live_sources:
             seen.add(norm)
             continue
+        saved_lane = str(entry.get("lane") or "").strip().lower()
+        if saved_lane not in {_LANE_BATCH, _LANE_INTERACTIVE}:
+            saved_lane = (
+                _LANE_BATCH if is_marked_business_jar(project_id, source) else _LANE_INTERACTIVE
+            )
         result = submit_decompile(
             project_id,
             source,
             class_name=str(entry.get("class_name") or ""),
             package=str(entry.get("package") or ""),
             audit_queue=True,
+            lane=saved_lane,
         )
         seen.add(norm)
         live_sources.add(norm)
@@ -1808,7 +1869,9 @@ def resume_orphaned_decompile_jobs(project_id: int) -> dict[str, Any]:
         st = get_job_status(project_id, source=source_rel)
         if st and st.get("status") == _STATUS_READY:
             continue
-        result = submit_decompile(project_id, source_rel, audit_queue=True)
+        result = submit_decompile(
+            project_id, source_rel, audit_queue=True, lane=_LANE_BATCH
+        )
         jid = str(result.get("job_id") or "")
         if jid and jid not in live_before:
             resumed.append(result)
@@ -1823,6 +1886,37 @@ def business_jar_decompile_pending(project_id: int) -> bool:
         st = get_job_status(project_id, source=source_rel)
         if st and st.get("status") in (_STATUS_QUEUED, _STATUS_RUNNING):
             return True
+    return False
+
+
+def business_jar_coverage_pending(project_id: int) -> bool:
+    """True while named business jars still need jadx or FileWeight ingest.
+
+    Failed / skipped / cancelled jars do not block recon_done.
+    """
+    try:
+        from .decompile_store import pending_count
+
+        if pending_count(project_id) > 0:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    if business_jar_decompile_pending(project_id):
+        return True
+    state = load_business_jar_state(project_id)
+    paths = list(state.get("paths") or [])
+    if not paths:
+        return False
+    ingested = {str(p).replace("\\", "/") for p in (state.get("ingested") or [])}
+    for source_rel in paths:
+        norm = str(source_rel).replace("\\", "/")
+        if norm in ingested:
+            continue
+        st = get_job_status(project_id, source=source_rel)
+        status = str((st or {}).get("status") or "")
+        if status in {_STATUS_FAILED, _STATUS_SKIPPED, _STATUS_CANCELLED}:
+            continue
+        return True
     return False
 
 

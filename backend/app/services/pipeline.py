@@ -3734,7 +3734,7 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
                 phase="recon-mark",
                 role="recon_mark",
             )
-        from .decompile_java import schedule_jar_ingest
+        from .decompile_java import business_jar_coverage_pending, schedule_jar_ingest
 
         schedule_jar_ingest(project_id)
         if recon_gates_met(project_id):
@@ -3779,6 +3779,10 @@ def _run_recon_marking(project_id: int, cancel: threading.Event) -> None:
             continue
         batch = pick_unmarked_batch(project_id, batch_size)
         if not batch:
+            if business_jar_coverage_pending(project_id):
+                schedule_jar_ingest(project_id)
+                cancel.wait(timeout=2.0)
+                continue
             return
         status = recon_gates_status(project_id)
         unmarked = int(status.get("unmarked") or 0)

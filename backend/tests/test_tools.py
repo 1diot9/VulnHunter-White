@@ -138,13 +138,19 @@ def test_recon_gates_requires_docs_and_weights(tmp_env, project, monkeypatch):
     assert none["ok"] is True
     assert recon_gates_met(project) is True
     monkeypatch.setattr(
-        "app.services.decompile_java.business_jar_decompile_pending",
+        "app.services.decompile_java.business_jar_coverage_pending",
         lambda pid: True,
     )
     pending_status = recon_gates_status(project)
-    assert pending_status["ok"] is True
-    assert not any("仍在反编译" in e for e in pending_status["errors"])
-    assert {s["id"]: s["done"] for s in pending_status["subphases"]}["mark"] is True
+    assert pending_status["ok"] is False
+    assert any("仍在反编译" in e for e in pending_status["errors"])
+    assert {s["id"]: s["done"] for s in pending_status["subphases"]}["mark"] is False
+    assert recon_gates_met(project) is False
+    assert apply_recon_done(project) is False
+    monkeypatch.setattr(
+        "app.services.decompile_java.business_jar_coverage_pending",
+        lambda pid: False,
+    )
     assert recon_gates_met(project) is True
     assert apply_recon_done(project) is True
     with Session() as db:

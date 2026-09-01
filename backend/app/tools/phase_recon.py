@@ -157,7 +157,14 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
             .count()
         )
         total = db.query(FileWeight).filter(FileWeight.project_id == project_id).count()
-    mark_done = unmarked == 0
+    coverage_pending = False
+    try:
+        from ..services.decompile_java import business_jar_coverage_pending
+
+        coverage_pending = business_jar_coverage_pending(project_id)
+    except Exception:  # noqa: BLE001
+        coverage_pending = False
+    mark_done = unmarked == 0 and not coverage_pending
     errors: list[str] = []
     if map_missing:
         errors.append(f"缺少代码地图/鉴权文档: {', '.join(map_missing)}")
@@ -191,6 +198,8 @@ def recon_gates_status(project_id: int) -> dict[str, Any]:
             )
     if unmarked > 0:
         errors.append(f"仍有 {unmarked}/{total} 个文件未标记权重（可用 MarkWeight/MarkSkip）")
+    if coverage_pending:
+        errors.append("已点名业务 jar 仍在反编译或尚未入库定权；盖章可继续处理已有文件")
     subphases = _recon_subphase_rows(
         map_done=map_done,
         ext_done=ext_done,

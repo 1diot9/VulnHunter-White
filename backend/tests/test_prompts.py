@@ -515,6 +515,9 @@ def test_recon_mark_weights_non_http_entries():
     assert "WebSocket" in recon
     assert "WebSocket" in recon_initial
     assert "不要只标 HTTP" in recon_initial
+    assert "com.landgrey" in recon
+    assert "同目录" in recon
+    assert "com.landgrey" in recon_initial
 
 
 def test_fast_worker_and_sink_triage_prompts():
@@ -568,6 +571,12 @@ def test_unconstrained_worker_prompts():
     assert "FinishRound" in initial
     assert "侦察文档" in initial
     assert "docs/code-map.md" in overlay
+    assert "DecompileJava" in worker
+    assert "ListBytecode" in worker
+    assert "不入定权" in worker
+    assert "queued" in worker
+    assert "DecompileJava" in overlay
+    assert "ListBytecode" in initial
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():

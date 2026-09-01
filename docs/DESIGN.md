@@ -181,7 +181,7 @@ VulnHunter-White 的特点：
 
 #### 4.4.1 代码地图与鉴权（recon）
 
-Java 字节码反编译（设计已拍板、实现见后续迭代）：Recon 用 `ListBytecode` 发现、`DecompileJava` 预解重要 jar/class（系统可启发式自动入队）；挖掘与审核可补录，**允许整包 jar**，默认输入 ≤80MiB。任务挂项目级队列，不阻塞地图门闩；产物在 `workspace/decompiled/`，不进 `FileWeight`。完整决策见 [java-decompile.md](./java-decompile.md)。
+Java 字节码反编译：Recon 用 `ListBytecode` 发现、`MarkBusinessJar` 点名要纳入定权的业务 jar/class（系统可启发式自动入队预读）；挖掘与审核用 `DecompileJava` 补录，**允许整包 jar**，默认输入 ≤80MiB。任务挂项目级队列，不阻塞地图门闩。产物在 `workspace/decompiled/`。**仅 `MarkBusinessJar` 点名的包**在 jadx `ready` 后滴注入 `FileWeight`；`DecompileJava` 只供临时阅读。盖章可与反编译并行，已入库的反编译类混入未标记队列。点名列表仍有 queued/running 或 sidecar 仍有待入库路径时，不置 `recon_done`。jadx 默认 2 槽，预留 1 槽给 Worker/Reviewer 的 `DecompileJava`。完整决策见 [java-decompile.md](./java-decompile.md)。
 
 | 工具 | 用途 |
 | --- | --- |

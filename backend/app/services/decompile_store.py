@@ -179,6 +179,8 @@ def upsert_job(payload: dict[str, Any]) -> None:
 
 
 def enqueue_pending(project_id: int, source_rel: str, paths: list[str]) -> int:
+    from sqlalchemy.exc import IntegrityError
+
     source = str(source_rel or "").replace("\\", "/")
     rels = [str(p or "").replace("\\", "/") for p in paths if str(p or "").strip()]
     if not rels:
@@ -198,7 +200,11 @@ def enqueue_pending(project_id: int, source_rel: str, paths: list[str]) -> int:
             existing.add(rel)
             added += 1
         if added:
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return 0
     return added
 
 

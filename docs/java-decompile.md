@@ -170,7 +170,7 @@
 
 ### 6.5 权重与领取
 
-Agent 通过 **`MarkBusinessJar`**（仅 recon 地图轮）点名要纳入定权的业务 jar/class；**每个** jar 反编译 `ready` 后先把 `.java` 路径写入 **`data/decompile.db` 的 pending 队列**，再由 **`vh-decompile-svc`** 在 app.db 空闲时按约 50 行一批滴注入 **`FileWeight`**（路径 `workspace/decompiled/<key>/...`）。jadx 线程、盖章 / Worker / 调度器只投递；Agent `_persist` / 领取期间不写 `file_weights`。反编译不阻塞仓库原文件盖章。`DecompileJava` / `force=true` **不**自动入库。已有 `src/` 同源 `.java` 与内部类 `*$*.java` 机械跳过。
+Agent 通过 **`MarkBusinessJar`**（仅 recon 地图轮）点名要纳入定权的业务 jar/class；**每个** jar 反编译 `ready` 后先把 `.java` 路径写入 **`data/decompile.db` 的 pending 队列**，再由 **`vh-decompile-svc`** 在 app.db 空闲时按约 50 行一批滴注入 **`FileWeight`**（路径 `workspace/decompiled/<key>/...`）。jadx 线程、盖章 / Worker / 调度器只投递；Agent `_persist` / 领取期间不写 `file_weights`。反编译不阻塞仓库原文件盖章，已入库的反编译类可混入盖章批次。点名列表仍有 `queued`/`running`、sidecar 仍有 pending、或已 `ready` 尚未标 `ingested` 时，**不置 `recon_done`**（失败/跳过/取消的 jar 不挡门闩）。`DecompileJava` / `force=true` **不**自动入库。已有 `src/` 同源 `.java` 与内部类 `*$*.java` 机械跳过。
 
 ### 6.6 报告与证据路径
 
@@ -191,7 +191,7 @@ Agent 通过 **`MarkBusinessJar`**（仅 recon 地图轮）点名要纳入定权
 | --- | --- |
 | 二进制 | 设置页可配 `jadx_path`；未配则 `PATH` 上的 `jadx` / `jadx.bat`。一期**不做** Docker 兜底（可二期对齐 Semgrep）。 |
 | 版本 | 启动任务时记录 `jadx --version`；写入索引。 |
-| 全局并发 | 进程内线程/进程池，默认 **每主机 1～2** 个 jadx；多项目共享队列。 |
+| 全局并发 | 进程内线程池，默认 **每主机 2** 个 jadx（上限 4），多项目共享。并发 ≥2 时预留 **1** 个槽给 Worker / Reviewer / Fix 的 `DecompileJava`（以及 recon 临时预读）；其余给 `MarkBusinessJar` 与 recon 启发式自动入队。并发为 1 时两路共用同一槽。同键仍去重，不启第二个 jadx。 |
 | 资源隔离 | 独立 sidecar `vh-decompile-svc` + 专用库 `data/decompile.db`（任务快照与待入库路径）。FileWeight 仅在 app.db 空闲时小批滴注；jadx 子进程降为低于正常优先级。挖掘轮遇 `database is locked` 保留检查点重试，不自杀线程。 |
 | 失败 | 混淆严重仍有部分输出 → 有 `.java` 则 `ready`（可带 `partial=true`）；零输出 → `failed`。 |
 | Fallback | 一期 **仅 jadx**，不接 CFR/Procyon。 |
@@ -219,8 +219,8 @@ Agent 通过 **`MarkBusinessJar`**（仅 recon 地图轮）点名要纳入定权
 | 原问题 | 结论 |
 | --- | --- |
 | 1.1 不阻塞哪一层 | 工具立刻返回；后台 jadx；完成靠系统注入 + 可查询；不改真并行循环 |
-| 1.2 生命周期 | 跨阶段继续；不堵 Recon 结束；取消才停；reset-progress 保留；重导入清空 |
+| 1.2 生命周期 | 跨阶段继续；不堵地图门闩 / `FinishReconMap`；点名业务 jar 未跑完或未入库前不置 `recon_done`；取消才停；reset-progress 保留；重导入清空 |
 | 1.3 如何发现 | `ListBytecode`；默认不扫 target；无字节码则 no-op |
 | 4 重要文件 | 系统启发式入队 + Recon 点名；默认拒第三方；一层 war/fat 嵌套；有源码则 skip |
 | Tool / ACL | 两工具；各角色均可整包 jar（默认 ≤80MiB），超限改类/包；禁 Shell 直调反编译器；静态强制轮仍可用 |
-| 索引与流水线 | sha256 键；`workspace/decompiled`；不进 FileWeight；报告 jar!class + 反编译路径 |
+| 索引与流水线 | sha256 键；`workspace/decompiled`；仅 `MarkBusinessJar` 入库 FileWeight，`DecompileJava` 不入库；盖章可混入已反编译类；Worker 与侦察共用 jadx 池（并发≥2 时预留 1 槽给 Worker）；占用时排队、立刻返回、完成注入；报告 jar!class + 反编译路径 |

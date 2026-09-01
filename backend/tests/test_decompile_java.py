@@ -473,8 +473,9 @@ def test_ingest_one_jar_while_another_still_running(tmp_env, project, monkeypatc
         db.commit()
     status = recon_gates_status(project)
     assert status["unmarked"] == 0
-    assert not any("仍在反编译" in e for e in status["errors"])
-    assert {s["id"]: s["done"] for s in status["subphases"]}["mark"] is True
+    assert any("仍在反编译" in e for e in status["errors"])
+    assert {s["id"]: s["done"] for s in status["subphases"]}["mark"] is False
+    assert dj.business_jar_coverage_pending(project) is True
     assert dj.wait_business_jar_ingest(project).get("ok") is True
     assert dj.business_jar_decompile_pending(project) is True
 
@@ -494,6 +495,7 @@ def test_ingest_one_jar_while_another_still_running(tmp_env, project, monkeypatc
         paths = [r.path for r in db.query(FileWeight).filter(FileWeight.project_id == project).all()]
     assert any(p.endswith("Second.java") and p.startswith("workspace/decompiled/") for p in paths)
     assert dj.business_jar_decompile_pending(project) is False
+    assert dj.business_jar_coverage_pending(project) is False
 
 
 def test_stale_queued_index_requeues_after_process_restart(tmp_env, project, monkeypatch):
@@ -519,6 +521,12 @@ def test_stale_queued_index_requeues_after_process_restart(tmp_env, project, mon
     assert job_id
     index_key = first.get("index_key")
     assert index_key
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if (dj.get_job_status(project, job_id=job_id) or {}).get("status") == "ready":
+            break
+        time.sleep(0.05)
+    assert (dj.get_job_status(project, job_id=job_id) or {}).get("status") == "ready"
 
     with dj._lock:
         dj._jobs.clear()
@@ -798,3 +806,96 @@ def test_decompile_store_upserts_job_on_ready(tmp_env, project, monkeypatch):
     assert row is not None
     assert row.status == "ready"
     assert row.project_id == project
+
+
+def test_jadx_lane_workers_reserves_interactive_slot(tmp_env, monkeypatch):
+    monkeypatch.setattr(dj.settings, "decompile_concurrency", 2)
+    sizes = dj.jadx_lane_workers()
+    assert sizes[dj._LANE_BATCH] == 1
+    assert sizes[dj._LANE_INTERACTIVE] == 1
+    monkeypatch.setattr(dj.settings, "decompile_concurrency", 1)
+    shared = dj.jadx_lane_workers()
+    assert shared[dj._LANE_BATCH] == 1
+    assert shared[dj._LANE_INTERACTIVE] == 0
+
+
+def test_submit_lanes_split_batch_and_interactive(tmp_env, project, monkeypatch):
+    src = src_dir(project)
+    _write_jar(src / "lib" / "biz.jar", {"com/demo/Biz.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+    _write_jar(src / "lib" / "read.jar", {"com/demo/Read.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+
+    def fake_run(cmd, *, timeout, job):
+        out_dir = Path(cmd[cmd.index("-d") + 1])
+        target = out_dir / "com" / "demo" / "X.java"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("class X {}\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(dj, "resolve_jadx_binary", lambda: "jadx")
+    monkeypatch.setattr(dj, "jadx_version_string", lambda _b=None: "1.5.5")
+    dj._run_jadx_hook = fake_run
+
+    batch = dj.submit_decompile(project, "src/lib/biz.jar", audit_queue=True)
+    interactive = dj.submit_decompile(project, "src/lib/read.jar")
+    assert dj._jobs[batch["job_id"]].lane == dj._LANE_BATCH
+    assert dj._jobs[interactive["job_id"]].lane == dj._LANE_INTERACTIVE
+    heuristic = dj.submit_decompile(project, "src/lib/biz.jar", lane=dj._LANE_BATCH)
+    assert heuristic.get("job_id") == batch["job_id"]
+
+
+def test_worker_decompile_not_blocked_by_full_batch_queue(tmp_env, project, monkeypatch):
+    import threading
+
+    src = src_dir(project)
+    _write_jar(src / "lib" / "batch-a.jar", {"com/demo/A.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+    _write_jar(src / "lib" / "batch-b.jar", {"com/demo/B.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+    _write_jar(src / "lib" / "worker-app.jar", {"com/demo/W.class": b"\xca\xfe\xba\xbe" + b"\x00" * 20})
+
+    monkeypatch.setattr(dj.settings, "decompile_concurrency", 2)
+    batch_hold = threading.Event()
+    batch_entered = threading.Event()
+    interactive_started = threading.Event()
+    interactive_threads: list[str] = []
+
+    def fake_run(cmd, *, timeout, job):
+        if getattr(job, "lane", "") == dj._LANE_BATCH:
+            batch_entered.set()
+            batch_hold.wait(timeout=10)
+        else:
+            interactive_threads.append(threading.current_thread().name)
+            interactive_started.set()
+        out_dir = Path(cmd[cmd.index("-d") + 1])
+        target = out_dir / "com" / "demo" / "Out.java"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("class Out {}\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(dj, "resolve_jadx_binary", lambda: "jadx")
+    monkeypatch.setattr(dj, "jadx_version_string", lambda _b=None: "1.5.5")
+    dj._run_jadx_hook = fake_run
+
+    worker_out: dict = {}
+    try:
+        dj.submit_decompile(project, "src/lib/batch-a.jar", audit_queue=True)
+        dj.submit_decompile(project, "src/lib/batch-b.jar", audit_queue=True)
+        assert batch_entered.wait(timeout=5)
+        worker_out = registry.dispatch(
+            _ctx(project, role="worker"),
+            "DecompileJava",
+            {"path": "src/lib/worker-app.jar"},
+        )
+        assert worker_out.get("ok") is True
+        assert worker_out.get("status") in ("queued", "running", "ready")
+        assert interactive_started.wait(timeout=5)
+        assert any(name.startswith("vh-jadx-w") for name in interactive_threads)
+    finally:
+        batch_hold.set()
+
+    jid = worker_out.get("job_id")
+    deadline = time.time() + 8
+    while time.time() < deadline and jid:
+        st = dj.get_job_status(project, job_id=jid) or {}
+        if st.get("status") in ("ready", "failed", "skipped"):
+            break
+        time.sleep(0.05)
+    assert (dj.get_job_status(project, job_id=jid) or {}).get("status") == "ready"

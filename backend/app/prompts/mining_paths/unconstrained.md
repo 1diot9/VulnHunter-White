@@ -18,3 +18,4 @@
 
 ### 其他规则
 SubmitVuln / SearchOldVuln / 同根因只交一份 / config_premise / poc.py CLI 参数化，均与赏金模式 Worker 相同。
+需要阅读未纳入定权的 class/jar 时用 `ListBytecode` / `DecompileJava`（不入定权；queued 勿空转轮询；完成后系统会注入通知）。Grep 反编译树须显式 `root=workspace/decompiled/...`。
