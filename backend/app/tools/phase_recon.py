@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from ..models import FileWeight, Project, SessionLocal, Source
-from ..services.ingest import EXTRA_SOURCE_EXTS, INDEX_SKIP_NAMES, SOURCE_EXTS, expand_file_index, normalize_source_ext
+from ..services.ingest import INDEX_SKIP_NAMES, SOURCE_EXTS, expand_file_index, normalize_source_ext
 from ..services.old_vuln_crawl import save_crawl_spec
 from ..services.paths import docs_dir, old_vulns_dir
 from . import ToolSpec, registry
@@ -659,10 +659,9 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
         added = list(result["added"])
         skipped_test = int(result["skipped_test"] or 0)
         if not accepted and not conclude:
-            allowed = ", ".join(sorted(EXTRA_SOURCE_EXTS))
             return {
                 "ok": False,
-                "error": f"扩展名均不在可追加白名单内: {rejected}。允许: {allowed}",
+                "error": f"扩展名无效或属于忽略类型（图片/压缩包/二进制等）: {rejected}",
                 "rejected": rejected,
             }
 
@@ -713,7 +712,7 @@ def _add_source_ext(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if skipped_test:
         hint += f" 其中 {skipped_test} 个测试路径已自动跳过。"
     if rejected:
-        hint += f" 已忽略不在白名单的扩展名: {rejected}。"
+        hint += f" 已忽略无效或应跳过的扩展名: {rejected}。"
     if removed:
         hint += f" 已移除扩展名: {', '.join(removed)}。"
     return {
@@ -1159,8 +1158,9 @@ def register_recon_tools() -> None:
         ToolSpec(
             name="AddSourceExt",
             description=(
-                "根据代码地图追加或移除源码扩展名。用于模板/映射等默认未索引类型，例如 Freemarker .ftl、MyBatis .xml。"
-                "也用于移除噪音扩展名（如过多且不重要的 .json/.xml/.properties）。"
+                "根据代码地图与仓库实际文件追加或移除源码扩展名。"
+                "用于模板/映射/脚本等默认未索引类型，也用于移除噪音扩展名。"
+                "以仓库为准，不要按固定名单照抄。"
                 "逐次追加/移除不会结束本会话；全部确认后设 done=true。"
                 "无需追加时设 none=true。不要为图片、压缩包、第三方静态资源加扩展名。"
                 "结束时会入库扩展名对应文件（跳过无效文件），防止落盘无效文件。"

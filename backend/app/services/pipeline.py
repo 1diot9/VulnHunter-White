@@ -1773,8 +1773,7 @@ def _phase_system_prompt(
     base = load_prompt(name).rstrip()
     if name == "worker-unconstrained.md":
         overlay = load_prompt("modes/bounty.md").strip()
-        path_overlay = load_prompt("mining_paths/unconstrained.md").strip()
-        parts = [base, overlay, path_overlay, _target_kind_overlay(project_id)]
+        parts = [base, overlay, _target_kind_overlay(project_id)]
         if name in _POC_PROMPT_PHASES:
             parts.append(load_prompt("poc.md").strip())
         if name in _REPORT_FORMAT_PHASES:

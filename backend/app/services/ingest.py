@@ -49,7 +49,7 @@ SOURCE_EXTS = frozenset(
     }
 )
 
-# Agent 可按侦察文档追加的模板/映射/配置扩展名（并集，不按语言裁掉 SOURCE_EXTS）
+# 预筛选时额外扫描的常见执行面扩展名（Agent 仍可按仓库实际文件追加其它类型）
 EXTRA_SOURCE_EXTS = frozenset(
     {
         ".ftl",
@@ -194,8 +194,14 @@ def normalize_source_ext(ext: str) -> str | None:
     return raw
 
 
+def is_ignored_index_ext(ext: str) -> bool:
+    """True for media / archive / binary suffixes that must never be indexed."""
+    dummy = f"x{ext}"
+    return any(dummy.endswith(suf) for suf in IGNORE_FILE_SUFFIXES)
+
+
 def is_indexable_ext(ext: str) -> bool:
-    return ext in SOURCE_EXTS or ext in EXTRA_SOURCE_EXTS
+    return bool(ext) and not is_ignored_index_ext(ext)
 
 
 def path_source_ext(path: str) -> str | None:
@@ -205,7 +211,6 @@ def path_source_ext(path: str) -> str | None:
     return suffix or None
 
 
-_INDEXED_EXTS = SOURCE_EXTS | EXTRA_SOURCE_EXTS
 _weight_exts_cache: dict[int, tuple[int, list[dict[str, Any]]]] = {}
 
 
@@ -242,7 +247,7 @@ def indexed_weight_exts(db, project_ids: list[int]) -> dict[int, list[dict[str, 
         db.query(FileWeight.project_id, FileWeight.path).filter(FileWeight.project_id.in_(pending)).all()
     ):
         ext = path_source_ext(path)
-        if not ext or ext not in _INDEXED_EXTS:
+        if not ext:
             continue
         counts[int(pid)][ext] += 1
     for pid in pending:
@@ -549,7 +554,7 @@ def prefilter_extensions(project_id: int) -> dict[str, Any]:
     """Code-based pre-filtering of extensions before Agent review.
 
     Returns:
-        - active_exts: extensions to scan (SOURCE_EXTS + validated EXTRA_SOURCE_EXTS, minus noisy)
+        - active_exts: extensions to scan (SOURCE_EXTS + prefilter extras, minus noisy)
         - noisy_exts: extensions skipped due to high volume
         - counts: file counts per extension
         - skipped_count: total files skipped due to noisy extensions

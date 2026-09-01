@@ -567,25 +567,24 @@ def test_bypass_worker_prompts():
 def test_unconstrained_worker_prompts():
     worker = load_prompt("worker-unconstrained.md")
     initial = load_prompt("initial/unconstrained-worker.md")
-    overlay = load_prompt("mining_paths/unconstrained.md")
     assert "无约束扫描" in worker
     assert "不注入" in worker
     assert "FinishRound" in worker
     assert "不要求" in worker
     assert "不要为了结束路径而硬写成" in worker
-    assert "赏金闸门" in overlay
-    assert "rce_effect=true" in overlay
-    assert "不由 `vuln_type`" in overlay
+    assert "赏金闸门" in worker
+    assert "即使项目挖掘模式是全量或自定义" in worker
+    assert "rce_effect=true" in worker
+    assert "不由 `vuln_type`" in worker
     assert "FinishFile" in initial
     assert "FinishRound" in initial
     assert "侦察文档" in initial
-    assert "docs/code-map.md" in overlay
+    assert "docs/code-map.md" in worker
     assert "外带内网信息" in worker
     assert "DecompileJava" in worker
     assert "ListBytecode" in worker
     assert "不入定权" in worker
     assert "queued" in worker
-    assert "DecompileJava" in overlay
     assert "ListBytecode" in initial
 
 
@@ -600,6 +599,10 @@ def test_recon_source_ext_prompt_and_map_does_not_add_ext():
     assert "done=true" in ext
     assert "none=true" in ext
     assert "AddSourceExt" in ext_init
+    assert "## 允许的扩展名" not in ext
+    assert "以仓库为准" in ext
+    assert "不要按固定名单照抄" in ext
+    assert "不要按固定名单照抄" in ext_init
 
 
 def test_worker_prompt_requires_asset_search_fingerprints():

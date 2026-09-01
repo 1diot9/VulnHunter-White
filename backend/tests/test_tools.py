@@ -2678,8 +2678,14 @@ def test_add_source_ext_is_recon_source_ext_only(tmp_env, project):
         assert html.weight is None
         assert html.skipped is False
 
+    extra = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"exts": [".lua"]})
+    assert extra["ok"] is True
+    assert ".lua" in extra["exts"]
+    assert extra["rejected"] == []
+
     bad = registry.dispatch(_ctx(project, "recon_source_ext"), "AddSourceExt", {"exts": [".png", ".exe"]})
     assert bad["ok"] is False
+    assert "忽略" in bad["error"]
 
 
 def test_add_source_ext_none_concludes(tmp_env, project):

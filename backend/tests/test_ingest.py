@@ -84,6 +84,10 @@ def test_expand_file_index_appends_templates_without_wiping(tmp_env, project):
         assert rows["tests/job.ftl"].skipped is True
         assert rows["tests/job.ftl"].weight == 0
 
+    lua = expand_file_index(project, [".lua"])
+    assert lua["rejected"] == []
+    assert lua["exts"] == [".lua"]
+
     again = expand_file_index(project, [".ftl"])
     assert again["added_count"] == 0
 
