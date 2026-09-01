@@ -26,7 +26,7 @@
 4. **漏洞参数可自定义**：凡攻击者本就可控的量都做成可选 CLI，并给安全默认值，使 `python poc.py -u <target_url>` 不传其它参数也能打出代表证据。
    - RCE / 命令注入：`-c/--cmd`（默认如 `id`）。**有回显则把命令输出原样打印到 stdout**（建议加 `Command output:` 前缀）；无回显则打印判定依据（时延、状态码、外带 DNS 等）。
    - 任意文件读 / 路径穿越：`-f/--file`（默认一条敏感路径）。
-   - SSRF：`--ssrf-url`（默认内网探测地址）。**有回显则打印目标响应正文**（建议加 `SSRF echo:` 前缀）；仅响应差别则打印通/不通对照（开/闭端口或活/死地址的状态码、时延、报错），不要把 URL 反显当成回显。
+   - SSRF：`--ssrf-url`（默认内网探测地址）。**有回显则打印目标响应正文**（建议加 `SSRF echo:` 前缀）；**外带内网信息则打印从攻击者信道取回的内容**（建议加 `SSRF exfil:` 前缀，须含目标侧信息，不要只打印「收到回调」）；仅响应差别则打印通/不通对照（开/闭端口或活/死地址的状态码、时延、报错），不要把 URL 反显当成回显。
    - SQLi / SSTI：`--payload`（默认探测句）。
    - 需登录：`--cookie` / `--token`，或 `-U/--user` `-P/--password`。
    - 其它入口（path、id、filename 等）同样做成 CLI，不要写死本次样本。
@@ -53,6 +53,7 @@ MSGS = {
     "response": ("Response:", "响应:"),
     "cmd_out": ("Command output:", "命令输出:"),
     "ssrf_echo": ("SSRF echo:", "SSRF 回显:"),
+    "ssrf_exfil": ("SSRF exfil:", "SSRF 外带:"),
 }
 
 def msg(key: str, zh: bool) -> str:

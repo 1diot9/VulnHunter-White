@@ -35,7 +35,7 @@
 不要提交：CORS、反射 XSS / DOM XSS / Self-XSS、缺速率限制、安全头、普通 CSRF、开放重定向、弱随机、配置文件/.env/compose 里用户可改的口令、前端传输混淆 AES。
 
 ## SSRF / 同根因 / PoC / Grep
-规则与启发式 Worker 相同：SSRF 须标明有回显或仅响应差别；同根因只交一份；有 HTTP 面的 poc.py 必须 CLI 参数化（`-u/--url`、`--proxy`；RCE 加 `-c/--cmd`）；Grep 必须缩 `root` 并带 `glob`。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`，提交后填写 CVE JSON。
+规则与启发式 Worker 相同：SSRF 须标明有回显、外带内网信息或仅响应差别（有回显与外带危害同级）；同根因只交一份；有 HTTP 面的 poc.py 必须 CLI 参数化（`-u/--url`、`--proxy`；RCE 加 `-c/--cmd`）；Grep 必须缩 `root` 并带 `glob`。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`，提交后填写 CVE JSON。
 
 ## 流程
 1. 读注入的地图与鉴权，自己选前台入口或高危执行面，Read/Grep 分析。需要阅读无源码 class/jar 时用 `ListBytecode` / `DecompileJava`（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 `root=workspace/decompiled/...`。漏洞代码同时写 `jar!class` 与反编译路径。

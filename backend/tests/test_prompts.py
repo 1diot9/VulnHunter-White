@@ -161,6 +161,8 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "弱口令" in text
     assert "SSRF 观察面" in text
     assert "仅响应差别" in text
+    assert "外带内网信息" in text
+    assert "危害与有回显同级" in text
     assert "CollectLabFingerprints" in load_prompt("initial/reviewer.md")
     assert "RequestLabRebuild" in text
     assert "RequestLabRebuild" in load_prompt("initial/reviewer.md")
@@ -190,7 +192,9 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "观察面" in load_prompt("initial/reviewer.md")
     assert "观察面" in load_prompt("initial/fix.md")
     assert "仅响应差别" in load_prompt("fast_worker.md")
+    assert "外带内网信息" in load_prompt("fast_worker.md")
     assert "仅响应差别" in load_prompt("bypass_worker.md")
+    assert "外带内网信息" in load_prompt("bypass_worker.md")
     assert "观察面" in load_prompt("modes/full.md")
     assert "观察面" in load_prompt("verifier.md")
 
@@ -261,6 +265,8 @@ def test_worker_prompt_requires_default_exploitability():
     assert "回显" in worker
     assert "SSRF 必须标明观察面" in worker
     assert "仅响应差别" in worker
+    assert "外带内网信息" in worker
+    assert "危害与有回显同级" in worker
     assert "内网端口" in worker
     assert "云元数据" in worker
 
@@ -274,6 +280,7 @@ def test_poc_prompt_requires_cli_parameters():
     assert "-c/--cmd" in poc
     assert "Command output" in poc
     assert "SSRF echo" in poc
+    assert "SSRF exfil" in poc
     assert "--zh" in poc
     assert "默认英语" in poc
     assert "argparse" in poc
@@ -306,7 +313,9 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "赏金模式" in bounty_worker
     assert "不要 Confirm、不要标 `low_impact`" in bounty_worker
     assert "有回显" in bounty_worker
+    assert "外带内网信息" in bounty_worker
     assert "仅响应差别" in bounty_worker
+    assert "危害同级" in bounty_worker
     assert "存储型 XSS" in bounty_worker
     assert "1-click CSRF" in bounty_worker
     assert "普通 CSRF" in bounty_worker
@@ -571,6 +580,7 @@ def test_unconstrained_worker_prompts():
     assert "FinishRound" in initial
     assert "侦察文档" in initial
     assert "docs/code-map.md" in overlay
+    assert "外带内网信息" in worker
     assert "DecompileJava" in worker
     assert "ListBytecode" in worker
     assert "不入定权" in worker
@@ -608,6 +618,7 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     report = Path(__file__).resolve().parents[2] / "templates" / "vuln-report.md"
     text = report.read_text(encoding="utf-8")
     assert "SSRF 须明确：观察面" in text
+    assert "外带内网信息" in text
     assert "仅响应差别（内网端口探测）" in text
     assert "标题须为中文" in text
     advisory = Path(__file__).resolve().parents[2] / "templates" / "vuln-advisory.md"
