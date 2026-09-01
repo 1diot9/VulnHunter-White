@@ -705,8 +705,8 @@ export default function SettingsPage() {
             </Button>
           </div>
           <div className="text-xs text-slate-500">
-            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。会话粘滞到同一 URL；429 /
-            额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
+            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。新会话按负载均匀分配，同一会话粘滞到所选
+            URL；429 / 额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
           </div>
           <div className="space-y-3">
             {endpoints.map((ep, index) => (

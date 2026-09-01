@@ -310,24 +310,26 @@ class LlmThreadLimiter:
             return self._buckets.get(endpoint_id)
 
     def _pick_endpoint_locked(self, *, prefer: str | None = None) -> str | None:
-        """Pick healthy endpoint with most remaining capacity."""
+        """Pick a healthy endpoint with remaining capacity, spreading load evenly.
+
+        Chooses the lowest utilization (used/cap), then the lowest inflight count.
+        ``prefer`` is a tie-breaker only: a sticky first endpoint is not filled to
+        capacity before other pools are used.
+        """
         now = time.time()
         best_id: str | None = None
-        best_remaining = -1
-        # Prefer sticky endpoint if still healthy with remaining capacity
-        if prefer and prefer in self._buckets:
-            b = self._buckets[prefer]
-            if b.used < b.cap and llm_gate.is_available(prefer, now=now):
-                return prefer
-        for eid in self._order:
+        best_key: tuple[float, int, int, int] | None = None
+        for idx, eid in enumerate(self._order):
             b = self._buckets[eid]
             if b.used >= b.cap:
                 continue
             if not llm_gate.is_available(eid, now=now):
                 continue
-            remaining = b.cap - b.used
-            if remaining > best_remaining:
-                best_remaining = remaining
+            util = b.used / b.cap
+            sticky = 0 if (prefer and eid == prefer) else 1
+            key = (util, b.used, sticky, idx)
+            if best_key is None or key < best_key:
+                best_key = key
                 best_id = eid
         return best_id
 
@@ -504,7 +506,7 @@ class LlmThreadLimiter:
             self._cond.notify_all()
 
     def pick_idle_endpoint(self) -> str | None:
-        """Select healthiest endpoint with most remaining capacity (no slot taken)."""
+        """Select the least-loaded healthy endpoint (no slot taken)."""
         self._ensure_loaded()
         with self._lock:
             return self._pick_endpoint_locked()

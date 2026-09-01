@@ -6,6 +6,7 @@ Worker=${worker_id} 轮次=${round_id}
 
 侦察文档与本路径最近摘要已注入：不要重复分析项目结构，不要重复已走过的路径。
 优先挖掘能打出前台 RCE 效果的问题；其他前台可利用漏洞也要提交，但不作为路径结束条件。路径结束由 Reviewer 判定「达成 RCE 效果」并 Confirm 后生效；本轮仍须跑到 FinishRound 或超时，不要刚交洞就收工。
+SubmitVuln 前必须再核一次是否真的前台可达：对照 docs/auth.md 与全局过滤器/拦截器/Security/Shiro/权限注解，确认未登录、不带 Cookie/Token 也能到达 sink。方法无注解 ≠ 匿名。需要登录或仅默认口令能打的不要当前台提交，写入已排除；认证绕过成立后才算前台。auth_premise 写真实前提，禁止把后台接口写成未授权。
 FinishFile 可用来记下本路径已看完的文件，不会改启发式队列，也不会结束本轮。FinishRound 不要求先 FinishFile。report 对齐 templates/round-report.md。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。
 有 HTTP 面时 poc_code 必须可对任意目标复测：`python poc.py -u <url>`，必须支持 `--proxy`（空则直连），RCE 加 `-c/--cmd` 并打印回显；脚本输出默认英语、须 `--zh` 切中文。SSRF 须标明观察面（有回显、外带内网信息或仅响应差别；有回显与外带危害同级）。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`。提交后用 ReadCveRecord / SetCveRecordField 填写 CVE JSON。

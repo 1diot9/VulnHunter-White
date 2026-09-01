@@ -5157,6 +5157,7 @@ def _run_reviewer_once(project_id: int) -> None:
                     "由你判定是否达成前台 RCE 效果，不要只看 vuln_type。"
                     "true 且前台确认后该路径结束（当前 Worker 轮仍会跑完）。"
                     "本条始终走赏金闸门，即使项目是全量/自定义模式。"
+                    "Worker 若声称前台，须独立核验无认证可达，不要照抄；核完其实要登录则标后台，不要为结束路径硬标 frontend。"
                 )
 
         if _give_up_exhausted_review(project_id, vuln_id):

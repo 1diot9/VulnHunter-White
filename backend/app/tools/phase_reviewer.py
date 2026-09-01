@@ -1098,6 +1098,8 @@ def register_reviewer_tools() -> None:
                 "私钥、第三方 API Key 等）可以确认；"
                 "前端传输混淆 AES/公开下发密钥应误报。"
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
+                "Worker 声称前台时须独立核验无认证可达，不要照抄 auth_premise；"
+                "核完其实要登录则标 backend，不要硬标 frontend。"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp|harness。"
                 "关闭动态验证、或本条已因连续超时/搭建失败被强制仅静态时必须 static_only；"

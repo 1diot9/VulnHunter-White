@@ -14,6 +14,18 @@
 
 发现其他类型的**前台**可利用漏洞也必须 SubmitVuln（收录范围对齐赏金模式），但不作为本路径结束条件。后台洞不是本路径主线；不要把精力花在纯后台管理功能上，除非发现了认证绕过漏洞。
 
+## 提交前再核前台可达（硬步骤）
+**前台** = 攻击者**无本应用账号、不带登录 Cookie / Session / Authorization / 业务 token**，就能打到该入口并到达 sink。需要任意登录、角色或后台菜单权限 → 是后台，本路径不要当新洞提交（认证绕过本身除外：绕过成立、未登录请求真正打通后才算前台）。
+
+SubmitVuln 之前必须再做一次独立核对，不要凭「方法上没有权限注解」或「路径看起来像公开接口」就交。核对清单：
+1. 对照注入的 `docs/auth.md`：该 URL/接口是在匿名/放行名单里，还是落在需登录的前缀（`/admin`、`/system`、后台 API 等）。
+2. 读**全局**鉴权，不要只看 Controller 方法：过滤器 / 拦截器 / Spring Security `antMatchers` / Shiro `filterChainDefinition` / `@PreAuthorize` / `@RequiresPermissions` / `@RequiresAuthentication` / 类级注解 / `excludePathPatterns`。方法无注解 ≠ 匿名可达。
+3. 确认未登录请求不会在到达 sink 前被拦（401 / 302 登录页 / 权限异常）。白名单必须覆盖**完整路径**，不要只匹配到 Controller 前缀。
+4. 用默认账号/文档口令登录再打 ≠ 前台；那是部署约定，不要提交。
+5. 仅内网可达的管理口、需先登录才颁发的 token、内部回调，都不是前台。
+
+核完其实需要登录 → **不要 SubmitVuln**，写入本轮「已排除」。不要把 `auth_premise` 写成无需登录/未授权。只有认证绕过让未登录请求真正打到原需登录的 sink 时才交，并写清「无认证（经某绕过）」。
+
 ## 单轮结束
 本轮在以下任一情况下结束，**不要**在刚 SubmitVuln 后立刻收工：
 1. 你调用 `FinishRound`：当前这一趟探索已经收束（已提交该交的洞，或已说明本轮尝试与排除）。
@@ -29,6 +41,7 @@
 1. 用户可控输入能到达真实执行的 sink。
 2. 攻击者只凭题目允许的权限和用户可控输入就能打出可观察的有害冲击。必填 `config_premise`：`default` 或 `specific`。官方已警示的风险开关不算 `specific`。
 3. 不依赖第二个独立漏洞、不依赖先往服务器写 payload、不依赖非默认目录布局。
+4. **前台可达**：已按上文「提交前再核前台可达」核对；未登录请求能到达 sink。`auth_premise` 不得把后台接口写成无需登录。
 
 只报赏金范围内的问题：RCE、SSTI、反序列化、SQL 注入、XML 注入、任意文件操作、能打内网的 SSRF、敏感信息泄露、文件上传、文件包含、目录遍历、认证绕过、越权、DoS、存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥，以及其他确定能造成实际危害的问题。
 
@@ -39,7 +52,7 @@
 
 ## 流程
 1. 读注入的地图与鉴权，自己选前台入口或高危执行面，Read/Grep 分析。需要阅读无源码 class/jar 时用 `ListBytecode` / `DecompileJava`（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 `root=workspace/decompiled/...`。漏洞代码同时写 `jar!class` 与反编译路径。
-2. 满足闸门则 SubmitVuln（前台优先；能打出 RCE 效果的优先深挖并写清利用链）。
+2. 满足闸门且**再核前台可达**后才 SubmitVuln（前台优先；能打出 RCE 效果的优先深挖并写清利用链）。`auth_premise` 必须写真实前提（无需登录 / 经某绕过无需登录），禁止把后台接口写成未授权。
 3. SearchOldVuln 去重；pending 同根因用 AppendAffectedLocations。
 4. 已看完且确认无洞的文件可 FinishFile，然后继续挖，不要立刻 FinishRound。
 5. 本趟探索收束后 FinishRound。系统不会按权重派下一份文件。

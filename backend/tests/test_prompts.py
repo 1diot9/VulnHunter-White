@@ -149,6 +149,10 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "双层审核" in text
     assert "前台" in text
     assert "后台" in text
+    assert "无认证可达" in text
+    assert "不要照抄 Worker" in text
+    assert "无认证可达" in load_prompt("initial/reviewer.md")
+    assert "不要标 attack_surface=frontend" in load_prompt("initial/reviewer.md")
     assert "互联网资产证明" in text
     assert "FOFA" in text
     assert "X 情报社区" in text
@@ -222,6 +226,7 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     assert spec is not None
     assert "CVSS 3.1 度量标准" in spec.description
     assert "PR:L" in spec.description
+    assert "独立核验无认证可达" in spec.description
     vector_desc = spec.parameters["properties"]["cvss_vector"]["description"]
     assert "CVSS 3.1 度量标准" in vector_desc
     assert "Cookie" in vector_desc
@@ -586,6 +591,11 @@ def test_unconstrained_worker_prompts():
     assert "不入定权" in worker
     assert "queued" in worker
     assert "ListBytecode" in initial
+    assert "提交前再核前台可达" in worker
+    assert "方法无注解" in worker
+    assert "docs/auth.md" in worker
+    assert "再核一次是否真的前台可达" in initial
+    assert "auth_premise" in initial
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():

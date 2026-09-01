@@ -154,12 +154,52 @@ def test_multi_endpoint_parallel_capacity():
     assert lim.snapshot()[0] == 5
     ids = {h.endpoint_id for h in handles}
     assert ids == {"ep-a", "ep-b"}
-    # Prefer remaining capacity: ep-a cap 2, ep-b cap 3
+    # Spread by utilization until both are full: ep-a cap 2, ep-b cap 3
     assert sum(1 for h in handles if h.endpoint_id == "ep-a") == 2
     assert sum(1 for h in handles if h.endpoint_id == "ep-b") == 3
     for h in handles:
         lim.release(h)
     assert lim.snapshot()[0] == 0
+
+
+def test_acquire_spreads_evenly_even_when_preferring_first():
+    """New sessions must not fill the sticky first endpoint before using others."""
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-a", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 4},
+            {"id": "ep-b", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 4},
+            {"id": "ep-c", "base_url": "https://c.example/v1", "api_key": "kc", "max_inflight": 4},
+        ]
+    )
+    handles = [lim.acquire(prefer_endpoint="ep-a") for _ in range(6)]
+    assert all(h is not None for h in handles)
+    counts = {"ep-a": 0, "ep-b": 0, "ep-c": 0}
+    for h in handles:
+        counts[h.endpoint_id] += 1
+    assert counts == {"ep-a": 2, "ep-b": 2, "ep-c": 2}
+    # Intermediate prefix must already be spread, not 4-on-a then overflow
+    prefix = [h.endpoint_id for h in handles[:3]]
+    assert set(prefix) == {"ep-a", "ep-b", "ep-c"}
+    for h in handles:
+        lim.release(h)
+    assert lim.snapshot()[0] == 0
+
+
+def test_prefer_wins_only_when_loads_are_equal():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-a", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 4},
+            {"id": "ep-b", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 4},
+        ]
+    )
+    h0 = lim.acquire(prefer_endpoint="ep-b")
+    assert h0 is not None and h0.endpoint_id == "ep-b"
+    h1 = lim.acquire(prefer_endpoint="ep-b")
+    assert h1 is not None and h1.endpoint_id == "ep-a"
+    lim.release(h0)
+    lim.release(h1)
 
 
 def test_rebind_moves_off_cooled_endpoint():

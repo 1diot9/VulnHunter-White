@@ -114,7 +114,7 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
         <TooltipContent side="bottom" className="max-w-md text-left leading-relaxed whitespace-normal">
           <p>
             所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL
-            并发之和；超出按到达顺序排队。可在设置页管理模型商池。
+            并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。可在设置页管理模型商池。
           </p>
           {endpoints.length > 0 ? (
             <ul className="mt-2 space-y-1.5 border-t border-background/20 pt-2 text-[11px]">
