@@ -169,6 +169,27 @@ def test_mining_prereqs_need_recon_and_code_intel(tmp_env, project):
     assert pipeline.mining_prereqs_met(project) is True
 
 
+def test_code_intel_blocks_mining_until_build_settles(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    assert pipeline._code_intel_blocks_mining(project) is False
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.code_intel_enabled = True
+        proj.code_intel_done = False
+        db.commit()
+    assert pipeline.mining_prereqs_met(project) is False
+    assert pipeline._code_intel_blocks_mining(project) is True
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.code_intel_done = True
+        proj.code_intel_status = "ready"
+        db.commit()
+    assert pipeline._code_intel_blocks_mining(project) is False
+    assert pipeline.mining_prereqs_met(project) is True
+
+
 def test_find_symbol_compacts_cli_json(tmp_env, project, monkeypatch):
     monkeypatch.setattr("app.code_intelligence.query.index_ready", lambda pid: True)
     monkeypatch.setattr("app.code_intelligence.query.find_codegraph", lambda: Path("fake-codegraph"))

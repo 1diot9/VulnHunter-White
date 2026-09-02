@@ -161,7 +161,7 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象、挖掘路径与代码库仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
+              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象、代码库与挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -173,6 +173,11 @@ export function ProjectSettingsButton({
             <ProjectModelSelect value={llmModel} onValueChange={setLlmModel} />
             <MaxTokenUsageField value={maxTokenUsage} onChange={setMaxTokenUsage} disabled={saving} />
             <ReconHintFields value={reconHint} onChange={setReconHint} disabled={saving} />
+            <CodeIntelToggle
+              enabled={codeIntel}
+              onEnabledChange={setCodeIntel}
+              disabled={project.status !== 'paused' && project.status !== 'completed'}
+            />
             <WorkerHintFields value={workerHint} onChange={setWorkerHint} disabled={saving} />
             <MiningPathSelect
               heuristicEnabled={heuristicEnabled}
@@ -194,11 +199,6 @@ export function ProjectSettingsButton({
                 setBypassEnabled(nextB)
                 setUnconstrainedEnabled(nextU)
               }}
-            />
-            <CodeIntelToggle
-              enabled={codeIntel}
-              onEnabledChange={setCodeIntel}
-              disabled={project.status !== 'paused' && project.status !== 'completed'}
             />
             <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />
             {dynamicVerifyMode === 'lab' ? (

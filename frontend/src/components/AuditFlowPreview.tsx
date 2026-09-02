@@ -255,7 +255,7 @@ function FlowBox({ node }: { node: FlowNode }) {
   return (
     <div
       className={cn(
-        'w-full rounded-lg border px-3 py-2.5 transition-colors',
+        'flex h-full w-full flex-col rounded-lg border px-3 py-2.5 transition-colors',
         node.skipped
           ? 'border-dashed border-border/80 bg-transparent'
           : 'border-blue-500/35 bg-blue-500/10',
@@ -361,6 +361,7 @@ function summaryText({
   manualLab,
   verifierEnabled,
   attackChainEnabled = false,
+  codeIntelEnabled = false,
   heuristicEnabled = true,
   heuristicLite = false,
   fastEnabled = false,
@@ -394,15 +395,18 @@ function summaryText({
   if (verifierEnabled) post.push('互联网验证')
   if (attackChainEnabled) post.push('攻击链')
   const tail = post.length > 0 ? `${post.join(' ∥ ')} → 完成` : '完成'
-  return `侦察 →（${mine}）→ 审核（${review}）→ ${tail}`
+  const head = codeIntelEnabled ? '侦察 ∥ 代码库' : '侦察'
+  return `${head} →（${mine}）→ 审核（${review}）→ ${tail}`
 }
 
 export function AuditFlowPreview(props: PreviewProps) {
   const nodes = buildNodes(props)
   const summary = summaryText(props)
   const recon = nodes.find((n) => n.id === 'recon')
+  const codeIntel = nodes.find((n) => n.id === 'code_intel')
   const mines = nodes.filter((n) => isMineNode(n.id))
-  const rest = nodes.filter((n) => n.id !== 'recon' && !isMineNode(n.id))
+  const rest = nodes.filter((n) => n.id !== 'recon' && n.id !== 'code_intel' && !isMineNode(n.id))
+  const startStages = [recon, codeIntel].filter((n): n is FlowNode => Boolean(n))
 
   return (
     <TooltipProvider delay={200}>
@@ -413,7 +417,11 @@ export function AuditFlowPreview(props: PreviewProps) {
         <h2 className="text-xs font-medium text-muted-foreground">当前勾选下的审计流程</h2>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{summary}</p>
         <div className="mt-3">
-          {recon ? <FlowBox node={recon} /> : null}
+          <div className="grid grid-cols-2 items-stretch gap-2">
+            {startStages.map((node) => (
+              <FlowBox key={node.id} node={node} />
+            ))}
+          </div>
           <FlowFork nodes={mines} />
           {rest.map((node) => (
             <div key={node.id}>

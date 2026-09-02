@@ -471,7 +471,11 @@ def note_attack_chain_enabled(project_id: int) -> None:
 def note_code_intel_enabled(project_id: int) -> None:
     """User turned Code Intelligence on; start a build even if mining is paused."""
     _phase_pause_event(project_id, "code_intel").clear()
-    live_log.system(project_id, "已开启代码库，开始构建调用图", phase="code_intel")
+    live_log.system(
+        project_id,
+        "已开启代码库，开始构建调用图；挖掘会等构建结束后再继续",
+        phase="code_intel",
+    )
     _start_code_intel_thread(project_id, force=False)
 
 
@@ -1008,6 +1012,34 @@ def _wait_if_paused(project_id: int, cancel: threading.Event, phase: str | None 
         if not paused:
             return not cancel.is_set()
         time.sleep(0.2)
+
+
+def _code_intel_blocks_mining(project_id: int) -> bool:
+    """True while Code Intelligence is on but the first build has not settled."""
+    from ..code_intelligence.service import is_code_intel_enabled, code_intel_ready_for_mining
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not is_code_intel_enabled(proj):
+            return False
+        return not code_intel_ready_for_mining(proj)
+
+
+def _wait_if_code_intel_pending(project_id: int, cancel: threading.Event) -> bool:
+    """Hold mining until an in-flight Code Intelligence build settles (or degrades)."""
+    logged = False
+    while _code_intel_blocks_mining(project_id):
+        if cancel.is_set() or _project_is_terminal(project_id):
+            return False
+        if not logged:
+            live_log.system(
+                project_id,
+                "已开启代码库，挖掘等待调用图构建结束",
+                phase="worker",
+            )
+            logged = True
+        time.sleep(0.2)
+    return not cancel.is_set()
 
 
 def _resumable_for_control(project_id: int, phase: str) -> list:
@@ -4181,6 +4213,8 @@ def _run_worker_loop_inner(
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
                 break
+            if not _wait_if_code_intel_pending(project_id, cancel):
+                break
             try:
                 with SessionLocal() as db:
                     proj = db.get(Project, project_id)
@@ -4364,6 +4398,8 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
     try:
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            if not _wait_if_code_intel_pending(project_id, cancel):
                 break
             try:
                 with SessionLocal() as db:
@@ -4598,6 +4634,8 @@ def _run_fast_prepare(project_id: int) -> None:
                 break
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
                 return
+            if not _wait_if_code_intel_pending(project_id, cancel):
+                return
             cards = _format_sink_cards(batch)
             system = _phase_system_prompt(project_id, "sink_triage.md")
             run_id = _new_phase_run(project_id, "sink-triage", "sink_triage")
@@ -4696,6 +4734,8 @@ def _run_fast_worker_loop(project_id: int, worker_id: str) -> None:
     try:
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            if not _wait_if_code_intel_pending(project_id, cancel):
                 break
             with SessionLocal() as db:
                 proj = db.get(Project, project_id)
@@ -4841,6 +4881,8 @@ def _run_bypass_worker_loop(project_id: int, worker_id: str) -> None:
     try:
         while not cancel.is_set():
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+                break
+            if not _wait_if_code_intel_pending(project_id, cancel):
                 break
             with SessionLocal() as db:
                 proj = db.get(Project, project_id)

@@ -216,7 +216,7 @@ export function CreateProjectDialog({
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、代码库与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
+            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、代码库阶段、挖掘路径与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -239,6 +239,7 @@ export function CreateProjectDialog({
                 reconHint={reconHint}
                 disabled={busy}
               />
+              <CodeIntelToggle enabled={codeIntelEnabled} onEnabledChange={setCodeIntelEnabled} />
               <MiningPathSelect
                 heuristicEnabled={heuristicEnabled}
                 heuristicLite={heuristicLite}
@@ -259,7 +260,6 @@ export function CreateProjectDialog({
                   setUnconstrainedEnabled(nextU)
                 }}
               />
-              <CodeIntelToggle enabled={codeIntelEnabled} onEnabledChange={setCodeIntelEnabled} />
               <DynamicVerifyToggle
                 mode={dynamicVerifyMode}
                 onModeChange={(mode) => {
