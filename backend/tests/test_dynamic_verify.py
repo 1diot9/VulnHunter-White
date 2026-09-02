@@ -678,6 +678,8 @@ def test_execute_harness_without_docker(monkeypatch):
     result = execute_harness("print(1)", language="python")
     assert result["ok"] is False
     assert "Docker" in result["error"]
+    assert result.get("failure_class") == "sandbox_unavailable"
+    assert result.get("hint")
 
 
 def test_confirm_lab_preserves_prior_harness_when_no_target(tmp_env, project):

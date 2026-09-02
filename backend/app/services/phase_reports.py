@@ -12,6 +12,7 @@ from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
     r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|unconstrained-worker|unconstrained-round|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain)"
+    r"(?:-vuln-(?P<vuln_id>\d+))?"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
 )
@@ -356,6 +357,7 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
         n = int(m.group("n"))
         kind = "rescue" if kind_raw == "rescue" else "summary"
         control, _, subphase = _PHASE_META[phase]
+        vuln_id = m.group("vuln_id")
         return _item(
             rel=rel,
             path=path,
@@ -363,19 +365,20 @@ def _item_for_rel(project_id: int, rel: str, *, content: str | None = None) -> d
             subphase=subphase,
             kind=kind,
             round_no=n,
-            title=_summary_title(phase, kind_raw, n),
+            title=_summary_title(phase, kind_raw, n, vuln_id=vuln_id),
             content=content,
         )
     raise FileNotFoundError(rel)
 
 
-def _summary_title(phase: str, kind: str | None, n: int) -> str:
+def _summary_title(phase: str, kind: str | None, n: int, vuln_id: str | None = None) -> str:
     sub = _SUB_LABEL[_PHASE_META[phase][2]]
+    prefix = f"漏洞 #{vuln_id} " if vuln_id else ""
     if kind == "round":
-        return f"{sub}第 {n} 轮压缩摘要"
+        return f"{prefix}{sub}第 {n} 轮压缩摘要"
     if kind == "rescue":
-        return f"{sub}抢救 · 第 {n} 次"
-    return f"{sub}压缩摘要 · 第 {n} 次"
+        return f"{prefix}{sub}抢救 · 第 {n} 次"
+    return f"{prefix}{sub}压缩摘要 · 第 {n} 次"
 
 
 def _collect_phase_report_candidates(project_id: int) -> list[_ReportCandidate]:
@@ -517,7 +520,7 @@ def _collect_phase_report_candidates(project_id: int) -> list[_ReportCandidate]:
                 subphase=subphase,
                 kind=kind,
                 round_no=n,
-                title=_summary_title(phase, kind_raw, n),
+                title=_summary_title(phase, kind_raw, n, vuln_id=m.group("vuln_id")),
             )
             if item is not None:
                 items.append(item)

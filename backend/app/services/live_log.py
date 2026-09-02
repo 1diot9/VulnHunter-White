@@ -33,6 +33,8 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
         {"recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"}
     ),
     "recon-mark": frozenset({"recon-mark", "recon_mark"}),
+    "code-intel": frozenset({"code_intel", "code-intel"}),
+    "code_intel": frozenset({"code_intel", "code-intel"}),
     "worker": frozenset({"worker", "fix", "fast-worker", "fast_worker", "sink-triage", "sink_triage", "bypass-worker", "bypass_worker", "unconstrained-worker", "unconstrained_worker"}),
     "mine": frozenset({"worker"}),
     "fast": frozenset({"fast-worker", "fast_worker", "sink-triage", "sink_triage"}),
@@ -57,6 +59,7 @@ LOG_PHASES = (
     "recon-old-vuln",
     "recon-old-vuln-ghsa",
     "recon-mark",
+    "code_intel",
     "worker",
     "fast-worker",
     "sink-triage",
@@ -70,6 +73,7 @@ LOG_PHASES = (
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
+    "code_intel": ("code_intel",),
     "worker": ("worker", "fast-worker", "sink-triage", "bypass-worker", "unconstrained-worker", "fix"),
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
@@ -552,6 +556,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "recon-old-vuln-ghsa"
     if p in ("recon-mark", "recon_mark"):
         return "recon-mark"
+    if p in ("code_intel", "code-intel"):
+        return "code_intel"
     if p in ("worker", "mine"):
         return "worker"
     if p in ("fast-worker", "fast_worker", "fast"):
@@ -581,6 +587,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return None
     if phase == "recon":
         return CONTROL_LOG_PHASES["recon"]
+    if phase in ("code-intel", "code_intel"):
+        return CONTROL_LOG_PHASES["code_intel"]
     if phase == "worker":
         return CONTROL_LOG_PHASES["worker"]
     if phase == "reviewer":

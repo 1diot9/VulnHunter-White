@@ -46,6 +46,7 @@ const PhaseReportsPanel = lazy(() => import('../components/PhaseReportsPanel'))
 const LOG_PAGE = 100
 const PHASE_TABS = [
   ['recon', '侦察'],
+  ['code-intel', '代码库'],
   ['worker', '挖掘'],
   ['reviewer', '审核'],
   ['verifier', '验证'],
@@ -82,9 +83,10 @@ function isSessionStart(ev: LogEvent): boolean {
   return ev.kind === 'system' && (ev.text || '').includes('新开对话')
 }
 
-function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 'verifier' | 'attack_chain' {
+function controlPhaseOf(logPhase: string): 'recon' | 'code-intel' | 'worker' | 'reviewer' | 'verifier' | 'attack_chain' {
   if (logPhase === 'verifier') return 'verifier'
   if (logPhase === 'attack_chain' || logPhase === 'attack-chain') return 'attack_chain'
+  if (logPhase === 'code-intel' || logPhase === 'code_intel') return 'code-intel'
   if (logPhase === 'reviewer' || logPhase === 'reviewer-lab' || logPhase === 'reviewer_lab' || logPhase === 'reviewer-review') return 'reviewer'
   if (
     logPhase === 'recon' ||
@@ -105,6 +107,7 @@ function controlPhaseOf(logPhase: string): 'recon' | 'worker' | 'reviewer' | 've
 
 function defaultPhaseTab(phase: string, status: string): string {
   if (phase === 'attack_chain' || phase === 'attack-chain') return 'attack_chain'
+  if (phase === 'code_intel' || phase === 'code-intel') return 'code-intel'
   if (phase === 'verifier') return 'verifier'
   if (status === 'completed' || phase === 'done' || phase === 'reviewer' || status === 'reviewing') {
     return 'reviewer'
@@ -147,6 +150,7 @@ export default function ProjectDetailPage() {
   const [sessionCount, setSessionCount] = useState(1)
   const [actionError, setActionError] = useState('')
   const [runBusy, setRunBusy] = useState(false)
+  const [ciBusy, setCiBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const oldestRef = useRef(0)
   const fileEndRef = useRef(0)
@@ -461,6 +465,8 @@ export default function ProjectDetailPage() {
               phase={project.phase}
               status={project.status}
               reconDone={project.recon_done}
+              codeIntelStatus={project.code_intel_status}
+              codeIntelDone={project.code_intel_done}
               filesAudited={project.files_audited}
               filesSkipped={project.files_skipped}
               filesTotal={project.files_total}
@@ -778,19 +784,68 @@ export default function ProjectDetailPage() {
               setLogSession(n)
             }}
           />
-          <ConversationComposer
-            projectId={projectId}
-            logPhase={phaseFilter}
-            session={displaySession}
-            sessionCount={sessionCount}
-            projectStatus={project.status}
-            onSent={() => {
-              followLiveRef.current = true
-              displaySessionRef.current = sessionCountRef.current
-              setDisplaySession(sessionCountRef.current)
-              setLogSession(null)
-            }}
-          />
+          {phaseFilter === 'code-intel' || phaseFilter === 'code_intel' ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={ciBusy || project.status === 'cancelled' || project.status === 'error'}
+                onClick={() => {
+                  setActionError('')
+                  setCiBusy(true)
+                  void api
+                    .rebuildCodeIntel(projectId)
+                    .then(() => api.getProject(projectId))
+                    .then((fresh) => {
+                      if (!fresh.notModified && !fresh.unchanged) applyRunChange(fresh)
+                    })
+                    .catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+                    .finally(() => setCiBusy(false))
+                }}
+              >
+                {ciBusy ? '处理中…' : '重建代码库'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={ciBusy || (project.code_intel_status !== 'ready' && project.code_intel_status !== 'stale')}
+                title="本机打开 CodeGraph 图浏览器，仅供测试"
+                onClick={() => {
+                  setActionError('')
+                  setCiBusy(true)
+                  void api
+                    .openCodeIntelUi(projectId)
+                    .then((out) => {
+                      if (out.url) window.open(out.url, '_blank', 'noopener,noreferrer')
+                    })
+                    .catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+                    .finally(() => setCiBusy(false))
+                }}
+              >
+                打开图浏览器（测试）
+              </Button>
+              {project.code_intel_status === 'stale' ? (
+                <span className="text-xs text-amber-300">源码已变化，索引过期，不会自动重建</span>
+              ) : null}
+              {project.code_intel_status === 'degraded' && project.code_intel_error ? (
+                <span className="text-xs text-red-300">{project.code_intel_error}</span>
+              ) : null}
+            </div>
+          ) : (
+            <ConversationComposer
+              projectId={projectId}
+              logPhase={phaseFilter}
+              session={displaySession}
+              sessionCount={sessionCount}
+              projectStatus={project.status}
+              onSent={() => {
+                followLiveRef.current = true
+                displaySessionRef.current = sessionCountRef.current
+                setDisplaySession(sessionCountRef.current)
+                setLogSession(null)
+              }}
+            />
+          )}
           </CardContent>
         </Card>
       ) : tab === 'vulns' ? (

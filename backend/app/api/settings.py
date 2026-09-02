@@ -15,6 +15,8 @@ from ..schemas import (
     FofaTestOut,
     GithubProbeIn,
     GithubTestOut,
+    CodegraphProbeIn,
+    CodegraphTestOut,
     JadxProbeIn,
     JadxTestOut,
     LiveLogPurgeIn,
@@ -132,6 +134,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.cli_tools_dir = (body.cli_tools_dir or "").strip() or None
         if body.jadx_path is not None:
             row.jadx_path = (body.jadx_path or "").strip() or None
+        if body.codegraph_path is not None:
+            row.codegraph_path = (body.codegraph_path or "").strip() or None
         db.commit()
         db.refresh(row)
         out = settings_out_from_row(row)
@@ -257,6 +261,14 @@ def probe_jadx_test(body: JadxProbeIn) -> JadxTestOut:
 
     result = probe_jadx(body.jadx_path)
     return JadxTestOut(**result)
+
+
+@router.post("/codegraph/test", response_model=CodegraphTestOut)
+def probe_codegraph_test(body: CodegraphProbeIn) -> CodegraphTestOut:
+    from ..code_intelligence.cli import probe_codegraph
+
+    result = probe_codegraph(body.codegraph_path)
+    return CodegraphTestOut(**result)
 
 
 @router.post("/logs/purge", response_model=LiveLogPurgeOut)

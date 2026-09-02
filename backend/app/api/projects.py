@@ -151,6 +151,8 @@ _PROJECT_LIST_LOAD = (
     Project.status,
     Project.phase,
     Project.recon_done,
+    Project.code_intel_status,
+    Project.code_intel_done,
     Project.audit_mode,
     Project.target_kind,
     Project.custom_audit_mode_id,
@@ -353,6 +355,10 @@ def _project_out(
         status=p.status,
         phase=p.phase,
         recon_done=p.recon_done,
+        code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
+        code_intel_done=bool(getattr(p, "code_intel_done", False)),
+        code_intel_error=(getattr(p, "code_intel_error", None) or "").strip(),
+        code_intel_stale=(getattr(p, "code_intel_status", None) or "") == "stale",
         audit_mode=normalize_audit_mode(p.audit_mode),
         target_kind=normalize_target_kind(getattr(p, "target_kind", None)),
         custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),
@@ -425,6 +431,8 @@ def _project_list_out(
         status=p.status,
         phase=p.phase,
         recon_done=p.recon_done,
+        code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
+        code_intel_done=bool(getattr(p, "code_intel_done", False)),
         audit_mode=normalize_audit_mode(p.audit_mode),
         target_kind=normalize_target_kind(getattr(p, "target_kind", None)),
         custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),
@@ -733,6 +741,8 @@ def get_project(
                 status=p.status,
                 phase=p.phase,
                 recon_done=p.recon_done,
+                code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
+                code_intel_done=bool(getattr(p, "code_intel_done", False)),
                 created_at=p.created_at,
                 updated_at=p.updated_at,
                 etag=etag,
@@ -1262,6 +1272,32 @@ def resume_project(project_id: int) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True, **get_phase_states(project_id)}
+
+
+@router.post("/{project_id}/code-intelligence/rebuild")
+def rebuild_code_intelligence(project_id: int) -> dict:
+    from ..code_intelligence.service import request_rebuild
+
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    try:
+        return request_rebuild(project_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/{project_id}/code-intelligence/ui")
+def open_code_intelligence_ui(project_id: int) -> dict:
+    from ..code_intelligence.service import request_ui
+
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    result = request_ui(project_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "无法打开图浏览器")
+    return result
 
 
 @router.get("/{project_id}/phases/state")

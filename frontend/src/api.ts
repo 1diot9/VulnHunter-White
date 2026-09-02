@@ -13,6 +13,10 @@ export type Project = {
   status: string
   phase: string
   recon_done: boolean
+  code_intel_status?: 'pending' | 'building' | 'ready' | 'degraded' | 'stale'
+  code_intel_done?: boolean
+  code_intel_error?: string
+  code_intel_stale?: boolean
   audit_mode: 'bounty' | 'full' | 'custom'
   target_kind: 'web' | 'library' | 'mixed'
   custom_audit_mode_id: number | null
@@ -277,6 +281,26 @@ export type VerifierConsentResult = {
   error?: string | null
 }
 
+export type HarnessConsentItem = {
+  id: number
+  project_id: number
+  project_name: string
+  title: string
+  vuln_type: string | null
+  severity: string | null
+  severity_score: number | null
+  cvss_vector?: string | null
+  harness_ask_reason: string | null
+  harness_ask_status: string
+  updated_at: string
+}
+
+export type UserAskCount = {
+  count: number
+  verifier?: number
+  harness?: number
+}
+
 export type VulnDetail = Vuln & {
   source_sink: string | null
   auth_premise: string | null
@@ -456,6 +480,7 @@ export type Settings = {
   chat_proxy: string
   cli_tools_dir: string
   jadx_path: string
+  codegraph_path: string
   access_token_set: boolean
 }
 
@@ -610,6 +635,18 @@ export type JadxTest = {
   error: string | null
 }
 
+export type CodegraphProbeBody = {
+  codegraph_path?: string | null
+}
+
+export type CodegraphTest = {
+  ok: boolean
+  path: string
+  version: string
+  latency_ms: number | null
+  error: string | null
+}
+
 export type GithubCandidate = {
   id: number
   full_name: string
@@ -708,6 +745,8 @@ export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
 
 const DEFAULT_API_TIMEOUT_MS = 30_000
 const PROJECT_READ_TIMEOUT_MS = 60_000
+/** Ask/revise a vuln report: backend LLM read is 3–10 min plus pool wait. */
+const FOLLOWUP_LLM_TIMEOUT_MS = 900_000
 const UPLOAD_TIMEOUT_MIN_MS = 120_000
 const UPLOAD_TIMEOUT_MAX_MS = 3_600_000
 const UPLOAD_TIMEOUT_BASE_MS = 60_000
@@ -976,6 +1015,14 @@ export const api = {
     request<{ ok: boolean }>(`/api/settings/custom-audit-modes/${id}`, { method: 'DELETE' }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
+  rebuildCodeIntel: (id: number) =>
+    request<{ ok: boolean; status?: string; error?: string }>(`/api/projects/${id}/code-intelligence/rebuild`, {
+      method: 'POST',
+    }),
+  openCodeIntelUi: (id: number) =>
+    request<{ ok: boolean; url: string; reused?: boolean }>(`/api/projects/${id}/code-intelligence/ui`, {
+      method: 'POST',
+    }),
   getConversationState: (id: number, logPhase: string) =>
     request<ConversationState>(
       `/api/projects/${id}/conversation?log_phase=${encodeURIComponent(logPhase)}`,
@@ -1089,10 +1136,22 @@ export const api = {
     const q = new URLSearchParams()
     if (projectId != null) q.set('project_id', String(projectId))
     const s = q.toString()
-    return request<{ count: number }>(`/api/vulns/verifier-consent/count${s ? `?${s}` : ''}`)
+    return request<UserAskCount>(`/api/vulns/verifier-consent/count${s ? `?${s}` : ''}`)
   },
   resolveVerifierConsent: (id: number, action: 'skip' | 'continue', instruction?: string) =>
     request<VerifierConsentResult>(`/api/vulns/${id}/verifier-consent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, instruction: instruction || null }),
+    }),
+  listHarnessConsent: (projectId?: number) => {
+    const q = new URLSearchParams()
+    if (projectId != null) q.set('project_id', String(projectId))
+    const s = q.toString()
+    return request<HarnessConsentItem[]>(`/api/vulns/harness-consent${s ? `?${s}` : ''}`)
+  },
+  resolveHarnessConsent: (id: number, action: 'skip' | 'continue', instruction?: string) =>
+    request<VerifierConsentResult>(`/api/vulns/${id}/harness-consent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, instruction: instruction || null }),
@@ -1113,12 +1172,14 @@ export const api = {
   askVulnFollowUp: (id: number, question: string) =>
     request<VulnFollowUpThread>(`/api/vulns/${id}/follow-ups`, {
       method: 'POST',
+      timeoutMs: FOLLOWUP_LLM_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
     }),
   generateVulnReportRevision: (id: number, kind: VulnReportKind, instruction: string) =>
     request<VulnReportRevision>(`/api/vulns/${id}/report-revisions`, {
       method: 'POST',
+      timeoutMs: FOLLOWUP_LLM_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, instruction }),
     }),
@@ -1208,6 +1269,12 @@ export const api = {
     }),
   testJadx: (body: JadxProbeBody) =>
     request<JadxTest>('/api/settings/jadx/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  testCodegraph: (body: CodegraphProbeBody) =>
+    request<CodegraphTest>('/api/settings/codegraph/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

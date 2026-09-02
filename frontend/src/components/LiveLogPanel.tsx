@@ -30,6 +30,8 @@ const PHASE_LABEL: Record<string, string> = {
   recon_old_vuln_ghsa: '侦察/历史漏洞补漏',
   'recon-mark': '侦察/盖章',
   recon_mark: '侦察/盖章',
+  'code-intel': '代码库',
+  code_intel: '代码库',
   worker: '挖掘',
   'fast-worker': '快速扫描',
   fast_worker: '快速扫描',
@@ -111,6 +113,9 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
     )
   }
   if (phaseFilter === 'recon-mark') return p === 'recon-mark' || p === 'recon_mark'
+  if (phaseFilter === 'code-intel' || phaseFilter === 'code_intel') {
+    return p === 'code_intel' || p === 'code-intel'
+  }
   if (phaseFilter === 'reviewer') {
     return p === 'reviewer' || p === 'reviewer-lab' || p === 'reviewer_lab'
   }

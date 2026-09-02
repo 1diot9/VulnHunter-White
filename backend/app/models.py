@@ -50,6 +50,7 @@ class AppSettings(Base):
     chat_proxy: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     cli_tools_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     jadx_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    codegraph_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # SHA-256 hex of the global access token. None = fall back to VULNHUNTER_ACCESS_TOKEN.
     access_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -84,6 +85,13 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | recon | worker | reviewer | verifier | attack_chain | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Code Intelligence（CodeGraph）：pending|building|ready|degraded|stale
+    code_intel_status: Mapped[str] = mapped_column(String(32), default="pending")
+    # 首次构建已结束（ready 或 degraded），挖掘门闩；重建不清除
+    code_intel_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    code_intel_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_intel_source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    code_intel_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # bounty | full | custom — set at create time; change only while paused or completed
     audit_mode: Mapped[str] = mapped_column(String(32), default="bounty")
     # web | library | mixed — audit object profile; orthogonal to audit_mode / mining paths
@@ -307,6 +315,10 @@ class Vuln(Base):
     verifier_ask_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_user_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     verifier_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # none | awaiting_user — Reviewer RunCode 连续失败后 AskUser
+    harness_ask_status: Mapped[str] = mapped_column(String(32), default="none")
+    harness_ask_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    harness_user_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -478,6 +490,7 @@ def _ensure_columns() -> None:
             "chat_proxy": "VARCHAR(1024)",
             "cli_tools_dir": "VARCHAR(1024)",
             "jadx_path": "VARCHAR(1024)",
+            "codegraph_path": "VARCHAR(1024)",
             "access_token_hash": "TEXT",
         },
         "file_weights": {
@@ -511,6 +524,11 @@ def _ensure_columns() -> None:
             "worker_hint": "TEXT",
             "recon_hint": "TEXT",
             "max_token_usage": "INTEGER DEFAULT 0",
+            "code_intel_status": "VARCHAR(32) DEFAULT 'pending'",
+            "code_intel_done": "BOOLEAN DEFAULT 0",
+            "code_intel_error": "TEXT",
+            "code_intel_source_hash": "VARCHAR(64)",
+            "code_intel_version": "VARCHAR(64)",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",
@@ -539,6 +557,9 @@ def _ensure_columns() -> None:
             "verifier_ask_reason": "TEXT",
             "verifier_user_instruction": "TEXT",
             "verifier_consent": "BOOLEAN DEFAULT 0",
+            "harness_ask_status": "VARCHAR(32) DEFAULT 'none'",
+            "harness_ask_reason": "TEXT",
+            "harness_user_instruction": "TEXT",
             "harness_depth": "VARCHAR(32)",
             "integration_runtime": "VARCHAR(32)",
         },

@@ -31,6 +31,10 @@ PARALLEL_SAFE = frozenset(
         "ListBytecode",
         "DecompileJava",
         "MarkBusinessJar",
+        "FindSymbol",
+        "FindCallers",
+        "FindCallees",
+        "TraceCalls",
     }
 )
 
@@ -140,6 +144,10 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishFix",
             "ListBytecode",
             "DecompileJava",
+            "FindSymbol",
+            "FindCallers",
+            "FindCallees",
+            "TraceCalls",
         }
     ),
     "fast_worker": frozenset(
@@ -153,6 +161,10 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SetCveRecordField",
             "AppendAffectedLocations",
             "FinishSink",
+            "FindSymbol",
+            "FindCallers",
+            "FindCallees",
+            "TraceCalls",
         }
     ),
     "bypass_worker": frozenset(
@@ -166,6 +178,10 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SetCveRecordField",
             "AppendAffectedLocations",
             "FinishBypass",
+            "FindSymbol",
+            "FindCallers",
+            "FindCallees",
+            "TraceCalls",
         }
     ),
     "unconstrained_worker": frozenset(
@@ -186,6 +202,10 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "FinishRound",
             "ListBytecode",
             "DecompileJava",
+            "FindSymbol",
+            "FindCallers",
+            "FindCallees",
+            "TraceCalls",
         }
     ),
     "sink_triage": frozenset({"FinishSinkTriage"}),
@@ -213,6 +233,10 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "SetCveRecordField",
             "ListBytecode",
             "DecompileJava",
+            "FindSymbol",
+            "FindCallers",
+            "FindCallees",
+            "TraceCalls",
         }
     ),
     "reviewer_lab": frozenset(
@@ -605,3 +629,4 @@ def register_all_tools() -> None:
     from . import run_code  # noqa: F401
     from . import phase_cve_record  # noqa: F401
     from . import phase_decompile  # noqa: F401
+    from . import phase_code_intel  # noqa: F401

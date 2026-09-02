@@ -104,6 +104,8 @@ def request_conversation(
     from . import pipeline
 
     lp = normalize_log_phase(log_phase)
+    if lp in ("code-intel", "code_intel"):
+        raise ValueError("代码库构建无 Agent 会话，请使用重建按钮")
     act = (action or "").strip().lower()
     if act not in ("steer", "continue", "new"):
         raise ValueError("action 须为 steer、continue 或 new")

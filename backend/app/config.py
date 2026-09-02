@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     review_timeouts_before_static: int = 1
     # reviewer-lab: consecutive timeouts (each timeout_reviewer_static) before project-wide static review.
     lab_setup_timeouts_before_static: int = 2
+    # Reviewer harness: consecutive RunCode failures before the loop parks and AskUser.
+    runcode_fail_ask_after: int = 3
     file_inject_max_bytes: int = 80 * 1024
     # Grep defaults: skip files outside this extension set unless caller overrides
     # `glob`. Without this, a default `Grep(pattern=...)` over a 1 GB tree (45 k files)
@@ -156,6 +158,11 @@ class Settings(BaseSettings):
 
     # Java decompilation (jadx)
     jadx_path: str = ""
+    # CodeGraph CLI；空则 PATH / data/tools/codegraph，缺失时构建阶段自动安装
+    codegraph_path: str = ""
+    timeout_codegraph_install: int = 300
+    timeout_codegraph_index: int = 1800
+    timeout_codegraph_query: int = 30
     decompile_max_jar_bytes: int = 80 * 1024 * 1024
     decompile_max_output_bytes: int = 500 * 1024 * 1024
     decompile_timeout_sec: int = 1800

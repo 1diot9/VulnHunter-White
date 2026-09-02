@@ -903,6 +903,7 @@ class AgentLoop:
                 cancel_requested=self._cancelled,
                 state=self.state,
             )
+            runcode_park = False
             for call in parsed_calls:
                 if self._cancelled():
                     result.cancelled = True
@@ -914,7 +915,7 @@ class AgentLoop:
                     self._persist(messages, status="awaiting_user")
                     self._live.system(
                         self.project_id,
-                        f"Verifier 等待用户确认互联网复测 vuln={self.vuln_id}",
+                        f"等待用户确认 vuln={self.vuln_id}",
                         phase=self.phase,
                         role=self.role,
                     )
@@ -930,6 +931,15 @@ class AgentLoop:
                         result=tr if isinstance(tr, dict) else {},
                         vuln_id=self.vuln_id,
                     )
+                if call["name"] == "RunCode" and isinstance(tr, dict):
+                    from ..services.runcode_feedback import note_runcode_result
+
+                    if note_runcode_result(
+                        self.state,
+                        tr,
+                        threshold=int(getattr(settings, "runcode_fail_ask_after", 3) or 3),
+                    ):
+                        runcode_park = True
                 if isinstance(tr, dict) and tr.get("ok") is False:
                     any_failed = True
                 messages.append(
@@ -941,6 +951,10 @@ class AgentLoop:
                 )
             self._persist(messages)
             self.watchdog.note_tool_results(failed=any_failed)
+            if runcode_park:
+                parked = self._park_runcode_ask(messages)
+                if parked is not None:
+                    return parked
 
             if self.stop_when and self.stop_when(self.state):
                 result.ok = True
@@ -1380,7 +1394,59 @@ class AgentLoop:
             path = self.summary_dir / filename
             path.write_text(summary or "", encoding="utf-8")
             return str(path)
-        return write_summary(self.project_id, name, summary)
+        return write_summary(
+            self.project_id,
+            name,
+            summary,
+            vuln_id=self.vuln_id if self._summary_scoped() else None,
+        )
+
+    def _park_runcode_ask(self, messages: list[dict[str, Any]]) -> LoopResult | None:
+        if self.phase != "reviewer" or not self.vuln_id or self.silent:
+            return None
+        from ..services.harness_ask import format_runcode_ask_reason, park_harness_ask_user
+
+        streak = int(self.state.get("runcode_fail_streak") or 0)
+        reason = format_runcode_ask_reason(self.state, streak=streak)
+        parked = park_harness_ask_user(self.project_id, int(self.vuln_id), reason=reason)
+        if not parked.get("ok"):
+            return None
+        tool_id = f"ask-runcode-{int(self.vuln_id)}-{int(time.time() * 1000)}"
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {
+                            "name": "AskUser",
+                            "arguments": json.dumps(
+                                {"reason": reason, "vuln_id": int(self.vuln_id)},
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                ],
+            }
+        )
+        self.state["awaiting_user"] = True
+        self.state["ask_kind"] = "runcode_fail"
+        self.state["runcode_fail_streak"] = 0
+        self._persist(messages, status="awaiting_user")
+        self._live.system(
+            self.project_id,
+            f"RunCode 连续失败，等待用户确认局部验证 vuln={self.vuln_id}",
+            phase=self.phase,
+            role=self.role,
+        )
+        return LoopResult(ok=True, stop_reason="awaiting_user", state=self.state)
+
+    def _summary_scoped(self) -> bool:
+        from .compression import VULN_SCOPED_SUMMARY_PHASES
+
+        return self.phase in VULN_SCOPED_SUMMARY_PHASES and self.vuln_id is not None
 
     def _attach_current_todos(self, summary: str) -> str:
         return attach_todo_list(summary, load_todos(self), include_empty=True)

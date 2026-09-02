@@ -104,7 +104,7 @@ VulnHunter-White 的特点：
 
 ## 4. VulnHunter-White 设计分析
 
-以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。
+以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon 与代码库并列 → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。
 
 ### 4.1 工具集
 
@@ -243,13 +243,18 @@ Java 字节码反编译：Recon 用 `ListBytecode` 发现、`MarkBusinessJar` �
 
 初始上下文为代码地图 / 鉴权文档；每批传入 150 个文件名，由 Agent 调用 Mark 系列工具定权。
 
+Recon **不读**代码库产物。代码库与侦察并列，见 4.5 节开头的门闩。
+
 ### 4.5 挖掘阶段
+
+挖掘须等 **Recon 完成**且 **代码库**首次构建结束（`ready` 或 `degraded` 都算完成）。代码库用 CodeGraph 只索引 `src/` 源码，供 Worker / Reviewer 的 `FindSymbol` / `FindCallers` / `FindCallees` / `TraceCalls` 查调用关系；失败则降级继续用 Read/Grep。源码变化只标过期，由用户点重建，不自动重建。jar/class 不在本阶段处理。
+
 
 #### 4.5.0 漏洞挖掘模式
 
-- **赏金模式（默认）**：只挖掘高危漏洞，不报告反射 XSS、CORS 安全头等低危害项。
-- **全量模式**：报告低危害漏洞。
-- **自定义模式**：在设置页用自然语言描述挖掘范围，项目选用时快照正文，无赏金硬闸门。
+- **赏金模式（默认）**：只挖掘高危漏洞，不报告反射 XSS、CORS 安全头等低危害项。无害/受限文件操作与不可获取且不可预测的 UUID 直接丢弃。
+- **全量模式**：报告低危害漏洞。无害/受限文件操作与不可获取且不可预测的 UUID 仍应误报，不入库。
+- **自定义模式**：在设置页用自然语言描述挖掘范围，项目选用时快照正文，无赏金硬闸门。基座提示仍要求丢弃无害文件操作与不可获取 UUID，自定义条款可覆盖。
 
 #### 4.5.0b 审计对象（target_kind）
 
@@ -425,11 +430,18 @@ flowchart LR
     B --> C[历史漏洞]
     C --> D[文件定权]
   end
+  subgraph CodeIntel[代码库]
+    CI[CodeGraph 索引 src]
+  end
   subgraph Mining
     D --> E[启发式 Worker]
     D --> F[快速扫描]
     D --> G[历史漏洞绕过]
     C --> U[无约束扫描]
+    CI --> E
+    CI --> F
+    CI --> G
+    CI --> U
   end
   subgraph Review
     E --> H[Reviewer]

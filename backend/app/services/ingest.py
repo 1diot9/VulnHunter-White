@@ -118,6 +118,7 @@ WORKER_ADDED_WEIGHT = 50
 IGNORE_DIR_NAMES = frozenset(
     {
         ".git",
+        ".codegraph",
         "node_modules",
         "vendor",
         "target",
@@ -357,6 +358,8 @@ def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
         clear_decompiled(project_id)
     except Exception:  # noqa: BLE001
         pass
+    # clear_decompiled → workspace_dir → ensure_project_dirs 会把 src/ 再建出来
+    force_rmtree(dest)
     clone_url = url.strip()
     if pat and "github.com" in clone_url:
         # https://TOKEN@github.com/owner/repo.git

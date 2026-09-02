@@ -275,7 +275,7 @@ class _FakeClient:
         return self.response
 
 
-def test_chat_uses_anthropic_messages_endpoint(monkeypatch):
+def test_chat_uses_anthropic_messages_endpoint(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
             'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":5}}}',

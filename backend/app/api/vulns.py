@@ -18,6 +18,8 @@ from sqlalchemy.types import String
 from ..target_kind import normalize_target_kind
 from ..models import Project, SessionLocal, Vuln
 from ..schemas import (
+    HarnessConsentItem,
+    HarnessConsentOut,
     VerifierConsentIn,
     VerifierConsentItem,
     VerifierConsentOut,
@@ -45,6 +47,11 @@ from ..services.poc_script import read_poc_code
 from ..services.report import stamp_produced_at
 from ..services.cve_record import format_cve_record_json
 from ..services import vuln_followup
+from ..services.harness_ask import (
+    HARNESS_ASK_AWAITING,
+    awaiting_harness_count,
+    resolve_harness_consent,
+)
 from ..services.verifier import (
     VERIFIER_AWAITING_USER,
     awaiting_user_verifier_count,
@@ -471,7 +478,55 @@ def list_verifier_consent(project_id: int | None = None) -> list[VerifierConsent
 
 @router.get("/verifier-consent/count")
 def verifier_consent_count(project_id: int | None = None) -> dict:
-    return {"count": awaiting_user_verifier_count(project_id)}
+    verifier = awaiting_user_verifier_count(project_id)
+    harness = awaiting_harness_count(project_id)
+    return {"count": verifier + harness, "verifier": verifier, "harness": harness}
+
+
+@router.get("/harness-consent", response_model=list[HarnessConsentItem])
+def list_harness_consent(project_id: int | None = None) -> list[HarnessConsentItem]:
+    with SessionLocal() as db:
+        q = (
+            db.query(Vuln, Project.name)
+            .outerjoin(Project, Project.id == Vuln.project_id)
+            .filter(Vuln.harness_ask_status == HARNESS_ASK_AWAITING)
+        )
+        if project_id is not None:
+            q = q.filter(Vuln.project_id == int(project_id))
+        rows = q.order_by(Vuln.id.asc()).all()
+        return [
+            HarnessConsentItem(
+                id=v.id,
+                project_id=v.project_id,
+                project_name=name or "",
+                title=v.title or "",
+                vuln_type=v.vuln_type,
+                severity=v.severity,
+                severity_score=_report_score(v, read_report=False),
+                cvss_vector=getattr(v, "cvss_vector", None),
+                harness_ask_reason=getattr(v, "harness_ask_reason", None),
+                harness_ask_status=v.harness_ask_status or "awaiting_user",
+                updated_at=v.updated_at,
+            )
+            for v, name in rows
+        ]
+
+
+@router.post("/{vuln_id}/harness-consent", response_model=HarnessConsentOut)
+def post_harness_consent(vuln_id: int, body: VerifierConsentIn) -> HarnessConsentOut:
+    result = resolve_harness_consent(
+        vuln_id,
+        action=body.action,
+        instruction=body.instruction or "",
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, str(result.get("error") or "无法处理确认"))
+    return HarnessConsentOut(
+        **{
+            k: result.get(k)
+            for k in ("ok", "action", "vuln_id", "instruction", "message", "error")
+        }
+    )
 
 
 @router.post("/{vuln_id}/verifier-consent", response_model=VerifierConsentOut)

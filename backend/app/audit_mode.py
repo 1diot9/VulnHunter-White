@@ -39,8 +39,9 @@ BOUNTY_DISALLOWED_TYPES = frozenset({"xss"})
 BOUNTY_DISALLOWED_TIERS = frozenset({"low_impact"})
 
 BOUNTY_TYPE_LABELS = (
-    "RCE、SSTI、反序列化、SQL 注入、XML 注入、任意文件操作（读/写/删/改/复制/解压穿越等）、"
-    "能打内网的 SSRF、敏感信息泄露、文件上传、文件包含、目录遍历、认证绕过、越权、DoS、"
+    "RCE、SSTI、反序列化、SQL 注入、XML 注入、真正任意的文件操作（能读/写/删敏感或越权对象）、"
+    "能打内网的 SSRF、敏感信息泄露、能造成执行或覆盖敏感路径的文件上传、文件包含、目录遍历、"
+    "认证绕过、越权、DoS、"
     "存储型 XSS、1-click CSRF（打开恶意页面即触发 RCE 或其他高危操作）、"
     "有服务端机密危害的源码硬编码密钥，以及其他确定能造成实际危害的问题"
 )
@@ -139,6 +140,8 @@ def initial_hint(mode: str, *, custom_name: str | None = None) -> str:
         return (
             f"当前为{AUDIT_MODE_LABELS[normalized]}：只报 {BOUNTY_TYPE_LABELS}。"
             "CORS、反射 XSS、缺速率限制、安全头、普通 CSRF（仅缺 token / 低危状态变更）等低危害项不要提交或确认。"
+            "无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件，含匿名文件操作）"
+            "以及不可获取且不可预测的 UUID 直接丢弃，不要提交或确认。"
             "存储型 XSS、1-click CSRF（受害者打开恶意页面即触发 RCE 或其他高危操作）"
             "与有服务端机密危害的源码硬编码密钥可以提交；"
             "配置文件/.env/compose 里用户可改的口令、前端传输混淆 AES/公开下发密钥不算。"
@@ -160,6 +163,8 @@ def initial_hint(mode: str, *, custom_name: str | None = None) -> str:
     return (
         f"当前为{AUDIT_MODE_LABELS[normalized]}：按现行规则提交，含难以利用项"
         "（缺速率限制、反射 XSS、CORS/安全头等），由 Reviewer 标为低危害难利用。"
+        "无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）"
+        "以及不可获取且不可预测的 UUID 仍应丢弃，不要入库。"
     )
 
 

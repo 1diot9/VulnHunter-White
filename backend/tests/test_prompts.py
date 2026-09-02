@@ -203,6 +203,36 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "观察面" in load_prompt("verifier.md")
 
 
+def test_harmless_file_ops_and_unguessable_uuid_are_discarded():
+    worker = load_prompt("worker.md")
+    reviewer = load_prompt("reviewer.md")
+    initial_worker = load_prompt("initial/worker.md")
+    initial_reviewer = load_prompt("initial/reviewer.md")
+    unconstrained = load_prompt("worker-unconstrained.md")
+    fast = load_prompt("fast_worker.md")
+    bypass = load_prompt("bypass_worker.md")
+    for text in (
+        worker,
+        reviewer,
+        initial_worker,
+        initial_reviewer,
+        unconstrained,
+        fast,
+        bypass,
+        load_prompt("initial/fast_worker.md"),
+        load_prompt("initial/bypass_worker.md"),
+        load_prompt("initial/unconstrained-worker.md"),
+    ):
+        assert "无害/受限文件操作" in text
+        assert "不可获取且不可预测" in text
+    assert "匿名文件操作" in worker
+    assert "匿名文件操作" in reviewer
+    assert "MarkFalsePositive" in reviewer
+    assert "不要标 `low_impact`" in reviewer
+    assert "FinishSink(verdict=intended)" in fast
+    assert "FinishBypass(verdict=intended)" in bypass
+
+
 def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     from app.tools import registry
 
@@ -340,6 +370,12 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     full = load_prompt("modes/full.md")
     assert "全量模式" in full
     assert "low_impact" in full
+    assert "无害/受限文件操作" in bounty_worker
+    assert "不可获取且不可预测" in bounty_worker
+    assert "匿名文件操作" in bounty_worker
+    assert "无害/受限文件操作" in full
+    assert "不可获取且不可预测" in full
+    assert "不要标 `low_impact` 入库" in full
 
     from app.models import Project, SessionLocal
     from app.services import pipeline

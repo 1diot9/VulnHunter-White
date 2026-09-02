@@ -181,6 +181,22 @@ def execute_harness(
     description: str = "",
 ) -> dict[str, Any]:
     """Run LLM-written harness in a one-shot sibling container. Never executes on the host."""
+    from .runcode_feedback import annotate_run_code_result
+
+    return annotate_run_code_result(
+        _execute_harness_raw(code, language=language, timeout=timeout, description=description),
+        language=language,
+        code=code,
+    )
+
+
+def _execute_harness_raw(
+    code: str,
+    *,
+    language: str = "python",
+    timeout: int = 60,
+    description: str = "",
+) -> dict[str, Any]:
     timeout = max(5, min(int(timeout or 60), 180))
     diagnosis = sandbox_diagnosis()
     if not diagnosis["available"]:

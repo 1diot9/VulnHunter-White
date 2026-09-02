@@ -274,7 +274,7 @@ def _loop(monkeypatch, client: _FakeClient, *, model: str = "glm-5.2") -> AgentL
     )
 
 
-def test_chat_streams_and_assembles(monkeypatch):
+def test_chat_streams_and_assembles(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
             'data: {"choices":[{"delta":{"content":"hi"}}]}',
@@ -298,7 +298,7 @@ def test_chat_streams_and_assembles(monkeypatch):
     assert client.captured["json"]["temperature"] == 0.2
 
 
-def test_chat_http_429(monkeypatch):
+def test_chat_http_429(tmp_env, monkeypatch):
     resp = _FakeResponse(status_code=429, headers={"retry-after": "7"}, body=b"Too Many Requests")
     loop = _loop(monkeypatch, _FakeClient(resp))
     with pytest.raises(RateLimitError) as ei:
@@ -306,7 +306,7 @@ def test_chat_http_429(monkeypatch):
     assert ei.value.retry_after == 7.0
 
 
-def test_chat_http_401(monkeypatch):
+def test_chat_http_401(tmp_env, monkeypatch):
     resp = _FakeResponse(status_code=401, body=b"nope")
     loop = _loop(monkeypatch, _FakeClient(resp))
     with pytest.raises(AuthError):
@@ -356,7 +356,7 @@ def test_sanitize_chat_messages_keeps_reasoning_for_kimi_k3():
     assert original[0]["reasoning_content"] == "plan"
 
 
-def test_chat_omits_temperature_for_kimi_k3(monkeypatch):
+def test_chat_omits_temperature_for_kimi_k3(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
             'data: {"choices":[{"delta":{"content":"ok"}}]}',
@@ -371,7 +371,7 @@ def test_chat_omits_temperature_for_kimi_k3(monkeypatch):
     assert body["model"] == "moonshotai/kimi-k3"
 
 
-def test_chat_sends_temperature_for_glm(monkeypatch):
+def test_chat_sends_temperature_for_glm(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
             'data: {"choices":[{"delta":{"content":"ok"}}]}',
@@ -385,7 +385,7 @@ def test_chat_sends_temperature_for_glm(monkeypatch):
     assert body["temperature"] == 0.2
 
 
-def test_chat_drops_temperature_on_400(monkeypatch):
+def test_chat_drops_temperature_on_400(tmp_env, monkeypatch):
     responses = [
         _FakeResponse(
             status_code=400,
@@ -413,7 +413,7 @@ def test_chat_drops_temperature_on_400(monkeypatch):
     assert captured[1]["stream"] is True
 
 
-def test_chat_sends_empty_string_for_null_assistant_content(monkeypatch):
+def test_chat_sends_empty_string_for_null_assistant_content(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
             'data: {"choices":[{"delta":{"content":"ok"}}]}',
@@ -447,7 +447,7 @@ def test_chat_sends_empty_string_for_null_assistant_content(monkeypatch):
     assert msgs[2]["content"] == ""
 
 
-def test_chat_drops_stream_options_on_400(monkeypatch):
+def test_chat_drops_stream_options_on_400(tmp_env, monkeypatch):
     responses = [
         _FakeResponse(status_code=400, body=b'{"error":"unknown parameter stream_options"}'),
         _FakeResponse(
@@ -472,7 +472,7 @@ def test_chat_drops_stream_options_on_400(monkeypatch):
     assert captured[1]["stream"] is True
 
 
-def test_chat_retries_incomplete_chunked_read(monkeypatch):
+def test_chat_retries_incomplete_chunked_read(tmp_env, monkeypatch):
     logs: list[str] = []
 
     class _BoomThenOk(_FakeClient):

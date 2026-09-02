@@ -1863,6 +1863,16 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "分析债务" in reviewer_descs["ReturnToWorker"]
     assert "MarkFalsePositive" in reviewer_descs["ReturnToWorker"]
     assert "不要用来改 PoC" in reviewer_descs["MarkFalsePositive"]
+    assert "无害/受限文件操作" in reviewer_descs["ConfirmVuln"]
+    assert "不可获取且不可预测" in reviewer_descs["ConfirmVuln"]
+    assert "无害/受限文件操作" in reviewer_descs["MarkFalsePositive"]
+    assert "不可获取且不可预测" in reviewer_descs["MarkFalsePositive"]
+    worker_descs = {
+        t["function"]["name"]: t["function"]["description"]
+        for t in registry.openai_tools_for_role("worker")
+    }
+    assert "无害/受限文件操作" in worker_descs["SubmitVuln"]
+    assert "不可获取且不可预测" in worker_descs["SubmitVuln"]
     lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}
     assert "FinishLab" in lab_names
     assert "Write" in lab_names

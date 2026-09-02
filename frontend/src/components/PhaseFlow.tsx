@@ -10,9 +10,14 @@ const PHASES = [
     hint: '摸清项目结构与鉴权，补齐源码扩展名、收录历史漏洞，并为文件定权，供后续挖掘使用。',
   },
   {
+    id: 'code_intel',
+    label: '代码库',
+    hint: '与侦察并列。用 CodeGraph 给 src/ 建代码数据库，供 Worker / Reviewer 查调用关系。失败则降级继续用 Read/Grep。',
+  },
+  {
     id: 'worker',
     label: '挖掘',
-    hint: '启发式在历史漏洞收集完毕后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
+    hint: '侦察与代码库都完成后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
   },
   {
     id: 'reviewer',
@@ -64,6 +69,8 @@ type FlowState = {
   phase: string
   status: string
   reconDone: boolean
+  codeIntelStatus?: string
+  codeIntelDone?: boolean
   filesAudited?: number
   filesSkipped?: number
   filesTotal?: number
@@ -99,9 +106,13 @@ type BranchItem = {
   node: ReactNode
 }
 
+function miningPrereqs(s: FlowState): boolean {
+  return Boolean(s.reconDone && s.codeIntelDone)
+}
+
 function heuristicFinished(s: FlowState): boolean {
   if (s.heuristicEnabled === false) return true
-  if (!s.reconDone) return false
+  if (!miningPrereqs(s)) return false
   if (s.heuristicLite === true) {
     return (s.filesWeight100Audited ?? 0) >= (s.filesWeight100 ?? 0)
   }
@@ -112,7 +123,7 @@ function heuristicFinished(s: FlowState): boolean {
 
 function fastFinished(s: FlowState): boolean {
   if (s.fastEnabled !== true) return true
-  if (!s.reconDone || !s.fastQueueFrozen) return false
+  if (!miningPrereqs(s) || !s.fastQueueFrozen) return false
   return (s.sinksDone ?? 0) >= (s.sinksQueued ?? 0)
 }
 
@@ -134,7 +145,7 @@ function workerFinished(s: FlowState): boolean {
 function heuristicTone(s: FlowState): Tone {
   if (s.heuristicEnabled === false) return 'neutral'
   if (heuristicFinished(s)) return 'success'
-  if (s.phase === 'worker' || s.phase === 'fix' || s.status === 'auditing' || (s.reconDone && !heuristicFinished(s))) {
+  if (s.phase === 'worker' || s.phase === 'fix' || s.status === 'auditing' || (miningPrereqs(s) && !heuristicFinished(s))) {
     return 'info'
   }
   return 'neutral'
@@ -143,21 +154,21 @@ function heuristicTone(s: FlowState): Tone {
 function fastTone(s: FlowState): Tone {
   if (s.fastEnabled !== true) return 'neutral'
   if (fastFinished(s)) return 'success'
-  if (s.reconDone && (s.phase === 'worker' || s.status === 'auditing' || !fastFinished(s))) return 'info'
+  if (miningPrereqs(s) && (s.phase === 'worker' || s.status === 'auditing' || !fastFinished(s))) return 'info'
   return 'neutral'
 }
 
 function bypassTone(s: FlowState): Tone {
   if (s.bypassEnabled !== true) return 'neutral'
   if (bypassFinished(s)) return 'success'
-  if (s.phase === 'worker' || s.status === 'auditing' || s.bypassQueueFrozen || s.reconDone) return 'info'
+  if (s.phase === 'worker' || s.status === 'auditing' || s.bypassQueueFrozen || miningPrereqs(s)) return 'info'
   return 'neutral'
 }
 
 function unconstrainedTone(s: FlowState): Tone {
   if (s.unconstrainedEnabled !== true) return 'neutral'
   if (unconstrainedFinished(s)) return 'success'
-  if (s.phase === 'worker' || s.status === 'auditing' || s.reconDone) return 'info'
+  if (s.phase === 'worker' || s.status === 'auditing' || miningPrereqs(s)) return 'info'
   return 'neutral'
 }
 
@@ -171,9 +182,21 @@ function phaseTone(id: string, s: FlowState): Tone {
     if (s.phase === 'recon' || s.status === 'recon' || s.status === 'ingesting') return 'info'
     return 'neutral'
   }
+  if (id === 'code_intel') {
+    const st = s.codeIntelStatus || 'pending'
+    if (st === 'ready' || st === 'stale' || st === 'degraded' || s.codeIntelDone) return 'success'
+    if (st === 'building' || s.phase === 'code_intel' || s.status === 'recon' || s.status === 'ingesting' || s.status === 'auditing') {
+      if (st === 'pending' && s.status === 'completed') return 'neutral'
+      if (st === 'building' || s.phase === 'code_intel' || s.status === 'recon' || s.status === 'ingesting') return 'info'
+    }
+    if (s.status === 'completed' || s.phase === 'done') return 'neutral'
+    if (st === 'building') return 'info'
+    if (s.status === 'recon' || s.status === 'ingesting' || s.status === 'auditing' || s.status === 'paused') return 'info'
+    return 'neutral'
+  }
   if (id === 'worker') {
     if (workerDone) return 'success'
-    if (s.phase === 'worker' || s.phase === 'fix' || s.status === 'auditing' || (s.reconDone && !workerDone)) {
+    if (s.phase === 'worker' || s.phase === 'fix' || s.status === 'auditing' || (miningPrereqs(s) && !workerDone)) {
       return 'info'
     }
     return 'neutral'
@@ -270,6 +293,8 @@ export default function PhaseFlow({
   phase,
   status,
   reconDone,
+  codeIntelStatus,
+  codeIntelDone,
   filesAudited,
   filesSkipped,
   filesTotal,
@@ -304,6 +329,8 @@ export default function PhaseFlow({
     phase,
     status,
     reconDone,
+    codeIntelStatus,
+    codeIntelDone,
     filesAudited,
     filesSkipped,
     filesTotal,
@@ -459,6 +486,7 @@ export default function PhaseFlow({
 
   const branches: Record<(typeof PHASES)[number]['id'], BranchItem[]> = {
     recon: branchOf('recon'),
+    code_intel: [],
     worker: branchOf('worker'),
     reviewer: branchOf('reviewer'),
     verifier: branchOf('verifier'),
@@ -467,19 +495,77 @@ export default function PhaseFlow({
   }
   const workerPaths = branches.worker
   const workerHints: Record<string, string> = {
-    mine: '历史漏洞收集完毕后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
+    mine: '侦察与代码库都完成后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
     bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
-    unconstrained: '历史漏洞收集完毕后启动，只注入代码地图与鉴权。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
+    unconstrained: '侦察与代码库都完成后启动，只注入代码地图与鉴权。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
   }
+
+  const codeIntel = PHASES.find((p) => p.id === 'code_intel')
+  const ciStatus = state.codeIntelStatus || 'pending'
+  const ciLabel =
+    ciStatus === 'stale'
+      ? '代码库 需重建'
+      : ciStatus === 'degraded'
+        ? '代码库 已降级'
+        : ciStatus === 'ready' || state.codeIntelDone
+          ? '代码库'
+          : '代码库'
 
   return (
     <TooltipProvider delay={200}>
       <div className="flex flex-nowrap items-start gap-2 overflow-x-auto">
-        {PHASES.map((p, i) => (
+        {PHASES.map((p, i) => {
+          if (p.id === 'code_intel') return null
+          const visibleAfter = PHASES.slice(i + 1).find((x) => x.id !== 'code_intel')
+          return (
           <Fragment key={p.id}>
             <div className="shrink-0">
-              {p.id === 'worker' && workerPaths.length > 0 ? (
+              {p.id === 'recon' ? (
+                <div className="flex flex-col gap-1">
+                  <div className="flex h-6 items-center">
+                    <FlowTip
+                      hint={p.hint}
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => onSelect?.('recon')}
+                          className="h-auto rounded-md p-0"
+                        />
+                      }
+                    >
+                      <Badge variant={badgeVariant(phaseTone('recon', state))}>
+                        侦察{state.reconDone ? ' ✓' : ''}
+                      </Badge>
+                    </FlowTip>
+                  </div>
+                  {codeIntel ? (
+                    <div className="flex h-6 items-center">
+                      <FlowTip
+                        hint={codeIntel.hint}
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => onSelect?.('code-intel')}
+                            className="h-auto rounded-md p-0"
+                          />
+                        }
+                      >
+                        <Badge variant={badgeVariant(phaseTone('code_intel', state))}>
+                          {ciLabel}
+                          {ciStatus === 'ready' || ciStatus === 'stale' || ciStatus === 'degraded' || state.codeIntelDone
+                            ? ' ✓'
+                            : ''}
+                        </Badge>
+                      </FlowTip>
+                    </div>
+                  ) : null}
+                </div>
+              ) : p.id === 'worker' && workerPaths.length > 0 ? (
                 <div className="flex flex-col gap-1">
                   {workerPaths.map((item, index) => (
                     <div key={item.id} className={index === 0 ? 'flex h-6 items-center' : undefined}>
@@ -526,11 +612,12 @@ export default function PhaseFlow({
               )}
               <PhaseBranch items={p.id === 'worker' ? [] : branches[p.id] ?? []} />
             </div>
-            {i < PHASES.length - 1 ? (
+            {visibleAfter ? (
               <span className="flex h-6 shrink-0 items-center text-slate-600">→</span>
             ) : null}
           </Fragment>
-        ))}
+          )
+        })}
       </div>
     </TooltipProvider>
   )

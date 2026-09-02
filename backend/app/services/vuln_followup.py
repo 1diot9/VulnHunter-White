@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from ..agent.anthropic_compat import (
     anthropic_headers,
     anthropic_url,
@@ -16,6 +18,7 @@ from ..agent.anthropic_compat import (
 from ..agent.llm_compat import param_to_drop, prepare_chat_body, sampling_temperature
 from ..agent.checkpoint import LoopCheckpoint, load_checkpoint
 from ..agent.chat_stream import ChatStreamError, ChatStreamProviderError, consume_chat_stream
+from ..agent.compression import estimate_tokens
 from ..config import settings
 from ..models import PhaseRun, SessionLocal, Vuln
 from ..prompts import load_prompt
@@ -668,7 +671,10 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
     from ..services.llm_thread import llm_thread_limiter, llm_thread_slot
 
     llm = resolve_llm("reviewer", project_id=project_id)
-    timeout = chat_http_timeout(float(settings.timeout_reviewer_static or 180), 0)
+    timeout = chat_http_timeout(
+        float(settings.timeout_reviewer_static or 180),
+        estimate_tokens(list(messages)),
+    )
     drop_keys: list[str] = []
 
     def failover(handle, kind: str, reason: str, message: str, retry_after: float | None = None):
@@ -761,6 +767,12 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                             return answer
                     except FollowUpLlmError:
                         raise
+                    except httpx.TimeoutException as e:
+                        rebound = failover(handle, "transient", "请求超时", str(e)[:240])
+                        if rebound is None:
+                            raise FollowUpLlmError("模型请求超时，请稍后重试") from e
+                        handle = rebound
+                        continue
                     except ChatStreamProviderError as e:
                         text = str(e)
                         if _looks_like_quota_exhausted(text):
@@ -780,6 +792,8 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                         raise FollowUpLlmError(str(e)) from e
         except FollowUpLlmError:
             raise
+        except httpx.TimeoutException as e:
+            raise FollowUpLlmError("模型请求超时，请稍后重试") from e
         except ChatStreamProviderError as e:
             raise FollowUpLlmError(str(e)) from e
         except ChatStreamError as e:

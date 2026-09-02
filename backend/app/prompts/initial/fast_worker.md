@@ -14,7 +14,7 @@ ${snippet}
 附近 Recon Source:
 ${nearby_sources}
 
-从该 Sink 回推用户可控入口。Grep 无生产调用即可 FinishSink(verdict=unreachable)。
+从该 Sink 回推用户可控入口。优先 FindCallers；无生产调用即可 FinishSink(verdict=unreachable)。
 分析结束后必须 FinishSink（verdict 为 vuln_submitted / unreachable / sanitized / intended / noise）。
-提交漏洞则先 SubmitVuln 再 FinishSink(verdict=vuln_submitted, vuln_id=...)。必填 config_premise=default|specific；特定配置不含官方已警示的风险开关。有 HTTP 面时 poc.py 须 CLI 参数化（-u/--url；--proxy 空则直连；RCE 加 -c/--cmd 并打印回显；须 --zh 切中文输出）；纯库洞不要假 HTTP CLI、不要抄 harness，无安装面可省略 poc_code。脚本输出默认英语。SSRF 须标明有回显、外带内网信息或仅响应差别（有回显与外带危害同级），不要把端口探测或空回调写成已读云元数据。
+提交漏洞则先 SubmitVuln 再 FinishSink(verdict=vuln_submitted, vuln_id=...)。必填 config_premise=default|specific；特定配置不含官方已警示的风险开关。无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）以及不可获取且不可预测的 UUID 不要提交，FinishSink(verdict=intended) 或 FinishSink(verdict=noise)。有 HTTP 面时 poc.py 须 CLI 参数化（-u/--url；--proxy 空则直连；RCE 加 -c/--cmd 并打印回显；须 --zh 切中文输出）；纯库洞不要假 HTTP CLI、不要抄 harness，无安装面可省略 poc_code。脚本输出默认英语。SSRF 须标明有回显、外带内网信息或仅响应差别（有回显与外带危害同级），不要把端口探测或空回调写成已读云元数据。
 report 可用简短中文说明回推结论。不要分析未注入的 Sink。

@@ -64,6 +64,7 @@ class SettingsOut(BaseModel):
     chat_proxy: str = ""
     cli_tools_dir: str = "tools/cli"
     jadx_path: str = ""
+    codegraph_path: str = ""
     access_token_set: bool = False
 
 
@@ -101,6 +102,7 @@ class SettingsUpdate(BaseModel):
     chat_proxy: str | None = None
     cli_tools_dir: str | None = None
     jadx_path: str | None = None
+    codegraph_path: str | None = None
 
 
 class AccessTokenUpdate(BaseModel):
@@ -189,6 +191,18 @@ class JadxProbeIn(BaseModel):
 
 
 class JadxTestOut(BaseModel):
+    ok: bool
+    path: str = ""
+    version: str = ""
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class CodegraphProbeIn(BaseModel):
+    codegraph_path: str | None = None
+
+
+class CodegraphTestOut(BaseModel):
     ok: bool
     path: str = ""
     version: str = ""
@@ -388,6 +402,10 @@ class ProjectOut(BaseModel):
     status: str
     phase: str
     recon_done: bool
+    code_intel_status: str = "pending"
+    code_intel_done: bool = False
+    code_intel_error: str = ""
+    code_intel_stale: bool = False
     audit_mode: str = "bounty"
     target_kind: str = "web"
     custom_audit_mode_id: int | None = None
@@ -465,6 +483,8 @@ class ProjectListItemOut(BaseModel):
     status: str
     phase: str
     recon_done: bool
+    code_intel_status: str = "pending"
+    code_intel_done: bool = False
     audit_mode: str = "bounty"
     target_kind: str = "web"
     custom_audit_mode_id: int | None = None
@@ -644,6 +664,29 @@ class VerifierConsentOut(BaseModel):
     action: str | None = None
     vuln_id: int | None = None
     verifier_status: str | None = None
+    instruction: str | None = None
+    message: str | None = None
+    error: str | None = None
+
+
+class HarnessConsentItem(BaseModel):
+    id: int
+    project_id: int
+    project_name: str = ""
+    title: str
+    vuln_type: str | None = None
+    severity: str | None = None
+    severity_score: float | None = None
+    cvss_vector: str | None = None
+    harness_ask_reason: str | None = None
+    harness_ask_status: str = "awaiting_user"
+    updated_at: datetime
+
+
+class HarnessConsentOut(BaseModel):
+    ok: bool
+    action: str | None = None
+    vuln_id: int | None = None
     instruction: str | None = None
     message: str | None = None
     error: str | None = None

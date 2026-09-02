@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -90,28 +91,83 @@ def _phase_summary_files(d: Path, phase: str, *, rescue: bool | None = None) -> 
     return out
 
 
-def write_summary(project_id: int, phase: str, summary: str) -> str:
+# Failure/compress summaries for these phases are per-vuln so a new review
+# round cannot pick up another vulnerability's rescue notes.
+VULN_SCOPED_SUMMARY_PHASES = frozenset({"reviewer", "verifier", "fix"})
+_KIND_SUFFIXES = ("-rescue", "-round")
+
+
+def summary_phase_key(phase: str, vuln_id: int | None = None) -> str:
+    """Map loop phase (+ optional vuln) to the summaries/ filename stem."""
+    if vuln_id is None:
+        return phase
+    base = phase
+    kind = ""
+    for suffix in _KIND_SUFFIXES:
+        if phase.endswith(suffix):
+            base = phase[: -len(suffix)]
+            kind = suffix.lstrip("-")
+            break
+    if base not in VULN_SCOPED_SUMMARY_PHASES:
+        return phase
+    mid = f"{base}-vuln-{int(vuln_id)}"
+    return f"{mid}-{kind}" if kind else mid
+
+
+@dataclass(frozen=True)
+class SummaryHit:
+    text: str
+    path: Path
+    rescue: bool
+
+
+def write_summary(
+    project_id: int,
+    phase: str,
+    summary: str,
+    *,
+    vuln_id: int | None = None,
+) -> str:
     d = summaries_dir(project_id)
     d.mkdir(parents=True, exist_ok=True)
-    name = f"{phase}-{len(_phase_summary_files(d, phase)) + 1}.md"
+    key = summary_phase_key(phase, vuln_id)
+    name = f"{key}-{len(_phase_summary_files(d, key)) + 1}.md"
     path = d / name
     path.write_text(summary, encoding="utf-8")
     return f"docs/summaries/{name}"
 
 
-def latest_summary(project_id: int, phase: str) -> str | None:
-    """Prefer newest {phase}-rescue-N.md, else newest {phase}-N.md / {phase}-round-N.md."""
+def find_latest_summary(
+    project_id: int,
+    phase: str,
+    *,
+    vuln_id: int | None = None,
+) -> SummaryHit | None:
+    """Newest summary for this key; rescue files win only when they are latest."""
+    key = summary_phase_key(phase, vuln_id)
     d = summaries_dir(project_id)
     if not d.exists():
         return None
-    rescue = sorted(_phase_summary_files(d, phase, rescue=True), key=lambda p: p.stat().st_mtime, reverse=True)
-    if rescue:
-        return rescue[0].read_text(encoding="utf-8", errors="replace")
-    candidates = _phase_summary_files(d, phase, rescue=False)
+    candidates = _phase_summary_files(d, key)
     if not candidates:
         return None
-    newest = max(candidates, key=lambda p: p.stat().st_mtime)
-    return newest.read_text(encoding="utf-8", errors="replace")
+    path = max(
+        candidates,
+        key=lambda p: (p.stat().st_mtime, 1 if "rescue" in p.name else 0),
+    )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return SummaryHit(text=text, path=path, rescue="rescue" in path.name)
+
+
+def latest_summary(
+    project_id: int,
+    phase: str,
+    *,
+    vuln_id: int | None = None,
+) -> str | None:
+    """Newest {phase}-rescue-N.md / {phase}-N.md / {phase}-round-N.md text, or None."""
+    hit = find_latest_summary(project_id, phase, vuln_id=vuln_id)
+    return hit.text if hit else None
 
 
 def _read_capped(path: Path, max_chars: int) -> str | None:
@@ -535,7 +591,12 @@ def attach_todo_list(
     return f"{text}\n\n{block}"
 
 
-def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:
+def inject_summary_block(
+    summary: str | None,
+    *,
+    for_file: bool = False,
+    failed: bool = False,
+) -> str:
     if not summary or not summary.strip():
         return ""
     hint = (
@@ -543,8 +604,13 @@ def inject_summary_block(summary: str | None, *, for_file: bool = False) -> str:
         if for_file
         else "若摘要与当前任务无关则忽略。\n"
     )
+    heading = (
+        "上一轮失败摘要（从这里接续，不要重复已完成工作）"
+        if failed
+        else "上一轮摘要（从这里接续，不要重复已完成工作）"
+    )
     return (
-        "## 上一轮摘要（从这里接续，不要重复已完成工作）\n"
+        f"## {heading}\n"
         f"{summary.strip()}\n\n"
         f"{hint}\n"
     )

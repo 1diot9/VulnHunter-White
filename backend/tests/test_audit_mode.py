@@ -44,9 +44,13 @@ def test_initial_hint_mentions_mode_rules():
     assert "前端传输混淆" in bounty
     assert "禁止主动搭建漏洞利用环境" not in bounty
     assert "Docker 靶场" in bounty
+    assert "无害/受限文件操作" in bounty
+    assert "不可获取且不可预测" in bounty
     full = initial_hint("full")
     assert "全量模式" in full
     assert "低危害难利用" in full
+    assert "无害/受限文件操作" in full
+    assert "不可获取且不可预测" in full
     custom = initial_hint("custom", custom_name="demo")
     assert "自定义模式" in custom
     assert "demo" in custom

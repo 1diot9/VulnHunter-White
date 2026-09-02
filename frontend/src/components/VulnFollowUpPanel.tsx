@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Loader2Icon } from 'lucide-react'
-import { api, type VulnFollowUpMessage, type VulnFollowUpThread, type VulnReportKind, type VulnReportRevision } from '../api'
+import { api, isTimeoutError, type VulnFollowUpMessage, type VulnFollowUpThread, type VulnReportKind, type VulnReportRevision } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,6 +10,7 @@ import { formatDateTime } from '../lib/utils'
 const MarkdownView = lazy(() => import('./MarkdownView'))
 
 function displayError(err: unknown) {
+  if (isTimeoutError(err)) return '模型响应超时，请稍后重试。'
   const text = err instanceof Error ? err.message : String(err || '')
   try {
     const data = JSON.parse(text)

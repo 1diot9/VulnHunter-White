@@ -54,6 +54,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.pipeline as pipeline
     import app.services.token_budget as token_budget
     import app.services.verifier as verifier_service
+    import app.services.harness_ask as harness_ask
     import app.services.vuln_followup as vuln_followup
     import app.tools as tools
     import app.tools.phase_fast as phase_fast
@@ -71,6 +72,8 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.bypass_queue as bypass_queue
     import app.services.conversation as conversation_service
     import app.services.cve_record as cve_record
+    import app.code_intelligence.service as code_intel_service
+    import app.code_intelligence.cli as code_intel_cli
 
     for mod in (
         models,
@@ -95,6 +98,7 @@ def tmp_env(tmp_path, monkeypatch):
         fofa_service,
         http_client_mod,
         verifier_service,
+        harness_ask,
         asset_proof,
         pipeline,
         token_budget,
@@ -103,6 +107,8 @@ def tmp_env(tmp_path, monkeypatch):
         conversation_service,
         cve_record,
         demo_seed,
+        code_intel_service,
+        code_intel_cli,
         agent_loop,
         agent_checkpoint,
         api_projects,
@@ -146,6 +152,8 @@ def tmp_env(tmp_path, monkeypatch):
     register_all_tools()
     http_client_mod.reset_proxy_skip()
     pipeline.reset_runtime_state()
+    monkeypatch.setattr(code_intel_cli, "install_codegraph", lambda log=None: None)
+    monkeypatch.setattr(code_intel_cli, "find_codegraph", lambda explicit=None: None)
     from app.services.live_log import live_log
 
     live_log.reset_runtime_state()

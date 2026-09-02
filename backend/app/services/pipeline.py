@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.exc import OperationalError
 
 from ..agent.checkpoint import (
@@ -24,13 +25,14 @@ from ..agent.checkpoint import (
     set_phase_run_worker,
 )
 from ..agent.compression import (
+    VULN_SCOPED_SUMMARY_PHASES,
+    find_latest_summary,
     inject_summary_block,
     inject_fast_prior_block,
     inject_bypass_prior_block,
     inject_unconstrained_prior_block,
     inject_security_policy_block,
     inject_worker_prior_block,
-    latest_summary,
     max_fast_round_report_no,
     max_bypass_round_report_no,
     max_unconstrained_round_report_no,
@@ -145,6 +147,7 @@ _threads: dict[int, list[threading.Thread]] = {}
 _recon_threads: dict[int, threading.Thread] = {}
 _recon_mark_threads: dict[int, threading.Thread] = {}
 _recon_rerun_threads: dict[int, threading.Thread] = {}
+_code_intel_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
 _verifier_threads: dict[int, threading.Thread] = {}
 _attack_chain_threads: dict[int, threading.Thread] = {}
@@ -164,9 +167,10 @@ WORKER_MINE_POOL = 1
 WORKER_FIX_POOL = 1
 REVIEWER_POOL = 1
 
-CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
+CONTROL_PHASES = ("recon", "code_intel", "worker", "reviewer", "verifier", "attack_chain")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
+    "code_intel": ("code_intel",),
     "worker": ("worker", "fix", "fast-worker", "sink-triage", "bypass-worker", "unconstrained-worker"),
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
@@ -174,6 +178,7 @@ CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
 }
 CONTROL_LABELS = {
     "recon": "侦察",
+    "code_intel": "代码库",
     "worker": "挖掘",
     "reviewer": "审核",
     "verifier": "验证",
@@ -247,6 +252,8 @@ def control_phase(phase: str) -> str:
         "recon_source_ext",
     ):
         return "recon"
+    if p in ("code_intel", "code-intel", "code_intelligence", "code-intelligence"):
+        return "code_intel"
     if p in (
         "worker",
         "fix",
@@ -320,6 +327,7 @@ def reset_runtime_state() -> None:
         _recon_threads.clear()
         _recon_mark_threads.clear()
         _recon_rerun_threads.clear()
+        _code_intel_threads.clear()
         _reviewer_threads.clear()
         _verifier_threads.clear()
         _attack_chain_threads.clear()
@@ -333,9 +341,11 @@ def reset_runtime_state() -> None:
         _map_refresh_pending.clear()
     from .cli_tool_index import stop_cli_tool_scanner
     from .llm_thread import llm_thread_limiter
+    from ..code_intelligence.service import reset_runtime_state as reset_code_intel_runtime
 
     stop_cli_tool_scanner()
     llm_thread_limiter.reset()
+    reset_code_intel_runtime()
 
 
 def _cancel_event(project_id: int) -> threading.Event:
@@ -438,6 +448,13 @@ def kick_verifier(project_id: int) -> None:
     """Wake Verifier for pending work or a post-consent checkpoint (even if project completed)."""
     cancel = _cancel_event(project_id)
     _ensure_verifier(project_id, cancel, allow_completed=True)
+
+
+def kick_reviewer(project_id: int) -> None:
+    """Wake Reviewer after a parked harness AskUser is resolved."""
+    if not _pause_event(project_id).is_set():
+        _phase_pause_event(project_id, "reviewer").clear()
+    _ensure_reviewer(project_id, _cancel_event(project_id))
 
 
 def note_attack_chain_enabled(project_id: int) -> None:
@@ -666,7 +683,7 @@ def request_resume(project_id: int) -> None:
 
 
 def _enabled_control_phases(project_id: int) -> tuple[str, ...]:
-    phases = ["recon", "worker", "reviewer"]
+    phases = ["recon", "code_intel", "worker", "reviewer"]
     if _read_verifier_enabled(project_id):
         phases.append("verifier")
     if _read_attack_chain_enabled(project_id):
@@ -932,15 +949,29 @@ def _set_project_running(project_id: int) -> None:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if proj and proj.status != "completed":
-            if proj.recon_done:
+            recon_done = bool(proj.recon_done)
+            ci_done = bool(getattr(proj, "code_intel_done", False))
+            if recon_done and ci_done:
                 proj.status = "auditing"
-                if proj.phase in ("pending", "recon"):
+                if proj.phase in ("pending", "recon", "code_intel"):
                     proj.phase = "worker"
+            elif recon_done:
+                proj.status = "recon"
+                proj.phase = "code_intel"
             else:
                 proj.status = "recon"
                 proj.phase = "recon"
             proj.error = None
             db.commit()
+
+
+def mining_prereqs_met(project_id: int) -> bool:
+    """Recon and Code Intelligence have both settled."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not proj.recon_done:
+            return False
+        return bool(getattr(proj, "code_intel_done", False))
 
 
 def _wait_if_paused(project_id: int, cancel: threading.Event, phase: str | None = None) -> bool:
@@ -1134,6 +1165,9 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
             return True
         mt = _recon_mark_threads.get(project_id)
         return mt is not None and mt.is_alive()
+    if control == "code_intel":
+        t = _code_intel_threads.get(project_id)
+        return t is not None and t.is_alive()
     if control == "reviewer":
         t = _reviewer_threads.get(project_id)
         return t is not None and t.is_alive()
@@ -1537,14 +1571,28 @@ def _prepare_lab_for_review(project_id: int) -> str:
     return "static"
 
 
+def _actionable_review_pending(project_id: int) -> int:
+    """pending_review vulns that are not parked on a harness AskUser."""
+    from .harness_ask import HARNESS_ASK_AWAITING
+
+    with SessionLocal() as db:
+        return (
+            db.query(Vuln)
+            .filter(
+                Vuln.project_id == project_id,
+                Vuln.status == "pending_review",
+                or_(
+                    Vuln.harness_ask_status.is_(None),
+                    Vuln.harness_ask_status != HARNESS_ASK_AWAITING,
+                ),
+            )
+            .count()
+        )
+
+
 def _reviewer_has_review_work(project_id: int, pending: int | None = None) -> bool:
     if pending is None:
-        with SessionLocal() as db:
-            pending = (
-                db.query(Vuln)
-                .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
-                .count()
-            )
+        pending = _actionable_review_pending(project_id)
     return pending > 0 or bool(list_resumable_runs(project_id, "reviewer"))
 
 
@@ -1964,6 +2012,8 @@ def _log_phase_control(log_phase: str) -> str:
     lp = normalize_log_phase(log_phase)
     if lp.startswith("recon"):
         return "recon"
+    if lp in ("code_intel", "code-intel"):
+        return "code_intel"
     if lp in ("mine", "fast", "bypass", "fix"):
         return "worker"
     if lp.startswith("reviewer"):
@@ -2211,17 +2261,33 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     return render_prompt(f"initial/{name}", **kwargs)
 
 
-def _prompt_with_summary(phase: str, project_id: int, body: str, *, for_file: bool = False) -> str:
-    summary = latest_summary(project_id, phase)
-    # Also try rescue / round variants for worker
-    if not summary and phase == "worker":
-        summary = latest_summary(project_id, "worker-rescue") or latest_summary(project_id, "worker-round")
-    if not summary and phase == "unconstrained-worker":
-        summary = (
-            latest_summary(project_id, "unconstrained-worker-rescue")
-            or latest_summary(project_id, "unconstrained-round")
-        )
-    block = inject_summary_block(summary, for_file=for_file)
+def _prompt_with_summary(
+    phase: str,
+    project_id: int,
+    body: str,
+    *,
+    for_file: bool = False,
+    vuln_id: int | None = None,
+) -> str:
+    hit = None
+    if phase in VULN_SCOPED_SUMMARY_PHASES:
+        if vuln_id is not None:
+            hit = find_latest_summary(project_id, phase, vuln_id=vuln_id)
+    else:
+        hit = find_latest_summary(project_id, phase)
+        if hit is None and phase == "worker":
+            hit = find_latest_summary(project_id, "worker-rescue") or find_latest_summary(
+                project_id, "worker-round"
+            )
+        if hit is None and phase == "unconstrained-worker":
+            hit = find_latest_summary(
+                project_id, "unconstrained-worker-rescue"
+            ) or find_latest_summary(project_id, "unconstrained-round")
+    block = inject_summary_block(
+        hit.text if hit else None,
+        for_file=for_file,
+        failed=bool(hit and hit.rescue),
+    )
     text = f"{block}{body}" if block else body
     if phase == "worker" and for_file:
         prior = inject_worker_prior_block(project_id)
@@ -2475,7 +2541,12 @@ def recover_inflight_projects() -> None:
                         continue
                     if proj:
                         proj.status = "recon" if not proj.recon_done else "auditing"
-                        proj.phase = "recon" if not proj.recon_done else "worker"
+                        if not proj.recon_done:
+                            proj.phase = "recon"
+                        elif not bool(getattr(proj, "code_intel_done", False)):
+                            proj.phase = "code_intel"
+                        else:
+                            proj.phase = "worker"
                         db.commit()
             _prepare_project_resume(pid)
             live_log.system(pid, f"进程启动恢复审计（原 status={status}）")
@@ -2566,9 +2637,12 @@ def _maybe_complete_project(
 
 def _refresh_project_after_reviewer(project_id: int) -> None:
     """Clear leftover reviewing when the review queue is empty."""
+    from .harness_ask import awaiting_harness_count
+
     if (
         _reviewer_has_lab_work(project_id)
         or _reviewer_has_review_work(project_id)
+        or awaiting_harness_count(project_id) > 0
     ):
         return
     with SessionLocal() as db:
@@ -2644,6 +2718,81 @@ def _ensure_recon(project_id: int, cancel: threading.Event) -> None:
     rt.start()
 
 
+def _ensure_code_intel(project_id: int, cancel: threading.Event) -> None:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status in ("completed", "cancelled", "error"):
+            return
+        done = bool(getattr(proj, "code_intel_done", False))
+        status = (getattr(proj, "code_intel_status", None) or "pending").strip()
+    if _phase_is_paused(project_id, "code_intel"):
+        return
+    if done and status != "building":
+        return
+    if cancel.is_set():
+        return
+    _start_code_intel_thread(project_id, force=False)
+
+
+def _start_code_intel_thread(project_id: int, *, force: bool) -> None:
+    with _lock:
+        t = _code_intel_threads.get(project_id)
+        if t is not None and t.is_alive():
+            return
+        rt = threading.Thread(
+            target=_run_code_intel,
+            args=(project_id, force),
+            daemon=True,
+            name=f"vh-code-intel-{project_id}",
+        )
+        _code_intel_threads[project_id] = rt
+        _threads.setdefault(project_id, []).append(rt)
+    live_log.system(project_id, "拉起代码库构建线程", phase="code_intel")
+    rt.start()
+
+
+def _run_code_intel(project_id: int, force: bool = False) -> None:
+    from ..code_intelligence.service import run_build
+
+    gen = _phase_generation_of(project_id, "code_intel")
+    cancel = GenerationCancel(_cancel_event(project_id), project_id, "code_intel", gen)
+    try:
+        run_build(project_id, force=force, cancel=cancel)
+    except Exception as e:  # noqa: BLE001
+        live_log.error(project_id, f"代码库构建线程异常: {e}", phase="code_intel")
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj and not bool(getattr(proj, "code_intel_done", False)):
+                proj.code_intel_status = "degraded"
+                proj.code_intel_done = True
+                proj.code_intel_error = str(e)[:2000]
+                db.commit()
+
+
+def request_code_intel_rebuild(project_id: int) -> dict[str, Any]:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可重建代码库")
+    _bump_phase_generation(project_id, "code_intel")
+    _phase_pause_event(project_id, "code_intel").clear()
+    live_log.system(project_id, "用户请求重建代码库", phase="code_intel")
+    with _lock:
+        old = _code_intel_threads.get(project_id)
+    if old is not None and old.is_alive():
+        old.join(timeout=20)
+    with _lock:
+        still = _code_intel_threads.get(project_id)
+        if still is not None and still.is_alive():
+            raise ValueError("上一轮构建尚未退出，请稍后重试")
+    _start_code_intel_thread(project_id, force=True)
+    from ..code_intelligence.service import status_payload
+
+    return {"ok": True, **status_payload(project_id)}
+
+
 def _ensure_recon_marking(project_id: int) -> None:
     """Stamp newly ingested files (e.g. late decompiled classes) even after recon_done."""
     with SessionLocal() as db:
@@ -2688,11 +2837,7 @@ def _ensure_reviewer(project_id: int, cancel: threading.Event) -> None:
         proj = db.get(Project, project_id)
         if not proj or proj.status in ("completed", "cancelled", "error"):
             return
-        pending = (
-            db.query(Vuln)
-            .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
-            .count()
-        )
+    pending = _actionable_review_pending(project_id)
     if _phase_is_paused(project_id, "reviewer"):
         return
     has_lab_work = _reviewer_has_lab_work(project_id)
@@ -2726,11 +2871,7 @@ def _run_reviewer_loop(project_id: int) -> None:
                     proj = db.get(Project, project_id)
                     if not proj or proj.status in ("completed", "cancelled", "error"):
                         return
-                    pending = (
-                        db.query(Vuln)
-                        .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
-                        .count()
-                    )
+                pending = _actionable_review_pending(project_id)
             except OperationalError as e:
                 if _is_sqlite_locked(e):
                     cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
@@ -2978,8 +3119,8 @@ def _ensure_workers(
     alive = [t for t in active_workers if t.is_alive()]
     if not heuristic_on:
         return alive
-    # 历史漏洞是启发式线索；LLM + GHSA/Issues 收齐前不拉 Worker。
-    if not recon_old_vulns_ready(project_id):
+    # 历史漏洞是启发式线索；侦察与代码库都完成后再拉 Worker。
+    if not mining_prereqs_met(project_id):
         return alive
     if project_complete_gates(project_id):
         return alive
@@ -3018,7 +3159,7 @@ def _ensure_workers(
 def _ensure_fast_prepare(project_id: int) -> None:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        if not proj or not proj.recon_done or not bool(getattr(proj, "fast_enabled", False)):
+        if not proj or not mining_prereqs_met(project_id) or not bool(getattr(proj, "fast_enabled", False)):
             return
         if bool(getattr(proj, "fast_queue_frozen", False)):
             return
@@ -3060,6 +3201,8 @@ def _ensure_fast_workers(
         return [t for t in active_workers if t.is_alive()]
     alive = [t for t in active_workers if t.is_alive()]
     if not fast_on or not queue_frozen(project_id) or fast_path_complete(project_id):
+        return alive
+    if not mining_prereqs_met(project_id):
         return alive
     if project_complete_gates(project_id):
         return alive
@@ -3129,6 +3272,8 @@ def _ensure_bypass_workers(
     alive = [t for t in active_workers if t.is_alive()]
     if not bypass_on or not queue_frozen(project_id) or bypass_path_complete(project_id):
         return alive
+    if not mining_prereqs_met(project_id):
+        return alive
     if project_complete_gates(project_id):
         return alive
     conc = 1 if heuristic_on or fast_on else _worker_concurrency(project_id)
@@ -3170,7 +3315,7 @@ def _ensure_unconstrained_workers(
     alive = [t for t in active_workers if t.is_alive()]
     if not unconstrained_on:
         return alive
-    if not recon_old_vulns_ready(project_id):
+    if not mining_prereqs_met(project_id):
         return alive
     if unconstrained_complete(project_id) and not list_resumable_runs(project_id, "unconstrained-worker"):
         return alive
@@ -3239,6 +3384,13 @@ def _orchestrate(project_id: int) -> None:
                         if proj and not proj.recon_done:
                             _ensure_recon(project_id, cancel)
                 _ensure_recon_marking(project_id)
+                _ensure_code_intel(project_id, cancel)
+                try:
+                    from ..code_intelligence.service import mark_stale_if_source_changed
+
+                    mark_stale_if_source_changed(project_id)
+                except Exception:  # noqa: BLE001
+                    pass
 
                 returned_ids: list[int] = []
                 pending_vulns = 0
@@ -4778,7 +4930,7 @@ def _run_fix(project_id: int, vuln_id: int) -> None:
             report_path=report_path,
             **_agent_prompt_vars(project_id),
         )
-        user = _prompt_with_summary("fix", project_id, body)
+        user = _prompt_with_summary("fix", project_id, body, vuln_id=vuln_id)
         try:
             if cp:
                 run_id = cp.phase_run_id
@@ -5110,6 +5262,15 @@ def _run_reviewer_once(project_id: int) -> None:
             if result.stop_reason == "auth_error":
                 _pause_for_auth(project_id, result.error or "auth_error")
                 return
+            if result.stop_reason == "awaiting_user" or (
+                result.state and result.state.get("awaiting_user")
+            ):
+                live_log.system(
+                    project_id,
+                    f"Reviewer 等待用户确认局部验证 vuln={cp.vuln_id}",
+                    phase="reviewer",
+                )
+                return
             _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
             _note_reviewer_round_end(project_id, cp.vuln_id, result)
             live_log.system(
@@ -5120,16 +5281,27 @@ def _run_reviewer_once(project_id: int) -> None:
             return
 
         prefer = _take_inject_vuln(project_id, "reviewer")
+        from .harness_ask import HARNESS_ASK_AWAITING, is_harness_ask_awaiting
+
         with SessionLocal() as db:
             vuln = None
             if prefer is not None:
                 vuln = db.get(Vuln, prefer)
                 if vuln and vuln.status not in ("pending_review", "returned"):
                     vuln = None
+                if vuln and is_harness_ask_awaiting(vuln):
+                    vuln = None
             if vuln is None:
                 vuln = (
                     db.query(Vuln)
-                    .filter(Vuln.project_id == project_id, Vuln.status == "pending_review")
+                    .filter(
+                        Vuln.project_id == project_id,
+                        Vuln.status == "pending_review",
+                        or_(
+                            Vuln.harness_ask_status.is_(None),
+                            Vuln.harness_ask_status != HARNESS_ASK_AWAITING,
+                        ),
+                    )
                     .order_by(Vuln.id.asc())
                     .first()
                 )
@@ -5197,7 +5369,7 @@ def _run_reviewer_once(project_id: int) -> None:
             unconstrained_note=unconstrained_note,
             **_agent_prompt_vars(project_id),
         )
-        user = body if force_static else _prompt_with_summary("reviewer", project_id, body)
+        user = _prompt_with_summary("reviewer", project_id, body, vuln_id=vuln_id)
         run_id = _new_phase_run(project_id, "reviewer", "reviewer", vuln_id=vuln_id)
         _consume_force_new(project_id, "reviewer")
         extra = f"漏洞 #{vuln_id}"
@@ -5221,6 +5393,15 @@ def _run_reviewer_once(project_id: int) -> None:
         result = loop.run()
         if result.stop_reason == "auth_error":
             _pause_for_auth(project_id, result.error or "auth_error")
+            return
+        if result.stop_reason == "awaiting_user" or (
+            result.state and result.state.get("awaiting_user")
+        ):
+            live_log.system(
+                project_id,
+                f"Reviewer 等待用户确认局部验证 vuln={vuln_id}",
+                phase="reviewer",
+            )
             return
         _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
         _note_reviewer_round_end(project_id, vuln_id, result)
@@ -5349,7 +5530,7 @@ def _run_verifier_once(project_id: int) -> None:
             poc_hint=poc_hint,
             **_agent_prompt_vars(project_id),
         )
-        user = _prompt_with_summary("verifier", project_id, body)
+        user = _prompt_with_summary("verifier", project_id, body, vuln_id=vuln_id)
         run_id = _new_phase_run(project_id, "verifier", "verifier", vuln_id=vuln_id)
         _consume_force_new(project_id, "verifier")
         _start_log_session(project_id, "verifier", extra=f"漏洞 #{vuln_id}")

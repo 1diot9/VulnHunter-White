@@ -163,6 +163,10 @@ export default function SettingsPage() {
   const [jadxTesting, setJadxTesting] = useState(false)
   const [jadxOk, setJadxOk] = useState<boolean | null>(null)
   const [jadxMsg, setJadxMsg] = useState('')
+  const [codegraphPath, setCodegraphPath] = useState('')
+  const [codegraphTesting, setCodegraphTesting] = useState(false)
+  const [codegraphOk, setCodegraphOk] = useState<boolean | null>(null)
+  const [codegraphMsg, setCodegraphMsg] = useState('')
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -245,6 +249,7 @@ export default function SettingsPage() {
       setChatProxy(x.chat_proxy || '')
       setCliToolsDir(x.cli_tools_dir || 'tools/cli')
       setJadxPath(x.jadx_path || '')
+      setCodegraphPath(x.codegraph_path || '')
     })
   }, [])
 
@@ -454,6 +459,31 @@ export default function SettingsPage() {
     }
   }
 
+  async function testCodegraph() {
+    setCodegraphTesting(true)
+    setCodegraphOk(null)
+    setCodegraphMsg('')
+    try {
+      const body: { codegraph_path?: string } = {}
+      if (codegraphPath.trim()) body.codegraph_path = codegraphPath.trim()
+      const out = await api.testCodegraph(body)
+      if (!out.ok) {
+        setCodegraphOk(false)
+        setCodegraphMsg(out.error || '未找到 codegraph')
+        return
+      }
+      setCodegraphOk(true)
+      setCodegraphMsg([out.path, out.version, out.latency_ms != null ? `${out.latency_ms}ms` : '']
+        .filter(Boolean)
+        .join(' · '))
+    } catch (e) {
+      setCodegraphOk(false)
+      setCodegraphMsg(String(e))
+    } finally {
+      setCodegraphTesting(false)
+    }
+  }
+
   async function save() {
     setMsg('')
     try {
@@ -467,6 +497,7 @@ export default function SettingsPage() {
         chat_proxy: chatProxy.trim(),
         cli_tools_dir: cliToolsDir.trim() || 'tools/cli',
         jadx_path: jadxPath.trim(),
+        codegraph_path: codegraphPath.trim(),
         llm_endpoints: endpoints.map((ep) => ({
           id: ep.id,
           base_url: ep.base_url.trim(),
@@ -985,6 +1016,32 @@ export default function SettingsPage() {
           <div className="text-xs text-slate-500">
             Recon / Worker / Reviewer 的 DecompileJava 调用此二进制。检测跑 jadx --version，使用当前表单路径（空则已保存配置或 PATH），不会自动保存。也可设环境变量
             VULNHUNTER_JADX_PATH。
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>CodeGraph 路径</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="min-w-[16rem] flex-1"
+              value={codegraphPath}
+              onChange={(e) => setCodegraphPath(e.target.value)}
+              placeholder="留空则自动检测或在构建时安装"
+            />
+            <Button type="button" variant="outline" disabled={codegraphTesting} onClick={testCodegraph}>
+              {codegraphTesting ? '检测中…' : '检测'}
+            </Button>
+          </div>
+          {codegraphMsg ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {codegraphOk != null ? (
+                <Badge variant={codegraphOk ? 'success' : 'destructive'}>{codegraphOk ? '成功' : '失败'}</Badge>
+              ) : null}
+              <span className={codegraphOk === false ? 'text-red-300' : 'text-slate-300'}>{codegraphMsg}</span>
+            </div>
+          ) : null}
+          <div className="text-xs text-slate-500">
+            代码库阶段用此 CLI 给 src/ 建图。未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量
+            VULNHUNTER_CODEGRAPH_PATH。
           </div>
         </div>
         <div className="flex items-center gap-3">

@@ -509,6 +509,8 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         cli_tools_dir=(getattr(row, "cli_tools_dir", None) or "").strip() or "tools/cli",
         jadx_path=(getattr(row, "jadx_path", None) or "").strip()
         or (getattr(settings, "jadx_path", None) or "").strip(),
+        codegraph_path=(getattr(row, "codegraph_path", None) or "").strip()
+        or (getattr(settings, "codegraph_path", None) or "").strip(),
         access_token_set=is_access_token_configured(row),
     )
 

@@ -20,7 +20,13 @@ def _run_code(ctx, args: dict[str, Any]) -> dict[str, Any]:
     language = str(args.get("language") or "python").strip() or "python"
     blocked = harness_output_block_reason(code, language=language)
     if blocked:
-        return {"ok": False, "error": blocked}
+        from ..services.runcode_feedback import annotate_run_code_result
+
+        return annotate_run_code_result(
+            {"ok": False, "error": blocked, "stdout": "", "stderr": "", "exit_code": -1},
+            language=language,
+            code=code,
+        )
     description = str(args.get("description") or "").strip()
     try:
         timeout = int(args.get("timeout") or 60)
@@ -35,11 +41,6 @@ def _run_code(ctx, args: dict[str, Any]) -> dict[str, Any]:
     result["language"] = language
     if description:
         result["description"] = description
-    if not result.get("ok"):
-        result["hint"] = (
-            "沙箱失败或 mock 起不来时不要判误报。"
-            "静态已能证明默认可利用则 ConfirmVuln(evidence_level=static_only)。"
-        )
     return result
 
 
@@ -58,6 +59,10 @@ def register_run_code_tool() -> None:
                 "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"
                 "沙箱无网、跑完即删。失败（无 Docker、缺镜像、编译错误）不要据此误报。"
+                "返回含 failure_class（sandbox_unavailable/image_missing/compile_error/"
+                "missing_dependency/runtime_error/timeout 等）、missing（缺的包/符号）、"
+                "signals、hint：按这些字段改 harness，不要只看 error 字符串。"
+                "连续多次失败后系统会 AskUser，等待用户在「验证确认」页决定继续或改为仅静态。"
                 "脚本写入 harness.py，不要把同一份 mock 写进 poc.py。"
             ),
             parameters={

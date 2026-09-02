@@ -113,6 +113,7 @@ def ensure_project_dirs(project_id: int) -> Path:
         "workspace/steer",
         "workspace/rounds",
         "workspace/decompiled",
+        "workspace/code_intelligence",
         "docs",
         "docs/old-vulns",
         "docs/summaries",
@@ -176,6 +177,19 @@ def data_tmp_dir(*parts: str) -> Path:
 
 def workspace_dir(project_id: int) -> Path:
     return ensure_project_dirs(project_id) / "workspace"
+
+
+def code_intel_dir(project_id: int) -> Path:
+    path = workspace_dir(project_id) / "code_intelligence"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def codegraph_install_dir() -> Path:
+    """Bundled CodeGraph CLI lives under data/tools/codegraph, not on the user PATH."""
+    path = PROJECTS_DIR.parent / "tools" / "codegraph"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def project_runtime_dir(project_id: int) -> Path:

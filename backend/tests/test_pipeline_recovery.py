@@ -721,6 +721,46 @@ def test_prompt_with_summary_injects_prior_only_for_worker_files(tmp_env, projec
     assert "审核正文" in reviewer
 
 
+def test_prompt_with_summary_scopes_reviewer_rescue_by_vuln(tmp_env, project):
+    write_summary(project, "reviewer-rescue", "漏洞甲失败：缺 javax.servlet", vuln_id=11)
+    write_summary(project, "reviewer-rescue", "漏洞乙失败：javac record 语法", vuln_id=22)
+    write_summary(project, "worker-rescue", "挖掘失败摘要不应进审核")
+
+    a = pipeline._prompt_with_summary("reviewer", project, "审核甲", vuln_id=11)
+    b = pipeline._prompt_with_summary("reviewer", project, "审核乙", vuln_id=22)
+    none = pipeline._prompt_with_summary("reviewer", project, "审核无编号")
+
+    assert "缺 javax.servlet" in a
+    assert "javac record" not in a
+    assert "上一轮失败摘要" in a
+    assert "挖掘失败摘要不应进审核" not in a
+
+    assert "javac record" in b
+    assert "缺 javax.servlet" not in b
+    assert "上一轮失败摘要" in b
+
+    assert "缺 javax.servlet" not in none
+    assert "javac record" not in none
+    assert "审核无编号" in none
+
+    write_summary(project, "verifier-rescue", "甲的互联网复测失败", vuln_id=11)
+    write_summary(project, "verifier-rescue", "乙的互联网复测失败", vuln_id=22)
+    va = pipeline._prompt_with_summary("verifier", project, "复测甲", vuln_id=11)
+    vb = pipeline._prompt_with_summary("verifier", project, "复测乙", vuln_id=22)
+    assert "甲的互联网复测失败" in va
+    assert "乙的互联网复测失败" not in va
+    assert "乙的互联网复测失败" in vb
+    assert "甲的互联网复测失败" not in vb
+
+
+def test_prompt_with_summary_injects_worker_rescue_on_restart(tmp_env, project):
+    write_summary(project, "worker-rescue", "挖掘失败：卡在 Grep 超时")
+    text = pipeline._prompt_with_summary("worker", project, "新一轮正文")
+    assert "卡在 Grep 超时" in text
+    assert "上一轮失败摘要" in text
+    assert "新一轮正文" in text
+
+
 def test_prompt_with_summary_injects_worker_hint(tmp_env, project):
     from app.models import Project, SessionLocal
 
@@ -876,9 +916,11 @@ def test_recon_control_includes_old_vuln_phase():
     assert pipeline.control_phase("fast") == "worker"
     assert pipeline.control_phase("bypass-worker") == "worker"
     assert pipeline.control_phase("bypass") == "worker"
+    assert pipeline.control_phase("code_intel") == "code_intel"
+    assert pipeline.control_phase("code-intel") == "code_intel"
 
 
-def test_ensure_workers_waits_for_old_vulns(tmp_env, project, monkeypatch):
+def test_ensure_workers_waits_for_recon_and_code_intel(tmp_env, project, monkeypatch):
     build_file_index(project)
     models = tmp_env["models"]
     Session = tmp_env["Session"]
@@ -914,6 +956,22 @@ def test_ensure_workers_waits_for_old_vulns(tmp_env, project, monkeypatch):
 
     _mark_all_weighted(project)
     assert pipeline.recon_old_vulns_ready(project) is True
+    out = pipeline._ensure_workers(project, [])
+    assert started == []
+
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.code_intel_done = False
+        db.commit()
+    out = pipeline._ensure_workers(project, [])
+    assert started == []
+
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.code_intel_done = True
+        proj.code_intel_status = "ready"
+        db.commit()
     out = pipeline._ensure_workers(project, [])
     assert started
     assert all(name.startswith("vh-worker-") for name in started)
