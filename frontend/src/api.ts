@@ -75,6 +75,24 @@ export type Project = {
   notModified?: boolean
 }
 
+export type CodeIntelSymbol = {
+  name: string
+  file?: string
+  line?: number
+  kind?: string
+}
+
+export type CodeIntelQueryOut = {
+  ok: boolean
+  error?: string
+  query?: string
+  symbol?: string
+  items?: CodeIntelSymbol[]
+  callers?: CodeIntelSymbol[]
+  callees?: CodeIntelSymbol[]
+  count?: number
+}
+
 export type ProjectLab = {
   ok: boolean
   has_env: boolean
@@ -1020,9 +1038,22 @@ export const api = {
       method: 'POST',
     }),
   openCodeIntelUi: (id: number) =>
-    request<{ ok: boolean; url: string; reused?: boolean }>(`/api/projects/${id}/code-intelligence/ui`, {
-      method: 'POST',
-    }),
+    request<{ ok: boolean; url?: string; reused?: boolean; builtin?: boolean }>(
+      `/api/projects/${id}/code-intelligence/ui`,
+      { method: 'POST' },
+    ),
+  queryCodeIntelSymbols: (id: number, q: string) =>
+    request<CodeIntelQueryOut>(
+      `/api/projects/${id}/code-intelligence/symbols?q=${encodeURIComponent(q)}`,
+    ),
+  queryCodeIntelCallers: (id: number, symbol: string) =>
+    request<CodeIntelQueryOut>(
+      `/api/projects/${id}/code-intelligence/callers?symbol=${encodeURIComponent(symbol)}`,
+    ),
+  queryCodeIntelCallees: (id: number, symbol: string) =>
+    request<CodeIntelQueryOut>(
+      `/api/projects/${id}/code-intelligence/callees?symbol=${encodeURIComponent(symbol)}`,
+    ),
   getConversationState: (id: number, logPhase: string) =>
     request<ConversationState>(
       `/api/projects/${id}/conversation?log_phase=${encodeURIComponent(logPhase)}`,

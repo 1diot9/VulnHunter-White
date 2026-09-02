@@ -6,6 +6,7 @@ import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
 import { ResetProgressButton } from '../components/ResetProgressButton'
 import { ConversationComposer } from '../components/ConversationComposer'
+import { CodeGraphExplorer } from '../components/CodeGraphExplorer'
 import { GithubLink } from '../components/GithubLink'
 import { LabControlPanel } from '../components/LabControlPanel'
 import LiveLogPanel, { eventMatchesPhase } from '../components/LiveLogPanel'
@@ -149,6 +150,7 @@ export default function ProjectDetailPage() {
   const [displaySession, setDisplaySession] = useState(1)
   const [sessionCount, setSessionCount] = useState(1)
   const [actionError, setActionError] = useState('')
+  const [graphOpen, setGraphOpen] = useState(false)
   const [runBusy, setRunBusy] = useState(false)
   const [ciBusy, setCiBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -586,6 +588,7 @@ export default function ProjectDetailPage() {
         </div>
       </div>
       {actionError ? <p className="text-sm text-red-300">{actionError}</p> : null}
+      <CodeGraphExplorer projectId={projectId} open={graphOpen} onOpenChange={setGraphOpen} />
 
       {normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled) ===
         'lab' && <LabControlPanel project={project} />}
@@ -809,14 +812,18 @@ export default function ProjectDetailPage() {
                 size="sm"
                 variant="ghost"
                 disabled={ciBusy || (project.code_intel_status !== 'ready' && project.code_intel_status !== 'stale')}
-                title="本机打开 CodeGraph 图浏览器，仅供测试"
+                title="查看调用图。若 CodeGraph 带官方图浏览器则另开本机页面，否则用内置查询。"
                 onClick={() => {
                   setActionError('')
                   setCiBusy(true)
                   void api
                     .openCodeIntelUi(projectId)
                     .then((out) => {
-                      if (out.url) window.open(out.url, '_blank', 'noopener,noreferrer')
+                      if (out.builtin || !out.url) {
+                        setGraphOpen(true)
+                        return
+                      }
+                      window.open(out.url, '_blank', 'noopener,noreferrer')
                     })
                     .catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
                     .finally(() => setCiBusy(false))

@@ -15,7 +15,7 @@ from ..models import Project, SessionLocal, utcnow
 from ..services.ingest import IGNORE_DIR_NAMES
 from ..services.live_log import live_log
 from ..services.paths import code_intel_dir, src_dir, strip_windows_long_path
-from .cli import cli_version, ensure_codegraph, find_codegraph, popen_ui, stream_codegraph
+from .cli import cli_version, ensure_codegraph, find_codegraph, popen_ui, stream_codegraph, ui_subcommand
 
 CODE_INTEL_PHASE = "code_intel"
 STATUSES = ("pending", "building", "ready", "degraded", "stale")
@@ -270,7 +270,7 @@ def run_build(
     _log(project_id, f"代码数据库就绪（CodeGraph {version or 'unknown'}）")
     _log(
         project_id,
-        "测试可用：在本阶段点击「打开图浏览器」，或于 src/ 下执行 codegraph ui --no-open",
+        "测试可用：在本阶段点击「打开图浏览器」查看调用关系",
     )
     return "ready"
 
@@ -294,20 +294,34 @@ def request_rebuild(project_id: int) -> dict[str, Any]:
     return request_code_intel_rebuild(project_id)
 
 
+def _cli_lacks_ui(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "unknown command" in lowered and ("'ui'" in lowered or '"ui"' in lowered or " ui" in lowered or "'web'" in lowered)
+
+
 def request_ui(project_id: int) -> dict[str, Any]:
-    """Start `codegraph ui --no-open` for testers. Returns local URL."""
+    """Open a graph viewer for testers.
+
+    Prefer `codegraph ui` / `web` when the installed CLI has it. Official
+    v1.6.0 does not; then fall back to the in-app explorer (`builtin`).
+    """
     payload = status_payload(project_id)
     if payload["status"] not in ("ready", "stale"):
         return {"ok": False, "error": "代码库尚未就绪，无法打开图浏览器"}
-    if find_codegraph() is None:
+    binary = find_codegraph()
+    if binary is None:
         return {"ok": False, "error": "未找到 codegraph CLI"}
+    command = ui_subcommand(binary)
+    if not command:
+        _log(project_id, "当前 CodeGraph 不含 ui 命令，改用内置调用图浏览")
+        return {"ok": True, "builtin": True, "url": ""}
     src = src_dir(project_id)
     with _ui_lock:
         proc = _ui_procs.get(project_id)
         if proc is not None and proc.poll() is None and _ui_urls.get(project_id):
-            return {"ok": True, "url": _ui_urls[project_id], "reused": True}
+            return {"ok": True, "url": _ui_urls[project_id], "reused": True, "builtin": False}
         try:
-            proc = popen_ui(src)
+            proc = popen_ui(src, binary=binary, command=command)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         url = "http://127.0.0.1:4747"
@@ -317,7 +331,11 @@ def request_ui(project_id: int) -> dict[str, Any]:
         while time.time() < deadline:
             if proc.poll() is not None:
                 rest = proc.stdout.read() or ""
-                return {"ok": False, "error": (buf + rest).strip()[:800] or "图浏览器进程已退出"}
+                text = (buf + rest).strip()
+                if _cli_lacks_ui(text):
+                    _log(project_id, "CodeGraph 不支持 ui 命令，改用内置调用图浏览")
+                    return {"ok": True, "builtin": True, "url": ""}
+                return {"ok": False, "error": text[:800] or "图浏览器进程已退出"}
             line = proc.stdout.readline()
             if not line:
                 time.sleep(0.05)
@@ -332,7 +350,7 @@ def request_ui(project_id: int) -> dict[str, Any]:
         _ui_procs[project_id] = proc
         _ui_urls[project_id] = url
     _log(project_id, f"图浏览器已在本机启动: {url}（仅 127.0.0.1，供测试查看）")
-    return {"ok": True, "url": url, "reused": False}
+    return {"ok": True, "url": url, "reused": False, "builtin": False}
 
 
 def reset_runtime_state() -> None:

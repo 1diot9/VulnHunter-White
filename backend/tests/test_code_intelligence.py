@@ -244,3 +244,80 @@ def test_project_payload_includes_code_intel(tmp_env, project):
         body = r.json()
         assert body["code_intel_done"] is False
         assert body["code_intel_status"] == "pending"
+
+
+def test_parse_help_commands_skips_wrapped_descriptions():
+    from app.code_intelligence.cli import parse_help_commands
+
+    text = """
+Usage: codegraph [options] [command]
+
+Commands:
+  init [options] [path]          Initialize CodeGraph in a project directory and
+                                 build the initial index
+  daemon|daemons                 Manage running CodeGraph background daemons
+  help [command]                 display help for command
+"""
+    names = parse_help_commands(text)
+    assert "init" in names
+    assert "daemon" in names
+    assert "daemons" in names
+    assert "help" in names
+    assert "build" not in names
+    assert "ui" not in names
+
+
+def _mark_code_intel_ready(tmp_env, project_id: int) -> None:
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project_id)
+        proj.code_intel_status = "ready"
+        proj.code_intel_done = True
+        db.commit()
+    db_dir = src_dir(project_id) / ".codegraph"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    (db_dir / "codegraph.db").write_bytes(b"stub")
+
+
+def test_request_ui_uses_builtin_when_cli_lacks_ui(tmp_env, project, monkeypatch):
+    from app.code_intelligence.service import request_ui
+
+    _mark_code_intel_ready(tmp_env, project)
+    monkeypatch.setattr("app.code_intelligence.service.find_codegraph", lambda: Path("fake-codegraph"))
+    monkeypatch.setattr("app.code_intelligence.service.ui_subcommand", lambda binary=None: None)
+    out = request_ui(project)
+    assert out["ok"] is True
+    assert out["builtin"] is True
+
+
+def test_open_ui_api_returns_builtin(tmp_env, project, monkeypatch):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    _mark_code_intel_ready(tmp_env, project)
+    monkeypatch.setattr("app.code_intelligence.service.find_codegraph", lambda: Path("fake-codegraph"))
+    monkeypatch.setattr("app.code_intelligence.service.ui_subcommand", lambda binary=None: None)
+    with TestClient(app) as client:
+        r = client.post(f"/api/projects/{project}/code-intelligence/ui")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["builtin"] is True
+
+
+def test_symbols_api_uses_query(tmp_env, project, monkeypatch):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    _mark_code_intel_ready(tmp_env, project)
+    monkeypatch.setattr(
+        "app.code_intelligence.query.find_symbol",
+        lambda pid, q, **k: {"ok": True, "query": q, "items": [{"name": "Main.login"}], "count": 1},
+    )
+    with TestClient(app) as client:
+        r = client.get(f"/api/projects/{project}/code-intelligence/symbols", params={"q": "login"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["items"][0]["name"] == "Main.login"

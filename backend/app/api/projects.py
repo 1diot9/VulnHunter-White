@@ -1300,6 +1300,36 @@ def open_code_intelligence_ui(project_id: int) -> dict:
     return result
 
 
+@router.get("/{project_id}/code-intelligence/symbols")
+def code_intelligence_symbols(project_id: int, q: str = Query(..., min_length=1)) -> dict:
+    from ..code_intelligence.query import find_symbol
+
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    return find_symbol(project_id, q)
+
+
+@router.get("/{project_id}/code-intelligence/callers")
+def code_intelligence_callers(project_id: int, symbol: str = Query(..., min_length=1)) -> dict:
+    from ..code_intelligence.query import callers
+
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    return callers(project_id, symbol)
+
+
+@router.get("/{project_id}/code-intelligence/callees")
+def code_intelligence_callees(project_id: int, symbol: str = Query(..., min_length=1)) -> dict:
+    from ..code_intelligence.query import callees
+
+    with SessionLocal() as db:
+        if not db.get(Project, project_id):
+            raise HTTPException(404, "项目不存在")
+    return callees(project_id, symbol)
+
+
 @router.get("/{project_id}/phases/state")
 def project_phase_state(project_id: int) -> dict:
     with SessionLocal() as db:

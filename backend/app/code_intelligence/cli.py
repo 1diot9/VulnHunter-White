@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -394,15 +395,85 @@ def cli_version(binary: Path | None = None) -> str:
     return text.splitlines()[0].strip() if text else ""
 
 
-def popen_ui(src: Path, *, binary: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.Popen[str]:
+_CMD_LINE = re.compile(r"^  ([a-zA-Z][\w-]*(?:\|[a-zA-Z][\w-]*)*)\b")
+_help_cache: dict[str, tuple[float, frozenset[str]]] = {}
+
+
+def parse_help_commands(text: str) -> frozenset[str]:
+    """Parse `codegraph --help` command names (including aliases like daemon|daemons)."""
+    names: set[str] = set()
+    in_commands = False
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Commands:"):
+            in_commands = True
+            continue
+        if not in_commands:
+            continue
+        if not stripped:
+            if names:
+                break
+            continue
+        match = _CMD_LINE.match(line)
+        if not match:
+            continue
+        for part in match.group(1).split("|"):
+            name = part.strip()
+            if name:
+                names.add(name)
+    return frozenset(names)
+
+
+def list_subcommands(binary: Path | None = None) -> frozenset[str]:
+    exe = binary or find_codegraph()
+    if exe is None:
+        return frozenset()
+    key = str(exe)
+    try:
+        mtime = exe.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cached = _help_cache.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        proc = run_codegraph(["--help"], timeout=20, binary=exe)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    names = parse_help_commands((proc.stdout or "") + "\n" + (proc.stderr or ""))
+    _help_cache[key] = (mtime, names)
+    return names
+
+
+def ui_subcommand(binary: Path | None = None) -> str | None:
+    """Return `ui` or `web` if this CLI build has a graph viewer; else None.
+
+    Official v1.6.0 (latest release as of 2026-09) does not ship the viewer yet;
+    it lives on CodeGraph main as an unreleased command.
+    """
+    cmds = list_subcommands(binary)
+    for name in ("ui", "web"):
+        if name in cmds:
+            return name
+    return None
+
+
+def popen_ui(
+    src: Path,
+    *,
+    binary: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    command: str = "ui",
+) -> subprocess.Popen[str]:
     exe = binary or find_codegraph()
     if exe is None:
         raise FileNotFoundError("未找到 codegraph CLI")
     env = _proxy_env()
     if extra_env:
         env.update(extra_env)
+    verb = (command or "ui").strip() or "ui"
     return subprocess.Popen(
-        [str(exe), "ui", "--no-open"],
+        [str(exe), verb, "--no-open"],
         cwd=str(src),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
