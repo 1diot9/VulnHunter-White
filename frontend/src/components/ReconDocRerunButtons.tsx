@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type Project } from '../api'
+import { api, formatApiError, type Project } from '../api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -62,7 +62,7 @@ export function ReconDocRerunButtons({ project, onStarted }: ReconDocRerunButton
       setPending(null)
       onStarted?.(sub)
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setBusy(false)
     }

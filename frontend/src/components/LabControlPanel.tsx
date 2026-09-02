@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Project, type ProjectLab } from '../api'
+import { api, formatApiError, type Project, type ProjectLab } from '../api'
 import { Button } from '@/components/ui/button'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
@@ -100,7 +100,7 @@ export function LabControlPanel({ project }: LabControlPanelProps) {
       setLab(next)
       setError(next.error || '')
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e, '靶场操作超时，启动或停止容器可能需要几分钟。'))
     }
   }
 
@@ -130,7 +130,7 @@ export function LabControlPanel({ project }: LabControlPanelProps) {
       }
       setError(next.error || '')
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e, '靶场操作超时，启动或停止容器可能需要几分钟。'))
       void refresh()
     } finally {
       setBusy(false)
@@ -159,7 +159,7 @@ export function LabControlPanel({ project }: LabControlPanelProps) {
       setLab(next)
       setEditingField(null)
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e, '靶场操作超时，启动或停止容器可能需要几分钟。'))
     } finally {
       setBusy(false)
     }

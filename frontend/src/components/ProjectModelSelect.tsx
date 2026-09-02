@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { api, formatApiError } from '../api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -58,7 +58,7 @@ export function ProjectModelSelect({
       }
     } catch (e) {
       setModels([])
-      setListError(String(e))
+      setListError(formatApiError(e, '拉取模型列表超时，请稍后重试。'))
     } finally {
       setListing(false)
     }

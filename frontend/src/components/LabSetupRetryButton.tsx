@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type Project } from '../api'
+import { api, formatApiError, type Project } from '../api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -41,7 +41,7 @@ export function LabSetupRetryButton({ project, onStarted }: LabSetupRetryButtonP
       setUserMessage('')
       onStarted?.()
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setBusy(false)
     }

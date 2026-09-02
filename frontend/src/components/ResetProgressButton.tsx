@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type Project } from '../api'
+import { api, formatApiError, type Project } from '../api'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -50,7 +50,7 @@ export function ResetProgressButton({ project, onReset }: ResetProgressButtonPro
       setAcked(false)
       onReset?.(next)
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e, '重置进度超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }

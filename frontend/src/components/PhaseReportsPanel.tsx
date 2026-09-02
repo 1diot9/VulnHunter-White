@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, type PhaseReport, type PhaseReportDetail, type PhaseReportList } from '../api'
+import { api, formatApiError, type PhaseReport, type PhaseReportDetail, type PhaseReportList } from '../api'
 import { formatDateTime } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
@@ -165,7 +165,7 @@ export default function PhaseReportsPanel({
       .catch((e) => {
         if (!alive) return
         setDetail(null)
-        setError(e instanceof Error ? e.message : '读取失败')
+        setError(formatApiError(e, '读取阶段报告超时，请稍后重试。'))
       })
     return () => {
       alive = false

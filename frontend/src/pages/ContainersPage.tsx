@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Loader2Icon, RefreshCw, Square, Trash2 } from 'lucide-react'
 import {
   api,
+  formatApiError,
   type DockerContainer,
   type DockerImage,
   type DockerImagePruneResult,
@@ -100,7 +101,7 @@ export default function ContainersPage() {
       if (gen !== refreshGen.current) return
       setContainersReady(true)
       setImagesReady(true)
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
       return
     }
     try {
@@ -117,7 +118,7 @@ export default function ContainersPage() {
     } catch (err) {
       if (gen !== refreshGen.current) return
       setImagesReady(true)
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     }
   }, [runningOnly])
 
@@ -178,7 +179,7 @@ export default function ContainersPage() {
         return next
       })
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -191,7 +192,7 @@ export default function ContainersPage() {
       await api.startContainer(id)
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -209,7 +210,7 @@ export default function ContainersPage() {
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -227,7 +228,7 @@ export default function ContainersPage() {
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -243,7 +244,7 @@ export default function ContainersPage() {
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -260,7 +261,7 @@ export default function ContainersPage() {
       setSelectedImages(new Set())
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -294,7 +295,7 @@ export default function ContainersPage() {
       setPruneResult(result)
       await refresh()
     } catch (err) {
-      setError(String(err))
+      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
     } finally {
       setBusy(false)
     }
@@ -329,7 +330,7 @@ export default function ContainersPage() {
             size="sm"
             disabled={busy}
             onClick={() => {
-              refresh().catch((e) => setError(String(e)))
+              refresh().catch((e) => setError(formatApiError(e)))
             }}
           >
             <RefreshCw className={`size-3.5 ${containersReady ? '' : 'animate-spin'}`} />

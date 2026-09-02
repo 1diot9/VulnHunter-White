@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { LockIcon } from 'lucide-react'
-import { api, getAccessToken, setAccessToken, subscribeAuth } from '../api'
+import { api, formatApiError, getAccessToken, setAccessToken, subscribeAuth } from '../api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -98,7 +98,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       setRequired(true)
       setToken('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(formatApiError(err))
       setUnlocked(false)
     } finally {
       setBusy(false)

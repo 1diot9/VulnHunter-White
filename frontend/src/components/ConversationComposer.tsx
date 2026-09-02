@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type ConversationState } from '../api'
+import { api, formatApiError, type ConversationState } from '../api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -71,7 +71,7 @@ export function ConversationComposer({
       await refresh()
       onSent?.()
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setBusy(false)
     }

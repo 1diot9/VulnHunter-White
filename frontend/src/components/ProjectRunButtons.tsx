@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { PauseIcon, PlayIcon } from 'lucide-react'
-import { api, type Project } from '../api'
+import { api, formatApiError, type Project } from '../api'
 import { applyProjectRunToListCaches } from '../lib/listCache'
 import { projectRunBucket, tokenBudgetReached } from '../lib/utils'
 import { Button } from '@/components/ui/button'
@@ -61,7 +61,7 @@ export function ProjectRunButtons({ project, size = 'sm' }: { project: Project; 
       .then(applyFresh)
       .catch((e) => {
         applyProjectRunToListCaches(prev)
-        setError(String(e instanceof Error ? e.message : e))
+        setError(formatApiError(e))
       })
       .finally(() => setBusy(false))
   }

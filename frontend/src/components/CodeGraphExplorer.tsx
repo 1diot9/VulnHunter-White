@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type CodeIntelSymbol } from '../api'
+import { api, formatApiError, type CodeIntelSymbol } from '../api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -90,7 +90,7 @@ export function CodeGraphExplorer({
         }
         setHits(out.items || [])
       })
-      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+      .catch((e) => setError(formatApiError(e)))
       .finally(() => setBusy(false))
   }
 
@@ -116,7 +116,7 @@ export function CodeGraphExplorer({
           setCallees(to.callees || [])
         }
       })
-      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+      .catch((e) => setError(formatApiError(e)))
       .finally(() => setBusy(false))
   }
 

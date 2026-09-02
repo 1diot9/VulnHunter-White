@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api } from '../api'
+import { api, formatApiError } from '../api'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -55,7 +55,7 @@ export function DeleteProjectButton({
       setAcked(false)
       onDeleted?.()
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e, '删除项目超时，工作区较大时请稍后重试。'))
     } finally {
       setBusy(false)
     }

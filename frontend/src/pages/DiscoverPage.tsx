@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2Icon, PlusIcon, RefreshCwIcon, StarIcon, Trash2Icon } from 'lucide-react'
-import { api, type GithubCandidate } from '../api'
+import { api, formatApiError, type GithubCandidate } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -149,7 +149,7 @@ export default function DiscoverPage() {
         writeJsonCache(DISCOVER_CACHE_KEY, { items: data.items, total: data.total })
         setError('')
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(formatApiError(e)))
       .finally(() => {
         if (showLoading) setLoading(false)
       })
@@ -171,7 +171,7 @@ export default function DiscoverPage() {
       if (result.warning) setWarning(result.warning)
       await load(false)
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setSearching(false)
     }
@@ -192,7 +192,7 @@ export default function DiscoverPage() {
       await api.dismissDiscovery(c.id)
       await load(false)
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setDismissingId(null)
     }

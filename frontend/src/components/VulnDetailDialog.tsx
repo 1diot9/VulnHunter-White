@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckIcon, CopyIcon, DownloadIcon, Loader2Icon } from 'lucide-react'
-import { api, type VulnDetail, type VulnTrackingStatus } from '../api'
+import { api, formatApiError, type VulnDetail, type VulnTrackingStatus } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -201,13 +201,7 @@ export default function VulnDetailDialog({
       setDetail(next)
       onUpdated?.(next)
     } catch (err) {
-      const text = err instanceof Error ? err.message : String(err || '')
-      try {
-        const data = JSON.parse(text)
-        setDynamicError(String(data.detail || text))
-      } catch {
-        setDynamicError(text || '启动动态验证失败')
-      }
+      setDynamicError(formatApiError(err, '启动动态验证超时，请稍后重试。'))
     } finally {
       setDynamicBusy(false)
     }

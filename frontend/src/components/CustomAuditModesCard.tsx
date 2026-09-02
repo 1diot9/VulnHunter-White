@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type BuiltinAuditMode, type CustomAuditMode } from '../api'
+import { api, formatApiError, type BuiltinAuditMode, type CustomAuditMode } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -45,7 +45,7 @@ export function CustomAuditModesCard() {
   useEffect(() => {
     refresh().catch((e) => {
       setOk(false)
-      setMsg(String(e))
+      setMsg(formatApiError(e))
     })
   }, [])
 
@@ -85,7 +85,7 @@ export function CustomAuditModesCard() {
       setMsg(editingId == null ? '已创建自定义审计模式' : '已保存自定义审计模式')
     } catch (e) {
       setOk(false)
-      setMsg(String(e))
+      setMsg(formatApiError(e))
     } finally {
       setBusy(false)
     }
@@ -103,7 +103,7 @@ export function CustomAuditModesCard() {
       setMsg(`已删除「${row.name}」`)
     } catch (e) {
       setOk(false)
-      setMsg(String(e))
+      setMsg(formatApiError(e))
     } finally {
       setBusy(false)
     }
