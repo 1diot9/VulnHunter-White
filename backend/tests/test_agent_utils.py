@@ -556,6 +556,7 @@ def test_llm_gate_compacts_json_error_and_keeps_reason_during_cooldown():
     still = gate.snapshot(["ep-3"])
     assert still["ep-3"]["last_error"] == "insufficient quota for gpt-4"
     assert still["ep-3"]["error_kind"] == "quota"
+    assert gate.last_error_kind("ep-3") == "quota"
     assert 290 <= float(still["ep-3"]["cooldown_sec"]) <= 300
 
 

@@ -19,6 +19,16 @@ export function errorKindLabel(kind?: string): string {
   return key ? ERROR_KIND_LABEL[key] || '' : ''
 }
 
+export function endpointSkipLabel(
+  ep: Pick<LlmEndpointUsage, 'disabled' | 'cooldown_sec' | 'error_kind'>,
+): string {
+  if (ep.disabled) return '已禁用'
+  if (ep.cooldown_sec > 0) return `冷却 ${formatCooldownSec(ep.cooldown_sec)}`
+  if ((ep.error_kind || '') === 'quota') return '额度用尽，不参与分配'
+  return ''
+}
+
+
 export function formatCooldownSec(sec: number): string {
   const s = Math.max(0, Math.ceil(sec))
   if (s >= 3600) {
@@ -114,12 +124,13 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
         <TooltipContent side="bottom" className="max-w-md text-left leading-relaxed whitespace-normal">
           <p>
             所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL
-            并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。可在设置页管理模型商池。
+            并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。额度用尽的端点不因空闲被选中。可在设置页管理模型商池。
           </p>
           {endpoints.length > 0 ? (
             <ul className="mt-2 space-y-1.5 border-t border-background/20 pt-2 text-[11px]">
               {endpoints.map((ep) => {
                 const reason = endpointCooldownReason(ep)
+                const skip = endpointSkipLabel(ep)
                 return (
                   <li key={ep.id} className="tabular-nums">
                     <span className="font-medium">{ep.id}</span>
@@ -127,11 +138,7 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
                     <span className="ml-1">
                       {ep.used}/{ep.limit}
                     </span>
-                    {ep.disabled ? (
-                      <span className="ml-1 font-medium">已禁用</span>
-                    ) : ep.cooldown_sec > 0 ? (
-                      <span className="ml-1 font-medium">冷却 {formatCooldownSec(ep.cooldown_sec)}</span>
-                    ) : null}
+                    {skip ? <span className="ml-1 font-medium">{skip}</span> : null}
                     {reason ? (
                       <span className="mt-0.5 block break-all whitespace-pre-wrap opacity-80">{reason}</span>
                     ) : null}

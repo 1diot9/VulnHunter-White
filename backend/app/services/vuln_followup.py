@@ -20,6 +20,7 @@ from ..config import settings
 from ..models import PhaseRun, SessionLocal, Vuln
 from ..prompts import load_prompt
 from ..services.http_client import chat_http_client, chat_http_timeout
+from ..services.llm_gate import llm_gate
 from ..services.llm_settings import resolve_llm
 from .cve_record import format_cve_record_json, write_cve_record
 from .paths import project_root, vuln_dir
@@ -601,17 +602,32 @@ def _parse_revision_response(answer: str) -> tuple[str, str]:
     return summary, str(revised or "").strip()
 
 
-def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
-    from ..services.llm_settings import bind_llm_to_endpoint, pool_endpoints_resolved
+def _bind_followup_llm(llm: Any, handle: Any) -> Any:
+    from ..services.llm_settings import PoolEndpoint, bind_llm_to_endpoint, pool_endpoints_resolved
     from ..services.llm_thread import llm_thread_limiter
 
-    llm = resolve_llm("reviewer", project_id=project_id)
-    eid = llm_thread_limiter.pick_idle_endpoint()
-    if eid:
-        for ep in pool_endpoints_resolved():
-            if ep.id == eid:
-                llm = bind_llm_to_endpoint(llm, ep)
-                break
+    if handle is None or not getattr(handle, "endpoint_id", ""):
+        return llm
+    eid = handle.endpoint_id
+    url, key, model = llm_thread_limiter.endpoint_creds(eid)
+    if url:
+        return bind_llm_to_endpoint(
+            llm,
+            PoolEndpoint(
+                id=eid,
+                base_url=url,
+                api_key=key or llm.api_key,
+                model=model,
+                max_inflight=1,
+            ),
+        )
+    for ep in pool_endpoints_resolved():
+        if ep.id == eid:
+            return bind_llm_to_endpoint(llm, ep)
+    return llm
+
+
+def _build_followup_request(llm: Any, messages: list[dict[str, str]], drop_keys: list[str]):
     if is_anthropic_wire(llm.wire_api):
         url = anthropic_url(llm.base_url)
         headers = anthropic_headers(llm.api_key)
@@ -636,39 +652,136 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
         }
         prepare_chat_body(body, llm.model, temperature=settings.temperature)
         consume = consume_chat_stream
+    for key in drop_keys:
+        body.pop(key, None)
+    return url, headers, body, consume
+
+
+def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
+    from ..agent.loop import (
+        _is_quota_response,
+        _is_rate_limit_response,
+        _looks_like_quota_exhausted,
+        _looks_like_rate_limit,
+    )
+    from ..services.llm_settings import pool_endpoints_resolved
+    from ..services.llm_thread import llm_thread_limiter, llm_thread_slot
+
+    llm = resolve_llm("reviewer", project_id=project_id)
     timeout = chat_http_timeout(float(settings.timeout_reviewer_static or 180), 0)
-    try:
-        with chat_http_client(timeout=timeout) as client:
-            for _attempt in range(2):
-                with client.stream("POST", url, headers=headers, json=body) as res:
-                    if res.status_code == 400:
-                        text = res.read().decode("utf-8", errors="replace")
-                        drop_key = param_to_drop(body, text)
-                        if drop_key:
-                            body.pop(drop_key, None)
+    drop_keys: list[str] = []
+
+    def failover(handle, kind: str, reason: str, message: str, retry_after: float | None = None):
+        nonlocal llm
+        eid = llm.endpoint_id or handle.endpoint_id
+        llm_gate.note_error(eid, kind, retry_after=retry_after, message=message)
+        rebound = llm_thread_limiter.rebind(
+            handle,
+            project_id=project_id,
+            phase="reviewer",
+            role="reviewer",
+            reason=reason,
+            wait=False,
+        )
+        if rebound is None or rebound.endpoint_id == handle.endpoint_id:
+            return None
+        llm = _bind_followup_llm(llm, rebound)
+        return rebound
+
+    with llm_thread_slot(project_id=project_id, phase="reviewer", role="reviewer") as handle:
+        if handle is None:
+            raise FollowUpLlmError("LLM 线程名额不可用")
+        llm = _bind_followup_llm(llm, handle)
+        pool_n = max(1, len(pool_endpoints_resolved()) or 1)
+        try:
+            with chat_http_client(timeout=timeout) as client:
+                for _attempt in range(max(2, pool_n + 1)):
+                    url, headers, body, consume = _build_followup_request(llm, messages, drop_keys)
+                    try:
+                        with client.stream("POST", url, headers=headers, json=body) as res:
+                            if res.status_code == 400:
+                                text = res.read().decode("utf-8", errors="replace")
+                                drop_key = param_to_drop(body, text)
+                                if drop_key:
+                                    if drop_key not in drop_keys:
+                                        drop_keys.append(drop_key)
+                                    continue
+                                raise FollowUpLlmError(f"LLM HTTP 400: {text[:300]}")
+                            if res.status_code == 401:
+                                text = res.read().decode("utf-8", errors="replace")
+                                rebound = failover(handle, "auth", "401 密钥无效", text[:240])
+                                if rebound is None:
+                                    raise FollowUpLlmError("401 密钥无效，请检查设置页模型配置")
+                                handle = rebound
+                                continue
+                            if res.status_code >= 400:
+                                text = res.read().decode("utf-8", errors="replace")
+                                if _is_quota_response(res.status_code, text):
+                                    rebound = failover(handle, "quota", "额度用尽", text[:240])
+                                    if rebound is None:
+                                        raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
+                                    handle = rebound
+                                    continue
+                                if _is_rate_limit_response(res.status_code, text):
+                                    retry_after = None
+                                    ra = (res.headers or {}).get("retry-after") or (res.headers or {}).get(
+                                        "Retry-After"
+                                    )
+                                    if ra:
+                                        try:
+                                            retry_after = float(ra)
+                                        except (TypeError, ValueError):
+                                            retry_after = None
+                                    rebound = failover(
+                                        handle,
+                                        "rate_limit",
+                                        "429 限流",
+                                        text[:240],
+                                        retry_after=retry_after,
+                                    )
+                                    if rebound is None:
+                                        raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
+                                    handle = rebound
+                                    continue
+                                raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
+                            data = consume(res.iter_lines())
+                            choice = (data.get("choices") or [None])[0] or {}
+                            msg = choice.get("message") or {}
+                            content = msg.get("content")
+                            if isinstance(content, list):
+                                content = "\n".join(
+                                    str(p.get("text") or p.get("content") or "")
+                                    for p in content
+                                    if isinstance(p, dict)
+                                )
+                            answer = str(content or "").strip()
+                            if not answer:
+                                raise FollowUpLlmError("模型返回空回答")
+                            llm_gate.note_success(llm.endpoint_id or handle.endpoint_id)
+                            return answer
+                    except FollowUpLlmError:
+                        raise
+                    except ChatStreamProviderError as e:
+                        text = str(e)
+                        if _looks_like_quota_exhausted(text):
+                            rebound = failover(handle, "quota", "额度用尽", text[:240])
+                            if rebound is None:
+                                raise FollowUpLlmError(text) from e
+                            handle = rebound
                             continue
-                        raise FollowUpLlmError(f"LLM HTTP 400: {text[:300]}")
-                    if res.status_code == 401:
-                        raise FollowUpLlmError("401 密钥无效，请检查设置页模型配置")
-                    if res.status_code >= 400:
-                        text = res.read().decode("utf-8", errors="replace")
-                        raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
-                    data = consume(res.iter_lines())
-                    choice = (data.get("choices") or [None])[0] or {}
-                    msg = choice.get("message") or {}
-                    content = msg.get("content")
-                    if isinstance(content, list):
-                        content = "\n".join(
-                            str(p.get("text") or p.get("content") or "")
-                            for p in content
-                            if isinstance(p, dict)
-                        )
-                    answer = str(content or "").strip()
-                    if not answer:
-                        raise FollowUpLlmError("模型返回空回答")
-                    return answer
-    except ChatStreamProviderError as e:
-        raise FollowUpLlmError(str(e)) from e
-    except ChatStreamError as e:
-        raise FollowUpLlmError(str(e)) from e
+                        if _looks_like_rate_limit(text):
+                            rebound = failover(handle, "rate_limit", "429 限流", text[:240])
+                            if rebound is None:
+                                raise FollowUpLlmError(text) from e
+                            handle = rebound
+                            continue
+                        raise FollowUpLlmError(text) from e
+                    except ChatStreamError as e:
+                        raise FollowUpLlmError(str(e)) from e
+        except FollowUpLlmError:
+            raise
+        except ChatStreamProviderError as e:
+            raise FollowUpLlmError(str(e)) from e
+        except ChatStreamError as e:
+            raise FollowUpLlmError(str(e)) from e
     raise FollowUpLlmError("模型请求失败")

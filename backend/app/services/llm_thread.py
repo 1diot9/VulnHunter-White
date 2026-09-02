@@ -315,23 +315,33 @@ class LlmThreadLimiter:
         Chooses the lowest utilization (used/cap), then the lowest inflight count.
         ``prefer`` is a tie-breaker only: a sticky first endpoint is not filled to
         capacity before other pools are used.
+
+        Quota-exhausted endpoints stay out of the first pass even after cooldown:
+        they sit at used=0 (everyone already failed over) and would otherwise win
+        every idle pick. They are last-resort only when nothing else has capacity.
         """
         now = time.time()
-        best_id: str | None = None
-        best_key: tuple[float, int, int, int] | None = None
-        for idx, eid in enumerate(self._order):
-            b = self._buckets[eid]
-            if b.used >= b.cap:
-                continue
-            if not llm_gate.is_available(eid, now=now):
-                continue
-            util = b.used / b.cap
-            sticky = 0 if (prefer and eid == prefer) else 1
-            key = (util, b.used, sticky, idx)
-            if best_key is None or key < best_key:
-                best_key = key
-                best_id = eid
-        return best_id
+
+        def choose(*, allow_quota: bool) -> str | None:
+            best_id: str | None = None
+            best_key: tuple[float, int, int, int] | None = None
+            for idx, eid in enumerate(self._order):
+                b = self._buckets[eid]
+                if b.used >= b.cap:
+                    continue
+                if not llm_gate.is_available(eid, now=now):
+                    continue
+                if not allow_quota and llm_gate.last_error_kind(eid) == "quota":
+                    continue
+                util = b.used / b.cap
+                sticky = 0 if (prefer and eid == prefer) else 1
+                key = (util, b.used, sticky, idx)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_id = eid
+            return best_id
+
+        return choose(allow_quota=False) or choose(allow_quota=True)
 
     def _wait_deadline_locked(self) -> float:
         ids = list(self._order)
@@ -425,8 +435,13 @@ class LlmThreadLimiter:
         phase: str = "",
         role: str = "",
         reason: str = "",
+        wait: bool = True,
     ) -> SlotHandle | None:
-        """Move an acquired slot to another healthy endpoint. Waits if pool is cold."""
+        """Move an acquired slot to another healthy endpoint. Waits if pool is cold.
+
+        ``wait=False`` returns immediately when no other healthy endpoint has
+        capacity (interactive callers such as vuln follow-up).
+        """
         self._ensure_loaded()
         if handle is None:
             return None
@@ -462,6 +477,8 @@ class LlmThreadLimiter:
                     # Same endpoint still best (e.g. only one) — keep sticky
                     return handle
                 # No healthy endpoint with capacity
+                if not wait:
+                    return None
                 any_not_disabled = any(
                     llm_gate.is_available(eid) or llm_gate.cooldown_remaining(eid) != float("inf")
                     for eid in self._order

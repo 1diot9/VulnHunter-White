@@ -158,6 +158,12 @@ class LlmRequestGate:
                 h.last_error = ""
                 h.error_kind = ""
 
+    def last_error_kind(self, endpoint_id: str) -> str:
+        eid = (endpoint_id or "").strip() or "_default"
+        with self._lock:
+            h = self._by_id.get(eid)
+            return str(h.error_kind or "") if h else ""
+
     def is_available(self, endpoint_id: str, *, now: float | None = None) -> bool:
         eid = (endpoint_id or "").strip() or "_default"
         t = now if now is not None else time.time()

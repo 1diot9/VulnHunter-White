@@ -243,6 +243,70 @@ def test_cooldown_on_one_endpoint_does_not_block_other():
     lim.release(h)
 
 
+def _expire_cooldown(eid: str) -> None:
+    with llm_gate._lock:
+        h = llm_gate._by_id.get(eid)
+        if h is not None:
+            h.cooldown_until = 0.0
+
+
+def test_quota_exhausted_not_picked_when_other_endpoint_free():
+    """Idle quota endpoints must not win by lowest utilization."""
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-1", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 4},
+            {"id": "ep-2", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 4},
+        ]
+    )
+    busy = lim.acquire(prefer_endpoint="ep-1")
+    assert busy is not None and busy.endpoint_id == "ep-1"
+    llm_gate.note_error("ep-2", "quota", message="insufficient_quota")
+    _expire_cooldown("ep-2")
+    assert llm_gate.is_available("ep-2")
+    assert llm_gate.last_error_kind("ep-2") == "quota"
+    h = lim.acquire()
+    assert h is not None
+    assert h.endpoint_id == "ep-1"
+    idle = lim.pick_idle_endpoint()
+    assert idle == "ep-1"
+    lim.release(h)
+    lim.release(busy)
+
+
+def test_quota_exhausted_is_last_resort_when_others_full():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-1", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 1},
+            {"id": "ep-2", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 1},
+        ]
+    )
+    llm_gate.note_error("ep-2", "quota", message="insufficient_quota")
+    _expire_cooldown("ep-2")
+    h1 = lim.acquire()
+    assert h1 is not None and h1.endpoint_id == "ep-1"
+    h2 = lim.acquire()
+    assert h2 is not None and h2.endpoint_id == "ep-2"
+    lim.release(h1)
+    lim.release(h2)
+
+
+def test_rebind_wait_false_returns_none_when_no_other_endpoint():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-1", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 1},
+        ]
+    )
+    h = lim.acquire()
+    assert h is not None
+    llm_gate.note_error("ep-1", "quota", message="insufficient_quota")
+    rebound = lim.rebind(h, reason="额度用尽", wait=False)
+    assert rebound is None
+    lim.release(h)
+
+
 def test_agent_loop_run_occupies_one_slot(tmp_env, project, monkeypatch):
     llm_thread_limiter.set_limit_override(1)
     held = threading.Event()
@@ -287,3 +351,124 @@ def test_agent_loop_run_occupies_one_slot(tmp_env, project, monkeypatch):
     t2.join(timeout=3)
     assert second_got == [True]
     assert llm_thread_limiter.snapshot()[0] == 0
+
+
+def _followup_pool(monkeypatch):
+    from contextlib import contextmanager
+
+    from app.services.llm_settings import PoolEndpoint, ResolvedLlm
+    import app.services.llm_settings as llm_settings
+    import app.services.vuln_followup as vf
+
+    llm_thread_limiter.reset()
+    llm_thread_limiter.refresh_pool(
+        [
+            {
+                "id": "ep-1",
+                "base_url": "https://a.example/v1",
+                "api_key": "ka",
+                "model": "m",
+                "max_inflight": 2,
+            },
+            {
+                "id": "ep-2",
+                "base_url": "https://b.example/v1",
+                "api_key": "kb",
+                "model": "m",
+                "max_inflight": 2,
+            },
+        ]
+    )
+    eps = [
+        PoolEndpoint(id="ep-1", base_url="https://a.example/v1", api_key="ka", model="m", max_inflight=2),
+        PoolEndpoint(id="ep-2", base_url="https://b.example/v1", api_key="kb", model="m", max_inflight=2),
+    ]
+    monkeypatch.setattr(
+        vf,
+        "resolve_llm",
+        lambda *a, **k: ResolvedLlm(
+            base_url="https://a.example/v1",
+            wire_api="chat",
+            model="m",
+            api_key="ka",
+            source="test",
+            endpoint_id="ep-1",
+        ),
+    )
+    monkeypatch.setattr(llm_settings, "pool_endpoints_resolved", lambda: eps)
+    seen: list[str] = []
+
+    class _Resp:
+        def __init__(self, status, body=b"", lines=None):
+            self.status_code = status
+            self._body = body
+            self._lines = lines or []
+            self.headers = {}
+
+        def read(self):
+            return self._body
+
+        def iter_lines(self):
+            yield from self._lines
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        def stream(self, method, url, headers=None, json=None):
+            seen.append(url)
+            if "b.example" in url:
+                return _Resp(
+                    429,
+                    b'{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}',
+                )
+            return _Resp(
+                200,
+                lines=[
+                    'data: {"choices":[{"message":{"content":"ok-from-ep-1"}}]}',
+                    "data: [DONE]",
+                ],
+            )
+
+    @contextmanager
+    def fake_client(timeout=None):
+        yield _Client()
+
+    monkeypatch.setattr(vf, "chat_http_client", fake_client)
+    return seen
+
+
+def test_call_reviewer_llm_fails_over_quota_endpoint(monkeypatch):
+    from app.services.vuln_followup import _call_reviewer_llm
+
+    seen = _followup_pool(monkeypatch)
+    busy = llm_thread_limiter.acquire(prefer_endpoint="ep-1")
+    assert busy is not None and busy.endpoint_id == "ep-1"
+    try:
+        answer = _call_reviewer_llm(1, [{"role": "user", "content": "q"}])
+        assert answer == "ok-from-ep-1"
+        assert any("b.example" in u for u in seen)
+        assert any("a.example" in u for u in seen)
+        assert llm_gate.last_error_kind("ep-2") == "quota"
+    finally:
+        llm_thread_limiter.release(busy)
+        llm_thread_limiter.reset()
+
+
+def test_call_reviewer_llm_skips_known_quota_endpoint(monkeypatch):
+    from app.services.vuln_followup import _call_reviewer_llm
+
+    seen = _followup_pool(monkeypatch)
+    llm_gate.note_error("ep-2", "quota", message="insufficient_quota")
+    _expire_cooldown("ep-2")
+    try:
+        answer = _call_reviewer_llm(1, [{"role": "user", "content": "q"}])
+        assert answer == "ok-from-ep-1"
+        assert seen
+        assert all("a.example" in u for u in seen)
+        assert not any("b.example" in u for u in seen)
+    finally:
+        llm_thread_limiter.reset()

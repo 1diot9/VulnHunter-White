@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
-import { endpointCooldownReason, formatCooldownSec } from '../components/LlmThreadUsageBar'
+import { endpointCooldownReason, endpointSkipLabel } from '../components/LlmThreadUsageBar'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -706,7 +706,7 @@ export default function SettingsPage() {
           </div>
           <div className="text-xs text-slate-500">
             可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。新会话按负载均匀分配，同一会话粘滞到所选
-            URL；429 / 额度用尽时该端点冷却并自动换路。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
+            URL；429 冷却该端点并换路。额度用尽的端点即使空闲也不再优先选中，有其它可用端点时直接跳过。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
           </div>
           <div className="space-y-3">
             {endpoints.map((ep, index) => (
@@ -1118,14 +1118,14 @@ export default function SettingsPage() {
 
 function EndpointHealthLine({ health }: { health: LlmEndpointUsage | undefined }) {
   if (!health) return null
-  const cooling = health.disabled || health.cooldown_sec > 0
+  const skip = endpointSkipLabel(health)
   const reason = endpointCooldownReason(health)
-  if (!cooling && !reason) return null
+  if (!skip && !reason) return null
   return (
     <div className="text-xs break-all">
-      <span className={health.disabled ? 'text-red-300' : 'text-amber-200'}>
-        {health.disabled ? '已禁用' : health.cooldown_sec > 0 ? `冷却 ${formatCooldownSec(health.cooldown_sec)}` : null}
-      </span>
+      {skip ? (
+        <span className={health.disabled ? 'text-red-300' : 'text-amber-200'}>{skip}</span>
+      ) : null}
       {reason ? <span className="mt-0.5 block whitespace-pre-wrap text-slate-400">{reason}</span> : null}
     </div>
   )
