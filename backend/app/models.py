@@ -85,7 +85,9 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(String(64), default="pending")
     # pending | recon | worker | reviewer | verifier | attack_chain | done
     recon_done: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Code Intelligence（CodeGraph）：pending|building|ready|degraded|stale
+    # 代码库（CodeGraph）按项目可选，默认关闭，避免每个项目都建索引占磁盘
+    code_intel_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Code Intelligence（CodeGraph）：pending|building|ready|degraded|stale|skipped
     code_intel_status: Mapped[str] = mapped_column(String(32), default="pending")
     # 首次构建已结束（ready 或 degraded），挖掘门闩；重建不清除
     code_intel_done: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -524,6 +526,7 @@ def _ensure_columns() -> None:
             "worker_hint": "TEXT",
             "recon_hint": "TEXT",
             "max_token_usage": "INTEGER DEFAULT 0",
+            "code_intel_enabled": "BOOLEAN DEFAULT 0",
             "code_intel_status": "VARCHAR(32) DEFAULT 'pending'",
             "code_intel_done": "BOOLEAN DEFAULT 0",
             "code_intel_error": "TEXT",

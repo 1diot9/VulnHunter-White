@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
+import { api, formatApiError, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
 import { endpointCooldownReason, endpointSkipLabel } from '../components/LlmThreadUsageBar'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -342,7 +342,7 @@ export default function SettingsPage() {
     } catch (e) {
       setModels([])
       setProbeOk(false)
-      setProbeMsg(String(e))
+      setProbeMsg(formatApiError(e, '拉取模型列表超时，请稍后重试。'))
     } finally {
       setListing(false)
     }
@@ -366,7 +366,7 @@ export default function SettingsPage() {
       setProbeMsg(`连通正常 · ${out.model}${latency ? ` · ${latency}` : ''}${reply}`)
     } catch (e) {
       setProbeOk(false)
-      setProbeMsg(String(e))
+      setProbeMsg(formatApiError(e, '连通测试超时，请稍后重试。'))
     } finally {
       setTesting(false)
     }
@@ -395,7 +395,7 @@ export default function SettingsPage() {
       setFofaMsg(parts.join(' · '))
     } catch (e) {
       setFofaOk(false)
-      setFofaMsg(String(e))
+      setFofaMsg(formatApiError(e, 'FOFA 连通测试超时，请稍后重试。'))
     } finally {
       setFofaTesting(false)
     }
@@ -427,7 +427,7 @@ export default function SettingsPage() {
       setGithubMsg(parts.join(' · '))
     } catch (e) {
       setGithubOk(false)
-      setGithubMsg(String(e))
+      setGithubMsg(formatApiError(e, 'GitHub 连通测试超时，请稍后重试。'))
     } finally {
       setGithubTesting(false)
     }
@@ -453,7 +453,7 @@ export default function SettingsPage() {
       setJadxMsg(parts.join(' · '))
     } catch (e) {
       setJadxOk(false)
-      setJadxMsg(String(e))
+      setJadxMsg(formatApiError(e, 'jadx 检测超时，请稍后重试。'))
     } finally {
       setJadxTesting(false)
     }
@@ -478,7 +478,7 @@ export default function SettingsPage() {
         .join(' · '))
     } catch (e) {
       setCodegraphOk(false)
-      setCodegraphMsg(String(e))
+      setCodegraphMsg(formatApiError(e, 'CodeGraph 检测超时，请稍后重试。'))
     } finally {
       setCodegraphTesting(false)
     }
@@ -562,7 +562,7 @@ export default function SettingsPage() {
       setFofaKey('')
       setMsg('已保存')
     } catch (e) {
-      setMsg(String(e))
+      setMsg(formatApiError(e))
     }
   }
 
@@ -599,7 +599,7 @@ export default function SettingsPage() {
       setTokenMsg(next.access_token_set ? '访问令牌已更新' : '已清除设置中的令牌覆盖')
     } catch (e) {
       setTokenOk(false)
-      setTokenMsg(String(e instanceof Error ? e.message : e))
+      setTokenMsg(formatApiError(e))
     } finally {
       setTokenSaving(false)
     }
@@ -624,7 +624,7 @@ export default function SettingsPage() {
       setLogConfirmOpen(false)
     } catch (e) {
       setLogOk(false)
-      setLogMsg(String(e))
+      setLogMsg(formatApiError(e, '日志清理超时，文件较多时请稍后重试。'))
     } finally {
       setLogPurging(false)
     }
@@ -1040,7 +1040,7 @@ export default function SettingsPage() {
             </div>
           ) : null}
           <div className="text-xs text-slate-500">
-            代码库阶段用此 CLI 给 src/ 建图。未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量
+            代码库阶段用此 CLI 给 src/ 建图。仅当项目勾选「代码库」时才会构建；未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量
             VULNHUNTER_CODEGRAPH_PATH。
           </div>
         </div>

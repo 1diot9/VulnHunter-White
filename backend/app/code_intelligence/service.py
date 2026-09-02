@@ -14,11 +14,11 @@ from ..config import settings
 from ..models import Project, SessionLocal, utcnow
 from ..services.ingest import IGNORE_DIR_NAMES
 from ..services.live_log import live_log
-from ..services.paths import code_intel_dir, src_dir, strip_windows_long_path
+from ..services.paths import code_intel_dir, force_rmtree, src_dir, strip_windows_long_path
 from .cli import cli_version, ensure_codegraph, find_codegraph, popen_ui, stream_codegraph, ui_subcommand
 
 CODE_INTEL_PHASE = "code_intel"
-STATUSES = ("pending", "building", "ready", "degraded", "stale")
+STATUSES = ("pending", "building", "ready", "degraded", "stale", "skipped")
 _STALE_CHECK_SEC = 30.0
 _last_stale_check: dict[int, float] = {}
 _ui_lock = threading.Lock()
@@ -89,10 +89,57 @@ def os_walk_sorted(root: Path):
     return os.walk(root)
 
 
+def is_code_intel_enabled(proj: Project | None) -> bool:
+    return bool(proj and getattr(proj, "code_intel_enabled", False))
+
+
+def code_intel_ready_for_mining(proj: Project | None) -> bool:
+    """True when mining may start with respect to Code Intelligence."""
+    if not proj:
+        return False
+    if not is_code_intel_enabled(proj):
+        return True
+    return bool(getattr(proj, "code_intel_done", False))
+
+
+def create_fields(*, enabled: bool) -> dict[str, Any]:
+    if enabled:
+        return {
+            "code_intel_enabled": True,
+            "code_intel_status": "pending",
+            "code_intel_done": False,
+            "code_intel_error": None,
+        }
+    return {
+        "code_intel_enabled": False,
+        "code_intel_status": "skipped",
+        "code_intel_done": False,
+        "code_intel_error": None,
+    }
+
+
+def mark_skipped(project_id: int) -> None:
+    _set_project_fields(
+        project_id,
+        code_intel_enabled=False,
+        code_intel_status="skipped",
+        code_intel_done=False,
+        code_intel_error=None,
+    )
+    purge_index(project_id)
+
+
+def purge_index(project_id: int) -> None:
+    """Delete src/.codegraph to free disk when Code Intelligence is off."""
+    force_rmtree(_index_dir(project_id))
+    write_metadata(project_id, {"status": "skipped", "purged_at": _now_iso(), "index_dir": "src/.codegraph"})
+    _log(project_id, "已关闭代码库并删除索引，释放磁盘")
+
+
 def code_intel_settled(project_id: int) -> bool:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        return bool(proj and getattr(proj, "code_intel_done", False))
+        return code_intel_ready_for_mining(proj)
 
 
 def _set_project_fields(project_id: int, **fields: Any) -> None:
@@ -112,6 +159,7 @@ def status_payload(project_id: int) -> dict[str, Any]:
         if not proj:
             return {
                 "status": "pending",
+                "enabled": False,
                 "done": False,
                 "error": "",
                 "source_hash": "",
@@ -119,8 +167,10 @@ def status_payload(project_id: int) -> dict[str, Any]:
                 "stale": False,
             }
         status = (getattr(proj, "code_intel_status", None) or "pending").strip() or "pending"
+        enabled = bool(getattr(proj, "code_intel_enabled", False))
         return {
             "status": status,
+            "enabled": enabled,
             "done": bool(getattr(proj, "code_intel_done", False)),
             "error": (getattr(proj, "code_intel_error", None) or "").strip(),
             "source_hash": (getattr(proj, "code_intel_source_hash", None) or "").strip(),
@@ -152,6 +202,8 @@ def mark_stale_if_source_changed(project_id: int) -> bool:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj:
+            return False
+        if not bool(getattr(proj, "code_intel_enabled", False)):
             return False
         status = (getattr(proj, "code_intel_status", None) or "").strip()
         if status not in ("ready", "stale"):

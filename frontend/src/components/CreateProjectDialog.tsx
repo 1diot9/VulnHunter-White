@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type CustomAuditMode } from '../api'
+import { api, formatApiError, type CustomAuditMode } from '../api'
 import { AuditModeSelect } from './AuditModeSelect'
 import { AttackChainToggle } from './AttackChainToggle'
 import { AuditFlowPreview } from './AuditFlowPreview'
@@ -10,6 +10,7 @@ import { AdvancedProjectOptions, AdvancedProjectOptionsButton } from './Advanced
 import { parseMaxTokenUsageInput } from './MaxTokenUsageField'
 import { TargetKindSelect } from './TargetKindSelect'
 import { VerifierToggle } from './VerifierToggle'
+import { CodeIntelToggle } from './CodeIntelToggle'
 import { ZipUploadStatus } from './ZipUploadStatus'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,10 +25,7 @@ import { Label } from '@/components/ui/label'
 import { type AuditMode, type TargetKind } from '@/lib/utils'
 
 function formatUploadError(e: unknown): string {
-  if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-    return '源码 zip 上传超时，请检查体积后重试，或改用 GitHub 导入'
-  }
-  return String(e instanceof Error ? e.message : e)
+  return formatApiError(e, '源码 zip 上传超时，请检查体积后重试，或改用 GitHub 导入')
 }
 
 type Props = {
@@ -58,6 +56,7 @@ export function CreateProjectDialog({
   const [dynamicVerifyMode, setDynamicVerifyMode] = useState<DynamicVerifyMode>('off')
   const [verifierEnabled, setVerifierEnabled] = useState(false)
   const [attackChainEnabled, setAttackChainEnabled] = useState(false)
+  const [codeIntelEnabled, setCodeIntelEnabled] = useState(false)
   const [heuristicEnabled, setHeuristicEnabled] = useState(true)
   const [heuristicLite, setHeuristicLite] = useState(false)
   const [fastEnabled, setFastEnabled] = useState(false)
@@ -130,6 +129,7 @@ export function CreateProjectDialog({
       manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
       verifier_enabled: verifierEnabled,
       attack_chain_enabled: attackChainEnabled,
+      code_intel_enabled: codeIntelEnabled,
       dynamic_verify_enabled: dynamicVerifyEnabled,
       dynamic_verify_mode: dynamicVerifyMode,
       heuristic_enabled: heuristicEnabled,
@@ -165,7 +165,7 @@ export function CreateProjectDialog({
       onOpenChange(false)
       await onCreated()
     } catch (e) {
-      setError(String(e))
+      setError(formatApiError(e))
     } finally {
       setBusy(false)
     }
@@ -216,7 +216,7 @@ export function CreateProjectDialog({
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>创建项目</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
+            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、挖掘路径、代码库与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -259,6 +259,7 @@ export function CreateProjectDialog({
                   setUnconstrainedEnabled(nextU)
                 }}
               />
+              <CodeIntelToggle enabled={codeIntelEnabled} onEnabledChange={setCodeIntelEnabled} />
               <DynamicVerifyToggle
                 mode={dynamicVerifyMode}
                 onModeChange={(mode) => {
@@ -291,6 +292,7 @@ export function CreateProjectDialog({
               manualLab={manualLab}
               verifierEnabled={verifierEnabled}
               attackChainEnabled={attackChainEnabled}
+              codeIntelEnabled={codeIntelEnabled}
               heuristicEnabled={heuristicEnabled}
               heuristicLite={heuristicLite}
               fastEnabled={fastEnabled}

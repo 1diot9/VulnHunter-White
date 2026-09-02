@@ -137,6 +137,19 @@ def test_extract_bundle_flattens_zip(tmp_path):
     assert not (dest / f"codegraph-{target}").exists()
 
 
+def test_mining_prereqs_skip_code_intel_when_disabled(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    assert pipeline.mining_prereqs_met(project) is False
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.code_intel_enabled = False
+        proj.code_intel_done = False
+        db.commit()
+    assert pipeline.mining_prereqs_met(project) is True
+
+
 def test_mining_prereqs_need_recon_and_code_intel(tmp_env, project):
     models = tmp_env["models"]
     Session = tmp_env["Session"]
@@ -144,6 +157,7 @@ def test_mining_prereqs_need_recon_and_code_intel(tmp_env, project):
     with Session() as db:
         proj = db.get(models.Project, project)
         proj.recon_done = True
+        proj.code_intel_enabled = True
         proj.code_intel_done = False
         db.commit()
     assert pipeline.mining_prereqs_met(project) is False
@@ -206,9 +220,26 @@ def test_trace_compacts_explore_json(tmp_env, project, monkeypatch):
     assert out["paths"][0][0]["name"] == "AdminController.run"
 
 
+def test_rebuild_rejected_when_disabled(tmp_env, project):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        rebuilt = client.post(f"/api/projects/{project}/code-intelligence/rebuild")
+        assert rebuilt.status_code == 400
+        assert "未开启" in rebuilt.json()["detail"]
+
+
 def test_rebuild_api_starts_thread(tmp_env, project, monkeypatch):
     from app.main import app
     from fastapi.testclient import TestClient
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.code_intel_enabled = True
+        db.commit()
 
     started: list[tuple[int, bool]] = []
     monkeypatch.setattr(
@@ -244,6 +275,7 @@ def test_project_payload_includes_code_intel(tmp_env, project):
         body = r.json()
         assert body["code_intel_done"] is False
         assert body["code_intel_status"] == "pending"
+        assert body["code_intel_enabled"] is False
 
 
 def test_parse_help_commands_skips_wrapped_descriptions():
@@ -274,6 +306,7 @@ def _mark_code_intel_ready(tmp_env, project_id: int) -> None:
         proj = db.get(models.Project, project_id)
         proj.code_intel_status = "ready"
         proj.code_intel_done = True
+        proj.code_intel_enabled = True
         db.commit()
     db_dir = src_dir(project_id) / ".codegraph"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -321,3 +354,74 @@ def test_symbols_api_uses_query(tmp_env, project, monkeypatch):
         body = r.json()
         assert body["ok"] is True
         assert body["items"][0]["name"] == "Main.login"
+
+
+def test_create_code_intel_defaults_off(tmp_env, monkeypatch):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr("app.api.projects.start_ingest_and_audit", lambda *a, **k: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/projects",
+            json={"source_type": "github", "source_url": "https://github.com/owner/demo"},
+        )
+        assert created.status_code == 200
+        body = created.json()
+        assert body["code_intel_enabled"] is False
+        assert body["code_intel_status"] == "skipped"
+        on = client.post(
+            "/api/projects",
+            json={
+                "source_type": "github",
+                "source_url": "https://github.com/owner/with-ci",
+                "code_intel_enabled": True,
+            },
+        )
+        assert on.status_code == 200
+        assert on.json()["code_intel_enabled"] is True
+        assert on.json()["code_intel_status"] == "pending"
+
+
+def test_patch_code_intel_only_when_paused(tmp_env, project, monkeypatch):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(pipeline, "_start_code_intel_thread", lambda *a, **k: None)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with TestClient(app) as client:
+        denied = client.patch(f"/api/projects/{project}", json={"code_intel_enabled": True})
+        assert denied.status_code == 400
+        with Session() as db:
+            proj = db.get(models.Project, project)
+            proj.status = "paused"
+            db.commit()
+        enabled = client.patch(f"/api/projects/{project}", json={"code_intel_enabled": True})
+        assert enabled.status_code == 200
+        assert enabled.json()["code_intel_enabled"] is True
+        assert enabled.json()["code_intel_status"] == "pending"
+
+
+def test_disable_code_intel_purges_index(tmp_env, project):
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    db_dir = src_dir(project) / ".codegraph"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    (db_dir / "codegraph.db").write_bytes(b"stub")
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.status = "paused"
+        proj.code_intel_enabled = True
+        proj.code_intel_status = "ready"
+        proj.code_intel_done = True
+        db.commit()
+    with TestClient(app) as client:
+        off = client.patch(f"/api/projects/{project}", json={"code_intel_enabled": False})
+        assert off.status_code == 200
+        assert off.json()["code_intel_enabled"] is False
+        assert off.json()["code_intel_status"] == "skipped"
+    assert not (db_dir / "codegraph.db").exists()

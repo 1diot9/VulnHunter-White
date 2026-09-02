@@ -104,7 +104,7 @@ VulnHunter-White 的特点：
 
 ## 4. VulnHunter-White 设计分析
 
-以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon 与代码库并列 → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。
+以下按「创建 GitHub 项目 → 审计完成」的顺序说明设计考量。默认流程：**Recon → 挖掘（启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描，至少一条）→ Reviewer → 可选 Verifier / 攻击链**。创建时可勾选代码库，开启后与 Recon 并列，都完成后才挖掘。
 
 ### 4.1 工具集
 
@@ -247,7 +247,7 @@ Recon **不读**代码库产物。代码库与侦察并列，见 4.5 节开头�
 
 ### 4.5 挖掘阶段
 
-挖掘须等 **Recon 完成**且 **代码库**首次构建结束（`ready` 或 `degraded` 都算完成）。代码库用 CodeGraph 只索引 `src/` 源码，供 Worker / Reviewer 的 `FindSymbol` / `FindCallers` / `FindCallees` / `TraceCalls` 查调用关系；失败则降级继续用 Read/Grep。源码变化只标过期，由用户点重建，不自动重建。jar/class 不在本阶段处理。
+挖掘须等 **Recon 完成**。若项目开启了代码库，还须等其首次构建结束（`ready` 或 `degraded` 都算完成）。代码库默认关闭，创建时勾选；用 CodeGraph 只索引 `src/` 源码，供 Worker / Reviewer 的 `FindSymbol` / `FindCallers` / `FindCallees` / `TraceCalls` 查调用关系；失败则降级继续用 Read/Grep。源码变化只标过期，由用户点重建，不自动重建。关闭会删除该项目索引以释放磁盘。jar/class 不在本阶段处理。
 
 
 #### 4.5.0 漏洞挖掘模式
@@ -430,7 +430,7 @@ flowchart LR
     B --> C[历史漏洞]
     C --> D[文件定权]
   end
-  subgraph CodeIntel[代码库]
+  subgraph CodeIntel[代码库（可选）]
     CI[CodeGraph 索引 src]
   end
   subgraph Mining

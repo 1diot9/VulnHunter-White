@@ -962,6 +962,7 @@ def test_ensure_workers_waits_for_recon_and_code_intel(tmp_env, project, monkeyp
     with Session() as db:
         proj = db.get(models.Project, project)
         proj.recon_done = True
+        proj.code_intel_enabled = True
         proj.code_intel_done = False
         db.commit()
     out = pipeline._ensure_workers(project, [])

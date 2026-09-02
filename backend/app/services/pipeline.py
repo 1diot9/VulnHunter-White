@@ -468,6 +468,25 @@ def note_attack_chain_enabled(project_id: int) -> None:
     _abandon_phase_checkpoints(project_id, "attack_chain")
 
 
+def note_code_intel_enabled(project_id: int) -> None:
+    """User turned Code Intelligence on; start a build even if mining is paused."""
+    _phase_pause_event(project_id, "code_intel").clear()
+    live_log.system(project_id, "已开启代码库，开始构建调用图", phase="code_intel")
+    _start_code_intel_thread(project_id, force=False)
+
+
+def note_code_intel_disabled(project_id: int) -> None:
+    """Stop an in-flight build and delete the on-disk index."""
+    from ..code_intelligence.service import mark_skipped
+
+    _bump_phase_generation(project_id, "code_intel")
+    with _lock:
+        old = _code_intel_threads.get(project_id)
+    if old is not None and old.is_alive():
+        old.join(timeout=20)
+    mark_skipped(project_id)
+
+
 def note_dynamic_verify_changed(project_id: int, *, enabled: bool) -> None:
     """Next Reviewer round should pick up the new static/dynamic gate."""
     _force_new_run.add((project_id, "reviewer"))
@@ -946,12 +965,14 @@ def _start_log_session(
 
 
 def _set_project_running(project_id: int) -> None:
+    from ..code_intelligence.service import code_intel_ready_for_mining
+
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if proj and proj.status != "completed":
             recon_done = bool(proj.recon_done)
-            ci_done = bool(getattr(proj, "code_intel_done", False))
-            if recon_done and ci_done:
+            ci_ready = code_intel_ready_for_mining(proj)
+            if recon_done and ci_ready:
                 proj.status = "auditing"
                 if proj.phase in ("pending", "recon", "code_intel"):
                     proj.phase = "worker"
@@ -966,12 +987,14 @@ def _set_project_running(project_id: int) -> None:
 
 
 def mining_prereqs_met(project_id: int) -> bool:
-    """Recon and Code Intelligence have both settled."""
+    """Recon has finished; Code Intelligence has settled if the project enabled it."""
+    from ..code_intelligence.service import code_intel_ready_for_mining
+
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not proj.recon_done:
             return False
-        return bool(getattr(proj, "code_intel_done", False))
+        return code_intel_ready_for_mining(proj)
 
 
 def _wait_if_paused(project_id: int, cancel: threading.Event, phase: str | None = None) -> bool:
@@ -2540,10 +2563,12 @@ def recover_inflight_projects() -> None:
                         live_log.error(pid, "导入中断且无文件索引，请重新导入")
                         continue
                     if proj:
+                        from ..code_intelligence.service import code_intel_ready_for_mining
+
                         proj.status = "recon" if not proj.recon_done else "auditing"
                         if not proj.recon_done:
                             proj.phase = "recon"
-                        elif not bool(getattr(proj, "code_intel_done", False)):
+                        elif not code_intel_ready_for_mining(proj):
                             proj.phase = "code_intel"
                         else:
                             proj.phase = "worker"
@@ -2719,12 +2744,19 @@ def _ensure_recon(project_id: int, cancel: threading.Event) -> None:
 
 
 def _ensure_code_intel(project_id: int, cancel: threading.Event) -> None:
+    from ..code_intelligence.service import is_code_intel_enabled, mark_skipped
+
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or proj.status in ("completed", "cancelled", "error"):
             return
+        enabled = is_code_intel_enabled(proj)
         done = bool(getattr(proj, "code_intel_done", False))
         status = (getattr(proj, "code_intel_status", None) or "pending").strip()
+    if not enabled:
+        if status != "skipped":
+            mark_skipped(project_id)
+        return
     if _phase_is_paused(project_id, "code_intel"):
         return
     if done and status != "building":
@@ -2776,6 +2808,8 @@ def request_code_intel_rebuild(project_id: int) -> dict[str, Any]:
             raise ValueError("项目不存在")
         if proj.status in ("cancelled", "ingesting", "error"):
             raise ValueError("当前项目状态不可重建代码库")
+        if not bool(getattr(proj, "code_intel_enabled", False)):
+            raise ValueError("未开启代码库。请先在项目配置中开启（需暂停或完成）")
     _bump_phase_generation(project_id, "code_intel")
     _phase_pause_event(project_id, "code_intel").clear()
     live_log.system(project_id, "用户请求重建代码库", phase="code_intel")
@@ -3119,7 +3153,7 @@ def _ensure_workers(
     alive = [t for t in active_workers if t.is_alive()]
     if not heuristic_on:
         return alive
-    # 历史漏洞是启发式线索；侦察与代码库都完成后再拉 Worker。
+    # 历史漏洞是启发式线索；侦察完成后再拉 Worker（开启代码库时还须等其首次构建结束）。
     if not mining_prereqs_met(project_id):
         return alive
     if project_complete_gates(project_id):

@@ -629,6 +629,8 @@ def test_create_github_audit_mode_defaults_bounty(tmp_env, monkeypatch):
         assert created.json()["manual_lab"] is False
         assert created.json()["manual_lab_prompt"] == ""
         assert created.json()["verifier_enabled"] is False
+        assert created.json()["code_intel_enabled"] is False
+        assert created.json()["code_intel_status"] == "skipped"
         assert created.json()["dynamic_verify_enabled"] is False
         assert created.json()["llm_model"] == ""
         assert created.json()["worker_hint"] == ""

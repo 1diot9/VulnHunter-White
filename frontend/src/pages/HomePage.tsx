@@ -338,6 +338,9 @@ export default function HomePage() {
                 phase={p.phase}
                 status={p.status}
                 reconDone={p.recon_done}
+                codeIntelEnabled={p.code_intel_enabled === true}
+                codeIntelStatus={p.code_intel_status}
+                codeIntelDone={p.code_intel_done}
                 filesAudited={p.files_audited}
                 filesSkipped={p.files_skipped}
                 filesTotal={p.files_total}

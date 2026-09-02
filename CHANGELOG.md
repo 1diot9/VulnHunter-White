@@ -8,13 +8,13 @@
 
 ### 新增
 
-- 流水线增加与 Recon 并列的 **代码库** 阶段：用 CodeGraph 给 `src/` 建调用图，供挖掘 Worker（含无约束）和 Reviewer 用 `FindSymbol` / `FindCallers` / `FindCallees` / `TraceCalls` 查关系。两边都完成后才开始挖掘。
+- 流水线增加可选 **代码库** 阶段：创建时勾选后与 Recon 并列，用 CodeGraph 给 `src/` 建调用图，供挖掘 Worker（含无约束）和 Reviewer 用 `FindSymbol` / `FindCallers` / `FindCallees` / `TraceCalls` 查关系。默认关闭，避免每个项目都建图占磁盘；开启后两边都完成后才开始挖掘。关闭已开启的项目会删除该索引。
 - 未安装 CodeGraph 时，构建阶段会自动下载到 `data/tools/codegraph`（不改系统 PATH）；设置页可指定 CLI 路径并检测。
 - 项目详情增加「代码库」日志 Tab（纯构建日志，无接续）。源码变化会标过期，由用户点「重建代码库」；测试可用「打开图浏览器」。
 
 ### 修改
 
-- 构建失败自动降级，审计仍按原来的 Read / Grep 继续，不阻塞项目。
+- CodeGraph构建失败自动降级，审计仍按原来的 Read / Grep 继续，不阻塞项目。
 - Recon 逻辑不变，不读取代码库产物。
 - Agent 失败后的抢救摘要会注入下一轮；漏洞审核 / 修复 / 互联网验证只注入**同一条漏洞**的摘要，避免串台。
 - `RunCode` 失败会带回 `failure_class`、缺的包/符号和修改建议，便于按编译错误改 harness。

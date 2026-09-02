@@ -36,6 +36,7 @@ from ..mining_paths import (
     parse_heuristic_lite,
     parse_mining_paths,
 )
+from ..code_intelligence.service import create_fields as code_intel_create_fields
 from ..target_kind import (
     TARGET_KIND_EDITABLE_STATUSES,
     create_verify_defaults,
@@ -126,6 +127,8 @@ from ..services.pipeline import (
     note_mining_paths_changed,
     note_verifier_enabled,
     note_attack_chain_enabled,
+    note_code_intel_enabled,
+    note_code_intel_disabled,
     request_cancel,
     request_pause,
     request_recon_subphase_rerun,
@@ -151,6 +154,7 @@ _PROJECT_LIST_LOAD = (
     Project.status,
     Project.phase,
     Project.recon_done,
+    Project.code_intel_enabled,
     Project.code_intel_status,
     Project.code_intel_done,
     Project.audit_mode,
@@ -355,6 +359,7 @@ def _project_out(
         status=p.status,
         phase=p.phase,
         recon_done=p.recon_done,
+        code_intel_enabled=bool(getattr(p, "code_intel_enabled", False)),
         code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
         code_intel_done=bool(getattr(p, "code_intel_done", False)),
         code_intel_error=(getattr(p, "code_intel_error", None) or "").strip(),
@@ -431,6 +436,7 @@ def _project_list_out(
         status=p.status,
         phase=p.phase,
         recon_done=p.recon_done,
+        code_intel_enabled=bool(getattr(p, "code_intel_enabled", False)),
         code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
         code_intel_done=bool(getattr(p, "code_intel_done", False)),
         audit_mode=normalize_audit_mode(p.audit_mode),
@@ -741,6 +747,7 @@ def get_project(
                 status=p.status,
                 phase=p.phase,
                 recon_done=p.recon_done,
+                code_intel_enabled=bool(getattr(p, "code_intel_enabled", False)),
                 code_intel_status=(getattr(p, "code_intel_status", None) or "pending").strip() or "pending",
                 code_intel_done=bool(getattr(p, "code_intel_done", False)),
                 created_at=p.created_at,
@@ -815,6 +822,7 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             worker_hint=worker_hint or None,
             recon_hint=recon_hint or None,
             max_token_usage=max_token_usage,
+            **code_intel_create_fields(enabled=bool(body.code_intel_enabled)),
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -850,6 +858,7 @@ async def create_project_zip(
     manual_lab_prompt: str = Form(""),
     verifier_enabled: bool = Form(False),
     attack_chain_enabled: bool = Form(False),
+    code_intel_enabled: bool = Form(False),
     dynamic_verify_enabled: bool = Form(False),
     dynamic_verify_mode: str = Form(""),
     heuristic_enabled: str = Form("true"),
@@ -922,6 +931,7 @@ async def create_project_zip(
             worker_hint=hint or None,
             recon_hint=recon or None,
             max_token_usage=token_cap,
+            **code_intel_create_fields(enabled=bool(code_intel_enabled)),
         )
         if custom_preset is not None:
             cam.apply_project_custom_snapshot(p, custom_preset)
@@ -956,6 +966,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         and body.manual_lab_prompt is None
         and body.verifier_enabled is None
         and body.attack_chain_enabled is None
+        and body.code_intel_enabled is None
         and body.dynamic_verify_enabled is None
         and body.dynamic_verify_mode is None
         and body.heuristic_enabled is None
@@ -1003,6 +1014,7 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
         old_custom_id = getattr(p, "custom_audit_mode_id", None)
         old_verifier = bool(p.verifier_enabled)
         old_attack_chain = bool(getattr(p, "attack_chain_enabled", False))
+        old_code_intel = bool(getattr(p, "code_intel_enabled", False))
         old_verify_mode = project_verify_mode(p)
         old_dynamic = old_verify_mode != VERIFY_MODE_OFF
         old_heuristic = bool(getattr(p, "heuristic_enabled", True))
@@ -1094,6 +1106,19 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.verifier_enabled = bool(body.verifier_enabled)
         if body.attack_chain_enabled is not None:
             p.attack_chain_enabled = bool(body.attack_chain_enabled)
+        if body.code_intel_enabled is not None:
+            if p.status not in MINING_PATH_EDITABLE_STATUSES:
+                raise HTTPException(400, "代码库仅在项目暂停或完成后可更改")
+            next_ci = bool(body.code_intel_enabled)
+            p.code_intel_enabled = next_ci
+            if next_ci and not old_code_intel:
+                p.code_intel_status = "pending"
+                p.code_intel_done = False
+                p.code_intel_error = None
+            elif not next_ci and old_code_intel:
+                p.code_intel_status = "skipped"
+                p.code_intel_done = False
+                p.code_intel_error = None
         if body.dynamic_verify_mode is not None or body.dynamic_verify_enabled is not None:
             try:
                 next_verify = resolve_verify_mode(
@@ -1156,6 +1181,10 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 restarted = True
         elif body.attack_chain_enabled is False and old_attack_chain:
             live_log.system(project_id, "已关闭攻击链串联")
+        if body.code_intel_enabled is True and not old_code_intel:
+            note_code_intel_enabled(project_id)
+        elif body.code_intel_enabled is False and old_code_intel:
+            note_code_intel_disabled(project_id)
         new_verify_mode = out.dynamic_verify_mode
         if new_verify_mode != old_verify_mode:
             if new_verify_mode == VERIFY_MODE_LAB:

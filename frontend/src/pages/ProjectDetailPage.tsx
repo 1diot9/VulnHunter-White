@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, withAccessTokenParam, type CustomAuditMode, type LogEvent, type Project, type Vuln } from '../api'
+import { api, formatApiError, withAccessTokenParam, type CustomAuditMode, type LogEvent, type Project, type Vuln } from '../api'
 import { AuditModeSelect } from '../components/AuditModeSelect'
 import { BountyScopeButton } from '../components/BountyScopeDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
@@ -467,6 +467,7 @@ export default function ProjectDetailPage() {
               phase={project.phase}
               status={project.status}
               reconDone={project.recon_done}
+              codeIntelEnabled={project.code_intel_enabled === true}
               codeIntelStatus={project.code_intel_status}
               codeIntelDone={project.code_intel_done}
               filesAudited={project.files_audited}
@@ -533,7 +534,7 @@ export default function ProjectDetailPage() {
                   })
                   .catch((e) => {
                     applyRunChange(prev)
-                    setActionError(String(e instanceof Error ? e.message : e))
+                    setActionError(formatApiError(e))
                   })
                   .finally(() => setRunBusy(false))
               }}
@@ -568,7 +569,7 @@ export default function ProjectDetailPage() {
                   })
                   .catch((e) => {
                     applyRunChange(prev)
-                    setActionError(String(e instanceof Error ? e.message : e))
+                    setActionError(formatApiError(e))
                   })
                   .finally(() => setRunBusy(false))
               }}
@@ -677,8 +678,11 @@ export default function ProjectDetailPage() {
           {project.unconstrained_enabled
             ? ' 无约束扫描只注入代码地图与鉴权，始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束该路径。'
             : ''}
+          {project.code_intel_enabled === true
+            ? ' 已开启代码库：与侦察并列建调用图，失败则降级用 Read/Grep。'
+            : ' 未开启代码库：不建调用图以节省磁盘，挖掘只等侦察完成。'}
           {project.status === 'paused' || project.project_paused || project.status === 'completed'
-            ? ' 暂停或完成后可更改挖掘模式；挖掘路径请到项目配置中修改。续跑后按新规则生效。'
+            ? ' 暂停或完成后可更改挖掘模式；挖掘路径与代码库请到项目配置中修改。续跑后按新规则生效。'
             : ''}
         </p>
       </div>
@@ -789,10 +793,20 @@ export default function ProjectDetailPage() {
           />
           {phaseFilter === 'code-intel' || phaseFilter === 'code_intel' ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              {project.code_intel_enabled !== true ? (
+                <span className="text-xs text-muted-foreground">
+                  未开启代码库，不建调用图。可在项目暂停或完成后于项目配置中开启。
+                </span>
+              ) : null}
               <Button
                 size="sm"
                 variant="outline"
-                disabled={ciBusy || project.status === 'cancelled' || project.status === 'error'}
+                disabled={
+                  ciBusy ||
+                  project.code_intel_enabled !== true ||
+                  project.status === 'cancelled' ||
+                  project.status === 'error'
+                }
                 onClick={() => {
                   setActionError('')
                   setCiBusy(true)
@@ -802,7 +816,7 @@ export default function ProjectDetailPage() {
                     .then((fresh) => {
                       if (!fresh.notModified && !fresh.unchanged) applyRunChange(fresh)
                     })
-                    .catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+                    .catch((e) => setActionError(formatApiError(e)))
                     .finally(() => setCiBusy(false))
                 }}
               >
@@ -811,7 +825,11 @@ export default function ProjectDetailPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={ciBusy || (project.code_intel_status !== 'ready' && project.code_intel_status !== 'stale')}
+                disabled={
+                  ciBusy ||
+                  project.code_intel_enabled !== true ||
+                  (project.code_intel_status !== 'ready' && project.code_intel_status !== 'stale')
+                }
                 title="查看调用图。若 CodeGraph 带官方图浏览器则另开本机页面，否则用内置查询。"
                 onClick={() => {
                   setActionError('')
@@ -825,7 +843,7 @@ export default function ProjectDetailPage() {
                       }
                       window.open(out.url, '_blank', 'noopener,noreferrer')
                     })
-                    .catch((e) => setActionError(String(e instanceof Error ? e.message : e)))
+                    .catch((e) => setActionError(formatApiError(e)))
                     .finally(() => setCiBusy(false))
                 }}
               >

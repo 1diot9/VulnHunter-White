@@ -12,12 +12,12 @@ const PHASES = [
   {
     id: 'code_intel',
     label: '代码库',
-    hint: '与侦察并列。用 CodeGraph 给 src/ 建代码数据库，供 Worker / Reviewer 查调用关系。失败则降级继续用 Read/Grep。',
+    hint: '可选。用 CodeGraph 给 src/ 建代码数据库，供 Worker / Reviewer 查调用关系。默认关闭以免占磁盘；开启后与侦察并列，都完成后才挖掘。失败则降级继续用 Read/Grep。',
   },
   {
     id: 'worker',
     label: '挖掘',
-    hint: '侦察与代码库都完成后按文件挖洞；轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
+    hint: '侦察完成后按文件挖洞；若开启了代码库则同时等其构建结束。轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
   },
   {
     id: 'reviewer',
@@ -69,6 +69,7 @@ type FlowState = {
   phase: string
   status: string
   reconDone: boolean
+  codeIntelEnabled?: boolean
   codeIntelStatus?: string
   codeIntelDone?: boolean
   filesAudited?: number
@@ -107,7 +108,9 @@ type BranchItem = {
 }
 
 function miningPrereqs(s: FlowState): boolean {
-  return Boolean(s.reconDone && s.codeIntelDone)
+  if (!s.reconDone) return false
+  if (s.codeIntelEnabled === true) return Boolean(s.codeIntelDone)
+  return true
 }
 
 function heuristicFinished(s: FlowState): boolean {
@@ -183,8 +186,10 @@ function phaseTone(id: string, s: FlowState): Tone {
     return 'neutral'
   }
   if (id === 'code_intel') {
+    if (s.codeIntelEnabled !== true) return 'neutral'
     const st = s.codeIntelStatus || 'pending'
     if (st === 'ready' || st === 'stale' || st === 'degraded' || s.codeIntelDone) return 'success'
+    if (st === 'skipped') return 'neutral'
     if (st === 'building' || s.phase === 'code_intel' || s.status === 'recon' || s.status === 'ingesting' || s.status === 'auditing') {
       if (st === 'pending' && s.status === 'completed') return 'neutral'
       if (st === 'building' || s.phase === 'code_intel' || s.status === 'recon' || s.status === 'ingesting') return 'info'
@@ -293,6 +298,7 @@ export default function PhaseFlow({
   phase,
   status,
   reconDone,
+  codeIntelEnabled,
   codeIntelStatus,
   codeIntelDone,
   filesAudited,
@@ -329,6 +335,7 @@ export default function PhaseFlow({
     phase,
     status,
     reconDone,
+    codeIntelEnabled,
     codeIntelStatus,
     codeIntelDone,
     filesAudited,
@@ -495,22 +502,25 @@ export default function PhaseFlow({
   }
   const workerPaths = branches.worker
   const workerHints: Record<string, string> = {
-    mine: '侦察与代码库都完成后按文件定权：入口正向挖，更低权按角色回推或控面。缺鉴权、IDOR、业务逻辑靠这条。',
+    mine: '侦察完成后按文件定权：入口正向挖，更低权按角色回推或控面。若开启了代码库则同时等其构建结束。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
     bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
-    unconstrained: '侦察与代码库都完成后启动，只注入代码地图与鉴权。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
+    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
   }
 
   const codeIntel = PHASES.find((p) => p.id === 'code_intel')
+  const ciOn = state.codeIntelEnabled === true
   const ciStatus = state.codeIntelStatus || 'pending'
   const ciLabel =
-    ciStatus === 'stale'
-      ? '代码库 需重建'
-      : ciStatus === 'degraded'
-        ? '代码库 已降级'
-        : ciStatus === 'ready' || state.codeIntelDone
-          ? '代码库'
+    !ciOn || ciStatus === 'skipped'
+      ? '代码库 未开'
+      : ciStatus === 'stale'
+        ? '代码库 需重建'
+        : ciStatus === 'degraded'
+          ? '代码库 已降级'
           : '代码库'
+  const ciDoneMark =
+    ciOn && (ciStatus === 'ready' || ciStatus === 'stale' || ciStatus === 'degraded' || state.codeIntelDone)
 
   return (
     <TooltipProvider delay={200}>
@@ -557,9 +567,7 @@ export default function PhaseFlow({
                       >
                         <Badge variant={badgeVariant(phaseTone('code_intel', state))}>
                           {ciLabel}
-                          {ciStatus === 'ready' || ciStatus === 'stale' || ciStatus === 'degraded' || state.codeIntelDone
-                            ? ' ✓'
-                            : ''}
+                          {ciDoneMark ? ' ✓' : ''}
                         </Badge>
                       </FlowTip>
                     </div>

@@ -353,6 +353,7 @@ class ProjectCreate(BaseModel):
     manual_lab_prompt: str = Field(default="", max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool = False
     attack_chain_enabled: bool = False
+    code_intel_enabled: bool = False
     dynamic_verify_enabled: bool = False
     dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool = True
@@ -374,6 +375,7 @@ class ProjectUpdate(BaseModel):
     manual_lab_prompt: str | None = Field(default=None, max_length=MANUAL_LAB_PROMPT_MAX)
     verifier_enabled: bool | None = None
     attack_chain_enabled: bool | None = None
+    code_intel_enabled: bool | None = None
     dynamic_verify_enabled: bool | None = None
     dynamic_verify_mode: Literal["off", "lab", "harness"] | None = None
     heuristic_enabled: bool | None = None
@@ -402,6 +404,7 @@ class ProjectOut(BaseModel):
     status: str
     phase: str
     recon_done: bool
+    code_intel_enabled: bool = False
     code_intel_status: str = "pending"
     code_intel_done: bool = False
     code_intel_error: str = ""
@@ -483,6 +486,7 @@ class ProjectListItemOut(BaseModel):
     status: str
     phase: str
     recon_done: bool
+    code_intel_enabled: bool = False
     code_intel_status: str = "pending"
     code_intel_done: bool = False
     audit_mode: str = "bounty"

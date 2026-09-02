@@ -13,7 +13,8 @@ export type Project = {
   status: string
   phase: string
   recon_done: boolean
-  code_intel_status?: 'pending' | 'building' | 'ready' | 'degraded' | 'stale'
+  code_intel_enabled?: boolean
+  code_intel_status?: 'pending' | 'building' | 'ready' | 'degraded' | 'stale' | 'skipped'
   code_intel_done?: boolean
   code_intel_error?: string
   code_intel_stale?: boolean
@@ -739,7 +740,26 @@ export function subscribeAuth(listener: AuthListener): () => void {
 }
 
 export function isTimeoutError(e: unknown): boolean {
-  return e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
+  if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) return true
+  if (e instanceof Error) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return true
+    const msg = (e.message || '').toLowerCase()
+    if (msg === 'signal timed out' || msg.includes('the operation was aborted')) return true
+  }
+  return false
+}
+
+export function formatApiError(e: unknown, timeoutMessage = '请求超时，请稍后重试。'): string {
+  if (isTimeoutError(e)) return timeoutMessage
+  const text = e instanceof Error ? e.message : String(e || '')
+  if (!text) return '请求失败'
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown }
+    if (typeof parsed?.detail === 'string' && parsed.detail.trim()) return parsed.detail
+  } catch {
+    /* keep raw */
+  }
+  return text
 }
 
 export function formatProjectsListError(e: unknown, hasCached: boolean): string {
@@ -748,7 +768,7 @@ export function formatProjectsListError(e: unknown, hasCached: boolean): string 
       ? '项目列表刷新超时，已显示最近一次成功结果。'
       : '项目列表加载超时，请稍后重试。'
   }
-  return String(e instanceof Error ? e.message : e)
+  return formatApiError(e)
 }
 
 export function notifyAuthChanged() {
@@ -763,6 +783,16 @@ export function withAccessTokenParam(params: URLSearchParams): URLSearchParams {
 
 const DEFAULT_API_TIMEOUT_MS = 30_000
 const PROJECT_READ_TIMEOUT_MS = 60_000
+/** Settings probes (LLM / FOFA / GitHub / jadx / CodeGraph). Backend probes are 15–30s. */
+const PROBE_TIMEOUT_MS = 60_000
+/** Disk-heavy: purge live logs, delete project, reset progress, large reports. */
+const IO_TIMEOUT_MS = 180_000
+/** Docker start/stop/prune/remove. */
+const DOCKER_TIMEOUT_MS = 180_000
+/** Lab start/stop waits on `docker compose up` (backend up to 600s). */
+const LAB_TIMEOUT_MS = 660_000
+/** GHSA discovery crawl (up to 10 pages). */
+const DISCOVER_TIMEOUT_MS = 180_000
 /** Ask/revise a vuln report: backend LLM read is 3–10 min plus pool wait. */
 const FOLLOWUP_LLM_TIMEOUT_MS = 900_000
 const UPLOAD_TIMEOUT_MIN_MS = 120_000
@@ -793,7 +823,14 @@ function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
     const ms = timeoutMs === null ? null : (timeoutMs ?? DEFAULT_API_TIMEOUT_MS)
     if (ms != null) nextSignal = AbortSignal.timeout(ms)
   }
-  return fetch(url, { ...rest, signal: nextSignal, headers })
+  return fetch(url, { ...rest, signal: nextSignal, headers }).catch((e) => {
+    if (isTimeoutError(e)) {
+      const err = new Error('请求超时，请稍后重试。')
+      err.name = 'TimeoutError'
+      throw err
+    }
+    throw e
+  })
 }
 
 function errorFromResponse(status: number, text: string, statusText: string): Error {
@@ -875,6 +912,7 @@ export const api = {
   searchDiscoveries: (limit = 5) =>
     request<GithubDiscoverSearch>('/api/discoveries/search', {
       method: 'POST',
+      timeoutMs: DISCOVER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ limit }),
     }),
@@ -891,6 +929,7 @@ export const api = {
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       attack_chain_enabled?: boolean
+      code_intel_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -918,6 +957,7 @@ export const api = {
         manual_lab_prompt: opts.manual_lab_prompt || '',
         verifier_enabled: Boolean(opts.verifier_enabled),
         attack_chain_enabled: Boolean(opts.attack_chain_enabled),
+        code_intel_enabled: Boolean(opts.code_intel_enabled),
         dynamic_verify_enabled: Boolean(opts.dynamic_verify_enabled),
         dynamic_verify_mode: opts.dynamic_verify_mode || (opts.dynamic_verify_enabled ? 'lab' : 'off'),
         heuristic_enabled: opts.heuristic_enabled !== false,
@@ -942,6 +982,7 @@ export const api = {
       manual_lab_prompt?: string
       verifier_enabled?: boolean
       attack_chain_enabled?: boolean
+      code_intel_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -967,6 +1008,7 @@ export const api = {
     fd.append('manual_lab_prompt', opts.manual_lab_prompt || '')
     fd.append('verifier_enabled', opts.verifier_enabled ? 'true' : 'false')
     fd.append('attack_chain_enabled', opts.attack_chain_enabled ? 'true' : 'false')
+    fd.append('code_intel_enabled', opts.code_intel_enabled ? 'true' : 'false')
     fd.append('dynamic_verify_enabled', opts.dynamic_verify_enabled ? 'true' : 'false')
     fd.append(
       'dynamic_verify_mode',
@@ -997,6 +1039,7 @@ export const api = {
       manual_lab_prompt?: string | null
       verifier_enabled?: boolean
       attack_chain_enabled?: boolean
+      code_intel_enabled?: boolean
       dynamic_verify_enabled?: boolean
       dynamic_verify_mode?: 'off' | 'lab' | 'harness'
       heuristic_enabled?: boolean
@@ -1036,23 +1079,27 @@ export const api = {
   rebuildCodeIntel: (id: number) =>
     request<{ ok: boolean; status?: string; error?: string }>(`/api/projects/${id}/code-intelligence/rebuild`, {
       method: 'POST',
+      timeoutMs: PROJECT_READ_TIMEOUT_MS,
     }),
   openCodeIntelUi: (id: number) =>
     request<{ ok: boolean; url?: string; reused?: boolean; builtin?: boolean }>(
       `/api/projects/${id}/code-intelligence/ui`,
-      { method: 'POST' },
+      { method: 'POST', timeoutMs: IO_TIMEOUT_MS },
     ),
   queryCodeIntelSymbols: (id: number, q: string) =>
     request<CodeIntelQueryOut>(
       `/api/projects/${id}/code-intelligence/symbols?q=${encodeURIComponent(q)}`,
+      { timeoutMs: PROJECT_READ_TIMEOUT_MS },
     ),
   queryCodeIntelCallers: (id: number, symbol: string) =>
     request<CodeIntelQueryOut>(
       `/api/projects/${id}/code-intelligence/callers?symbol=${encodeURIComponent(symbol)}`,
+      { timeoutMs: PROJECT_READ_TIMEOUT_MS },
     ),
   queryCodeIntelCallees: (id: number, symbol: string) =>
     request<CodeIntelQueryOut>(
       `/api/projects/${id}/code-intelligence/callees?symbol=${encodeURIComponent(symbol)}`,
+      { timeoutMs: PROJECT_READ_TIMEOUT_MS },
     ),
   getConversationState: (id: number, logPhase: string) =>
     request<ConversationState>(
@@ -1079,7 +1126,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_message: userMessage }),
     }),
-  getLab: (id: number) => request<ProjectLab>(`/api/projects/${id}/lab`),
+  getLab: (id: number) => request<ProjectLab>(`/api/projects/${id}/lab`, { timeoutMs: PROJECT_READ_TIMEOUT_MS }),
   patchLab: (id: number, body: ProjectLabPatch) =>
     request<ProjectLab>(`/api/projects/${id}/lab`, {
       method: 'PATCH',
@@ -1087,13 +1134,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   startLab: (id: number) =>
-    request<ProjectLab>(`/api/projects/${id}/lab/start`, { method: 'POST' }),
+    request<ProjectLab>(`/api/projects/${id}/lab/start`, { method: 'POST', timeoutMs: LAB_TIMEOUT_MS }),
   stopLab: (id: number) =>
-    request<ProjectLab>(`/api/projects/${id}/lab/stop`, { method: 'POST' }),
+    request<ProjectLab>(`/api/projects/${id}/lab/stop`, { method: 'POST', timeoutMs: LAB_TIMEOUT_MS }),
   resetProgress: (id: number) =>
-    request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST' }),
+    request<Project>(`/api/projects/${id}/reset-progress`, { method: 'POST', timeoutMs: IO_TIMEOUT_MS }),
   cancel: (id: number) => request(`/api/projects/${id}/cancel`, { method: 'POST' }),
-  deleteProject: (id: number) => request(`/api/projects/${id}`, { method: 'DELETE' }),
+  deleteProject: (id: number) =>
+    request(`/api/projects/${id}`, { method: 'DELETE', timeoutMs: IO_TIMEOUT_MS }),
   events: (id: number, query: EventsQuery = {}) => {
     const q = new URLSearchParams()
     if (query.offset != null) q.set('offset', String(query.offset))
@@ -1103,7 +1151,9 @@ export const api = {
     if (query.phase) q.set('phase', query.phase)
     if (query.session != null) q.set('session', String(query.session))
     const s = q.toString()
-    return request<EventsChunk>(`/api/projects/${id}/events${s ? `?${s}` : ''}`)
+    return request<EventsChunk>(`/api/projects/${id}/events${s ? `?${s}` : ''}`, {
+      timeoutMs: PROJECT_READ_TIMEOUT_MS,
+    })
   },
   listPhaseReports: (
     id: number,
@@ -1115,10 +1165,14 @@ export const api = {
     if (query.limit != null) q.set('limit', String(query.limit))
     if (query.offset != null) q.set('offset', String(query.offset))
     const s = q.toString()
-    return request<PhaseReportList>(`/api/projects/${id}/reports${s ? `?${s}` : ''}`)
+    return request<PhaseReportList>(`/api/projects/${id}/reports${s ? `?${s}` : ''}`, {
+      timeoutMs: PROJECT_READ_TIMEOUT_MS,
+    })
   },
   getPhaseReport: (id: number, path: string) =>
-    request<PhaseReportDetail>(`/api/projects/${id}/reports/file?path=${encodeURIComponent(path)}`),
+    request<PhaseReportDetail>(`/api/projects/${id}/reports/file?path=${encodeURIComponent(path)}`, {
+      timeoutMs: IO_TIMEOUT_MS,
+    }),
   listVulns: (query: VulnListQuery = {}) => {
     const q = new URLSearchParams()
     if (query.projectId != null) q.set('project_id', String(query.projectId))
@@ -1133,7 +1187,7 @@ export const api = {
     if (query.limit != null) q.set('limit', String(query.limit))
     if (query.offset != null) q.set('offset', String(query.offset))
     const s = q.toString()
-    return request<VulnList>(`/api/vulns${s ? `?${s}` : ''}`)
+    return request<VulnList>(`/api/vulns${s ? `?${s}` : ''}`, { timeoutMs: PROJECT_READ_TIMEOUT_MS })
   },
   listAllVulns: async (query: Omit<VulnListQuery, 'limit' | 'offset'> = {}) => {
     const pageSize = 200
@@ -1217,6 +1271,7 @@ export const api = {
   applyVulnReportRevision: (id: number, kind: VulnReportKind, content: string, note?: string) =>
     request<VulnReportApplyResult>(`/api/vulns/${id}/report-revisions/apply`, {
       method: 'POST',
+      timeoutMs: IO_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, content, note: note || null }),
     }),
@@ -1227,7 +1282,7 @@ export const api = {
     ),
   downloadVulns: async (ids: number[]) => {
     const res = await apiFetch('/api/vulns/download', {
-      timeoutMs: 120_000,
+      timeoutMs: IO_TIMEOUT_MS,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
@@ -1238,7 +1293,7 @@ export const api = {
   },
   downloadVulnReport: async (id: number, kind?: 'report' | 'advisory' | 'cve') => {
     const qs = kind ? `?kind=${kind}` : ''
-    const res = await apiFetch(`/api/vulns/${id}/download${qs}`, { timeoutMs: 120_000 })
+    const res = await apiFetch(`/api/vulns/${id}/download${qs}`, { timeoutMs: IO_TIMEOUT_MS })
     if (res.status === 401) setAccessToken('')
     if (!res.ok) throw errorFromResponse(res.status, await res.text(), res.statusText)
     const blob = await res.blob()
@@ -1277,78 +1332,95 @@ export const api = {
   listLlmModels: (body: LlmProbeBody) =>
     request<LlmModelList>('/api/settings/llm/models', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   testLlm: (body: LlmProbeBody) =>
     request<LlmTest>('/api/settings/llm/test', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   testFofa: (body: FofaProbeBody) =>
     request<FofaTest>('/api/settings/fofa/test', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   testGithub: (body: GithubProbeBody) =>
     request<GithubTest>('/api/settings/github/test', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   testJadx: (body: JadxProbeBody) =>
     request<JadxTest>('/api/settings/jadx/test', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   testCodegraph: (body: CodegraphProbeBody) =>
     request<CodegraphTest>('/api/settings/codegraph/test', {
       method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
   purgeLiveLogs: (olderThanDays: number) =>
     request<LiveLogPurge>('/api/settings/logs/purge', {
       method: 'POST',
+      timeoutMs: IO_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ older_than_days: olderThanDays }),
     }),
   listContainers: (runningOnly = false) =>
-    request<DockerContainer[]>(`/api/docker/containers${runningOnly ? '?running_only=true' : ''}`),
+    request<DockerContainer[]>(`/api/docker/containers${runningOnly ? '?running_only=true' : ''}`, {
+      timeoutMs: DOCKER_TIMEOUT_MS,
+    }),
   stopContainer: (containerId: string) =>
     request<DockerActionItem>(`/api/docker/containers/${encodeURIComponent(containerId)}/stop`, {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
     }),
   startContainer: (containerId: string) =>
     request<DockerActionItem>(`/api/docker/containers/${encodeURIComponent(containerId)}/start`, {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
     }),
   stopContainers: (ids: string[]) =>
     request<DockerActionBatch>('/api/docker/containers/stop', {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     }),
   startContainers: (ids: string[]) =>
     request<DockerActionBatch>('/api/docker/containers/start', {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     }),
-  listDockerImages: () => request<DockerImage[]>('/api/docker/images'),
-  getDockerImageUsage: () => request<DockerImageUsage>('/api/docker/images/usage'),
+  listDockerImages: () =>
+    request<DockerImage[]>('/api/docker/images', { timeoutMs: DOCKER_TIMEOUT_MS }),
+  getDockerImageUsage: () =>
+    request<DockerImageUsage>('/api/docker/images/usage', { timeoutMs: DOCKER_TIMEOUT_MS }),
   removeDockerImages: (ids: string[]) =>
     request<DockerActionBatch>('/api/docker/images/remove', {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     }),
   pruneDockerImages: (removeStopped = false) =>
     request<DockerImagePruneResult>('/api/docker/images/prune', {
       method: 'POST',
+      timeoutMs: DOCKER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ remove_stopped: removeStopped }),
     }),

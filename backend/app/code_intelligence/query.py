@@ -23,6 +23,8 @@ def _unavailable(project_id: int, extra: str = "") -> dict[str, Any]:
     elif status == "degraded":
         err = payload.get("error") or "构建失败"
         msg = f"代码库不可用（已降级）: {err}。请用 Read / Grep"
+    elif status == "skipped":
+        msg = "本项目未开启代码库，请用 Read / Grep"
     elif status == "pending":
         msg = "代码库尚未构建，请用 Read / Grep"
     else:

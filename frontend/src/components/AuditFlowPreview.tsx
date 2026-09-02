@@ -17,6 +17,7 @@ type PreviewProps = {
   manualLab: boolean
   verifierEnabled: boolean
   attackChainEnabled?: boolean
+  codeIntelEnabled?: boolean
   heuristicEnabled?: boolean
   heuristicLite?: boolean
   fastEnabled?: boolean
@@ -42,6 +43,7 @@ function buildNodes({
   manualLab,
   verifierEnabled,
   attackChainEnabled = false,
+  codeIntelEnabled = false,
   heuristicEnabled = true,
   heuristicLite = false,
   fastEnabled = false,
@@ -129,6 +131,21 @@ function buildNodes({
       hint: '导入后先跑侦察：代码地图、源码扩展名、历史漏洞、文件定权。启发式不等待定权全部结束。',
       chips: [...RECON_STEPS],
     },
+    {
+      id: 'code_intel',
+      title: '代码库',
+      tag: codeIntelEnabled ? 'CodeGraph' : '未开',
+      skipped: !codeIntelEnabled,
+      body: codeIntelEnabled
+        ? '与侦察并列。用 CodeGraph 给 src/ 建调用图，供 Worker / Reviewer 查关系。失败则降级继续用 Read/Grep。'
+        : '未开启。不建代码数据库，挖掘只等侦察完成，Worker / Reviewer 用 Read / Grep。',
+      hint: codeIntelEnabled
+        ? '索引写在 src/.codegraph/，体积较大。源码变化只标过期，由用户点重建。'
+        : '默认关闭，避免每个项目都建图占磁盘。勾选后与侦察并列，都完成后才开始挖掘。',
+      chips: codeIntelEnabled
+        ? [{ id: 'src', label: '仅 src/', hint: '不索引 jar/class，留给后续 Jar Analyzer。' }]
+        : [],
+    },
     ...mines,
     {
       id: 'reviewer',
@@ -215,7 +232,7 @@ function buildNodes({
         verifierEnabled || attackChainEnabled
           ? '侦察、挖掘、审核与已开启的后置阶段均结束，产出漏洞报告。'
           : '侦察、挖掘与审核结束，产出漏洞报告。',
-      hint: '流水线结束。之后仍可在项目配置里改动态验证、互联网验证或攻击链串联，或重置挖掘进度后换模式续跑。',
+      hint: '流水线结束。之后仍可在项目配置里改动态验证、互联网验证、攻击链串联或代码库，或重置挖掘进度后换模式续跑。',
       chips: [],
     },
   ]
