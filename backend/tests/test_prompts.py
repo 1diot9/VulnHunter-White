@@ -299,6 +299,9 @@ def test_poc_prompt_requires_cli_parameters():
     assert "--strict-ssl" in poc
     assert "默认跳过证书校验" in poc
     assert "skips TLS certificate verification" in poc
+    assert "互联网复测（Verifier）" in poc
+    assert "不要跳过" in poc
+    assert "自行构造" in poc
     reviewer = load_prompt("reviewer.md")
     assert "poc_code" in reviewer
     assert "-c/--cmd" in reviewer
@@ -311,6 +314,8 @@ def test_poc_prompt_requires_cli_parameters():
     assert "-c/--cmd" in load_prompt("initial/worker.md")
     assert "CLI 形态" in load_prompt("initial/fix.md")
     assert "poc.py -u" in load_prompt("verifier.md")
+    assert "利用本质" in load_prompt("verifier.md")
+    assert "调整利用方式" in load_prompt("verifier.md")
 
 
 def test_audit_mode_overlay_prompts(tmp_env, project):
@@ -821,6 +826,20 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "app-fingerprints" in text or "项目级" in text or "项目应用指纹" in text
     assert "body=" in text or "body=\"" in text
     assert "各试一条" in text or "另一类" in text
+    assert "利用本质" in text
+    assert "失效" in text
+    assert "不要覆盖" in text
+    assert "调整利用方式" in text
+    assert "利用本质" in initial
+    assert "失效" in initial
+    assert "不要覆盖" in initial
+    assert "调整利用方式" in initial
+    assert "不要跳过" in text
+    assert "自行构造" in text
+    assert "harness.py" in text
+    assert "不要跳过" in initial
+    assert "自行构造" in initial
+    assert "${poc_hint}" in initial
 
 
 def test_old_vuln_prompt_persist_is_not_completion():

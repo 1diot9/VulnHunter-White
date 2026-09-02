@@ -177,7 +177,7 @@ function buildNodes({
       tag: verifierEnabled ? 'FOFA' : '未开',
       skipped: !verifierEnabled,
       body: verifierEnabled
-        ? 'Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认 10 个，成功 3 个即结束。'
+        ? 'Reviewer 确认前台漏洞后，用 FOFA 搜同款目标；先理解报告和 PoC 的利用本质，优先跑原 PoC，没有可用 PoC 时按报告构造 payload。失效时同链调整再利用。默认 10 个，成功 3 个即结束。'
         : '未开启。确认后不搜互联网目标。',
       hint: verifierEnabled
         ? '当前这批 10 个凑不满 3 个成功时，保留已成功的并再搜下一轮，最多 5 轮（合计最多 50 个目标）。语法有命中后项目内共享。任意文件删除、DoS、SQL 增删改等破坏性漏洞会跳过。需配置 FOFA Key。'

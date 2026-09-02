@@ -373,7 +373,7 @@ L1/L2 规则不变：公开入口吃 HTTP/请求对象时用 **httptest 同进�
 
 L3 通过 `ConfirmVuln(harness_depth=integration, integration_start=...)` 触发；须报告已有「### 局部验证」章节。integration 沙箱与 harness 沙箱不同（bridge 网络、可写、含 npm）。沙箱不可用时可用 `env/env.json` 的 `local_service_url`（仅 loopback）走本机 fallback。
 
-`harness.py` 与 `poc.py` 职责分离。L3 成功后 `evidence_level=dynamic`，可入队 Verifier（与靶场动态一致）。已 harness 确认且有 `poc.py` 的漏洞可在 harness 项目下「追加集成验证」，无需切靶场模式。
+`harness.py` 与 `poc.py` 职责分离。L3 成功后 `evidence_level=dynamic`。仅 harness 确认的前台洞仍入队 Verifier：无可用 HTTP PoC 时按报告构造 payload。已 harness 确认且有 `poc.py` 的漏洞可在 harness 项目下「追加集成验证」，无需切靶场模式。
 
 #### 4.6.4 静态验证
 
@@ -387,7 +387,7 @@ Reviewer 复核数据流是否用户可控、防护是否有效、权限标注�
 | AskUser | 破坏性复测前询问用户 |
 | FinishVerifier | 提交结论并结束本轮 |
 
-对已确认**前台**漏洞：按项目级指纹（`docs/app-fingerprints.json`）FOFA 搜索，默认每批 10 个、成功 3 个即结束，最多 5 轮（合计最多 50 目标）。命中目标项目内共享；0 条可改写语法最多 3 次。破坏性操作 `AskUser`，在「验证确认」页 Human-in-the-loop，**不阻塞项目完成**。
+对已确认**前台**漏洞：按项目级指纹（`docs/app-fingerprints.json`）FOFA 搜索，默认每批 10 个、成功 3 个即结束，最多 5 轮（合计最多 50 目标）。命中目标项目内共享；0 条可改写语法最多 3 次。复测先读报告与 PoC 理解利用本质（入口 / sink / payload 机理 / 成功证据），优先跑原 `poc.py`；没有可换目标的 HTTP PoC（含仅 harness 确认）时按报告构造 payload，不自动跳过；原脚本在该目标失效时按同一条洞调整利用方式（路径前缀、编码、header 等），不覆盖已确认脚本、不换洞。破坏性操作 `AskUser`，在「验证确认」页 Human-in-the-loop，**不阻塞项目完成**。
 
 ### 4.8 攻击链串联（attack_chain）
 

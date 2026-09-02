@@ -169,6 +169,16 @@ def poc_lab_run_block_reason(poc_code: str | None) -> str | None:
     return poc_cli_block_reason(text)
 
 
+def has_replayable_http_poc(poc_code: str | None) -> bool:
+    """True when poc.py can be pointed at an arbitrary HTTP origin (`-u` + HTTP client)."""
+    text = poc_code or ""
+    if not text.strip():
+        return False
+    if _HARNESS_SHAPED_RE.search(text):
+        return False
+    return bool(_has_url_flag(text) and _HTTP_HINT_RE.search(text))
+
+
 def poc_path(project_id: int, vuln_id: int) -> Path:
     return vuln_dir(project_id, vuln_id) / "poc.py"
 

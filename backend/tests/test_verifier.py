@@ -513,7 +513,27 @@ def test_finish_verifier_skipped_harm_requires_ask_first(tmp_env, project):
     assert "AskUser" in out["error"]
 
 
-def test_harness_still_auto_skips(tmp_env, project):
+def test_http_poc_replay_hint_constructs_when_unusable():
+    from app.services.verifier import has_replayable_http_poc, http_poc_replay_hint
+
+    assert not has_replayable_http_poc("")
+    assert not has_replayable_http_poc("print('poc')\n")
+    hint = http_poc_replay_hint(poc_code="", http_request="GET /api/x HTTP/1.1")
+    assert "不要跳过" in hint
+    assert "request.http" in hint
+    replayable = (
+        "import argparse, requests\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('-u', '--url')\n"
+        "p.add_argument('--proxy', default='')\n"
+        "args = p.parse_args()\n"
+        "requests.get(args.url)\n"
+    )
+    assert has_replayable_http_poc(replayable)
+    assert "poc.py" in http_poc_replay_hint(poc_code=replayable)
+
+
+def test_harness_frontend_still_queues_verifier(tmp_env, project):
     vuln_id, conf = _submit_and_confirm(
         project,
         enable_verifier=True,
@@ -528,11 +548,47 @@ def test_harness_still_auto_skips(tmp_env, project):
     from app.services.verifier import enqueue_frontend_vuln
 
     result = enqueue_frontend_vuln(project, vuln_id)
-    assert result["queued"] is False
-    assert result["skipped"] is True
-    assert "局部验证" in (result["reason"] or "")
+    assert result["queued"] is True
+    assert result["skipped"] is False
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "pending"
+
+
+def test_old_missing_poc_skip_is_requeued(tmp_env, project):
+    from app.services.verifier import (
+        enqueue_confirmed_frontend,
+        requeue_capability_poc_skips,
+        write_verifier_skip,
+    )
+
+    vuln_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        title="旧规则跳过",
+        root_cause_key="info:oldskip",
+    )
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        v.evidence_level = "harness"
+        v.verifier_status = "skipped"
+        db.commit()
+    write_verifier_skip(
+        project,
+        vuln_id,
+        "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测",
+    )
+    assert enqueue_confirmed_frontend(project) == 1
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "pending"
+    with _db() as db:
+        db.get(Vuln, vuln_id).verifier_status = "skipped"
+        db.commit()
+    write_verifier_skip(project, vuln_id, "用户选择跳过互联网复测。DoS")
+    assert requeue_capability_poc_skips(project) == 0
     with _db() as db:
         assert db.get(Vuln, vuln_id).verifier_status == "skipped"
+    n = enqueue_confirmed_frontend(project)
+    assert n == 0
 
 
 def test_finish_verifier_success(tmp_env, project):

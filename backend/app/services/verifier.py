@@ -489,7 +489,7 @@ def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
         )
         return (
             f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条）。不要为换语法再搜。"
-            f"直接用下列目标按本条报告复测：\n{sample_json}\n{extra}"
+            f"直接用下列目标复测本条（先理解报告+PoC 利用本质，优先原 PoC，失效则同链调整利用方式）：\n{sample_json}\n{extra}"
         )
     if fofa_search_exhausted(cache):
         tried = "；".join((cache or {}).get("attempt_queries") or []) or "（未记录）"
@@ -583,11 +583,79 @@ def internet_test_block_reason(
     )
 
 
-def internet_capability_skip_reason(vuln: Vuln) -> str | None:
-    """Capability gaps that still auto-skip (not user-consent questions)."""
-    if (vuln.evidence_level or "").strip().lower() == "harness":
-        return "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测"
-    return None
+# Old auto-skip copy; used to re-queue harness-only / no-HTTP-PoC rows.
+_CAPABILITY_POC_SKIP_MARKERS = (
+    "没有可对任意 URL 复测的 HTTP PoC",
+    "仅局部验证确认，没有可对任意 URL 复测的 HTTP PoC，跳过互联网复测",
+)
+
+
+def has_replayable_http_poc(poc_code: str | None) -> bool:
+    """True when landed poc.py can be pointed at an arbitrary HTTP origin."""
+    from .poc_script import has_replayable_http_poc as _has
+
+    return _has(poc_code)
+
+
+def http_poc_replay_hint(*, poc_code: str = "", http_request: str = "") -> str:
+    """Tell Verifier whether to run poc.py or construct HTTP from the report."""
+    if has_replayable_http_poc(poc_code):
+        return "已有可对任意 URL 复测的 poc.py，优先 `python poc.py -u <该目标>`。"
+    if str(http_request or "").strip():
+        return (
+            "没有可对任意 URL 复测的 HTTP PoC（脚本缺失、仅 harness、或不能换目标）。不要跳过。"
+            "根据报告入口 / 参数 / payload 机理，并以 request.http 为报文底稿，自行构造 HTTP 请求打该目标。"
+        )
+    return (
+        "没有可对任意 URL 复测的 HTTP PoC（脚本缺失、仅 harness、或不能换目标）。不要跳过。"
+        "根据报告入口 / 参数 / payload 机理自行构造 HTTP 请求打该目标。"
+    )
+
+
+def was_capability_poc_skip(project_id: int, vuln_id: int) -> bool:
+    """True if this vuln was auto-skipped solely because no replayable HTTP PoC."""
+    blobs: list[str] = []
+    report = verifier_report_path(project_id, int(vuln_id))
+    if report.is_file():
+        blobs.append(report.read_text(encoding="utf-8", errors="replace"))
+    md = read_report_md(project_id, int(vuln_id))
+    if md:
+        blobs.append(md)
+    text = "\n".join(blobs)
+    return any(marker in text for marker in _CAPABILITY_POC_SKIP_MARKERS)
+
+
+def requeue_capability_poc_skips(project_id: int) -> int:
+    """Re-queue frontend vulns skipped under the old missing-PoC rule."""
+    ids: list[int] = []
+    with SessionLocal() as db:
+        rows = (
+            db.query(Vuln)
+            .filter(
+                Vuln.project_id == project_id,
+                Vuln.verifier_status == VERIFIER_SKIPPED,
+                Vuln.status.in_(tuple(CONFIRMED_STATUSES)),
+                Vuln.attack_surface == "frontend",
+            )
+            .all()
+        )
+        ids = [int(row.id) for row in rows]
+    to_requeue = [vid for vid in ids if was_capability_poc_skip(project_id, vid)]
+    if not to_requeue:
+        return 0
+    n = 0
+    with SessionLocal() as db:
+        for vid in to_requeue:
+            vuln = db.get(Vuln, vid)
+            if not vuln or vuln.project_id != project_id:
+                continue
+            if normalize_verifier_status(vuln.verifier_status) != VERIFIER_SKIPPED:
+                continue
+            vuln.verifier_status = VERIFIER_PENDING
+            n += 1
+        if n:
+            db.commit()
+    return n
 
 
 def internet_harm_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
@@ -603,10 +671,7 @@ def internet_harm_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> s
 
 
 def internet_test_block_reason_for_vuln(vuln: Vuln, report_md: str | None = None) -> str | None:
-    """Capability skip first; then harm (for AskUser / FinishVerifier)."""
-    cap = internet_capability_skip_reason(vuln)
-    if cap:
-        return cap
+    """Harm detection for AskUser / FinishVerifier; missing PoC is not a skip."""
     return internet_harm_reason_for_vuln(vuln, report_md)
 
 
@@ -658,8 +723,8 @@ def verifier_report_path(project_id: int, vuln_id: int):
 def enqueue_frontend_vuln(project_id: int, vuln_id: int) -> dict[str, Any]:
     """Queue one confirmed frontend vuln if Verifier is enabled.
 
-    Returns ``queued`` / ``skipped`` / ``reason``. Capability gaps (e.g. harness-only)
-    are auto-skipped; harm types stay pending so Verifier can AskUser.
+    Returns ``queued`` / ``skipped`` / ``reason``. Missing HTTP PoC is not skipped;
+    Verifier constructs payloads from the report. Harm types stay pending so it can AskUser.
     """
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -679,12 +744,6 @@ def enqueue_frontend_vuln(project_id: int, vuln_id: int) -> dict[str, Any]:
                 "skipped": current == VERIFIER_SKIPPED,
                 "reason": "",
             }
-        reason = internet_capability_skip_reason(vuln)
-        if reason:
-            vuln.verifier_status = VERIFIER_SKIPPED
-            db.commit()
-            write_verifier_skip(project_id, int(vuln_id), reason)
-            return {"queued": False, "skipped": True, "reason": reason}
         vuln.verifier_status = VERIFIER_PENDING
         db.commit()
         return {"queued": True, "skipped": False, "reason": ""}
@@ -693,7 +752,6 @@ def enqueue_frontend_vuln(project_id: int, vuln_id: int) -> dict[str, Any]:
 def enqueue_confirmed_frontend(project_id: int) -> int:
     """When enabling Verifier, queue already-confirmed frontend vulns. Returns queued count."""
     n = 0
-    skips: list[tuple[int, str]] = []
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not proj.verifier_enabled:
@@ -711,17 +769,11 @@ def enqueue_confirmed_frontend(project_id: int) -> int:
             current = normalize_verifier_status(vuln.verifier_status)
             if current not in (VERIFIER_NONE, ""):
                 continue
-            reason = internet_capability_skip_reason(vuln)
-            if reason:
-                vuln.verifier_status = VERIFIER_SKIPPED
-                skips.append((int(vuln.id), reason))
-                continue
             vuln.verifier_status = VERIFIER_PENDING
             n += 1
-        if n or skips:
+        if n:
             db.commit()
-    for vuln_id, reason in skips:
-        write_verifier_skip(project_id, vuln_id, reason)
+    n += requeue_capability_poc_skips(project_id)
     return n
 
 
@@ -783,7 +835,7 @@ def park_verifier_ask_user(
                 "instruction": instruction,
                 "message": (
                     "用户已同意互联网复测"
-                    + (f"：{instruction}" if instruction else "，可按报告 PoC 复测。")
+                    + (f"：{instruction}" if instruction else "，可按报告理解利用后复测（优先原 PoC，失效时同链调整）。")
                 ),
             }
         vuln.verifier_status = VERIFIER_AWAITING_USER
@@ -939,7 +991,11 @@ def resolve_verifier_consent(
         "instruction": instruction_text,
         "message": (
             "用户同意继续互联网复测"
-            + (f"。自定义指示：{instruction_text}" if instruction_text else "。按报告 PoC 复测。")
+            + (
+                f"。自定义指示：{instruction_text}"
+                if instruction_text
+                else "。按报告理解利用后复测；优先跑原 PoC，失效时可在同链上调整利用方式。"
+            )
         ),
     }
     cp.messages.append(

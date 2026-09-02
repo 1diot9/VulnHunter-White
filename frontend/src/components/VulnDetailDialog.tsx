@@ -339,7 +339,7 @@ export default function VulnDetailDialog({
               ) : null}
               {detail.verifier_status === 'skipped' ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  未做互联网复测。可能因用户选择跳过、缺少可对任意 URL 复测的 HTTP PoC，或其他原因；详见下方报告「互联网验证」。
+                  未做互联网复测。可能因用户选择跳过、FOFA 无样本或网络不可用等；详见下方报告「互联网验证」。
                 </div>
               ) : null}
               {detail.verifier_targets && detail.verifier_targets.length > 0 ? (

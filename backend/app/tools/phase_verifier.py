@@ -341,7 +341,7 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return call_fail("success 必须提供 fofa_query（FOFA 搜索语法）；优先用本项目共享结果里的语法")
     notes = str(args.get("notes") or "").strip()
     if not notes:
-        return call_fail("必须填写 notes：测了哪些目标、为何成功或失败")
+        return call_fail("必须填写 notes：测了哪些目标、原 PoC 是否打通、失效时如何调整、为何成功或失败")
     submitted = args.get("targets")
     if submitted is None:
         submitted = args.get("fofa_targets")
@@ -515,7 +515,8 @@ def register_verifier_tools() -> None:
         ToolSpec(
             name="FinishVerifier",
             description=(
-                f"提交互联网验证结论并结束本轮。至少 {VERIFIER_SUCCESS_MIN} 个 FOFA 目标按报告复测成功才 verdict=success；"
+                f"提交互联网验证结论并结束本轮。至少 {VERIFIER_SUCCESS_MIN} 个 FOFA 目标按本条利用链复测成功才 verdict=success"
+                "（优先原 PoC，失效时须同链调整利用方式后再判）；"
                 f"当前这批测完仍不足则保留成功的、FofaSearch(expand=true) 再搜下一轮"
                 f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）；"
                 f"{FOFA_MAX_PAGES} 轮都测完仍不足=fail；无样本=no_targets；无 key/网络不可用=skipped。"
@@ -538,7 +539,7 @@ def register_verifier_tools() -> None:
                     },
                     "poc": {
                         "type": "string",
-                        "description": "对该目标实际发出的请求或脚本（curl/http/python 原样），success 时必填",
+                        "description": "对该目标实际发出的请求或脚本（curl/http/python 原样；若调整过利用方式贴调整后的），success 时必填",
                     },
                     "response": {
                         "type": "string",
@@ -572,7 +573,10 @@ def register_verifier_tools() -> None:
                         "description": "FOFA 搜索语法；success 必填，优先填本项目共享缓存里的那条",
                     },
                     "tested_count": {"type": "integer", "description": "实际发过复测请求的目标数"},
-                    "notes": {"type": "string", "description": "测了哪些目标、为何成功或失败"},
+                    "notes": {
+                        "type": "string",
+                        "description": "测了哪些目标、原 PoC 是否打通、失效时如何调整利用方式、为何成功或失败",
+                    },
                 },
                 "required": ["verdict", "notes"],
             },

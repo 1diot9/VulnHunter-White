@@ -456,10 +456,10 @@ def test_confirm_harness_when_mode_harness(tmp_env, project):
         proj.verifier_enabled = True
         db.commit()
         vuln = db.get(Vuln, vuln_id)
-        assert internet_test_block_reason_for_vuln(vuln) is not None
+        assert internet_test_block_reason_for_vuln(vuln) is None
         queued = enqueue_frontend_vuln(project, vuln_id)
-        assert queued["queued"] is False
-        assert queued["skipped"] is True
+        assert queued["queued"] is True
+        assert queued["skipped"] is False
 
 
 def test_confirm_rejects_canned_harness_output(tmp_env, project):

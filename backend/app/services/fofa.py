@@ -240,7 +240,8 @@ def search(
         "returned": len(sample),
         "sample": sample,
         "guidance": (
-            f"每页最多 {FOFA_DEFAULT_SIZE} 条。首批按报告复测，凑满 3 个成功即 "
+            f"每页最多 {FOFA_DEFAULT_SIZE} 条。首批先理解报告+PoC 的利用本质，优先原 PoC 复测，"
+            "失效则同链调整利用方式；凑满 3 个成功即 "
             "FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., "
             "fofa_query=本次语法, targets=全部样本)。"
             "targets 里已测标 success/fail，达 3 个成功后其余标 untested；"

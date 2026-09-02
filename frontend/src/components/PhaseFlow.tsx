@@ -22,7 +22,7 @@ const PHASES = [
   {
     id: 'verifier',
     label: '验证',
-    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标并按报告复测；默认每轮 10 个，成功 3 个即结束；不足则再搜下一轮，最多 5 轮 / 50 个目标。',
+    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标；先理解报告和 PoC 的利用本质，优先跑原 PoC，没有可用 PoC 时按报告构造 payload。失效时同链调整再利用。默认每轮 10 个，成功 3 个即结束；不足则再搜下一轮，最多 5 轮 / 50 个目标。',
   },
   {
     id: 'attack_chain',

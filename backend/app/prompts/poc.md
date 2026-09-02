@@ -134,7 +134,8 @@ python harness.py --zh
 ```
 
 ## Reviewer / Verifier
-- 动态验证或互联网复测：先跑 `python vulns/{id}/poc.py -u <该目标>`，按需加 `-c`、`--proxy` 等参数，不要把地址或代理写回脚本。
+- 动态验证（Reviewer）：先跑 `python vulns/{id}/poc.py -u <该目标>`，按需加 `-c`、`--proxy` 等参数，不要把地址或代理写回脚本。
+- **互联网复测（Verifier）**：先读报告和 PoC 理解利用本质（入口、sink、payload 机理、成功证据）。有可换目标的 `poc.py` 时优先跑 `poc.py -u <该目标>`；没有可用 HTTP PoC（缺失、仅 harness、不能换目标）时**不要跳过**，根据报告自行构造 HTTP payload。原 PoC 失效时按**同一条洞**调整利用方式（路径前缀、编码、header、参数名等）再打；不要覆盖已确认的 `poc.py`，不要换洞或换 sink，不要拿 `harness.py` 打互联网。FinishVerifier.poc 填实际发出的请求。
 - **靶场动态收口闸门**：ConfirmVuln 会系统再执行即将落盘的 `poc.py -u <target_url>`；退出码非 0 则拒绝确认。你仍须先自己跑一遍观察冲击。
 - **PoC 由 Reviewer 收口**：Worker 交静态草案。写死地址/参数、缺 CLI（含 `--proxy` / HTTPS 证书处理 / `--zh`）、有代理却让 `127.0.0.1` 旁路、HTTPS 因证书校验失败直接中断、默认输出写死中文或中英混排、同链 payload 细节不对，都由 Reviewer Write `poc.py` 并在 ConfirmVuln 传入 `poc_code`。不要为此 ReturnToWorker。
 - **debug MCP**：仅当 poc.py 缺失、跑不通或复现失败，且 Reviewer 需要自己改写/调试 PoC 时使用；不是首选验证方式。

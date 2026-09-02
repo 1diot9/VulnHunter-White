@@ -2767,7 +2767,7 @@ def _ensure_verifier(
     *,
     allow_completed: bool = False,
 ) -> None:
-    from .verifier import is_verifier_enabled, pending_verifier_count
+    from .verifier import is_verifier_enabled, pending_verifier_count, requeue_capability_poc_skips
 
     if not is_verifier_enabled(project_id):
         return
@@ -2783,6 +2783,7 @@ def _ensure_verifier(
                 return
     if _phase_is_paused(project_id, "verifier"):
         return
+    requeue_capability_poc_skips(project_id)
     has_work = (
         pending_verifier_count(project_id) > 0
         or bool(list_resumable_runs(project_id, "verifier"))
@@ -5236,9 +5237,8 @@ def _run_verifier_once(project_id: int) -> None:
     from .verifier import (
         extract_fofa_query,
         format_shared_fofa_hint,
-        internet_capability_skip_reason,
+        http_poc_replay_hint,
         load_project_fofa_cache,
-        mark_internet_unsafe_skipped,
         pick_pending_verifier_vuln,
         read_report_md,
         seed_fofa_state,
@@ -5291,16 +5291,6 @@ def _run_verifier_once(project_id: int) -> None:
             return
         vuln_id = vuln.id
         report_md = read_report_md(project_id, vuln_id)
-        # Capability gaps still auto-skip; harm types go through AskUser in-agent.
-        capability = internet_capability_skip_reason(vuln)
-        if capability:
-            mark_internet_unsafe_skipped(project_id, vuln_id, capability)
-            live_log.system(
-                project_id,
-                f"漏洞 #{vuln_id} 跳过互联网复测：{capability}",
-                phase="verifier",
-            )
-            return
         from .asset_proof import ensure_project_fingerprints, fofa_search_variants, load_project_fingerprints
         from .report import is_placeholder_query
 
@@ -5324,6 +5314,7 @@ def _run_verifier_once(project_id: int) -> None:
             fofa_alts = "；".join(f"`{item}`" for item in search_variants)
         else:
             fofa_alts = "（无独立备选；0 条时换另一类语法，title/app 与 body 各试一条）"
+        poc_code = read_poc_code(project_id, vuln_id, fallback=vuln.poc_code)
         payload = {
             "title": vuln.title,
             "type": vuln.vuln_type,
@@ -5333,9 +5324,13 @@ def _run_verifier_once(project_id: int) -> None:
             "line": vuln.line_no,
             "report_path": vuln.report_path or f"vulns/{vuln_id}/report.md",
             "http_request": vuln.http_request,
-            "poc_code": read_poc_code(project_id, vuln_id, fallback=vuln.poc_code),
+            "poc_code": poc_code,
             "expected_evidence": vuln.expected_evidence,
         }
+        poc_hint = http_poc_replay_hint(
+            poc_code=poc_code or "",
+            http_request=vuln.http_request or "",
+        )
         with SessionLocal() as db:
             proj = db.get(Project, project_id)
             if proj and proj.status not in ("completed", "cancelled", "paused"):
@@ -5351,6 +5346,7 @@ def _run_verifier_once(project_id: int) -> None:
             fofa_query=fofa_query,
             fofa_alts=fofa_alts,
             fofa_shared=format_shared_fofa_hint(fofa_cache),
+            poc_hint=poc_hint,
             **_agent_prompt_vars(project_id),
         )
         user = _prompt_with_summary("verifier", project_id, body)
