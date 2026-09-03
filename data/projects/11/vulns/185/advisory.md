@@ -100,5 +100,6 @@ CWE-79. Any visitor of `/notes` (the public memo list) executes attacker-control
 
 - **Severity:** High
 - **CVSS 3.1:** 8.2 High — `CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N`
+- **CVSS 4.0:** 7.1 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N`
 - **CWE:** CWE-79 Improper Neutralization of Input During Web Page Generation ("Cross-site Scripting")
 - **Related:**

@@ -141,6 +141,7 @@ const VULN_STATUS_LABEL: Record<string, string> = {
 }
 
 export const FP_KIND_TIMEOUT = 'timeout'
+export const FP_KIND_KNOWN_CVE_PATCHED = 'known_cve_patched'
 
 /** Confirmed vulns fold evidence into one badge: 已确认-仅静态 / 局部验证 / 动态验证.
  * Timeout give-ups show 误报-审核超时; reviewer-judged FPs stay 误报. */
@@ -157,6 +158,9 @@ export function formatVulnStatus(
   }
   if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_TIMEOUT) {
     return '误报-审核超时'
+  }
+  if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_KNOWN_CVE_PATCHED) {
+    return '误报-已知CVE已修复'
   }
   return VULN_STATUS_LABEL[s] || s
 }

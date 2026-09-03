@@ -42,6 +42,25 @@ export type Project = {
   worker_hint?: string
   recon_hint?: string
   max_token_usage: number
+  source_baseline_status?: 'pending' | 'ok' | 'stale' | 'acknowledged'
+  source_baseline_blocks_mining?: boolean
+  source_baseline?: {
+    checked_at?: string
+    status?: string
+    source_version?: string
+    source_commit?: string
+    source_ref?: string
+    issues?: Array<{
+      cve: string
+      title: string
+      fix_status: string
+      affected_range: string
+      fix_version: string
+      source_version: string
+      reason: string
+      source?: string
+    }>
+  } | null
   error: string | null
   worker_concurrency: number | null
   created_at: string
@@ -190,9 +209,12 @@ export type ConversationState = {
   can_steer: boolean
   has_archived: boolean
   latest_session: number
+  can_stop?: boolean
+  can_start?: boolean
+  unconstrained_done?: boolean
 }
 
-export type ConversationAction = 'steer' | 'continue' | 'new'
+export type ConversationAction = 'steer' | 'continue' | 'new' | 'stop' | 'start'
 
 export type VulnTrackingStatus = 'none' | 'submitted' | 'ignored'
 
@@ -1076,6 +1098,11 @@ export const api = {
     request<{ ok: boolean }>(`/api/settings/custom-audit-modes/${id}`, { method: 'DELETE' }),
   pause: (id: number) => request(`/api/projects/${id}/pause`, { method: 'POST' }),
   resume: (id: number) => request(`/api/projects/${id}/resume`, { method: 'POST' }),
+  sourceBaselineDecision: (id: number, action: 'acknowledge' | 'recheck') =>
+    request<Project>(`/api/projects/${id}/source-baseline`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
   rebuildCodeIntel: (id: number) =>
     request<{ ok: boolean; status?: string; error?: string }>(`/api/projects/${id}/code-intelligence/rebuild`, {
       method: 'POST',

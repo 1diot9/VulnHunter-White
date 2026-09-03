@@ -73,5 +73,6 @@ Do not run this against systems you do not own or have authorization to test.
 
 - **Severity:** Low / Moderate / High / Critical
 - **CVSS 3.1:** (base score + severity filled by ConfirmVuln from the vector) — `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+- **CVSS 4.0:** (base score + severity filled by ConfirmVuln from the vector) — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`
 - **CWE:**
 - **Related:**

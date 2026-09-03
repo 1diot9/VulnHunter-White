@@ -94,6 +94,23 @@
             "availabilityImpact": "NONE",
             "baseScore": 8.2,
             "baseSeverity": "HIGH"
+          },
+          "cvssV4_0": {
+            "version": "4.0",
+            "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
+            "attackVector": "NETWORK",
+            "attackComplexity": "LOW",
+            "attackRequirements": "NONE",
+            "privilegesRequired": "NONE",
+            "userInteraction": "PASSIVE",
+            "vulnConfidentialityImpact": "HIGH",
+            "vulnIntegrityImpact": "LOW",
+            "vulnAvailabilityImpact": "NONE",
+            "subConfidentialityImpact": "NONE",
+            "subIntegrityImpact": "NONE",
+            "subAvailabilityImpact": "NONE",
+            "baseScore": 7.1,
+            "baseSeverity": "HIGH"
           }
         }
       ],

@@ -156,7 +156,7 @@ VulnHunter-White 的特点：
 
 #### 超时与限流
 
-4. 各阶段墙钟超时：侦察 3600s，盖章轮 1800s，Worker 一轮 7200s，审核静态 1800s，靶场动态再加 Docker 1800s，Verifier / 攻击链 / Semgrep / Sink 筛选各 1800s。每阶段最多超时 2 次，此后抢救落盘并保留基本产出（如审核默认降级为仅静态）。
+4. 各阶段墙钟超时：侦察 3600s，盖章轮 1800s，Worker 一轮 7200s，审核静态 1800s，靶场动态再加 Docker 1800s，Verifier / 攻击链 / Semgrep / Sink 筛选各 1800s。审核超时后最多再跑一轮（强制仅静态），再超时标误报。Verifier 超时直接将该条标 fail，不再新开轮。其它阶段最多超时 2 次，此后抢救落盘并保留基本产出。
 5. LLM 429 休眠 90s 再试，最多 20 次；其它瞬时失败最多退避 3 次。设置页模型商池：同一协议多个 Base URL（各自 Key、模型、并发上限），全局线程上限 = 各端点并发之和（单端点默认 6）；新会话按利用率均匀分配，同一会话粘滞到所选端点，满则按到达顺序排队。某端点 429 / 额度用尽 / 5xx 只冷却该端点并立刻换路，不拖垮全池。额度用尽的端点即使冷却结束、占用为 0，只要池里还有其它可用端点就不会再被选中（漏洞报告追问同样走线程池并换路）。项目级 `llm_model` 仍优先。
 
 #### 工具执行容错
@@ -169,7 +169,7 @@ VulnHunter-White 的特点：
 8. 无工具调用的纯文字轮立刻提醒改用工具；有一次真工具调用后连续无工具计数清零。门闩满足后系统自己结束本轮。
 9. 连续 4 次同一工具且参数不变则拦截并重置窗口；同一轮死循环窗口触达 5 次则终止本轮。
 10. 历史漏洞落盘 / 补漏连续 50 轮未 `WriteOldVuln`、扩展名连续 50 轮未 `AddSourceExt` 则催落盘；代码地图 / 鉴权轮不催。
-11. 启发式连续 50 轮未 `FinishFile`、快速扫描未 `FinishSink`、绕过未 `FinishBypass`、Sink 筛选未 `FinishSinkTriage` 则催收工；`Read` / `Grep` 不计入空闲。CLI 静默索引连续 8 轮未 `FinishIndex` 则催落盘描述。
+11. 启发式连续 50 轮未 `FinishFile`、快速扫描未 `FinishSink`、绕过未 `FinishBypass`、Sink 筛选未 `FinishSinkTriage` 则催收工；`Read` / `Grep` 不计入空闲。无约束扫描不催收工。CLI 静默索引连续 8 轮未 `FinishIndex` 则催落盘描述。
 
 #### 审核与验证闸门
 
@@ -322,10 +322,9 @@ Recon **不读**代码库产物。代码库与侦察并列，见 4.5 节开头�
 | SubmitVuln | 提交待审核漏洞（始终走赏金闸门） |
 | ReadCveRecord / SetCveRecordField | 提交后填写 CVE JSON |
 | AppendAffectedLocations | 追加同根因受影响点 |
-| FinishFile | 记下本路径已看文件，**不**改启发式 `FileWeight.audited` |
-| FinishRound | 结束本轮；不要求先 FinishFile |
+| FinishRound | 本轮上下文压缩满 2 次后才注入；结束本轮 |
 
-与启发式隔离：只注入 `docs/code-map.md` 与 `docs/auth.md`，不派发定权焦点。固定并发 1。历史漏洞收集完毕后启动。Submit/Confirm 始终走赏金闸门。路径结束由 Reviewer 对前台产出标 `rce_effect=true` 决定，不看 `vuln_type` 是否为 rce；当前轮仍跑完。
+与启发式隔离：只注入 `docs/code-map.md` 与 `docs/auth.md`，不派发定权焦点。固定并发 1。历史漏洞收集完毕后启动。Submit/Confirm 始终走赏金闸门。路径结束由 Reviewer 对前台产出标 `rce_effect=true` 决定，不看 `vuln_type` 是否为 rce；当前轮仍跑完。用户可在无约束日志输入框停止或再启动；停止会打断当前轮，若其他阶段已结束则项目完成。无 `FinishFile`。
 
 #### 4.5.5 报告修复（fix）
 
@@ -347,7 +346,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 
 | 工具 | 用途 |
 | --- | --- |
-| ConfirmVuln | 确认漏洞：Agent 填 CVSS 3.1 向量，系统计分，并标注价值分层 |
+| ConfirmVuln | 确认漏洞：Agent 填 CVSS 3.1 与 4.0 向量，系统计分，并标注价值分层 |
 | MarkFalsePositive | 判定误报 |
 | ReturnToWorker | 仅入口 / sink / 根因分析错误时打回 |
 | MergeIntoVuln | 同根因同危害重复报告并入主报告 |
@@ -412,7 +411,7 @@ Reviewer 复核数据流是否用户可控、防护是否有效、权限标注�
 | --- | --- |
 | 模型商池 | 见 4.3；设置页多 Base URL，会话粘滞、端点故障换路 |
 | 项目 Token 上限 | `max_token_usage`（默认 0 不限制）按本项目全部 Agent 输入+输出合计，到达后自动暂停；提高上限或改为 0 后再续跑 |
-| 接续对话 | 阶段日志 SSE 下方按当前小阶段：**引导**（进行中下一轮注入）、**接续**（用最新一轮完整消息继续）、**新开**（放弃检查点再跑一轮）。轮结束后检查点归档到 `workspace/last-conversation/` |
+| 接续对话 | 阶段日志 SSE 下方按当前小阶段：**引导**（进行中下一轮注入）、**接续**（用最新一轮完整消息继续）、**新开**（放弃检查点再跑一轮）。无约束扫描改为 **停止 / 启动**（无新开）；停止后若其他阶段已结束则项目完成。轮结束后检查点归档到 `workspace/last-conversation/` |
 | 重置启发式进度 | 暂停或终态可用；清 `audited`/认领/启发式轮次摘要与 Worker 检查点。快速扫描 Sink 队列与绕过进度不重置；漏洞产出与侦察文档保留 |
 | GitHub 发现仓库 | 从公开 GHSA 筛星标与活跃度达标的仓库；关键词粗分后再用模型单轮复核 `target_kind`。已创建与可创建分开列出，可忽略候选使其不再出现 |
 | 产出日历 | 漏洞产出页按日统计已确认与误报 |
@@ -488,9 +487,12 @@ flowchart LR
 
 ## 7. 漏洞评级附录
 
-按 CVSS 3.1 基础分：9.0–10.0 为严重，7.0–8.9 为高危，4.0–6.9 为中危，0.1–3.9 为低危。Agent 只填写评分向量（`cvss_vector`），分数由系统按 FIRST 公式计算；向量格式错误、或 PR 与 `attack_surface` / `required_account` 不一致时 ConfirmVuln / SetCveRecordField 返回具体错误。
+按 CVSS 3.1 基础分：9.0–10.0 为严重，7.0–8.9 为高危，4.0–6.9 为中危，0.1–3.9 为低危。Agent 填写 `cvss_vector`（3.1）与 `cvss4_vector`（4.0），分数由系统按 FIRST 公式计算；向量格式错误、或 PR 与 `attack_surface` / `required_account` 不一致时 ConfirmVuln / SetCveRecordField 返回具体错误。严重度与列表徽章以 3.1 为准；Advisory 与 CVE JSON 同时写入 4.0。
 
-向量格式：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+向量格式：
+
+- `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+- `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`
 
 | 度量 | 取值 |
 | --- | --- |
@@ -501,7 +503,9 @@ flowchart LR
 | S Scope | U Unchanged / C Changed |
 | C / I / A | H High / L Low / N None |
 
-PR 必须与攻击面一致：前台 → PR:N，后台普通权限 → PR:L，后台管理员 → PR:H。XSS 默认 `UI:R/S:C/C:L/I:L/A:N`，不要因 Cookie/账户接管把 C/I 标 H。完整度量标准见 `backend/app/prompts/cvss.md`（注入 Reviewer 系统提示词与 ConfirmVuln 工具描述）。
+CVSS 4.0 另需：AT（N None / P Present）、UI（N None / P Passive / A Active）、VC/VI/VA（脆弱系统）、SC/SI/SA（后续系统，无跨边界时全 N）。XSS 默认 4.0 为 `UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N`。
+
+PR 必须与攻击面一致：前台 → PR:N，后台普通权限 → PR:L，后台管理员 → PR:H。XSS 默认 3.1 `UI:R/S:C/C:L/I:L/A:N`，不要因 Cookie/账户接管把 C/I 标 H。完整度量标准见 `backend/app/prompts/cvss.md`（注入 Reviewer 系统提示词与 ConfirmVuln 工具描述）。
 
 ---
 

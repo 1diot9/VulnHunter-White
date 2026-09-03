@@ -8,7 +8,7 @@ summary: "{{summary}}"
 
 ## 摘要
 - 漏洞技术类型：
-- 严重度：待 Reviewer 填写 CVSS 3.1 向量（分数由系统计算）
+- 严重度：待 Reviewer 填写 CVSS 3.1 与 CVSS 4.0 向量（分数由系统计算）
 - CWE：
 - 位置：
 - 配置前提：默认配置 / 特定配置

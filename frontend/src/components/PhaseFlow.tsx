@@ -505,7 +505,7 @@ export default function PhaseFlow({
     mine: '侦察完成后按文件定权：入口正向挖，更低权按角色回推或控面。若开启了代码库则同时等其构建结束。缺鉴权、IDOR、业务逻辑靠这条。',
     fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
     bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
-    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束。',
+    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束，也可在日志输入框手动停止或再启动。',
   }
 
   const codeIntel = PHASES.find((p) => p.id === 'code_intel')

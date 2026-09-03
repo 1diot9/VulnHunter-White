@@ -20,6 +20,10 @@ type ConversationComposerProps = {
   onSent?: () => void
 }
 
+function isUnconstrainedPhase(logPhase: string) {
+  return logPhase === 'unconstrained' || logPhase === 'unconstrained-worker'
+}
+
 export function ConversationComposer({
   projectId,
   logPhase,
@@ -33,9 +37,11 @@ export function ConversationComposer({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmNew, setConfirmNew] = useState(false)
+  const [confirmStop, setConfirmStop] = useState(false)
 
   const blocked = ['cancelled', 'ingesting', 'error'].includes(projectStatus)
   const viewingHistory = session < sessionCount
+  const unconstrained = isUnconstrainedPhase(logPhase)
 
   const refresh = useCallback(async () => {
     try {
@@ -52,7 +58,7 @@ export function ConversationComposer({
     return () => window.clearInterval(t)
   }, [refresh])
 
-  async function submit(action: 'steer' | 'continue' | 'new') {
+  async function submit(action: 'steer' | 'continue' | 'new' | 'stop' | 'start') {
     if (busy || blocked) return
     if (action === 'steer' && !message.trim()) {
       setError('请输入引导内容')
@@ -68,6 +74,7 @@ export function ConversationComposer({
       })
       setMessage('')
       setConfirmNew(false)
+      setConfirmStop(false)
       await refresh()
       onSent?.()
     } catch (e) {
@@ -81,6 +88,25 @@ export function ConversationComposer({
   const canContinue = Boolean(state?.can_continue)
   const canNew = Boolean(state?.can_new)
   const canSteer = Boolean(state?.can_steer)
+  const canStop = Boolean(state?.can_stop)
+  const canStart = Boolean(state?.can_start)
+  const unconstrainedDone = Boolean(state?.unconstrained_done)
+
+  let placeholder = '可选：接续或新开时附带说明…'
+  if (unconstrained) {
+    if (running) placeholder = '输入引导，将在下一轮模型调用前注入（类似 Cursor 跟进）…'
+    else if (unconstrainedDone) placeholder = '路径已停止。点启动后继续挖掘。'
+    else placeholder = '可选：接续时附带说明…'
+  } else if (running) {
+    placeholder = '输入引导，将在下一轮模型调用前注入（类似 Cursor 跟进）…'
+  }
+
+  let hint = running ? '进行中 · Ctrl+Enter 发送引导' : '空闲 · 接续保留上下文，新开放弃检查点'
+  if (unconstrained) {
+    if (unconstrainedDone) hint = '已停止 · 启动后继续无约束扫描'
+    else if (running) hint = '进行中 · Ctrl+Enter 发送引导；停止后不再新开本路径'
+    else hint = '空闲 · 接续保留上下文；停止后若其他阶段已结束则项目完成'
+  }
 
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">
@@ -93,13 +119,9 @@ export function ConversationComposer({
       <Textarea
         value={message}
         onChange={(e) => setMessage(e.target.value)}
-        placeholder={
-          running
-            ? '输入引导，将在下一轮模型调用前注入（类似 Cursor 跟进）…'
-            : '可选：接续或新开时附带说明…'
-        }
+        placeholder={placeholder}
         rows={3}
-        disabled={busy || blocked}
+        disabled={busy || blocked || (unconstrained && unconstrainedDone)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault()
@@ -109,7 +131,49 @@ export function ConversationComposer({
       />
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
-        {running ? (
+        {unconstrained ? (
+          <>
+            {running ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || blocked || !canSteer || !message.trim()}
+                onClick={() => void submit('steer')}
+              >
+                {busy ? '发送中…' : '发送引导'}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || blocked || !canContinue}
+                onClick={() => void submit('continue')}
+              >
+                {busy ? '处理中…' : '接续'}
+              </Button>
+            )}
+            {canStart ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || blocked || !canStart}
+                onClick={() => void submit('start')}
+              >
+                {busy ? '启动中…' : '启动'}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="warning"
+                disabled={busy || blocked || !canStop}
+                onClick={() => setConfirmStop(true)}
+              >
+                停止
+              </Button>
+            )}
+          </>
+        ) : running ? (
           <>
             <Button
               type="button"
@@ -150,9 +214,7 @@ export function ConversationComposer({
             </Button>
           </>
         )}
-        <span className="text-[11px] text-muted-foreground">
-          {running ? '进行中 · Ctrl+Enter 发送引导' : '空闲 · 接续保留上下文，新开放弃检查点'}
-        </span>
+        <span className="text-[11px] text-muted-foreground">{hint}</span>
       </div>
 
       <Dialog open={confirmNew} onOpenChange={(o) => !busy && setConfirmNew(o)}>
@@ -169,6 +231,25 @@ export function ConversationComposer({
             </Button>
             <Button type="button" disabled={busy} onClick={() => void submit('new')}>
               {busy ? '启动中…' : '确认新开'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmStop} onOpenChange={(o) => !busy && setConfirmStop(o)}>
+        <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
+          <DialogHeader>
+            <DialogTitle>停止无约束扫描？</DialogTitle>
+            <DialogDescription>
+              将结束当前挖掘轮并停止本路径。若其他挖掘与审核均已结束，项目将标记为完成。之后可再点启动继续挖。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirmStop(false)}>
+              取消
+            </Button>
+            <Button type="button" variant="warning" disabled={busy} onClick={() => void submit('stop')}>
+              {busy ? '停止中…' : '确认停止'}
             </Button>
           </DialogFooter>
         </DialogContent>

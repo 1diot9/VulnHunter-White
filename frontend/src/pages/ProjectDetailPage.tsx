@@ -152,6 +152,7 @@ export default function ProjectDetailPage() {
   const [actionError, setActionError] = useState('')
   const [graphOpen, setGraphOpen] = useState(false)
   const [runBusy, setRunBusy] = useState(false)
+  const [baselineBusy, setBaselineBusy] = useState(false)
   const [ciBusy, setCiBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const oldestRef = useRef(0)
@@ -589,6 +590,62 @@ export default function ProjectDetailPage() {
         </div>
       </div>
       {actionError ? <p className="text-sm text-red-300">{actionError}</p> : null}
+      {project.source_baseline_status === 'stale' ? (
+        <Card className="border-amber-500/40 bg-amber-950/30">
+          <CardContent className="space-y-3 pt-4 text-sm text-amber-100">
+            <p className="font-medium text-amber-50">源码基线检查：当前导入版本落后于上游已修复 CVE</p>
+            <p>
+              当前源码版本 {project.source_baseline?.source_version || '（未识别）'}
+              {project.source_baseline?.source_commit
+                ? `（commit ${project.source_baseline.source_commit}）`
+                : ''}
+              。以下已知 CVE 在上游已修复，但当前快照仍落在官方受影响范围内；在判定前挖掘将被阻塞。
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-amber-100/90">
+              {(project.source_baseline?.issues || []).slice(0, 8).map((issue) => (
+                <li key={issue.cve || issue.title}>
+                  {issue.cve ? `${issue.cve}：` : ''}
+                  {issue.title}（{issue.affected_range}）
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={baselineBusy}
+                onClick={() => {
+                  setBaselineBusy(true)
+                  void api
+                    .sourceBaselineDecision(projectId, 'acknowledge')
+                    .then(applyProject)
+                    .catch((e) => setActionError(formatApiError(e)))
+                    .finally(() => setBaselineBusy(false))
+                }}
+              >
+                继续审计当前快照
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={baselineBusy}
+                onClick={() => {
+                  setBaselineBusy(true)
+                  void api
+                    .sourceBaselineDecision(projectId, 'recheck')
+                    .then(applyProject)
+                    .catch((e) => setActionError(formatApiError(e)))
+                    .finally(() => setBaselineBusy(false))
+                }}
+              >
+                重新检查
+              </Button>
+            </div>
+            <p className="text-xs text-amber-200/80">
+              若需切换到含修复的 release tag，请手动更新 `src/` 后点「重新检查」。已知 CVE 提交将被系统自动判为误报。
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
       <CodeGraphExplorer projectId={projectId} open={graphOpen} onOpenChange={setGraphOpen} />
 
       {normalizeDynamicVerifyMode(project.dynamic_verify_mode, project.dynamic_verify_enabled) ===
@@ -868,6 +925,12 @@ export default function ProjectDetailPage() {
                 displaySessionRef.current = sessionCountRef.current
                 setDisplaySession(sessionCountRef.current)
                 setLogSession(null)
+                void api
+                  .getProject(projectId)
+                  .then((fresh) => {
+                    if (!fresh.notModified && !fresh.unchanged) applyRunChange(fresh)
+                  })
+                  .catch(() => undefined)
               }}
             />
           )}

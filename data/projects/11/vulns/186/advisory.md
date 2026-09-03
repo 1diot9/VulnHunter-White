@@ -103,5 +103,6 @@ CWE-639. Any network caller who can reach the default MemoBoard HTTP port can en
 
 - **Severity:** High
 - **CVSS 3.1:** 7.5 High — `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N`
+- **CVSS 4.0:** 8.7 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N`
 - **CWE:** CWE-639 Authorization Bypass Through User-Controlled Key
 - **Related:**
