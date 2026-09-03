@@ -26,6 +26,10 @@ from ..services.llm_settings import (
 )
 from ..tools import ToolContext, registry
 from ..tools.common import load_todos
+from ..tools.phase_worker import (
+    UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS,
+    unconstrained_finish_round_ready,
+)
 from .checkpoint import LoopCheckpoint, save_checkpoint
 from .anthropic_compat import (
     anthropic_headers,
@@ -514,9 +518,6 @@ class AgentLoop:
             if last.get("role") != "user" or last.get("content") != INTERRUPT_RESUME:
                 messages.append({"role": "user", "content": INTERRUPT_RESUME})
             self._resumed = False
-        tools = registry.openai_tools_for_role(
-            self.role, project_id=self.project_id, vuln_id=self.vuln_id
-        )
         result = LoopResult(ok=False, state=self.state)
         self._persist(messages)
 
@@ -556,6 +557,7 @@ class AgentLoop:
                 self._rescue_conclude(messages)
                 return result
 
+            tools = self._openai_tools()
             est = estimate_tokens(messages, tools)
             if needs_compress(
                 messages,
@@ -575,6 +577,8 @@ class AgentLoop:
                 self._last_prompt_tokens = 0
                 self._persist(messages)
 
+            self._maybe_unlock_unconstrained_finish_round(messages)
+            tools = self._openai_tools()
             self._maybe_inject_todolist(messages)
             self._maybe_inject_steer(messages)
             self._maybe_inject_decompile_notices(messages)
@@ -1525,11 +1529,49 @@ class AgentLoop:
         )
         self._persist(messages)
 
+    def _is_unconstrained(self) -> bool:
+        role = (self.role or "").strip().lower()
+        phase = (self.phase or "").strip().lower()
+        return role in ("unconstrained_worker", "unconstrained-worker") or phase in (
+            "unconstrained-worker",
+            "unconstrained_worker",
+        )
+
+    def _openai_tools(self) -> list[dict[str, Any]]:
+        return registry.openai_tools_for_role(
+            self.role,
+            project_id=self.project_id,
+            vuln_id=self.vuln_id,
+            compress_count=int(self.state.get("compress_count") or 0),
+        )
+
+    def _maybe_unlock_unconstrained_finish_round(self, messages: list[dict[str, Any]]) -> None:
+        if not self._is_unconstrained():
+            return
+        if not unconstrained_finish_round_ready(self.state):
+            return
+        if self.state.get("finish_round_unlocked"):
+            return
+        self.state["finish_round_unlocked"] = True
+        notice = (
+            f"上下文已压缩满 {UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS} 次，"
+            "FinishRound 现已加入工具列表。本趟探索收束后再调用；不要刚交洞就收工。"
+        )
+        messages.append({"role": "user", "content": notice})
+        self._live.system(
+            self.project_id,
+            "无约束扫描：FinishRound 已注入工具列表",
+            phase=self.phase,
+            role=self.role,
+        )
+        self._persist(messages)
+
     def _compress(self, messages: list[dict[str, Any]], force_summary: str | None = None) -> list[dict[str, Any]]:
         # Ask model briefly, or synthesize
         summary = self._attach_current_todos(force_summary or self._request_summary(messages))
         path = self._store_summary("compress" if self.silent else self.phase, summary)
         self._live.system(self.project_id, f"总结已落盘: {path}", phase=self.phase)
+        self.state["compress_count"] = int(self.state.get("compress_count") or 0) + 1
         bootstrap = self.user_prompt[:4000]
         return build_compressed_messages(self.system_prompt, summary, bootstrap, messages)
 

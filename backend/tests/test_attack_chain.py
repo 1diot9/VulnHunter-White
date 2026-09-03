@@ -63,6 +63,7 @@ def _submit_and_confirm(project, *, title="洞 A", file_path="a.java", root_caus
             "vuln_id": vuln_id,
             "attack_surface": "frontend",
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "cvss4_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "高危害，可独立利用",
             "root_cause_key": payload["root_cause_key"],

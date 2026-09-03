@@ -112,7 +112,9 @@ def test_recon_mark_and_reviewer_docs_render_runtime_fields():
     assert "advisory.md" in review
     assert "环境: ok" in review
     assert "cvss_vector" in review
+    assert "cvss4_vector" in review
     assert "CVSS 3.1" in review
+    assert "CVSS 4.0" in review
     assert "submission_tier" in review
     assert "submission_reason" in review
     assert "submission_reason（中文）" in review
@@ -129,7 +131,9 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "attack_surface" in text
     assert "required_account" in text
     assert "cvss_vector" in text
+    assert "cvss4_vector" in text
     assert "CVSS 3.1" in text
+    assert "CVSS 4.0" in text
     assert "submission_tier" in text
     assert "submission_reason" in text
     assert "中文" in text or "须用中文" in text
@@ -238,6 +242,8 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
 
     text = load_prompt("cvss.md")
     assert "PR 必须与 attack_surface" in text
+    assert "CVSS 4.0" in text
+    assert "AT:N" in text
     assert "普通权限" in text
     assert "PR:L" in text
     assert "XSS" in text
@@ -251,6 +257,7 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     assert "PR 必须与攻击面一致" in initial
     overlay = pipeline._phase_system_prompt(project, "reviewer.md")
     assert "CVSS 3.1 度量标准" in overlay
+    assert "CVSS 4.0 度量标准" in overlay
     assert "XSS（含存储型）" in overlay
     spec = registry.get("ConfirmVuln")
     assert spec is not None
@@ -260,6 +267,9 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     vector_desc = spec.parameters["properties"]["cvss_vector"]["description"]
     assert "CVSS 3.1 度量标准" in vector_desc
     assert "Cookie" in vector_desc
+    v4_desc = spec.parameters["properties"]["cvss4_vector"]["description"]
+    assert "CVSS:4.0/" in v4_desc
+    assert "UI:P" in v4_desc
     cve_spec = registry.get("SetCveRecordField")
     assert cve_spec is not None
     assert "PR 须与已确认的 attack_surface 一致" in cve_spec.description
@@ -616,13 +626,15 @@ def test_unconstrained_worker_prompts():
     assert "无约束扫描" in worker
     assert "不注入" in worker
     assert "FinishRound" in worker
-    assert "不要求" in worker
+    assert "压缩满 2 次" in worker
+    assert "没有 `FinishFile`" in worker
     assert "不要为了结束路径而硬写成" in worker
     assert "赏金闸门" in worker
     assert "即使项目挖掘模式是全量或自定义" in worker
     assert "rce_effect=true" in worker
     assert "不由 `vuln_type`" in worker
-    assert "FinishFile" in initial
+    assert "没有 FinishFile" in initial
+    assert "压缩满 2 次" in initial
     assert "FinishRound" in initial
     assert "侦察文档" in initial
     assert "docs/code-map.md" in worker
@@ -687,6 +699,8 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "## Severity / CWE" in advisory_text
     assert "**CVSS 3.1:**" in advisory_text
     assert "CVSS:3.1/" in advisory_text
+    assert "**CVSS 4.0:**" in advisory_text
+    assert "CVSS:4.0/" in advisory_text
     assert "raw HTTP request packet" in advisory_text
     assert "<BASE64_PAYLOAD>" in advisory_text
     assert "Write all fill-in content in English" in advisory_text
@@ -840,6 +854,8 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "fofa_query" in text
     assert "5 轮" in text
     assert "50" in text
+    assert "超时" in text
+    assert "不会新开轮" in text or "不再新开" in text
     initial = load_prompt("initial/verifier.md")
     assert "FofaSearch" in initial
     assert "FinishVerifier" in initial
@@ -856,6 +872,7 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "expand=true" in initial
     assert "5 轮" in initial
     assert "50" in initial
+    assert "超时" in initial
     assert "增删改" in text or "禁止" in text
     assert "AskUser" in text
     assert "AskUser" in initial

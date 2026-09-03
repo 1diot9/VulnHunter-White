@@ -65,3 +65,18 @@ ConfirmVuln / SetCveRecordField 只填基础向量（8 个度量），不要手�
 - XSS 写成 `C:H/I:H` 得到 9.3/9.6。
 - 把 S:C 用在没有跨权威冲击的服务端洞上抬分。
 - 用复杂向量掩盖种文件、换 sink、组合第二个洞。
+
+# CVSS 4.0 度量标准
+
+ConfirmVuln 还须传 `cvss4_vector`（11 个基础度量），不要手填分数；系统按 FIRST CVSS 4.0 计分并写入 advisory.md / cve.json。
+向量：`CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`
+取值：AV=N|A|L|P，AC=L|H，AT=N|P，PR=N|L|H，UI=N|P|A，VC/VI/VA/SC/SI/SA=H|L|N。
+PR 规则与 3.1 相同。分数阈值相同。
+
+**与 3.1 的对应**
+- AT:N 默认；仅当利用还依赖攻击者无法单独准备的部署条件时 AT:P（接近 3.1 的 AC:H 里「额外条件」那一半）。
+- UI:N 无交互；UI:P 被动（打开页面/看后台即可，XSS 默认）；UI:A 还须主动点击。不要写 3.1 的 UI:R。
+- VC/VI/VA = 脆弱系统冲击（对应 3.1 的 C/I/A，且 S:U 时后续系统全 N）。
+- SC/SI/SA = 后续系统。无跨安全边界时全 N。不要把普通 RCE/SQLi 的后续系统标 H。
+- XSS 默认 `UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N`，不要因 Cookie/账户接管把 VC/VI 标 H。
+- 间接消费型：AC:H、AV 不得 N；未证明上游链时 VC/VI/VA 至多一项 H。

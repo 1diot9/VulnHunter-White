@@ -141,6 +141,7 @@ _cancel_events: dict[int, threading.Event] = {}
 _pause_flags: dict[int, threading.Event] = {}
 _phase_pause_flags: dict[tuple[int, str], threading.Event] = {}
 _phase_generation: dict[tuple[int, str], int] = {}
+_unconstrained_generation: dict[int, int] = {}
 _force_new_run: set[tuple[int, str]] = set()
 _pending_inject: dict[tuple[int, str], list[dict[str, Any]]] = {}
 _threads: dict[int, list[threading.Thread]] = {}
@@ -308,6 +309,43 @@ def _loop_cancel(project_id: int, phase: str) -> GenerationCancel:
     return GenerationCancel(_cancel_event(project_id), project_id, control_phase(phase), _phase_generation_of(project_id, phase))
 
 
+class UnconstrainedLoopCancel:
+    """Project cancel, worker 新跑, or user stop of unconstrained scanning."""
+
+    def __init__(self, project_id: int) -> None:
+        self._project = _cancel_event(project_id)
+        self._project_id = project_id
+        self._worker_gen = _phase_generation_of(project_id, "worker")
+        self._u_gen = _unconstrained_generation.get(project_id, 0)
+
+    def is_set(self) -> bool:
+        if self._project.is_set():
+            return True
+        if _phase_generation_of(self._project_id, "worker") != self._worker_gen:
+            return True
+        return _unconstrained_generation.get(self._project_id, 0) != self._u_gen
+
+    def wait(self, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.time() + max(0.0, timeout)
+        while not self.is_set():
+            remaining = None if deadline is None else deadline - time.time()
+            if remaining is not None and remaining <= 0:
+                return False
+            time.sleep(min(0.2, remaining if remaining is not None else 0.2))
+        return True
+
+
+def _unconstrained_loop_cancel(project_id: int) -> UnconstrainedLoopCancel:
+    return UnconstrainedLoopCancel(project_id)
+
+
+def _bump_unconstrained_generation(project_id: int) -> int:
+    with _lock:
+        nxt = _unconstrained_generation.get(project_id, 0) + 1
+        _unconstrained_generation[project_id] = nxt
+        return nxt
+
+
 def _phase_is_paused(project_id: int, phase: str) -> bool:
     return _pause_event(project_id).is_set() or _phase_pause_event(project_id, phase).is_set()
 
@@ -321,6 +359,7 @@ def reset_runtime_state() -> None:
         _pause_flags.clear()
         _phase_pause_flags.clear()
         _phase_generation.clear()
+        _unconstrained_generation.clear()
         _force_new_run.clear()
         _pending_inject.clear()
         _threads.clear()
@@ -993,12 +1032,41 @@ def _set_project_running(project_id: int) -> None:
 def mining_prereqs_met(project_id: int) -> bool:
     """Recon has finished; Code Intelligence has settled if the project enabled it."""
     from ..code_intelligence.service import code_intel_ready_for_mining
+    from .source_baseline import source_baseline_blocks_mining
 
+    if source_baseline_blocks_mining(project_id):
+        return False
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not proj.recon_done:
             return False
         return code_intel_ready_for_mining(proj)
+
+
+def _maybe_run_source_baseline_check(project_id: int) -> None:
+    if not recon_old_vulns_ready(project_id):
+        return
+    from .source_baseline import BASELINE_PENDING, run_source_baseline_check
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return
+        status = str(getattr(proj, "source_baseline_status", None) or BASELINE_PENDING)
+        if status != BASELINE_PENDING:
+            return
+    report = run_source_baseline_check(project_id)
+    if report.status == "stale":
+        live_log.system(
+            project_id,
+            (
+                f"源码基线检查：发现 {len(report.issues)} 条上游已修复 CVE "
+                "仍落在当前导入版本范围内，请在项目详情页判定是否继续审计当前快照"
+            ),
+            phase="recon-old-vuln",
+        )
+    else:
+        live_log.system(project_id, "源码基线检查：未发现版本滞后问题", phase="recon-old-vuln")
 
 
 def _wait_if_paused(project_id: int, cancel: threading.Event, phase: str | None = None) -> bool:
@@ -2234,6 +2302,123 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
     return {"ok": True, "action": "new", "log_phase": lp, **get_phase_states(project_id)}
 
 
+def _abandon_unconstrained_runs(project_id: int) -> None:
+    reason = "用户停止无约束扫描"
+    _abandon_db_phase_runs(project_id, ("unconstrained-worker",), reason=reason)
+    with SessionLocal() as db:
+        rows = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.phase == "unconstrained-worker",
+                PhaseRun.status.in_(("running", "paused", "awaiting_user")),
+            )
+            .all()
+        )
+        ids = [int(r.id) for r in rows]
+    for rid in ids:
+        _release_adopted(project_id, rid)
+        _finish_phase_run(rid, "cancelled", reason)
+
+
+def _try_complete_after_unconstrained_stop(project_id: int) -> bool:
+    with _lock:
+        fix_busy = bool(_fix_inflight.get(project_id))
+        reviewer_busy = bool(_reviewer_inflight.get(project_id))
+        verifier_busy = bool(_verifier_inflight.get(project_id))
+        attack_chain_busy = bool(_attack_chain_inflight.get(project_id))
+    return _maybe_complete_project(
+        project_id,
+        reviewer_busy=reviewer_busy,
+        fix_busy=fix_busy,
+        verifier_busy=verifier_busy,
+        attack_chain_busy=attack_chain_busy,
+    )
+
+
+def request_unconstrained_stop(project_id: int) -> dict[str, Any]:
+    """End unconstrained scanning; complete the project if other gates already pass."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可停止无约束扫描")
+        if not bool(getattr(proj, "unconstrained_enabled", False)):
+            raise ValueError("未开启无约束扫描")
+        already_complete = proj.status == "completed"
+        already_done = bool(getattr(proj, "unconstrained_done", False))
+        if not already_done:
+            proj.unconstrained_done = True
+            db.commit()
+
+    if already_complete:
+        return {
+            "ok": True,
+            "action": "stop",
+            "log_phase": "unconstrained",
+            "unconstrained_done": True,
+            "project_completed": True,
+            **get_phase_states(project_id),
+        }
+
+    _bump_unconstrained_generation(project_id)
+    _abandon_unconstrained_runs(project_id)
+    live_log.system(
+        project_id,
+        "用户停止无约束扫描，不再新开本路径轮次",
+        phase="unconstrained-worker",
+    )
+    completed = _try_complete_after_unconstrained_stop(project_id)
+    if completed:
+        live_log.system(
+            project_id,
+            "无约束扫描已停止，其他阶段均已结束，项目标为完成",
+            phase="unconstrained-worker",
+        )
+    return {
+        "ok": True,
+        "action": "stop",
+        "log_phase": "unconstrained",
+        "unconstrained_done": True,
+        "project_completed": completed,
+        **get_phase_states(project_id),
+    }
+
+
+def request_unconstrained_start(project_id: int) -> dict[str, Any]:
+    """Restart unconstrained scanning after a stop or RCE-effect confirm."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可启动无约束扫描")
+        if not bool(getattr(proj, "unconstrained_enabled", False)):
+            raise ValueError("未开启无约束扫描")
+        proj.unconstrained_done = False
+        if proj.status == "completed":
+            proj.status = "paused"
+            proj.phase = "worker"
+            proj.error = None
+        db.commit()
+
+    _pause_event(project_id).clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    _set_project_running(project_id)
+    live_log.system(project_id, "用户启动无约束扫描", phase="unconstrained-worker")
+    start_audit(project_id)
+    return {
+        "ok": True,
+        "action": "start",
+        "log_phase": "unconstrained",
+        "unconstrained_done": False,
+        **get_phase_states(project_id),
+    }
+
+
 def _worker_hint_block(project_id: int) -> str:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -2441,10 +2626,11 @@ def _loop_from_checkpoint(
     llm=None,
     resumed: bool = True,
 ) -> AgentLoop:
+    unconstrained = (cp.phase or "") in ("unconstrained-worker", "unconstrained")
     return AgentLoop.from_checkpoint(
         cp,
-        cancel_event=_loop_cancel(cp.project_id, cp.phase),
-        pause_event=_combined_pause(cp.project_id, cp.phase),
+        cancel_event=_unconstrained_loop_cancel(cp.project_id) if unconstrained else _loop_cancel(cp.project_id, cp.phase),
+        pause_event=_pause_event(cp.project_id) if unconstrained else _combined_pause(cp.project_id, cp.phase),
         stop_when=stop_when,
         context_window=_context_window(),
         timeout_sec=timeout_sec,
@@ -2621,6 +2807,7 @@ def _maybe_mark_recon_done(project_id: int) -> bool:
     if apply_recon_done(project_id):
         live_log.system(project_id, "侦察门闩已满足，系统标记 recon_done")
         _ensure_project_fingerprints_once(project_id)
+        _maybe_run_source_baseline_check(project_id)
         return True
     return False
 
@@ -2654,6 +2841,33 @@ def _stop_lab_on_project_complete(project_id: int) -> None:
             live_log.system(project_id, f"自动停止靶场失败: {result['error']}")
     except Exception as e:  # noqa: BLE001
         live_log.error(project_id, f"自动停止靶场异常: {e}")
+
+
+def reclaim_premature_project_complete(project_id: int) -> bool:
+    """Reopen a completed project when completion gates are no longer satisfied."""
+    from ..tools.phase_worker import project_complete_gates
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status != "completed":
+            return False
+    if project_complete_gates(project_id):
+        return False
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or proj.status != "completed":
+            return False
+        proj.status = "auditing"
+        proj.phase = "reviewer"
+        proj.error = None
+        db.commit()
+    live_log.system(
+        project_id,
+        "项目曾提前标为完成，仍有待审漏洞或进行中的无约束轮次，已改回运行",
+        phase="worker",
+    )
+    start_audit(project_id)
+    return True
 
 
 def _maybe_complete_project(
@@ -3376,7 +3590,7 @@ def _ensure_unconstrained_workers(
             return [t for t in active_workers if t.is_alive()]
         unconstrained_on = bool(getattr(proj, "unconstrained_enabled", False))
         status = proj.status
-    if _phase_is_paused(project_id, "worker"):
+    if _pause_event(project_id).is_set():
         return [t for t in active_workers if t.is_alive()]
     alive = [t for t in active_workers if t.is_alive()]
     if not unconstrained_on:
@@ -3727,8 +3941,12 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         return False
     if recon_old_vulns_ready(project_id):
         _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
+        _maybe_run_source_baseline_check(project_id)
         return True
-    return _run_recon_old_vuln_ghsa(project_id, cancel)
+    ok = _run_recon_old_vuln_ghsa(project_id, cancel)
+    if ok:
+        _maybe_run_source_baseline_check(project_id)
+    return ok
 
 
 def _run_recon_old_vuln_crawl_pass(project_id: int, cancel: threading.Event) -> bool:
@@ -4376,6 +4594,13 @@ def _next_unconstrained_round_id(project_id: int) -> int:
 
 
 def _finish_unconstrained_round(project_id: int, worker_id: str, run_id: int, result) -> str:
+    if unconstrained_complete(project_id):
+        _finish_phase_run(
+            run_id,
+            "cancelled" if result.cancelled else ("completed" if result.ok else "failed"),
+            result.error or "用户停止无约束扫描",
+        )
+        return "done"
     if result.stop_reason == "auth_error":
         _pause_for_auth(project_id, result.error or "auth_error")
         return "interrupt"
@@ -4393,13 +4618,15 @@ def _finish_unconstrained_round(project_id: int, worker_id: str, run_id: int, re
 
 
 def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
-    cancel = _cancel_event(project_id)
+    loop_cancel = _unconstrained_loop_cancel(project_id)
     current_run_id: int | None = None
     try:
-        while not cancel.is_set():
-            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+        while not loop_cancel.is_set():
+            if unconstrained_complete(project_id):
+                return
+            if not _wait_if_paused(project_id, loop_cancel):
                 break
-            if not _wait_if_code_intel_pending(project_id, cancel):
+            if not _wait_if_code_intel_pending(project_id, loop_cancel):
                 break
             try:
                 with SessionLocal() as db:
@@ -4411,13 +4638,13 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
                 path_done = unconstrained_complete(project_id)
             except OperationalError as e:
                 if _is_sqlite_locked(e):
-                    cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                    loop_cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                     continue
                 raise
             if not unconstrained_on:
                 return
             if not old_ready:
-                cancel.wait(timeout=5.0)
+                loop_cancel.wait(timeout=5.0)
                 continue
 
             cp = _adopt_resumable(project_id, "unconstrained-worker", worker_id=worker_id)
@@ -4427,7 +4654,7 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
                     _start_log_session(project_id, "unconstrained-worker", extra="接续")
                     loop = _loop_from_checkpoint(
                         cp,
-                        cancel=cancel,
+                        cancel=loop_cancel,
                         stop_when=lambda st: bool(st.get("round_finished")),
                         timeout_sec=settings.timeout_worker_round,
                     )
@@ -4442,12 +4669,12 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
                             "无约束扫描轮数据库忙，保留检查点稍后继续",
                             phase="unconstrained-worker",
                         )
-                        cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                        loop_cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                         continue
                     action = _finish_unconstrained_round(
                         project_id, worker_id, cp.phase_run_id, result
                     )
-                    if action in ("interrupt", "cancel"):
+                    if action in ("interrupt", "cancel", "done"):
                         return
                     if action == "restart":
                         continue
@@ -4482,8 +4709,8 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
                 user_prompt=user,
                 phase_run_id=run_id,
                 worker_id=worker_id,
-                cancel_event=_loop_cancel(project_id, "worker"),
-                pause_event=_combined_pause(project_id, "worker"),
+                cancel_event=loop_cancel,
+                pause_event=_pause_event(project_id),
                 timeout_sec=settings.timeout_worker_round,
                 context_window=_context_window(),
                 stop_when=lambda st: bool(st.get("round_finished")),
@@ -4499,11 +4726,11 @@ def _run_unconstrained_worker_loop(project_id: int, worker_id: str) -> None:
                     "无约束扫描轮数据库忙，保留检查点稍后继续",
                     phase="unconstrained-worker",
                 )
-                cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
+                loop_cancel.wait(timeout=_DB_LOCK_RETRY_SECONDS)
                 continue
             action = _finish_unconstrained_round(project_id, worker_id, run_id, result)
             current_run_id = None
-            if action in ("interrupt", "cancel"):
+            if action in ("interrupt", "cancel", "done"):
                 return
             if action == "restart":
                 continue
@@ -5534,6 +5761,7 @@ def _run_verifier_once(project_id: int) -> None:
                     phase="verifier",
                 )
                 return
+            _close_verifier_on_timeout(project_id, cp.vuln_id, result)
             _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
             live_log.system(
                 project_id,
@@ -5638,6 +5866,7 @@ def _run_verifier_once(project_id: int) -> None:
                 phase="verifier",
             )
             return
+        _close_verifier_on_timeout(project_id, vuln_id, result)
         _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
         live_log.system(
             project_id,
@@ -5646,6 +5875,31 @@ def _run_verifier_once(project_id: int) -> None:
         )
     except Exception as e:  # noqa: BLE001
         live_log.error(project_id, f"Verifier 异常: {e}", phase="verifier")
+
+
+def _close_verifier_on_timeout(project_id: int, vuln_id: int | None, result) -> None:
+    """Timeout closes the vuln as fail so the scheduler does not start another round."""
+    if vuln_id is None:
+        return
+    timed_out = bool(getattr(result, "timed_out", False)) or getattr(result, "stop_reason", "") == "timeout"
+    if not timed_out or getattr(result, "cancelled", False):
+        return
+    state = result.state if isinstance(getattr(result, "state", None), dict) else {}
+    if state.get("verifier_done") or state.get("awaiting_user"):
+        return
+    from .verifier import apply_verifier_timeout_fail
+
+    out = apply_verifier_timeout_fail(project_id, int(vuln_id), state=state)
+    if not out.get("applied"):
+        return
+    state["verifier_done"] = True
+    state["verifier_verdict"] = "fail"
+    result.state = state
+    live_log.system(
+        project_id,
+        f"Verifier 超时，漏洞 #{int(vuln_id)} 已自动 fail，不再新开轮",
+        phase="verifier",
+    )
 
 
 def _run_attack_chain_once(project_id: int) -> None:

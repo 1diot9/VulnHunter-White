@@ -32,6 +32,7 @@ def tmp_env(tmp_path, monkeypatch):
     models.SessionLocal = Session
     models.Base.metadata.drop_all(bind=engine)
     models.Base.metadata.create_all(bind=engine)
+    models._ensure_columns()
 
     # Rebind every consumer that already imported SessionLocal
     import app.agent.checkpoint as agent_checkpoint
@@ -52,6 +53,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.github_issues as github_issues
     import app.services.github_probe as github_probe
     import app.services.pipeline as pipeline
+    import app.services.source_baseline as source_baseline
     import app.services.token_budget as token_budget
     import app.services.verifier as verifier_service
     import app.services.harness_ask as harness_ask
@@ -101,6 +103,7 @@ def tmp_env(tmp_path, monkeypatch):
         harness_ask,
         asset_proof,
         pipeline,
+        source_baseline,
         token_budget,
         sink_queue,
         bypass_queue,

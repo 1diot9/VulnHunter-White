@@ -393,22 +393,44 @@ def test_bypass_worker_acl_has_finish_bypass_not_finish_file():
     assert names == set(ROLE_ACL["bypass_worker"])
 
 
-def test_unconstrained_worker_acl_has_finish_file_and_round():
+def test_unconstrained_worker_acl_has_finish_round_not_finish_file():
     from app.tools import native_shell_tool
+    from app.tools.phase_worker import UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
 
-    assert "FinishFile" in ROLE_ACL["unconstrained_worker"]
+    assert "FinishFile" not in ROLE_ACL["unconstrained_worker"]
     assert "FinishRound" in ROLE_ACL["unconstrained_worker"]
     assert "FinishFix" not in ROLE_ACL["unconstrained_worker"]
     assert "FinishSink" not in ROLE_ACL["unconstrained_worker"]
     assert "FinishBypass" not in ROLE_ACL["unconstrained_worker"]
     assert "Read" in ROLE_ACL["unconstrained_worker"]
-    names = {t["function"]["name"] for t in registry.openai_tools_for_role("unconstrained_worker")}
     native = native_shell_tool()
     expected = {
         n for n in ROLE_ACL["unconstrained_worker"] if n not in {"Bash", "PowerShell"} or n == native
     }
-    assert names == expected
-    assert native in names
+    hidden = {t["function"]["name"] for t in registry.openai_tools_for_role("unconstrained_worker")}
+    assert hidden == expected - {"FinishRound"}
+    assert "FinishRound" not in hidden
+    assert native in hidden
+    shown = {
+        t["function"]["name"]
+        for t in registry.openai_tools_for_role(
+            "unconstrained_worker",
+            compress_count=UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS,
+        )
+    }
+    assert shown == expected
+    assert "FinishRound" in shown
+    worker_always = {t["function"]["name"] for t in registry.openai_tools_for_role("worker")}
+    assert "FinishRound" in worker_always
+    desc = next(
+        t["function"]["description"]
+        for t in registry.openai_tools_for_role(
+            "unconstrained_worker",
+            compress_count=UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS,
+        )
+        if t["function"]["name"] == "FinishRound"
+    )
+    assert "没有 FinishFile" in desc
 
 
 def test_heuristic_lite_complete_and_pick_entry(tmp_env, project):
@@ -649,15 +671,17 @@ _UNCONSTRAINED_SUBMIT = {
 }
 _CONFIRM_SEVERITY = {
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "cvss4_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
     "submission_tier": "cve_candidate",
     "submission_reason": "未认证可达且可造成敏感数据/权限影响，有 CVE 价值",
 }
 
 
-def test_unconstrained_finish_file_does_not_mark_fileweight(tmp_env, project):
+def test_unconstrained_finish_file_rejected_finish_round_after_compress(tmp_env, project):
     from app.models import FileWeight, SessionLocal
     from app.services.ingest import build_file_index
     from app.services.paths import workspace_dir
+    from app.tools.phase_worker import UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
 
     build_file_index(project)
     with SessionLocal() as db:
@@ -671,8 +695,8 @@ def test_unconstrained_finish_file_does_not_mark_fileweight(tmp_env, project):
     ctx = _ctx(project, "unconstrained_worker")
     ctx.state["round_id"] = 1
     marked = registry.dispatch(ctx, "FinishFile", {"path": "app/Main.java"})
-    assert marked["ok"] is True
-    assert "不改启发式" in marked["message"]
+    assert marked["ok"] is False
+    assert "无权" in marked["error"]
     with SessionLocal() as db:
         fw = (
             db.query(FileWeight)
@@ -680,10 +704,24 @@ def test_unconstrained_finish_file_does_not_mark_fileweight(tmp_env, project):
             .one()
         )
         assert fw.audited is False
-    fresh = _ctx(project, "unconstrained_worker")
-    fresh.state["round_id"] = 2
+
+    locked = registry.dispatch(
+        ctx,
+        "FinishRound",
+        {
+            "report": (
+                "## 本轮入口\n自主选择登录\n\n## 本轮挖掘方向\n\n"
+                "## 已尝试\n\n## 已排除（后续轮不要再走）\n"
+            )
+        },
+    )
+    assert locked["ok"] is False
+    assert "压缩" in locked["error"]
+
+    ctx.state["compress_count"] = UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
+    ctx.state["round_id"] = 2
     done = registry.dispatch(
-        fresh,
+        ctx,
         "FinishRound",
         {
             "report": (
@@ -776,6 +814,7 @@ def test_unconstrained_confirm_rce_effect_ends_path(tmp_env, project):
             "attack_surface": "backend",
             "required_account": "user",
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+            "cvss4_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "后台可利用但仍非前台 RCE 效果",
             "rce_effect": True,
@@ -826,6 +865,122 @@ def test_unconstrained_confirm_rce_effect_ends_path(tmp_env, project):
     assert mining_complete(project) is True
 
 
+def test_unconstrained_rce_done_does_not_complete_project_while_round_active(tmp_env, project):
+    from datetime import datetime
+
+    from app.models import FileWeight, PhaseRun, Project, SessionLocal, Vuln
+    from app.services.ingest import build_file_index
+    from app.tools.phase_worker import unconstrained_worker_active
+
+    build_file_index(project)
+    with SessionLocal() as db:
+        for fw in db.query(FileWeight).filter(FileWeight.project_id == project).all():
+            if fw.skipped:
+                continue
+            fw.audited = True
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = True
+        proj.status = "auditing"
+        db.add(
+            PhaseRun(
+                project_id=project,
+                phase="unconstrained-worker",
+                role="unconstrained_worker",
+                status="running",
+                started_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+    assert unconstrained_worker_active(project) is True
+    assert mining_complete(project) is True
+    assert project_complete_gates(project) is False
+
+    with SessionLocal() as db:
+        pr = (
+            db.query(PhaseRun)
+            .filter(PhaseRun.project_id == project, PhaseRun.phase == "unconstrained-worker")
+            .one()
+        )
+        pr.status = "completed"
+        pr.finished_at = datetime.utcnow()
+        db.commit()
+    assert unconstrained_worker_active(project) is False
+    assert project_complete_gates(project) is True
+
+
+def test_unconstrained_rce_done_blocks_project_complete_with_pending_review(tmp_env, project):
+    from datetime import datetime
+
+    from app.models import FileWeight, PhaseRun, Project, SessionLocal, Vuln
+    from app.services.ingest import build_file_index
+
+    build_file_index(project)
+    with SessionLocal() as db:
+        for fw in db.query(FileWeight).filter(FileWeight.project_id == project).all():
+            if fw.skipped:
+                continue
+            fw.audited = True
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = True
+        proj.status = "auditing"
+        db.add(
+            Vuln(
+                project_id=project,
+                title="tail round pending",
+                vuln_type="sqli",
+                severity="pending",
+                status="pending_review",
+                mining_path="unconstrained",
+            )
+        )
+        db.commit()
+    assert mining_complete(project) is True
+    assert project_complete_gates(project) is False
+
+
+def test_reclaim_premature_project_complete(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal, Vuln
+    from app.services import pipeline
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = True
+        proj.status = "completed"
+        db.add(
+            Vuln(
+                project_id=project,
+                title="stale pending",
+                vuln_type="sqli",
+                severity="pending",
+                status="pending_review",
+                mining_path="unconstrained",
+            )
+        )
+        db.commit()
+    started = {"n": 0}
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: started.__setitem__("n", started["n"] + 1))
+    assert pipeline.reclaim_premature_project_complete(project) is True
+    assert started["n"] == 1
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.status == "auditing"
+
+
 def test_reenable_unconstrained_clears_done(tmp_env, project):
     from app.main import app
     from app.models import Project, SessionLocal
@@ -844,4 +999,90 @@ def test_reenable_unconstrained_clears_done(tmp_env, project):
         assert on.status_code == 200
         assert on.json()["unconstrained_enabled"] is True
         assert on.json()["unconstrained_done"] is False
+
+
+def _enable_unconstrained_only(project_id: int, *, done: bool = False, status: str = "auditing") -> None:
+    from app.models import Project, SessionLocal
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = done
+        proj.status = status
+        proj.phase = "worker"
+        db.commit()
+
+
+def test_unconstrained_stop_completes_when_other_paths_done(tmp_env, project):
+    from app.models import Project, SessionLocal
+    from app.services.conversation import request_conversation
+
+    _enable_unconstrained_only(project)
+    assert mining_complete(project) is False
+    out = request_conversation(project, "unconstrained", "stop")
+    assert out["ok"] is True
+    assert out["action"] == "stop"
+    assert out["unconstrained_done"] is True
+    assert out["project_completed"] is True
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.unconstrained_done is True
+        assert proj.status == "completed"
+    assert mining_complete(project) is True
+    assert project_complete_gates(project) is True
+
+
+def test_unconstrained_stop_keeps_project_running_if_heuristic_left(tmp_env, project):
+    from app.models import FileWeight, Project, SessionLocal
+    from app.services.conversation import request_conversation
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = True
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = False
+        proj.status = "auditing"
+        db.add(
+            FileWeight(
+                project_id=project,
+                path="app/Main.java",
+                weight=100,
+                audited=False,
+                skipped=False,
+            )
+        )
+        db.commit()
+    out = request_conversation(project, "unconstrained", "stop")
+    assert out["unconstrained_done"] is True
+    assert out["project_completed"] is False
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.status == "auditing"
+        assert proj.unconstrained_done is True
+    assert mining_complete(project) is False
+
+
+def test_unconstrained_start_reopens_completed_project(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+    from app.services.conversation import request_conversation
+
+    _enable_unconstrained_only(project, done=True, status="completed")
+    started = {"n": 0}
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: started.__setitem__("n", started["n"] + 1))
+    out = request_conversation(project, "unconstrained", "start")
+    assert out["ok"] is True
+    assert out["action"] == "start"
+    assert out["unconstrained_done"] is False
+    assert started["n"] == 1
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.unconstrained_done is False
+        assert proj.status != "completed"
+    assert mining_complete(project) is False
 

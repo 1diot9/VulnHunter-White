@@ -79,23 +79,25 @@ Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / �
    - 环境起不来（无 target_url），但静态已能证明默认部署可利用 → ConfirmVuln(evidence_level=static_only)，价值仍标 `cve_candidate` 或 `low_impact`。
    - 静态也只能证明 sink 可达、默认冲击不确定 → 误报，不要用 `static_only` 过关。
    - 赏金模式禁止的是种文件/改非应用配置来制造利用条件，不是禁止使用已有 Docker 靶场。
-5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。ConfirmVuln 必须传 `cvss_vector`（CVSS 3.1 基础向量），**只填度量、不要填分数**；系统按 FIRST CVSS 3.1 计分并回写严重度。向量格式不对、或 PR 与攻击面不一致时工具会返回错误，改完再调。完整度量标准见系统附加的 CVSS 专章（与 ConfirmVuln 工具描述相同）。
-   - 向量：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
-   - 度量：AV=N|A|L|P，AC=L|H，PR=N|L|H，UI=N|R，S=U|C，C/I/A=H|L|N
-   - **PR 必须与攻击面一致**（硬校验）：前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。不要用「SNMP/设备侧注入」把后台洞写成 PR:N。
-   - XSS 默认 `UI:R/S:C/C:L/I:L/A:N`，不要因 Cookie/账户接管把 C/I 标 H。
+5. 严重度审核：Worker 入库严重度为 pending，不要按漏洞类型映射。ConfirmVuln 必须传 `cvss_vector`（CVSS 3.1）和 `cvss4_vector`（CVSS 4.0），**只填度量、不要填分数**；系统按 FIRST 计分并回写严重度与 Advisory。向量格式不对、或 PR 与攻击面不一致时工具会返回错误，改完再调。完整度量标准见系统附加的 CVSS 专章（与 ConfirmVuln 工具描述相同）。
+   - 3.1 向量：`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+   - 4.0 向量：`CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`
+   - 度量（3.1）：AV=N|A|L|P，AC=L|H，PR=N|L|H，UI=N|R，S=U|C，C/I/A=H|L|N
+   - 度量（4.0）：AT=N|P，UI=N|P|A，VC/VI/VA 为脆弱系统，SC/SI/SA 为后续系统（无跨边界时全 N）
+   - **PR 必须与攻击面一致**（硬校验，两套向量都要）：前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。不要用「SNMP/设备侧注入」把后台洞写成 PR:N。
+   - XSS 默认 3.1 `UI:R/S:C/C:L/I:L/A:N`，4.0 `UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N`，不要因 Cookie/账户接管把 C/I 或 VC/VI 标 H。
    - 分数阈值：9.0–10.0 critical，7.0–8.9 high，4.0–6.9 medium，0.1–3.9 low。
 6. 资产证明审核：报告必须包含 `## 互联网资产证明`（旧报告中的 `## 应用搜索指纹` 视为等价），并分别给出 FOFA 与 X 情报社区查询语句。测绘语句不允许出现「或」/`||`。**指纹是项目级的**（`docs/app-fingerprints.json`），全项目只识别一次，本条 Confirm 写入报告即可，不要每条洞重新搜。
    - **有漏洞环境**（`env.json` 的 `target_url` 可访问，或人工靶场说明里有地址）：若项目指纹仍缺 `icon_hash`/标题，才 `CollectLabFingerprints` 升级项目指纹并写回本条（`apply=true` 或 ConfirmVuln 传入 `fofa_fingerprint`/`x_fingerprint`）。占位「待运行环境确认」、照搬漏洞路径/PoC 参数、编造 hash，都由你在本轮改好，不要为此 ReturnToWorker。
    - **无漏洞环境**：复用项目指纹；仍是占位则让 Confirm 自动写入共享指纹，不要编造 hash，不要为此 ReturnToWorker，也不要每条再搜一遍互联网。
    - 「基础环境搭建」应引用 `docs/lab.md`，不要在漏洞报告内重复镜像、端口、凭据。
-7. 确认：ConfirmVuln 必须标注攻击面、CVSS 3.1 向量和价值分层：
+7. 确认：ConfirmVuln 必须标注攻击面、CVSS 3.1 / 4.0 向量和价值分层：
    - `attack_surface=frontend`：前台漏洞（公开/未登录可打到）。**须独立核验无认证可达**，不要照抄 Worker。核完其实要登录 → 改标 `backend`，不要硬标前台。
    - `attack_surface=backend`：后台漏洞，且必须再标 `required_account`：
      - `user`：普通权限账号即可利用
      - `admin`：需要管理员账号
    - 也可直接写中文：前台 / 后台，普通权限 / 管理员。
-   - 必须再传 `cvss_vector`（CVSS 3.1 基础向量，不要手填分数）。
+   - 必须再传 `cvss_vector`（CVSS 3.1）和 `cvss4_vector`（CVSS 4.0），不要手填分数。
    - 必须再传 `submission_tier`、`submission_reason`（中文）；主报告填 `root_cause_key`。同根因同危害重复条用 `MergeIntoVuln`，不要 Confirm 多份；仅危害/鉴权不同的相关变体才标 `duplicate_grouped` 并原样复用键。
    - 核对 `config_premise`；Worker 标错则 Confirm 时传入 `default` 或 `specific` 纠正。官方已警示的风险配置不算 `specific`。
    默认本轮收口：ConfirmVuln 或 MarkFalsePositive。**不要**为改报告包装、PoC、指纹或危害口径而 ReturnToWorker。
@@ -110,7 +112,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理、缺 `--zh`）、缺打印、默认输出写死中文或中英混排、同链 payload 细节（编码、参数名、鉴权头）；纯库洞误把 harness 抄进 `poc.py` 或加了未使用的 `-u/--proxy` | 本轮 Write `poc.py`（或纯库洞无安装面则删掉假脚本），ConfirmVuln 传 `poc_code` |
 | 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显/外带 vs 仅探测）；间接消费型「### 触发条件」未说明上游依赖 | 本轮 Write `report.md` 后 Confirm；须 `exposure_mode=indirect_consumer` 并按约束降 CVSS/分层 |
 | 局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm（标题改成中文） |
-| 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1 向量、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 向量字符串，基础分由 ConfirmVuln 按向量计算，不要手填分数；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
+| 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1 / 4.0 向量、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 向量字符串，基础分由 ConfirmVuln 按向量计算，不要手填分数；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述过短、缺漏洞代码（完整路径 + 源码）、缺 HTTP/API PoC 或未写入口→sink 链路、版本/参考链接 | `ReadCveRecord` 查看字段与 `quality_issues`，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`；`descriptions[0].value` 须为英文详述，含漏洞代码路径与原文；supportingMedia 用 HTML 且漏洞代码与 PoC 放 `<pre>`）；不要 Write 整份 `cve.json` |
 | 容器在跑但业务入口 404/无法登录、sidecar 已退出等靶场故障 | RequestLabRebuild(reason=...)；修复后 RecordLabRepair 再验洞 |
 | 入口 / sink / 根因分析错了，需要重新读源码补分析 | ReturnToWorker（写清缺哪一块）；上限 1 次，超过由系统误报 |

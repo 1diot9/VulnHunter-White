@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from .cvss31 import Cvss31Result
+from .cvss40 import Cvss40Result
 
 EXPOSURE_DIRECT = "direct"
 EXPOSURE_INDIRECT_CONSUMER = "indirect_consumer"
@@ -141,6 +142,32 @@ def cvss_indirect_consumer_error(
     if not issues:
         return None
     return "间接消费型 CVSS 约束：" + "；".join(issues)
+
+
+def cvss40_indirect_consumer_error(
+    cvss: Cvss40Result,
+    *,
+    upstream_chain_proven: bool = False,
+) -> str | None:
+    """CVSS 4.0 constraints for indirect consumer exposure."""
+    m = cvss.metrics
+    issues: list[str] = []
+    if m.get("AC") != "H":
+        issues.append("间接消费型须 AC:H（完整利用依赖上游注入链/特定语句形态，攻击者无法单独准备）")
+    if m.get("AV") == "N":
+        issues.append(
+            "间接消费型不得 AV:N（组件本身无直接网络入口）；"
+            "应写 AV:L（经上游应用本地/集成调用链触发）或 AV:A（相邻网络）"
+        )
+    high_cia = sum(1 for key in ("VC", "VI", "VA") if m.get(key) == "H")
+    if high_cia > 1 and not upstream_chain_proven:
+        issues.append(
+            "未证明完整上游利用链时，VC/VI/VA 至多一项标 H；"
+            "其余按已证明冲击标 L/N。若已在真实业务入口打通全链，Confirm 时传 upstream_chain_proven=true"
+        )
+    if not issues:
+        return None
+    return "间接消费型 CVSS 4.0 约束：" + "；".join(issues)
 
 
 def indirect_attack_surface_error(

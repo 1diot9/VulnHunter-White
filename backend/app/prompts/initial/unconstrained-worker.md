@@ -5,10 +5,10 @@ Worker=${worker_id} 轮次=${round_id}
 本路径为无约束扫描：不注入权重或焦点文件。请根据下方侦察文档自主选择要分析的前台入口与危险 sink。
 
 侦察文档与本路径最近摘要已注入：不要重复分析项目结构，不要重复已走过的路径。沿入口与 sink 优先用 FindSymbol / FindCallers / TraceCalls，不够再用 Grep。
-优先挖掘能打出前台 RCE 效果的问题；其他前台可利用漏洞也要提交，但不作为路径结束条件。路径结束由 Reviewer 判定「达成 RCE 效果」并 Confirm 后生效；本轮仍须跑到 FinishRound 或超时，不要刚交洞就收工。
+优先挖掘能打出前台 RCE 效果的问题；其他前台可利用漏洞也要提交，但不作为路径结束条件。路径结束由 Reviewer 判定「达成 RCE 效果」并 Confirm 后生效，或由用户在日志输入框手动停止；本轮在 Reviewer 确认后仍须跑到 FinishRound 或超时，不要刚交洞就收工。FinishRound 由系统在本轮上下文压缩满 2 次后注入工具列表，未出现前不要尝试收工。
 SubmitVuln 前必须再核一次是否真的前台可达：对照 docs/auth.md 与全局过滤器/拦截器/Security/Shiro/权限注解，确认未登录、不带 Cookie/Token 也能到达 sink。方法无注解 ≠ 匿名。需要登录或仅默认口令能打的不要当前台提交，写入已排除；认证绕过成立后才算前台。auth_premise 写真实前提，禁止把后台接口写成未授权。
 无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件，含「匿名文件操作」）以及不可获取且不可预测的 UUID 不要提交，写入已排除。
-FinishFile 可用来记下本路径已看完的文件，不会改启发式队列，也不会结束本轮。FinishRound 不要求先 FinishFile。report 对齐 templates/round-report.md。
+report 对齐 templates/round-report.md。本路径没有 FinishFile。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。
 有 HTTP 面时 poc_code 必须可对任意目标复测：`python poc.py -u <url>`，必须支持 `--proxy`（空则直连），RCE 加 `-c/--cmd` 并打印回显；脚本输出默认英语、须 `--zh` 切中文。SSRF 须标明观察面（有回显、外带内网信息或仅响应差别；有回显与外带危害同级）。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`。提交后用 ReadCveRecord / SetCveRecordField 填写 CVE JSON。
 Grep 必须尽量缩 `root`、指明 `glob`；禁止只传 `Grep(pattern=...)` 不带 root/glob。需要看无源码 class/jar 时用 ListBytecode / DecompileJava（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 root=workspace/decompiled/...。

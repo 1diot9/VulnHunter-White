@@ -113,7 +113,7 @@ registry.register(
             "descriptions[0].value 须含漏洞链路、漏洞代码（完整路径+源码）与 HTTP/API PoC，不要一句话摘要。"
             "纯文本 value 最多 4096 字符，超长会自动截断；长 payload 请用 <BASE64_PAYLOAD> 等占位符。"
             "affected[0] 须填 vendor+product，或 packageName+collectionURL（如 pip 包填 memoboard + https://pypi.python.org）。"
-            "CVSS 只写 vectorString（CVSS:3.1/...），不要手填 baseScore；向量无效会返回具体错误。"
+            "CVSS 只写 vectorString：3.1 用 CVSS:3.1/...，4.0 用 CVSS:4.0/...；不要手填 baseScore；向量无效会返回具体错误。"
             "PR 须与已确认的 attack_surface 一致（前台 PR:N，后台 user PR:L，admin PR:H）；"
             "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。"
             "仅可写预定义字段；未知信息请传统一占位符，不要 Write 整份 cve.json。"

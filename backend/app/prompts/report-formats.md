@@ -19,7 +19,7 @@
 
 ## 英文 GitHub Advisory（advisory_md / advisory.md）
 
-- 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### Vulnerable code` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`（含 **CVSS 3.1** 向量字符串；基础分与严重度标签由 ConfirmVuln 按向量自动计算，不要手填分数；不确定时留空向量由 Reviewer 填）。
+- 必须为英文 GitHub Advisory 填表稿，结构对齐 `templates/vuln-advisory.md`，至少包含：`## Title`、`## Description`（`### Summary` / `### Details` / `### Vulnerable code` / `### PoC` / `### Impact`）、`## Affected products`、`## Severity / CWE`（含 **CVSS 3.1** 与 **CVSS 4.0** 向量字符串；基础分与严重度标签由 ConfirmVuln 按向量自动计算，不要手填分数；不确定时留空向量由 Reviewer 填）。
 - `### Vulnerable code` 须写明漏洞代码段对应的仓库内**完整相对路径**（不要只写类名/方法名），并粘贴源码原文到 fenced 代码块，与中文报告 `### 漏洞代码` 同级证据，不要省略。
 - `### PoC` 须含 `http` 代码块形式的完整 HTTP 请求包；请求包内长字符串（约 80+ 字符）用描述性占位符（如 `<BASE64_PAYLOAD>`）替代。
 - 不要把中文报告粘进去；Title、Description、Impact 等章节正文一律英文；章节标题保持模板英文。用户指令即使是中文，也不要把 Advisory 改成中文。Description 按 GitHub 表单可直接粘贴。
@@ -28,7 +28,7 @@
 
 - 对齐 `templates/cve.json`。未知字段保持统一占位符 `VULNHUNTER_PENDING`。
 - Agent 挖掘/审核轮次用 `ReadCveRecord` / `SetCveRecordField` 逐字段填写，不要 Write 整份 `cve.json`。
-- CVSS 只写 `containers.cna.metrics[0].cvssV3_1.vectorString`（`CVSS:3.1/...` 基础向量）；`baseScore` / `baseSeverity` 由系统按 CVSS 3.1 计算，手填分数或 3.0/4.0 路径会被拒绝。
+- CVSS 写 `containers.cna.metrics[0].cvssV3_1.vectorString`（`CVSS:3.1/...`）和 `containers.cna.metrics[0].cvssV4_0.vectorString`（`CVSS:4.0/...`）；`baseScore` / `baseSeverity` 由系统计算，手填分数或 3.0 路径会被拒绝。
 - `containers.cna.affected[0]` 须满足 CVE 5.2：**vendor + product**，或 **packageName + collectionURL**（如 `https://pypi.python.org`）。可与 advisory `## Affected products` 对齐。
 - `containers.cna.descriptions[0].value` 必须是可供 CNA 审核的**英文详述**，不要一句话摘要，也不要把中文报告或 Advisory Markdown 章节标题粘进去。该字段**最多 4096 字符**；约 80+ 字符的长串须用 `<BASE64_PAYLOAD>` / `<JWT_TOKEN>` 等占位符，系统对超长文本会自动截断。按下面顺序写清：
   1. **产品**：厂商/单位、产品名称、受影响版本。

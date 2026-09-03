@@ -21,6 +21,13 @@ from ..cvss31 import (
     cvss_pr_alignment_error,
     parse_cvss31,
 )
+from ..cvss40 import (
+    CVE_VECTOR_PATH as CVE4_VECTOR_PATH,
+    Cvss40Error,
+    apply_cvss40_to_cve_record,
+    cvss40_pr_alignment_error,
+    parse_cvss40,
+)
 from .paths import vuln_dir
 
 CVE_FIELD_PLACEHOLDER = "VULNHUNTER_PENDING"
@@ -150,6 +157,13 @@ FILLABLE_FIELDS: tuple[FillableField, ...] = (
         "分数由系统计算，不要手填 baseScore）。"
         "PR 须与已确认的 attack_surface 一致：前台 PR:N，后台 user PR:L，admin PR:H。"
         "XSS 默认 UI:R/S:C/C:L/I:L/A:N，不要因 Cookie/账户接管把 C/I 标 H。",
+        required=False,
+    ),
+    FillableField(
+        "containers.cna.metrics[0].cvssV4_0.vectorString",
+        "CVSS 4.0 基础向量（只填度量，如 CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N；"
+        "分数由系统计算，不要手填 baseScore）。"
+        "PR 须与已确认的 attack_surface 一致。XSS 默认 UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N。",
         required=False,
     ),
 )
@@ -610,13 +624,13 @@ def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[
             "ok": False,
             "error": (
                 "不要手填 CVSS 分数或严重度标签。"
-                f"请写入 {CVE_VECTOR_PATH}，分数由系统按 CVSS 3.1 计算。"
+                f"请写入 {CVE_VECTOR_PATH} 或 {CVE4_VECTOR_PATH}，分数由系统计算。"
             ),
         }
-    if normalized.endswith(".cvssV4_0.vectorString") or normalized.endswith(".cvssV3_0.vectorString"):
+    if normalized.endswith(".cvssV3_0.vectorString"):
         return {
             "ok": False,
-            "error": f"请使用 CVSS 3.1 向量路径 {CVE_VECTOR_PATH}，不要写 3.0/4.0。",
+            "error": f"请使用 CVSS 3.1 向量路径 {CVE_VECTOR_PATH} 或 CVSS 4.0 路径 {CVE4_VECTOR_PATH}，不要写 3.0。",
         }
     if normalized not in _FILLABLE_PATHS:
         return {
@@ -659,6 +673,42 @@ def set_cve_field(project_id: int, vuln_id: int, path: str, value: Any) -> dict[
             "severity_score": parsed.score,
             "severity": parsed.severity,
             "message": f"已写入向量，系统计分为 {parsed.score:.1f} {parsed.severity_en}",
+        }
+    if normalized == CVE4_VECTOR_PATH:
+        if is_unfilled_value(value):
+            set_by_path(record, normalized, CVE_FIELD_PLACEHOLDER)
+            write_cve_record(project_id, vuln_id, record)
+            return {
+                "ok": True,
+                "path": normalized,
+                "current_value": CVE_FIELD_PLACEHOLDER,
+                "needs_fill": False,
+                "quality_issues": [],
+            }
+        try:
+            parsed40 = parse_cvss40(value)
+        except Cvss40Error as exc:
+            return {"ok": False, "error": str(exc)}
+        with SessionLocal() as db:
+            vuln = db.get(Vuln, int(vuln_id))
+            surface = (getattr(vuln, "attack_surface", None) or "").strip() if vuln else ""
+            account = (getattr(vuln, "required_account", None) or "").strip() or None if vuln else None
+        if surface:
+            pr_mismatch = cvss40_pr_alignment_error(parsed40, surface, account)
+            if pr_mismatch:
+                return {"ok": False, "error": pr_mismatch}
+        apply_cvss40_to_cve_record(record, parsed40)
+        write_cve_record(project_id, vuln_id, record)
+        return {
+            "ok": True,
+            "path": normalized,
+            "current_value": parsed40.vector,
+            "needs_fill": False,
+            "quality_issues": [],
+            "cvss4_vector": parsed40.vector,
+            "cvss4_score": parsed40.score,
+            "severity": parsed40.severity,
+            "message": f"已写入 CVSS 4.0 向量，系统计分为 {parsed40.score:.1f} {parsed40.severity_en}",
         }
     write_value: Any = value
     truncated = False

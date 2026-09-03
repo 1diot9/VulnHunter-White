@@ -12,9 +12,10 @@ window so the same call is not blocked forever. Hitting that threshold
 five times in one round aborts the session.
 
 Historical-vuln recon sessions get a persist reminder after N consecutive
-turns without WriteOldVuln. Worker mining gets a FinishFile reminder after
-M consecutive turns without FinishFile. Calling the corresponding tool
-resets the idle counter. Unrelated tools (Read/Grep/…) do not. Code-map
+turns without WriteOldVuln. Heuristic worker mining gets a FinishFile
+reminder after M consecutive turns without FinishFile. Calling the
+corresponding tool resets the idle counter. Unrelated tools (Read/Grep/…)
+do not. Unconstrained mining has no persist-to-finish reminder. Code-map
 and auth recon sessions are not nudged to persist.
 """
 
@@ -159,11 +160,10 @@ WORKER_FINISH_NUDGE = (
     "仍有未查清的焦点链路可继续，但不要重复已读代码或无限扩读。上下文会被压缩，拖延标记会丢失进展。"
 )
 
-UNCONSTRAINED_FINISH_NUDGE = (
-    "看门狗提醒：无约束扫描已连续 {n} 轮未 SubmitVuln / FinishFile / FinishRound。"
-    "请继续自主挖掘前台可利用漏洞，优先能达成 RCE 效果的问题；其他前台洞也要提交。"
-    "已看完的文件可用 FinishFile（不结束本轮）。本趟探索收束后 FinishRound。"
-    "不要等 Reviewer 确认才收工；路径结束由 Reviewer 判定 RCE 效果，当前轮须自己跑完。"
+UNCONSTRAINED_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。请立刻根据注入的地图与鉴权自主挖掘前台可利用漏洞，"
+    "优先 FindSymbol / FindCallers / TraceCalls，不够再用 Read/Grep。"
+    "满足闸门后 SubmitVuln。FinishRound 由系统在上下文压缩满 2 次后注入，未出现前不要尝试收工。"
 )
 
 FAST_FINISH_NUDGE = (
@@ -202,7 +202,6 @@ PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon-old-vuln-ghsa": frozenset({"WriteOldVuln"}),
     "recon-source-ext": frozenset({"AddSourceExt"}),
     "worker": frozenset({"FinishFile"}),
-    "unconstrained-worker": frozenset({"FinishFile", "FinishRound", "SubmitVuln"}),
     "fast-worker": frozenset({"FinishSink"}),
     "bypass-worker": frozenset({"FinishBypass"}),
     "sink-triage": frozenset({"FinishSinkTriage"}),
@@ -229,7 +228,7 @@ class AgentWatchdog:
     def _persist_interval(self) -> int:
         if self.phase == "cli-indexer":
             return 8
-        if self.phase in ("worker", "unconstrained-worker", "fast-worker", "bypass-worker", "sink-triage"):
+        if self.phase in ("worker", "fast-worker", "bypass-worker", "sink-triage"):
             return self.worker_finish_interval
         if self.phase in RECON_PERSIST_PHASES:
             return self.persist_nudge_interval
@@ -262,8 +261,6 @@ class AgentWatchdog:
         if self.idle_turns % interval == 0:
             if self.phase == "worker":
                 return WORKER_FINISH_NUDGE.format(n=self.idle_turns)
-            if self.phase == "unconstrained-worker":
-                return UNCONSTRAINED_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "fast-worker":
                 return FAST_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "bypass-worker":
@@ -286,8 +283,6 @@ class AgentWatchdog:
         n = self.idle_turns
         if self.phase == "worker":
             return f"看门狗：挖掘连续 {n} 轮未 FinishFile，已提醒立刻标记已确认无漏洞的文件"
-        if self.phase == "unconstrained-worker":
-            return f"看门狗：无约束扫描连续 {n} 轮未推进，已提醒继续挖前台洞或 FinishRound"
         if self.phase == "fast-worker":
             return f"看门狗：快速扫描连续 {n} 轮未 FinishSink，已提醒立刻结束本条 Sink"
         if self.phase == "bypass-worker":
@@ -317,6 +312,8 @@ class AgentWatchdog:
             return ATTACK_CHAIN_NO_TOOL_NUDGE
         if self.phase in ("fast-worker", "fast_worker"):
             return FAST_NO_TOOL_NUDGE
+        if self.phase in ("unconstrained-worker", "unconstrained_worker"):
+            return UNCONSTRAINED_NO_TOOL_NUDGE
         if self.phase in ("bypass-worker", "bypass_worker"):
             return BYPASS_NO_TOOL_NUDGE
         if self.phase in ("sink-triage", "sink_triage"):

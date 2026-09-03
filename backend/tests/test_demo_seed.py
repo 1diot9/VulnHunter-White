@@ -146,6 +146,7 @@ def test_bundled_showcase_has_current_advisory_and_cve():
         "### Impact",
         "## Affected products",
         "**CVSS 3.1:**",
+        "**CVSS 4.0:**",
         "```http",
     )
     for vid, file_path in files.items():

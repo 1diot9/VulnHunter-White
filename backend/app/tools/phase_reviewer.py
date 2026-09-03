@@ -85,10 +85,18 @@ from ..cvss31 import (
     parse_cvss31,
     stamp_advisory_cvss31,
 )
+from ..cvss40 import (
+    Cvss40Error,
+    Cvss40Result,
+    apply_cvss40_to_cve_record,
+    cvss40_pr_alignment_error,
+    parse_cvss40,
+)
 from ..exposure_mode import (
     EXPOSURE_DIRECT,
     EXPOSURE_INDIRECT_CONSUMER,
     cvss_indirect_consumer_error,
+    cvss40_indirect_consumer_error,
     exposure_mode_label,
     indirect_attack_surface_error,
     indirect_exposure_section_gap,
@@ -168,6 +176,7 @@ def _review_label_body(
     *,
     exposure_mode: str | None = None,
     upstream_chain_proven: bool = False,
+    cvss40: Cvss40Result | None = None,
 ) -> str:
     lines = [f"- 攻击面：{_SURFACE_LABELS[surface]}"]
     if surface == "backend" and account:
@@ -182,15 +191,25 @@ def _review_label_body(
     premise_label = config_premise_label(config_premise)
     if premise_label:
         lines.append(f"- 配置前提：{premise_label}")
-    lines.extend(
+    score_lines = [
+        f"- 严重度：{cvss.severity_label}（{cvss.severity}）",
+        f"- CVSS 3.1：{cvss.score:.1f}",
+        f"- 评分向量：{cvss.vector}",
+    ]
+    if cvss40 is not None:
+        score_lines.extend(
+            [
+                f"- CVSS 4.0：{cvss40.score:.1f}",
+                f"- CVSS 4.0 向量：{cvss40.vector}",
+            ]
+        )
+    score_lines.extend(
         [
-            f"- 严重度：{cvss.severity_label}（{cvss.severity}）",
-            f"- CVSS 3.1：{cvss.score:.1f}",
-            f"- 评分向量：{cvss.vector}",
             f"- 价值分层：{submission.tier_label}（{submission.tier}）",
             f"- 分层理由：{submission.reason}",
         ]
     )
+    lines.extend(score_lines)
     if submission.root_cause_key:
         lines.append(f"- 根因合并键：{submission.root_cause_key}")
     return "\n".join(lines)
@@ -217,23 +236,40 @@ def mark_timeout_give_up(vuln: Vuln, streak: int) -> str:
     return reason
 
 
-def _stamp_cvss_artifacts(project_id: int, vuln_id: int, cvss: Cvss31Result) -> None:
-    """Write computed CVSS 3.1 score into advisory.md and cve.json."""
+def _stamp_cvss_artifacts(
+    project_id: int,
+    vuln_id: int,
+    cvss: Cvss31Result,
+    cvss40: Cvss40Result | None = None,
+) -> None:
+    """Write computed CVSS 3.1 / 4.0 scores into advisory.md and cve.json."""
     adv_path = vuln_dir(project_id, vuln_id) / "advisory.md"
     if adv_path.is_file():
         stamped = stamp_advisory_cvss31(
             adv_path.read_text(encoding="utf-8", errors="ignore"),
             cvss,
+            cvss40,
         )
         write_advisory_md(adv_path, stamped)
     record = ensure_cve_record(project_id, vuln_id)
     apply_cvss31_to_cve_record(record, cvss)
+    if cvss40 is not None:
+        apply_cvss40_to_cve_record(record, cvss40)
     write_cve_record(project_id, vuln_id, record)
 
 
-def _commit_false_positive(ctx, db, vuln: Vuln, vuln_id: int, reason: str, message: str) -> dict[str, Any]:
+def _commit_false_positive(
+    ctx,
+    db,
+    vuln: Vuln,
+    vuln_id: int,
+    reason: str,
+    message: str,
+    *,
+    fp_kind: str | None = None,
+) -> dict[str, Any]:
     vuln.status = "false_positive"
-    vuln.fp_kind = None
+    vuln.fp_kind = fp_kind
     vuln.return_reason = reason
     _append_false_positive_reason(vuln.project_id, int(vuln_id), reason)
     db.commit()
@@ -451,6 +487,26 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
     vuln_id = args.get("vuln_id") or ctx.vuln_id
     if not vuln_id:
         return {"ok": False, "error": "缺少 vuln_id"}
+    with SessionLocal() as db:
+        early_vuln = db.get(Vuln, int(vuln_id))
+        if not early_vuln or early_vuln.project_id != ctx.project_id:
+            return {"ok": False, "error": "漏洞不存在"}
+        from ..services.source_baseline import (
+            FP_KIND_KNOWN_CVE_PATCHED,
+            known_patched_cve_false_positive_reason,
+        )
+
+        fp_reason = known_patched_cve_false_positive_reason(ctx.project_id, early_vuln)
+        if fp_reason:
+            return _commit_false_positive(
+                ctx,
+                db,
+                early_vuln,
+                int(vuln_id),
+                fp_reason,
+                "已知 CVE 在旧源码快照上复现，系统自动判为误报",
+                fp_kind=FP_KIND_KNOWN_CVE_PATCHED,
+            )
     evidence_raw = str(args.get("evidence_level") or "").strip()
     if evidence_raw and normalize_evidence_level(evidence_raw) is None:
         return {"ok": False, "error": "evidence_level 须为 dynamic|static_only|mcp|harness"}
@@ -465,16 +521,20 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         account = None
     try:
         cvss = parse_cvss31(args.get("cvss_vector"))
+        cvss40 = parse_cvss40(args.get("cvss4_vector"))
         submission = normalize_submission_decision(
             submission_tier=args.get("submission_tier"),
             submission_reason=args.get("submission_reason"),
             root_cause_key=args.get("root_cause_key"),
         )
-    except (Cvss31Error, ValueError) as exc:
+    except (Cvss31Error, Cvss40Error, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     pr_mismatch = cvss_pr_alignment_error(cvss, surface, account)
     if pr_mismatch:
         return {"ok": False, "error": pr_mismatch}
+    pr40_mismatch = cvss40_pr_alignment_error(cvss40, surface, account)
+    if pr40_mismatch:
+        return {"ok": False, "error": pr40_mismatch}
     try:
         exposure_mode = normalize_exposure_mode(args.get("exposure_mode"))
     except ValueError as exc:
@@ -487,6 +547,12 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         )
         if cvss_indirect:
             return {"ok": False, "error": cvss_indirect}
+        cvss40_indirect = cvss40_indirect_consumer_error(
+            cvss40,
+            upstream_chain_proven=upstream_chain_proven,
+        )
+        if cvss40_indirect:
+            return {"ok": False, "error": cvss40_indirect}
         surface_indirect = indirect_attack_surface_error(
             surface,
             upstream_chain_proven=upstream_chain_proven,
@@ -781,7 +847,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             write_poc_code(ctx.project_id, int(vuln_id), str(poc_code))
         if advisory_md not in (None, ""):
             write_advisory_md(vuln_dir(vuln.project_id, int(vuln_id)) / "advisory.md", str(advisory_md))
-        _stamp_cvss_artifacts(ctx.project_id, int(vuln_id), cvss)
+        _stamp_cvss_artifacts(ctx.project_id, int(vuln_id), cvss, cvss40)
         if harness_code:
             write_harness_code(
                 ctx.project_id,
@@ -803,6 +869,7 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 config_premise=vuln.config_premise,
                 exposure_mode=exposure_mode,
                 upstream_chain_proven=upstream_chain_proven,
+                cvss40=cvss40,
             ),
         )
         db.commit()
@@ -852,6 +919,8 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "severity_label": cvss.severity_label,
         "severity_score": cvss.score,
         "cvss_vector": cvss.vector,
+        "cvss4_vector": cvss40.vector,
+        "cvss4_score": cvss40.score,
         "submission_tier": submission.tier,
         "submission_tier_label": submission.tier_label,
         "submission_reason": submission.reason,
@@ -1090,7 +1159,7 @@ def register_reviewer_tools() -> None:
         ToolSpec(
             name="ConfirmVuln",
             description=(
-                "确认漏洞，按 CVSS 3.1 向量由系统计分，并标注价值分层。"
+                "确认漏洞，按 CVSS 3.1 与 CVSS 4.0 向量由系统计分，并标注价值分层。"
                 "只确认默认/官方部署下攻击者可单独利用、且能打出可观察有害冲击的问题；"
                 "不要把仅 sink 可达、靠 docker exec 种文件/组合独立写原语才成立、"
                 "无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）、"
@@ -1112,7 +1181,8 @@ def register_reviewer_tools() -> None:
                 "局部验证打通时标 harness，不要标 dynamic；"
                 "harness 确认前报告须含「### 漏洞代码」（完整文件路径 + 源码原文）。"
                 "harness 必须打印运行时实际数据，禁止写死 SUCCESS/success=true 或预期回显字面量。"
-                "还必须标注 cvss_vector（CVSS 3.1 基础向量，只填度量不要填分数）、"
+                "还必须标注 cvss_vector（CVSS 3.1 基础向量）与 cvss4_vector（CVSS 4.0 基础向量），"
+                "只填度量不要填分数、"
                 "submission_tier、submission_reason（分层理由须用中文）。"
                 "核对 Worker 的 config_premise；错误则 Confirm 时传入纠正。"
                 "specific 不含官方已明确警示会导致安全风险的配置；仅在此类开关下才成立则误报。"
@@ -1125,6 +1195,7 @@ def register_reviewer_tools() -> None:
                 "（不必看 vuln_type 是否为 rce）；true 且前台确认后该路径结束，当前挖掘轮仍会跑完。"
                 "无约束扫描产出始终走赏金闸门。"
                 "严重度按 CVSS 3.1 向量由系统计分，不要手填分数，也不要按漏洞类型映射。"
+                "Advisory / CVE JSON 同时回写 CVSS 4.0（cvss4_vector，分数同样由系统计算）。"
                 "PR 必须与 attack_surface / required_account 一致，否则拒绝确认。"
                 "SSRF 须按观察面确认：有回显或外带内网信息才能写可读元数据/内网正文（二者危害同级）；"
                 "仅状态码/时延/报错差别、或仅出网回调不含内网内容，只算内网端口探测，向量 C/I/A 不要按凭据窃取标 H。"
@@ -1202,6 +1273,18 @@ def register_reviewer_tools() -> None:
                             + cvss_scoring_prompt()
                         ),
                     },
+                    "cvss4_vector": {
+                        "type": "string",
+                        "description": (
+                            "必填。CVSS 4.0 基础评分向量，只填度量，不要填分数。"
+                            "格式 CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N。"
+                            "PR 必须与 attack_surface 一致（同 3.1）。"
+                            "UI 为 N|P|A（XSS 默认 UI:P，不要写成 3.1 的 UI:R）。"
+                            "VC/VI/VA 为脆弱系统冲击；SC/SI/SA 为后续系统，无跨边界时全 N。"
+                            "XSS 默认 UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N，不要因 Cookie/账户接管把 VC/VI 标 H。"
+                            "间接消费型须 AC:H 且 AV 不得为 N，未证明上游链时 VC/VI/VA 至多一项 H。"
+                        ),
+                    },
                     "submission_tier": {
                         "type": "string",
                         "description": (
@@ -1267,7 +1350,7 @@ def register_reviewer_tools() -> None:
                         "type": "string",
                         "description": (
                             "可选。英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
-                            "Severity/CWE 须含 CVSS 3.1 向量；基础分由系统按向量计算，不要手填分数。"
+                            "Severity/CWE 须含 CVSS 3.1 与 CVSS 4.0 向量；基础分由系统按向量计算，不要手填分数。"
                             "须含 ### Vulnerable code（完整相对路径 + 源码原文）。"
                             "系统会回写 vulns/{id}/advisory.md。也可本轮 Write 该文件后 Confirm。"
                         ),
@@ -1316,6 +1399,7 @@ def register_reviewer_tools() -> None:
                 "required": [
                     "attack_surface",
                     "cvss_vector",
+                    "cvss4_vector",
                     "submission_tier",
                     "submission_reason",
                 ],

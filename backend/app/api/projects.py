@@ -74,6 +74,7 @@ from ..schemas import (
     normalize_recon_hint,
     normalize_worker_hint,
     normalize_lab_retry_message,
+    SourceBaselineDecisionBody,
     LabSetupRetryBody,
     ConversationBody,
     ConversationStateOut,
@@ -95,6 +96,11 @@ from ..services.llm_settings import normalize_project_llm_model
 from ..services.token_budget import maybe_pause_for_token_budget, parse_max_token_usage
 from ..services import custom_audit_modes as cam
 from ..services.paths import ensure_project_dirs, force_rmtree, project_dir, project_root
+from ..services.source_baseline import (
+    acknowledge_source_baseline,
+    run_source_baseline_check,
+    source_baseline_out,
+)
 
 _ZIP_WRITE_CHUNK = 1024 * 1024
 
@@ -134,6 +140,7 @@ from ..services.pipeline import (
     request_recon_subphase_rerun,
     request_lab_setup_retry,
     request_resume,
+    reclaim_premature_project_complete,
     request_worker_progress_reset,
     start_audit,
     start_ingest_and_audit,
@@ -346,6 +353,7 @@ def _project_out(
         weight_exts = indexed_weight_exts(db, [p.id]).get(p.id, [])
     verify_mode = project_verify_mode(p)
     lab_done, lab_failed = lab_setup_state(p.id)
+    baseline = source_baseline_out(p.id)
     if include_phase_states:
         phase_fields = _phase_state_fields(p.id)
     else:
@@ -388,6 +396,9 @@ def _project_out(
         worker_hint=(getattr(p, "worker_hint", None) or "").strip(),
         recon_hint=(getattr(p, "recon_hint", None) or "").strip(),
         max_token_usage=int(getattr(p, "max_token_usage", 0) or 0),
+        source_baseline_status=str(getattr(p, "source_baseline_status", None) or "pending"),
+        source_baseline_blocks_mining=bool(baseline.get("blocks_mining")),
+        source_baseline=baseline.get("report"),
         error=p.error,
         worker_concurrency=p.worker_concurrency,
         created_at=p.created_at,
@@ -738,6 +749,13 @@ def get_project(
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "项目不存在")
+    if p.status == "completed":
+        reclaim_premature_project_complete(project_id)
+        with SessionLocal() as db:
+            p = db.get(Project, project_id)
+            if not p:
+                raise HTTPException(404, "项目不存在")
+    with SessionLocal() as db:
         etag = _project_detail_etag(db, p)
         if since.strip().strip('"') == etag:
             return ProjectOut(
@@ -1301,6 +1319,36 @@ def resume_project(project_id: int) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True, **get_phase_states(project_id)}
+
+
+@router.post("/{project_id}/source-baseline", response_model=ProjectOut)
+def decide_source_baseline(project_id: int, body: SourceBaselineDecisionBody) -> ProjectOut:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise HTTPException(404, "项目不存在")
+    if body.action == "acknowledge":
+        try:
+            acknowledge_source_baseline(project_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        live_log.system(project_id, "已确认继续审计当前源码快照（已知 CVE 提交将判为误报）")
+    elif body.action == "recheck":
+        report = run_source_baseline_check(project_id)
+        if report.status == "stale":
+            live_log.system(
+                project_id,
+                f"源码基线重新检查：仍发现 {len(report.issues)} 条上游已修复 CVE 仍落在当前版本范围内",
+            )
+        else:
+            live_log.system(project_id, "源码基线重新检查：未发现版本滞后问题")
+    else:
+        raise HTTPException(400, "action 无效")
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise HTTPException(404, "项目不存在")
+        return _project_out(db, proj)
 
 
 @router.post("/{project_id}/code-intelligence/rebuild")

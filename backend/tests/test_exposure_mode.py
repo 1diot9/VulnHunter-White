@@ -3,10 +3,12 @@ from __future__ import annotations
 import pytest
 
 from app.cvss31 import parse_cvss31
+from app.cvss40 import parse_cvss40
 from app.exposure_mode import (
     EXPOSURE_DIRECT,
     EXPOSURE_INDIRECT_CONSUMER,
     cvss_indirect_consumer_error,
+    cvss40_indirect_consumer_error,
     indirect_attack_surface_error,
     indirect_exposure_section_gap,
     indirect_submission_tier_error,
@@ -57,6 +59,16 @@ def test_cvss_indirect_consumer_constraints():
 
     proven = parse_cvss31("CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H")
     assert cvss_indirect_consumer_error(proven, upstream_chain_proven=True) is None
+
+
+def test_cvss40_indirect_consumer_constraints():
+    bad_av = parse_cvss40("CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N")
+    err = cvss40_indirect_consumer_error(bad_av)
+    assert err is not None
+    assert "AV" in err
+
+    ok = parse_cvss40("CVSS:4.0/AV:L/AC:H/AT:N/PR:L/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N")
+    assert cvss40_indirect_consumer_error(ok) is None
 
 
 def test_indirect_submission_and_surface_gates():

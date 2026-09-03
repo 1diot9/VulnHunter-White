@@ -11,7 +11,7 @@ from ..mining_paths import (
     mining_path_from_role,
     normalize_mining_path,
 )
-from ..models import FileWeight, Project, SessionLocal, Sink, Vuln
+from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Vuln
 from ..services.affected_locations import (
     AFFECTED_LOCATIONS_HEADING,
     append_affected_locations,
@@ -95,6 +95,24 @@ FINISH_ROUND_NEED_ENTRY = (
     "中途 FinishFile 的是其它文件，请继续分析注入焦点；"
     "仅当该焦点已按角色分析完并 FinishFile 后再 FinishRound。"
 )
+UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS = 2
+UNCONSTRAINED_FINISH_ROUND_LOCKED = (
+    f"FinishRound 须等本轮上下文压缩满 {UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS} 次后"
+    "才会出现在工具列表中，当前不可用。请继续挖掘前台洞，不要尝试收工。"
+)
+
+
+def unconstrained_finish_round_ready(state: dict[str, Any] | None) -> bool:
+    n = int((state or {}).get("compress_count") or 0)
+    return n >= UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
+
+
+def unconstrained_finish_round_description() -> str:
+    return (
+        "本趟探索收束后结束本轮。须附 report，结构对齐 templates/round-report.md"
+        "（本轮入口、挖掘方向、已尝试、已排除）。不要写建议后续方向。"
+        "不要刚 SubmitVuln 就收工。本路径没有 FinishFile。"
+    )
 
 
 def _norm_audit_path(p: str) -> str:
@@ -216,9 +234,46 @@ def mark_unconstrained_done(project_id: int) -> bool:
         return True
 
 
+def clear_unconstrained_done(project_id: int) -> bool:
+    """Clear unconstrained_done so the path can start new rounds."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not bool(getattr(proj, "unconstrained_enabled", False)):
+            return False
+        if not bool(getattr(proj, "unconstrained_done", False)):
+            return False
+        proj.unconstrained_done = False
+        db.commit()
+        return True
+
+
+_ACTIVE_UNCONSTRAINED_RUN_STATUSES = ("running", "paused", "awaiting_user")
+
+
+def unconstrained_worker_active(project_id: int) -> bool:
+    """True while an unconstrained-worker round is still in flight (incl. RCE tail round)."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or not bool(getattr(proj, "unconstrained_enabled", False)):
+            return False
+        active = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.phase == "unconstrained-worker",
+                PhaseRun.status.in_(_ACTIVE_UNCONSTRAINED_RUN_STATUSES),
+            )
+            .limit(1)
+            .first()
+        )
+        return active is not None
+
+
 def project_complete_gates(project_id: int) -> bool:
-    """Mining done + no pending_review/returned/fixing."""
+    """Mining done + no pending_review/returned/fixing + no in-flight unconstrained round."""
     if not mining_complete(project_id):
+        return False
+    if unconstrained_worker_active(project_id):
         return False
     with SessionLocal() as db:
         pending = (
@@ -338,6 +393,16 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return soft
 
     mining_path = _resolve_mining_path(ctx)
+    from ..services.source_baseline import known_patched_cve_submit_block_reason
+
+    patched_block = known_patched_cve_submit_block_reason(
+        ctx.project_id,
+        args,
+        mining_path=mining_path,
+    )
+    if patched_block:
+        return {"ok": False, "error": patched_block}
+
     report_md_raw = args.get("report_md")
     if report_md_raw:
         report_title_blocked = chinese_title_block_reason(report_md=str(report_md_raw))
@@ -498,7 +563,7 @@ summary: {args.get('source_sink', '')[:200]}
 
 ## 摘要
 - 漏洞技术类型：{vtype}
-- 严重度：待 Reviewer 填写 CVSS 3.1 向量（分数由系统计算，不按类型映射）
+- 严重度：待 Reviewer 填写 CVSS 3.1 与 CVSS 4.0 向量（分数由系统计算，不按类型映射）
 - CWE：{args.get('cwe')}
 - 位置：{args.get('file_path')}:{args.get('line_no')}
 - 配置前提：{config_premise_label(args.get('config_premise')) or args.get('config_premise')}
@@ -607,13 +672,9 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not paths:
         return {"ok": False, "error": "缺少 path/paths"}
     done = []
-    unconstrained = (ctx.role or "").strip().lower() == "unconstrained_worker"
     with SessionLocal() as db:
         for p in paths:
             p = _norm_audit_path(p)
-            if unconstrained:
-                done.append(p)
-                continue
             fw = (
                 db.query(FileWeight)
                 .filter(FileWeight.project_id == ctx.project_id, FileWeight.path == p)
@@ -628,15 +689,6 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
         db.commit()
     ctx.state.setdefault("finished_files_this_round", [])
     ctx.state["finished_files_this_round"].extend(done)
-    if unconstrained:
-        return {
-            "ok": True,
-            "finished": done,
-            "count": len(done),
-            "message": (
-                "已记下本路径看过的文件（不改启发式定权队列）。FinishFile 不等于结束本轮，请继续挖前台洞。"
-            ),
-        }
     return {
         "ok": True,
         "finished": done,
@@ -646,7 +698,12 @@ def _finish_file(ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _finish_round(ctx, args: dict[str, Any]) -> dict[str, Any]:
-    unconstrained = (ctx.role or "").strip().lower() == "unconstrained_worker"
+    unconstrained = (ctx.role or "").strip().lower() in (
+        "unconstrained_worker",
+        "unconstrained-worker",
+    )
+    if unconstrained and not unconstrained_finish_round_ready(ctx.state):
+        return {"ok": False, "error": UNCONSTRAINED_FINISH_ROUND_LOCKED}
     finished = ctx.state.get("finished_files_this_round") or []
     if not unconstrained and not finished:
         return {"ok": False, "error": FINISH_ROUND_NEED_FILE}
@@ -774,7 +831,7 @@ def register_worker_tools() -> None:
                 "应填写 root_cause_key（类型:稳定锚点）。"
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次调用会提醒复查；"
                 "确认仍要单独交时，再次调用并传 confirm_not_duplicate=true（仅本会话提醒过一次后才接受）。"
-                "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 填写 CVSS 3.1 向量，分数由系统计算。"
+                "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 填写 CVSS 3.1 与 CVSS 4.0 向量，分数由系统计算。"
                 "必填 config_premise=default|specific（默认配置/特定配置）。"
                 "特定配置指须改应用自身配置才成立，且该配置不是官方已明确警示会导致安全风险的选项；"
                 "仅在官方已警示的不安全开关下才成立的不要提交。"
@@ -858,7 +915,7 @@ def register_worker_tools() -> None:
                         "description": (
                             "英文 GitHub Advisory 填表稿，结构对齐 templates/vuln-advisory.md。"
                             "含 Title、Description（Summary/Details/Vulnerable code/PoC/Impact）、"
-                            "Affected products、Severity/CWE（含 CVSS 3.1 向量；分数由系统计算）。"
+                            "Affected products、Severity/CWE（含 CVSS 3.1 与 CVSS 4.0 向量；分数由系统计算）。"
                             "Vulnerable code 须含完整相对路径与源码原文。不要写中文报告。"
                         ),
                     },

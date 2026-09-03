@@ -265,6 +265,39 @@ def test_compress_reads_todolist_from_workspace_file(tmp_env, project):
     assert "文件中的待办" in out[1]["content"]
 
 
+def test_unconstrained_compress_unlocks_finish_round(tmp_env, project):
+    from app.tools.phase_worker import UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
+
+    loop = AgentLoop(
+        project_id=project,
+        role="unconstrained_worker",
+        phase="unconstrained-worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="u1",
+    )
+    names = {t["function"]["name"] for t in loop._openai_tools()}
+    assert "FinishRound" not in names
+    assert "FinishFile" not in names
+    messages = [{"role": "user", "content": "task"}]
+    loop._compress(messages, force_summary="第一次压缩")
+    assert loop.state["compress_count"] == 1
+    loop._maybe_unlock_unconstrained_finish_round(messages)
+    assert loop.state.get("finish_round_unlocked") is None
+    names = {t["function"]["name"] for t in loop._openai_tools()}
+    assert "FinishRound" not in names
+    loop._compress(messages, force_summary="第二次压缩")
+    assert loop.state["compress_count"] == UNCONSTRAINED_FINISH_ROUND_AFTER_COMPRESS
+    loop._maybe_unlock_unconstrained_finish_round(messages)
+    assert loop.state["finish_round_unlocked"] is True
+    assert any("FinishRound 现已加入工具列表" in (m.get("content") or "") for m in messages)
+    names = {t["function"]["name"] for t in loop._openai_tools()}
+    assert "FinishRound" in names
+    before = len(messages)
+    loop._maybe_unlock_unconstrained_finish_round(messages)
+    assert len(messages) == before
+
+
 def test_chat_http_timeout_scales_and_caps(monkeypatch):
     monkeypatch.setattr(settings, "chat_connect_timeout", 30.0)
     monkeypatch.setattr(settings, "chat_read_timeout_min", 180.0)

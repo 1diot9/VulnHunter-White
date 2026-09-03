@@ -686,6 +686,63 @@ def write_verifier_skip(project_id: int, vuln_id: int, reason: str) -> None:
     upsert_report_section(vuln_dir(project_id, int(vuln_id)) / "report.md", _REVIEW_HEADING, body)
 
 
+def apply_verifier_timeout_fail(
+    project_id: int,
+    vuln_id: int,
+    *,
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Force-fail a pending verifier vuln after AgentLoop timeout. Does not reopen a round."""
+    from ..config import settings
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, int(vuln_id))
+        if not vuln or vuln.project_id != project_id:
+            return {"applied": False, "reason": "missing"}
+        current = normalize_verifier_status(vuln.verifier_status)
+        if current != VERIFIER_PENDING:
+            return {"applied": False, "reason": current or VERIFIER_NONE, "verifier_status": current}
+
+        query, sample = resolve_fofa_sample(project_id, state)
+        submitted = []
+        if state:
+            submitted = parse_verifier_targets(state.get("verifier_targets"))
+            if not submitted:
+                submitted = parse_verifier_targets(state.get("targets"))
+        targets = merge_verifier_targets(fofa_sample=sample, submitted=submitted)
+        success_n, fail_n, untested_n = target_status_counts(targets)
+        tested_count = success_n + fail_n
+        timeout_sec = max(1, int(getattr(settings, "timeout_verifier", 1800) or 1800))
+        notes = (
+            f"系统因本轮互联网验证超时（{timeout_sec}s）自动判定 fail，不再为同一条漏洞新开验证轮。"
+            f"超时前未通过 FinishVerifier 收口"
+            f"（成功 {success_n} · 失败 {fail_n} · 未测 {untested_n}）。"
+        )
+        body = format_verifier_report(
+            verdict="fail",
+            fofa_query=query,
+            tested_count=tested_count,
+            notes=notes,
+            targets=targets,
+        )
+        rel = verifier_report_rel(int(vuln_id))
+        report_path = verifier_report_path(project_id, int(vuln_id))
+        report_path.write_text(f"# Verifier · 漏洞 #{int(vuln_id)}\n\n{body}", encoding="utf-8")
+        upsert_report_section(vuln_dir(project_id, int(vuln_id)) / "report.md", _REVIEW_HEADING, body)
+        vuln.verifier_status = VERIFIER_FAILED
+        vuln.verifier_targets = dump_verifier_targets(targets)
+        vuln.verifier_fofa_query = query or None
+        db.commit()
+        return {
+            "applied": True,
+            "verifier_status": VERIFIER_FAILED,
+            "verdict": "fail",
+            "report_path": rel,
+            "targets": targets,
+            "notes": notes,
+        }
+
+
 def mark_internet_unsafe_skipped(project_id: int, vuln_id: int, reason: str) -> None:
     with SessionLocal() as db:
         vuln = db.get(Vuln, int(vuln_id))

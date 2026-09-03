@@ -280,6 +280,7 @@ def test_submit_and_confirm_write_custom_advisory(tmp_env, project):
             "attack_surface": "frontend",
             "evidence_level": "static_only",
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "cvss4_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
             "submission_tier": "cve_candidate",
             "submission_reason": "有 CVE 价值，未认证可达",
             "advisory_md": "# GitHub Security Advisory\n\n## Title\n\n```\nreviewed title\n```\n",
@@ -328,6 +329,7 @@ def test_default_advisory_md_includes_cvss_fields():
 
     text = default_advisory_md({"title": "demo", "cwe": "CWE-89", "file_path": "app/Db.java"})
     assert "**CVSS 3.1:**" in text
+    assert "**CVSS 4.0:**" in text
     assert "### Vulnerable code" in text
     assert "app/Db.java" in text
 
@@ -608,6 +610,22 @@ def test_set_cve_record_field_cvss_vector_computes_score(tmp_env, project):
     assert metric["baseScore"] == 7.5
     assert metric["baseSeverity"] == "HIGH"
     assert metric["vectorString"] == ok["cvss_vector"]
+
+    v4 = registry.dispatch(
+        ctx,
+        "SetCveRecordField",
+        {
+            "path": "containers.cna.metrics[0].cvssV4_0.vectorString",
+            "value": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+        },
+    )
+    assert v4["ok"] is True
+    assert v4["cvss4_score"] == 8.7
+    metric4 = json.loads(cve_record_path(project, vid).read_text(encoding="utf-8"))[
+        "containers"
+    ]["cna"]["metrics"][0]["cvssV4_0"]
+    assert metric4["baseScore"] == 8.7
+    assert metric4["vectorString"] == v4["cvss4_vector"]
 
 
 def test_cve_record_initialize_standalone(tmp_env, project):

@@ -11,6 +11,7 @@ from app.models import Project, Vuln
 from app.services.fofa import FOFA_DEFAULT_SIZE, search as fofa_search
 from app.services.pipeline import control_phase
 from app.services.verifier import (
+    apply_verifier_timeout_fail,
     enqueue_confirmed_frontend,
     extract_fofa_query,
     format_verifier_report,
@@ -18,6 +19,7 @@ from app.services.verifier import (
     load_project_fofa_cache,
     merge_verifier_targets,
     pending_verifier_count,
+    save_project_fofa_cache,
 )
 from app.tools import ROLE_ACL, registry
 from app.tools.phase_worker import project_complete_gates
@@ -80,6 +82,11 @@ def _submit_and_confirm(
             "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
             if surface == "backend"
             else "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        ),
+        "cvss4_vector": (
+            "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
+            if surface == "backend"
+            else "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
         ),
         "submission_tier": "cve_candidate",
         "submission_reason": "未授权可读敏感数据",
@@ -1526,3 +1533,93 @@ def test_verifier_consent_api_list_and_skip(tmp_env, project):
         assert skipped.json()["verifier_status"] == "skipped"
         empty = client.get("/api/vulns/verifier-consent")
         assert all(row["id"] != vuln_id for row in empty.json())
+
+
+def test_apply_verifier_timeout_fail_closes_pending(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    save_project_fofa_cache(
+        project,
+        query='title="demo"',
+        sample=[{"host": "a.example", "title": "Demo"}, {"host": "b.example", "title": "Demo"}],
+        size=2,
+        frozen=True,
+        page=1,
+    )
+    out = apply_verifier_timeout_fail(
+        project,
+        vuln_id,
+        state={"targets": [{"host": "a.example", "status": "fail", "note": "404"}]},
+    )
+    assert out["applied"] is True
+    assert out["verdict"] == "fail"
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        assert v.verifier_status == "failed"
+        assert v.verifier_fofa_query == 'title="demo"'
+    from app.services.paths import vuln_dir
+    from app.services.verifier import verifier_report_path
+
+    report = verifier_report_path(project, vuln_id).read_text(encoding="utf-8")
+    assert "超时" in report
+    assert "不再为同一条漏洞新开验证轮" in report
+    assert "a.example" in report
+    assert pending_verifier_count(project) == 0
+    again = apply_verifier_timeout_fail(project, vuln_id)
+    assert again["applied"] is False
+    body = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
+    assert "互联网验证" in body
+    assert "超时" in body
+
+
+def test_apply_verifier_timeout_fail_skips_non_pending(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    with _db() as db:
+        v = db.get(Vuln, vuln_id)
+        v.verifier_status = "verified"
+        db.commit()
+    out = apply_verifier_timeout_fail(project, vuln_id)
+    assert out["applied"] is False
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "verified"
+
+
+def test_run_verifier_once_timeout_auto_fails_without_retry(tmp_env, project, monkeypatch):
+    from app.agent.loop import LoopResult
+    from app.services import pipeline
+
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    monkeypatch.setattr(
+        "app.services.asset_proof.ensure_project_fingerprints",
+        lambda project_id, force=False: {},
+    )
+    monkeypatch.setattr(
+        "app.services.asset_proof.load_project_fingerprints",
+        lambda project_id: {"collected": True, "fofa": 'title="demo"'},
+    )
+    monkeypatch.setattr("app.services.asset_proof.fofa_search_variants", lambda fp: [])
+
+    class TimeoutLoop:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.state = {}
+
+        def run(self) -> LoopResult:
+            return LoopResult(ok=False, stop_reason="timeout", timed_out=True, state=self.state)
+
+    monkeypatch.setattr(pipeline, "AgentLoop", TimeoutLoop)
+    pipeline._run_verifier_once(project)
+    with _db() as db:
+        assert db.get(Vuln, vuln_id).verifier_status == "failed"
+    assert pending_verifier_count(project) == 0
+
+    calls: list[object] = []
+
+    class ShouldNotRun:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+
+        def run(self) -> LoopResult:
+            raise AssertionError("timeout fail must not start another verifier round")
+
+    monkeypatch.setattr(pipeline, "AgentLoop", ShouldNotRun)
+    pipeline._run_verifier_once(project)
+    assert calls == []

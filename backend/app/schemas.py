@@ -272,7 +272,7 @@ def normalize_conversation_message(raw: Any) -> str:
 
 class ConversationBody(BaseModel):
     log_phase: str = Field(..., min_length=1, max_length=64)
-    action: Literal["steer", "continue", "new"]
+    action: Literal["steer", "continue", "new", "stop", "start"]
     message: str = Field(default="", max_length=WORKER_HINT_MAX)
 
 
@@ -284,10 +284,17 @@ class ConversationStateOut(BaseModel):
     can_steer: bool
     has_archived: bool
     latest_session: int = 1
+    can_stop: bool = False
+    can_start: bool = False
+    unconstrained_done: bool = False
 
 
 class LabSetupRetryBody(BaseModel):
     user_message: str = Field(default="", max_length=WORKER_HINT_MAX)
+
+
+class SourceBaselineDecisionBody(BaseModel):
+    action: Literal["acknowledge", "recheck"]
 
 
 class ProjectLabOut(BaseModel):
@@ -433,6 +440,9 @@ class ProjectOut(BaseModel):
     worker_hint: str = ""
     recon_hint: str = ""
     max_token_usage: int = 0
+    source_baseline_status: str = "pending"
+    source_baseline_blocks_mining: bool = False
+    source_baseline: dict[str, Any] | None = None
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime

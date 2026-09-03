@@ -237,7 +237,7 @@ def test_reviewer_lab_no_tool_nudge():
 
 
 def test_fix_and_reviewer_have_no_finish_nudge():
-    for phase in ("fix", "reviewer", "recon-mark", "recon", "verifier"):
+    for phase in ("fix", "reviewer", "recon-mark", "recon", "verifier", "unconstrained-worker"):
         w = AgentWatchdog(phase=phase)
         for _ in range(60):
             assert w.note_turn() is None
@@ -314,6 +314,18 @@ def test_bypass_finish_nudge_and_no_tool():
     assert msg == BYPASS_FINISH_NUDGE.format(n=2)
     assert "FinishBypass" in w.persist_nudge_log()
     assert w.note_turn(["FinishBypass"]) is None
+    assert w.idle_turns == 0
+
+
+def test_unconstrained_watchdog_has_no_persist_nudge():
+    from app.agent.watchdog import UNCONSTRAINED_NO_TOOL_NUDGE
+
+    w = AgentWatchdog(phase="unconstrained-worker")
+    assert w.note_no_tools() == UNCONSTRAINED_NO_TOOL_NUDGE
+    assert "FinishFile" not in UNCONSTRAINED_NO_TOOL_NUDGE
+    assert "压缩满 2 次" in UNCONSTRAINED_NO_TOOL_NUDGE
+    for _ in range(100):
+        assert w.note_turn(["Read"]) is None
     assert w.idle_turns == 0
 
 

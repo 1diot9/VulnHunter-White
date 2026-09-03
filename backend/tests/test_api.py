@@ -2051,6 +2051,7 @@ def test_completed_project_can_change_mode_but_not_pause(tmp_env, project, monke
     monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
     with SessionLocal() as db:
         p = db.get(Project, project)
+        p.recon_done = True
         p.status = "completed"
         p.phase = "done"
         db.commit()

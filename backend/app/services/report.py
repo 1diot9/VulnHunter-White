@@ -355,6 +355,7 @@ Do not run this against systems you do not own or have authorization to test.
 
 - **Severity:** (Reviewer — ConfirmVuln computes from cvss_vector)
 - **CVSS 3.1:** (Reviewer supplies vector; score is computed)
+- **CVSS 4.0:** (Reviewer supplies cvss4_vector; score is computed)
 - **CWE:** {cwe}
 - **Related:**
 """

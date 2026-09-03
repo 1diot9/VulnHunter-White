@@ -309,10 +309,15 @@ def parse_cvss31(raw: Any) -> Cvss31Result:
     return Cvss31Result(vector=vector, metrics=seen, score=score, severity=severity)
 
 
-def stamp_advisory_cvss31(text: str, result: Cvss31Result) -> str:
-    """Replace CVSS 3.x/4.x lines in advisory.md with the computed CVSS 3.1 line."""
+def stamp_advisory_cvss31(text: str, result: Cvss31Result, cvss40: Any | None = None) -> str:
+    """Replace CVSS 3.x/4.x lines in advisory.md with computed 3.1 and 4.0 lines."""
     body = (text or "").replace("\r\n", "\n")
-    cvss_line = f"- **CVSS 3.1:** {result.score:.1f} {result.severity_en} — `{result.vector}`"
+    cvss_lines = [f"- **CVSS 3.1:** {result.score:.1f} {result.severity_en} — `{result.vector}`"]
+    if cvss40 is not None:
+        cvss_lines.append(
+            f"- **CVSS 4.0:** {cvss40.score:.1f} {cvss40.severity_en} — `{cvss40.vector}`"
+        )
+    cvss_block = "\n".join(cvss_lines) + "\n"
     sev_line = f"- **Severity:** {result.severity_en}"
     if _ADVISORY_SEVERITY_LINE_RE.search(body):
         body = _ADVISORY_SEVERITY_LINE_RE.sub(sev_line, body, count=1)
@@ -323,7 +328,7 @@ def stamp_advisory_cvss31(text: str, result: Cvss31Result) -> str:
             nonlocal first
             if first:
                 first = False
-                return cvss_line + "\n"
+                return cvss_block
             return ""
 
         body = _ADVISORY_CVSS_LINE_RE.sub(_replace, body)
@@ -335,9 +340,9 @@ def stamp_advisory_cvss31(text: str, result: Cvss31Result) -> str:
         insert_at = body.find("\n", idx)
         if insert_at == -1:
             insert_at = len(body)
-        block = f"\n\n{sev_line}\n{cvss_line}\n"
+        block = f"\n\n{sev_line}\n{cvss_block}"
         return body[: insert_at + 1] + block + body[insert_at + 1 :].lstrip("\n")
-    return body.rstrip() + f"\n\n{marker}\n\n{sev_line}\n{cvss_line}\n"
+    return body.rstrip() + f"\n\n{marker}\n\n{sev_line}\n{cvss_block}"
 
 
 def apply_cvss31_to_cve_record(record: dict[str, Any], result: Cvss31Result) -> None:
@@ -349,7 +354,6 @@ def apply_cvss31_to_cve_record(record: dict[str, Any], result: Cvss31Result) -> 
     if not isinstance(entry, dict):
         entry = {"format": "CVSS"}
         metrics_list[0] = entry
-    entry.pop("cvssV4_0", None)
     entry.pop("cvssV3_0", None)
     entry["format"] = "CVSS"
     entry["cvssV3_1"] = result.to_cve_metric()

@@ -72,19 +72,23 @@ def test_empty_vector():
 
 
 def test_stamp_advisory_replaces_old_cvss_lines():
+    from app.cvss40 import parse_cvss40
+
     src = (
         "## Severity / CWE\n\n"
         "- **Severity:** Low\n"
         "- **CVSS 3.0:** 7.5 High — `CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N`\n"
-        "- **CVSS 4.0:** 8.7 High — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N`\n"
+        "- **CVSS 4.0:** pending\n"
         "- **CWE:** CWE-89\n"
     )
     result = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N")
-    out = stamp_advisory_cvss31(src, result)
+    cvss40 = parse_cvss40("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N")
+    out = stamp_advisory_cvss31(src, result, cvss40)
     assert "**CVSS 3.1:** 7.5 High" in out
     assert result.vector in out
     assert "CVSS 3.0" not in out
-    assert "CVSS 4.0" not in out
+    assert "**CVSS 4.0:** 8.7 High" in out
+    assert cvss40.vector in out
     assert "**Severity:** High" in out
 
 

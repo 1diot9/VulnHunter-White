@@ -160,3 +160,66 @@ def test_conversation_api_endpoints(tmp_env, project):
             json={"log_phase": "mine", "action": "steer", "message": "hi"},
         )
         assert steer.status_code == 400  # not running
+
+
+def test_unconstrained_conversation_stop_start_and_rejects_new(tmp_env, project, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.models import Project, SessionLocal
+    from app.services import pipeline
+    from app.services.conversation import get_conversation_state, request_conversation
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.unconstrained_enabled = True
+        proj.unconstrained_done = False
+        proj.status = "auditing"
+        db.commit()
+
+    state = get_conversation_state(project, "unconstrained")
+    assert state["can_new"] is False
+    assert state["can_stop"] is True
+    assert state["can_start"] is False
+    assert state["unconstrained_done"] is False
+
+    with pytest.raises(ValueError, match="停止或启动"):
+        request_conversation(project, "unconstrained", "new")
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    with TestClient(app) as client:
+        denied = client.post(
+            f"/api/projects/{project}/conversation",
+            json={"log_phase": "mine", "action": "stop"},
+        )
+        assert denied.status_code == 400
+        stopped = client.post(
+            f"/api/projects/{project}/conversation",
+            json={"log_phase": "unconstrained", "action": "stop"},
+        )
+        assert stopped.status_code == 200
+        body = stopped.json()
+        assert body["action"] == "stop"
+        assert body["unconstrained_done"] is True
+        assert body["project_completed"] is True
+
+    state = get_conversation_state(project, "unconstrained")
+    assert state["can_stop"] is False
+    assert state["can_start"] is True
+    assert state["unconstrained_done"] is True
+    assert state["can_new"] is False
+
+    with TestClient(app) as client:
+        started = client.post(
+            f"/api/projects/{project}/conversation",
+            json={"log_phase": "unconstrained", "action": "start"},
+        )
+        assert started.status_code == 200
+        assert started.json()["unconstrained_done"] is False
+
+    state = get_conversation_state(project, "unconstrained")
+    assert state["can_start"] is False
+    assert state["can_stop"] is True
+    assert state["unconstrained_done"] is False
