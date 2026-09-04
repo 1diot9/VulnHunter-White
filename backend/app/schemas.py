@@ -640,6 +640,8 @@ class VulnDetail(VulnOut):
     verifier_fofa_query: str | None = None
     can_dynamic_verify: bool = False
     dynamic_verify_queued: bool = False
+    can_internet_verify: bool = False
+    internet_verify_queued: bool = False
 
 
 class VulnCalendarDay(BaseModel):

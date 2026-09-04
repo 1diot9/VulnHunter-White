@@ -1623,3 +1623,130 @@ def test_run_verifier_once_timeout_auto_fails_without_retry(tmp_env, project, mo
     monkeypatch.setattr(pipeline, "AgentLoop", ShouldNotRun)
     pipeline._run_verifier_once(project)
     assert calls == []
+
+
+def test_manual_internet_verify_when_disabled(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import Project
+    from app.services import pipeline
+
+    kicked: list[int] = []
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "kick_verifier", lambda pid: kicked.append(pid))
+
+    first_id, _ = _submit_and_confirm(project, enable_verifier=False, root_cause_key="unauthorized_access:A")
+    second_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=False,
+        title="另一条前台",
+        root_cause_key="unauthorized_access:B",
+        file_path="b.java",
+    )
+    with TestClient(app) as client:
+        detail = client.get(f"/api/vulns/{first_id}")
+        assert detail.status_code == 200
+        assert detail.json()["can_internet_verify"] is True
+        assert detail.json()["internet_verify_queued"] is False
+
+        queued = client.post(f"/api/vulns/{first_id}/internet-verify")
+        assert queued.status_code == 200
+        body = queued.json()
+        assert body["ok"] is True
+        assert body["vuln_id"] == first_id
+        assert body["verifier_status"] == "pending"
+        assert body["verifier_enabled"] is True
+        assert kicked == [project]
+
+        again = client.post(f"/api/vulns/{first_id}/internet-verify")
+        assert again.status_code == 409
+
+        refreshed = client.get(f"/api/vulns/{first_id}")
+        assert refreshed.json()["internet_verify_queued"] is True
+        assert refreshed.json()["can_internet_verify"] is True
+
+        sibling = client.get(f"/api/vulns/{second_id}")
+        assert sibling.json()["verifier_status"] in ("none", None)
+        assert sibling.json()["internet_verify_queued"] is False
+        assert sibling.json()["can_internet_verify"] is True
+
+    with _db() as db:
+        proj = db.get(Project, project)
+        assert proj.verifier_enabled is True
+        assert db.get(Vuln, first_id).verifier_status == "pending"
+        assert db.get(Vuln, second_id).verifier_status == "none"
+
+
+def test_manual_internet_verify_rejects_backend_and_requeues_skipped(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import Project
+    from app.services import pipeline
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "kick_verifier", lambda pid: None)
+
+    backend_id, _ = _submit_and_confirm(project, surface="backend", enable_verifier=False)
+    skipped_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=False,
+        title="跳过的前台",
+        root_cause_key="unauthorized_access:Skip",
+        file_path="skip.java",
+    )
+    with _db() as db:
+        row = db.get(Vuln, skipped_id)
+        row.verifier_status = "skipped"
+        db.commit()
+
+    with TestClient(app) as client:
+        blocked = client.post(f"/api/vulns/{backend_id}/internet-verify")
+        assert blocked.status_code == 400
+        assert "前台" in blocked.json()["detail"]
+        assert client.get(f"/api/vulns/{backend_id}").json()["can_internet_verify"] is False
+
+        queued = client.post(f"/api/vulns/{skipped_id}/internet-verify")
+        assert queued.status_code == 200
+        assert queued.json()["verifier_status"] == "pending"
+
+    with _db() as db:
+        assert db.get(Vuln, skipped_id).verifier_status == "pending"
+        assert db.get(Project, project).verifier_enabled is True
+
+
+def test_manual_internet_verify_awaiting_user_and_completed_project(tmp_env, project, monkeypatch):
+    from app.main import app
+    from app.models import Project
+    from app.services import pipeline
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(pipeline, "kick_verifier", lambda pid: None)
+
+    awaiting_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    done_id, _ = _submit_and_confirm(
+        project,
+        enable_verifier=True,
+        title="已完成项目上的前台",
+        root_cause_key="unauthorized_access:Done",
+        file_path="done.java",
+    )
+    with _db() as db:
+        db.get(Vuln, awaiting_id).verifier_status = "awaiting_user"
+        db.get(Vuln, done_id).verifier_status = "failed"
+        proj = db.get(Project, project)
+        proj.status = "completed"
+        db.commit()
+
+    with TestClient(app) as client:
+        awaiting = client.post(f"/api/vulns/{awaiting_id}/internet-verify")
+        assert awaiting.status_code == 409
+        assert "验证确认" in awaiting.json()["detail"]
+
+        queued = client.post(f"/api/vulns/{done_id}/internet-verify")
+        assert queued.status_code == 200
+        assert queued.json()["verifier_status"] == "pending"
+
+    with _db() as db:
+        proj = db.get(Project, project)
+        assert proj.status == "auditing"
+        assert proj.phase == "verifier"
+        assert db.get(Vuln, done_id).verifier_status == "pending"
+        assert db.get(Vuln, awaiting_id).verifier_status == "awaiting_user"

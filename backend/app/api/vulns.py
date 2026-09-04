@@ -40,8 +40,11 @@ from ..schemas import (
 from ..services.paths import project_root, vuln_dir
 from ..services.pipeline import (
     DynamicVerifyRequestError,
+    InternetVerifyRequestError,
     dynamic_verify_flags,
+    internet_verify_flags,
     request_dynamic_verify,
+    request_internet_verify,
 )
 from ..services.poc_script import read_poc_code
 from ..services.report import stamp_produced_at
@@ -567,6 +570,7 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             )
         ]
         can_dynamic, queued_dynamic = dynamic_verify_flags(v, project=v.project)
+        can_internet, queued_internet = internet_verify_flags(v, project=v.project)
         return VulnDetail(
             **_vuln_out(v).model_dump(),
             source_sink=v.source_sink,
@@ -584,6 +588,8 @@ def get_vuln(vuln_id: int) -> VulnDetail:
             verifier_fofa_query=getattr(v, "verifier_fofa_query", None),
             can_dynamic_verify=can_dynamic,
             dynamic_verify_queued=queued_dynamic,
+            can_internet_verify=can_internet,
+            internet_verify_queued=queued_internet,
         )
 
 
@@ -634,6 +640,14 @@ def start_dynamic_verify(vuln_id: int) -> dict:
     try:
         return request_dynamic_verify(vuln_id)
     except DynamicVerifyRequestError as e:
+        raise HTTPException(e.status_code, str(e)) from e
+
+
+@router.post("/{vuln_id}/internet-verify")
+def start_internet_verify(vuln_id: int) -> dict:
+    try:
+        return request_internet_verify(vuln_id)
+    except InternetVerifyRequestError as e:
         raise HTTPException(e.status_code, str(e)) from e
 
 

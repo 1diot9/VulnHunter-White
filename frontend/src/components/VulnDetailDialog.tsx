@@ -62,6 +62,8 @@ export default function VulnDetailDialog({
   const [marking, setMarking] = useState(false)
   const [dynamicBusy, setDynamicBusy] = useState(false)
   const [dynamicError, setDynamicError] = useState('')
+  const [internetBusy, setInternetBusy] = useState(false)
+  const [internetError, setInternetError] = useState('')
   const [reportKind, setReportKind] = useState<'report' | 'advisory' | 'cve'>('report')
   const [advisoryCopied, setAdvisoryCopied] = useState(false)
   const [cveCopied, setCveCopied] = useState(false)
@@ -74,6 +76,8 @@ export default function VulnDetailDialog({
       activeVulnIdRef.current = null
       setDynamicError('')
       setDynamicBusy(false)
+      setInternetError('')
+      setInternetBusy(false)
       setReportKind('report')
       setAdvisoryCopied(false)
       setCveCopied(false)
@@ -88,6 +92,8 @@ export default function VulnDetailDialog({
     setCveCopied(false)
     setDynamicError('')
     setDynamicBusy(false)
+    setInternetError('')
+    setInternetBusy(false)
 
     async function loadDetail(id: number, initial: boolean) {
       try {
@@ -142,6 +148,24 @@ export default function VulnDetailDialog({
         : priorIsHarness
           ? `对已局部验证确认的漏洞追加靶场动态验证，不是互联网验证。完成后证据等级会从局部验证更新为动态验证。项目须为靶场动态模式（可在项目设置中切换）。`
           : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
+  const internetQueued = Boolean(detail?.internet_verify_queued) || internetBusy
+  const internetAwaiting = detail?.verifier_status === 'awaiting_user'
+  const internetLabel =
+    internetQueued
+      ? '互联网验证中…'
+      : internetAwaiting
+        ? '待用户确认'
+        : detail?.verifier_status === 'skipped' ||
+            detail?.verifier_status === 'failed' ||
+            detail?.verifier_status === 'verified'
+          ? '再次互联网验证'
+          : '互联网验证'
+  const internetHint =
+    internetQueued
+      ? '已排队，Verifier 正在或即将用 FOFA 搜同款目标复测本条。'
+      : internetAwaiting
+        ? '请先到「验证确认」页跳过或同意后再发起。'
+        : '项目未开启 Verifier、或此前跳过/失败后，可从这里手动排队：用 FOFA 搜索同款目标并复测本条。未开启时会打开本项目 Verifier，只排队这一条。'
 
   async function downloadReport(id: number, kind: 'report' | 'advisory' | 'cve' = 'report') {
     try {
@@ -204,6 +228,24 @@ export default function VulnDetailDialog({
       setDynamicError(formatApiError(err, '启动动态验证超时，请稍后重试。'))
     } finally {
       setDynamicBusy(false)
+    }
+  }
+
+  async function startInternetVerify() {
+    if (!detail || internetBusy || detail.internet_verify_queued || detail.verifier_status === 'awaiting_user') {
+      return
+    }
+    setInternetBusy(true)
+    setInternetError('')
+    try {
+      await api.requestInternetVerify(detail.id)
+      const next = await api.getVuln(detail.id)
+      setDetail(next)
+      onUpdated?.(next)
+    } catch (err) {
+      setInternetError(formatApiError(err, '启动互联网验证失败，请稍后重试。'))
+    } finally {
+      setInternetBusy(false)
     }
   }
 
@@ -333,7 +375,7 @@ export default function VulnDetailDialog({
               ) : null}
               {detail.verifier_status === 'skipped' ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  未做互联网复测。可能因用户选择跳过、FOFA 无样本或网络不可用等；详见下方报告「互联网验证」。
+                  未做互联网复测。可能因用户选择跳过、FOFA 无样本或网络不可用等；详见下方报告「互联网验证」。可点击「再次互联网验证」重新排队。
                 </div>
               ) : null}
               {detail.verifier_targets && detail.verifier_targets.length > 0 ? (
@@ -470,10 +512,37 @@ export default function VulnDetailDialog({
                     </Tooltip>
                   </TooltipProvider>
                 ) : null}
+                {detail.can_internet_verify ? (
+                  <TooltipProvider delay={200}>
+                    <Tooltip>
+                      <TooltipTrigger render={<span className="inline-flex" />}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={internetQueued || internetAwaiting}
+                          onClick={() => startInternetVerify()}
+                        >
+                          {internetQueued ? (
+                            <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                          ) : null}
+                          {internetLabel}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-left leading-relaxed whitespace-normal">
+                        {internetHint}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : null}
               </div>
               {dynamicError ? (
                 <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {dynamicError}
+                </div>
+              ) : null}
+              {internetError ? (
+                <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {internetError}
                 </div>
               ) : null}
               {detail.dynamic_verify_queued ? (

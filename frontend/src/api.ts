@@ -358,6 +358,8 @@ export type VulnDetail = Vuln & {
   verifier_fofa_query?: string | null
   can_dynamic_verify?: boolean
   dynamic_verify_queued?: boolean
+  can_internet_verify?: boolean
+  internet_verify_queued?: boolean
 }
 
 export type VerifierTarget = {
@@ -1307,6 +1309,14 @@ export const api = {
       `/api/vulns/${id}/dynamic-verify`,
       { method: 'POST' },
     ),
+  requestInternetVerify: (id: number) =>
+    request<{
+      ok: boolean
+      vuln_id: number
+      project_id: number
+      verifier_status: string
+      verifier_enabled: boolean
+    }>(`/api/vulns/${id}/internet-verify`, { method: 'POST' }),
   downloadVulns: async (ids: number[]) => {
     const res = await apiFetch('/api/vulns/download', {
       timeoutMs: IO_TIMEOUT_MS,
