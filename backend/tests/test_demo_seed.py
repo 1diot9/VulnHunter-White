@@ -21,7 +21,7 @@ def _stage_demo_workspace(projects_dir: Path) -> Path:
     (root / "src" / "app.py").write_text("# demo\n", encoding="utf-8")
     report_dir = root / "vulns" / "183"
     report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "report.md").write_text("## 摘要\n\nfixture report\n", encoding="utf-8")
+    (report_dir / "report.md").write_text("## 漏洞描述\n\nfixture report\n", encoding="utf-8")
     showcase = root / "showcase"
     showcase.mkdir(parents=True, exist_ok=True)
     dest = showcase / "db-seed.json"

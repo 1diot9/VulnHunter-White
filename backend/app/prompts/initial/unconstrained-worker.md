@@ -9,6 +9,6 @@ Worker=${worker_id} 轮次=${round_id}
 SubmitVuln 前必须再核一次是否真的前台可达：对照 docs/auth.md 与全局过滤器/拦截器/Security/Shiro/权限注解，确认未登录、不带 Cookie/Token 也能到达 sink。方法无注解 ≠ 匿名。需要登录或仅默认口令能打的不要当前台提交，写入已排除；认证绕过成立后才算前台。auth_premise 写真实前提，禁止把后台接口写成未授权。
 无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件，含「匿名文件操作」）以及不可获取且不可预测的 UUID 不要提交，写入已排除。
 report 对齐 templates/round-report.md。本路径没有 FinishFile。
-SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。
+SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 以及入口/sink 同类的公开洞不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。若提示疑似已公开同类洞，不要提交。
 有 HTTP 面时 poc_code 必须可对任意目标复测：`python poc.py -u <url>`，必须支持 `--proxy`（空则直连），RCE 加 `-c/--cmd` 并打印回显；脚本输出默认英语、须 `--zh` 切中文。SSRF 须标明观察面（有回显、外带内网信息或仅响应差别；有回显与外带危害同级）。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`。提交后用 ReadCveRecord / SetCveRecordField 填写 CVE JSON。
 Grep 必须尽量缩 `root`、指明 `glob`；禁止只传 `Grep(pattern=...)` 不带 root/glob。需要看无源码 class/jar 时用 ListBytecode / DecompileJava（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 root=workspace/decompiled/...。

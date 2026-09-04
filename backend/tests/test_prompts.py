@@ -163,6 +163,10 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "CollectLabFingerprints" in text
     assert "fofa_fingerprint" in text
     assert "成立性否决" in text
+    assert "kind=old" in text
+    assert "已公开同类洞" in text
+    assert "confirm_not_known_public" in text
+    assert "已公开同类洞" in load_prompt("initial/reviewer.md")
     assert "docker exec" in text
     assert "不要按漏洞类型" in text
     assert "默认密码" in text
@@ -713,6 +717,8 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     assert "# 报告 / Advisory / CVE 格式" in text
     assert "必须为中文" in text
     assert "标题须为中文" in text
+    assert "## 漏洞描述" in text
+    assert "不要写 `## 摘要`" in text
     assert "必须为英文 GitHub Advisory 填表稿" in text
     assert "不要把中文报告粘进去" in text
     assert "VULNHUNTER_PENDING" in text

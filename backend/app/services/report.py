@@ -362,7 +362,6 @@ Do not run this against systems you do not own or have authorization to test.
 
 
 REPORT_REQUIRED_H2: tuple[str, ...] = (
-    "## 摘要",
     "## 漏洞描述",
     "## 漏洞危害",
     "## 漏洞厂商全称",

@@ -71,6 +71,7 @@ from ..services.report import (
     write_advisory_md,
 )
 from ..services.duplicate_guard import soft_duplicate_gate
+from ..services.known_public import soft_known_public_gate
 from ..services.root_cause import (
     canonical_root_cause_key,
     mismatched_root_cause_key_error,
@@ -507,6 +508,20 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 "已知 CVE 在旧源码快照上复现，系统自动判为误报",
                 fp_kind=FP_KIND_KNOWN_CVE_PATCHED,
             )
+        known_public = soft_known_public_gate(
+            ctx,
+            args,
+            tool="ConfirmVuln",
+            title=str(early_vuln.title or ""),
+            source_sink=str(early_vuln.source_sink or ""),
+            http_request=str(early_vuln.http_request or ""),
+            file_path=str(early_vuln.file_path or ""),
+            vuln_type=str(early_vuln.vuln_type or ""),
+            exclude_vuln_id=int(vuln_id),
+            mining_path=str(early_vuln.mining_path or ""),
+        )
+        if known_public:
+            return known_public
     evidence_raw = str(args.get("evidence_level") or "").strip()
     if evidence_raw and normalize_evidence_level(evidence_raw) is None:
         return {"ok": False, "error": "evidence_level 须为 dynamic|static_only|mcp|harness"}
@@ -1191,6 +1206,9 @@ def register_reviewer_tools() -> None:
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次 Confirm 会提醒复查合并；"
                 "确认危害/鉴权不同仍要单独确认时，再次调用并传 confirm_not_duplicate=true"
                 "（仅本会话提醒过一次后才接受）。"
+                "若与侦察历史漏洞（kind=old）同一入口/sink，首次 Confirm 会提醒这是已公开同类洞；"
+                "应 MarkFalsePositive，不要当成新 CVE。仅当公开文未覆盖的新链时，"
+                "再次 Confirm 并传 confirm_not_known_public=true（仅本会话提醒过一次后才接受）。"
                 "无约束扫描产出必须传 rce_effect=true|false：由你判定本条前台漏洞是否达成 RCE 效果"
                 "（不必看 vuln_type 是否为 rce）；true 且前台确认后该路径结束，当前挖掘轮仍会跑完。"
                 "无约束扫描产出始终走赏金闸门。"
@@ -1316,6 +1334,13 @@ def register_reviewer_tools() -> None:
                         "description": (
                             "疑似重复提醒后仍确认单独 Confirm 时传 true。"
                             "仅本会话已因同一指纹被提醒过一次后才接受；首次带上会被拒绝。"
+                        ),
+                    },
+                    "confirm_not_known_public": {
+                        "type": "boolean",
+                        "description": (
+                            "疑似已公开同类洞提醒后，确认是公开公告未覆盖的新链时传 true。"
+                            "仅本会话已因同一入口/sink 被提醒过一次后才接受；首次带上会被拒绝。"
                         ),
                     },
                     "rce_effect": {
@@ -1508,7 +1533,8 @@ def register_reviewer_tools() -> None:
             description=(
                 "判定误报并结束本审核会话。用于成立性不成立、赏金禁止类型、"
                 "需种文件/第二个独立漏洞才成立、默认口令、前端传输混淆密钥、"
-                "无害/受限文件操作、不可获取且不可预测的 UUID 等。"
+                "无害/受限文件操作、不可获取且不可预测的 UUID、"
+                "以及与侦察历史漏洞（kind=old）同一入口/sink 的已公开同类洞等。"
                 "不要用来改 PoC、降危害口径或合并同根因。"
             ),
             parameters={

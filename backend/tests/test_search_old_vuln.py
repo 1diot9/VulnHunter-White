@@ -129,3 +129,36 @@ def test_search_old_vuln_excludes_current_review_vuln(tmp_env, project):
     assert "第一条提交" in titles
     assert "第二条提交" not in titles
     assert first["vuln_id"] != second["vuln_id"]
+
+
+def test_search_old_vuln_token_recall_does_not_need_full_phrase(tmp_env, project):
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "CVE-2024-37014.md").write_text(
+        "---\n"
+        "title: CVE-2024-37014：Langflow /api/v1/custom_component 端点远程代码执行\n"
+        "summary: Langflow 允许未受信用户通过 POST /api/v1/custom_component 端点提交 Python 脚本。\n"
+        "cve: CVE-2024-37014\n"
+        "fix_status: patched\n"
+        "type: RCE\n"
+        "component: custom_component 端点\n"
+        "---\n\n"
+        "如果未受信用户能够访问 POST /api/v1/custom_component 则可执行任意代码。\n",
+        encoding="utf-8",
+    )
+    (old / "unrelated.md").write_text(
+        "---\ntitle: 无关 XSS\nsummary: 反射 XSS\nfix_status: patched\ntype: XSS\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    listed = registry.dispatch(
+        _ctx(project),
+        "SearchOldVuln",
+        {"query": "AUTO_LOGIN auto_login RCE custom_component"},
+    )
+    assert listed["ok"] is True
+    titles = {d["title"] for d in listed["docs"]}
+    assert any("custom_component" in t for t in titles)
+    assert listed.get("hint")
+    assert all(d.get("match") in {"phrase", "all_tokens", "keywords"} for d in listed["docs"])
+    assert not any("无关 XSS" in t for t in titles)
+

@@ -1037,7 +1037,42 @@ def _full_doc(entry: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "in",
+        "on",
+        "to",
+        "for",
+        "and",
+        "or",
+        "with",
+        "via",
+        "from",
+        "that",
+        "this",
+        "is",
+        "are",
+        "by",
+        "at",
+        "as",
+        "into",
+        "over",
+        "under",
+    }
+)
+_SEARCH_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_./]{1,}", re.IGNORECASE)
+
+
+def _normalize_search_text(text: str) -> str:
+    return (text or "").lower().replace("-", "_")
+
+
 def _search_blob(entry: dict[str, Any]) -> str:
+    meta = entry.get("meta") or {}
     parts = [
         entry.get("title") or "",
         entry.get("summary") or "",
@@ -1058,8 +1093,87 @@ def _search_blob(entry: dict[str, Any]) -> str:
         entry.get("attack_surface") or "",
         entry.get("required_account") or "",
         entry.get("source_sink") or "",
+        meta.get("cve") or "",
+        meta.get("type") or "",
+        meta.get("component") or "",
+        meta.get("affected_version") or "",
+        meta.get("cwe") or "",
     ]
-    return "\n".join(str(p) for p in parts).lower()
+    return _normalize_search_text("\n".join(str(p) for p in parts if p not in (None, "")))
+
+
+def _query_tokens(query: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in _SEARCH_TOKEN_RE.findall(_normalize_search_text(query)):
+        token = raw.strip("._/")
+        if len(token) < 2 or token in _SEARCH_STOPWORDS or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _token_is_specific(token: str) -> bool:
+    if "/" in token or "_" in token:
+        return True
+    if token.startswith("cve") and any(ch.isdigit() for ch in token):
+        return True
+    return len(token) >= 8
+
+
+def _score_search_entry(blob: str, phrase: str, tokens: list[str]) -> tuple[int, str]:
+    """Return (score, match_mode) or (0, '') if no hit."""
+    if phrase and phrase in blob:
+        extra = sum(1 for t in tokens if t in blob)
+        return 1000 + extra, "phrase"
+    if tokens and all(t in blob for t in tokens):
+        return 100 + len(tokens), "all_tokens"
+    specific = [t for t in tokens if _token_is_specific(t)]
+    hits = [t for t in specific if t in blob]
+    if hits:
+        return len(hits), "keywords"
+    return 0, ""
+
+
+def _search_docs_for_query(entries: list[dict[str, Any]], query: str) -> tuple[list[dict[str, Any]], str | None]:
+    phrase = _normalize_search_text(query).strip()
+    if not phrase:
+        return [_public_doc(e) for e in entries], None
+    tokens = _query_tokens(query)
+    scored: list[tuple[int, str, dict[str, Any]]] = []
+    used_keywords = False
+    n = max(len(entries), 1)
+    df: dict[str, int] = {}
+    blobs = [_search_blob(e) for e in entries]
+    specific_tokens = [t for t in tokens if _token_is_specific(t)]
+    for blob in blobs:
+        for token in specific_tokens:
+            if token in blob:
+                df[token] = df.get(token, 0) + 1
+    rare_specific = {t for t in specific_tokens if df.get(t, 0) < max(3, int(0.4 * n) + 1)}
+    for entry, blob in zip(entries, blobs):
+        score, mode = _score_search_entry(blob, phrase, tokens)
+        if score <= 0 or not mode:
+            continue
+        if mode == "keywords":
+            hits = [t for t in rare_specific if t in blob]
+            if not hits:
+                continue
+            score = len(hits)
+            used_keywords = True
+        item = _public_doc(entry)
+        item["match"] = mode
+        scored.append((score, mode, item))
+    scored.sort(key=lambda row: (-row[0], row[2].get("title") or ""))
+    docs = [row[2] for row in scored]
+    hint = None
+    if used_keywords:
+        hint = (
+            "未整句命中，已按关键词分词召回。请用 title 读全文，"
+            "核对 kind=old 是否同一入口/sink；同类公开洞不要当新发现。"
+        )
+    return docs, hint
 
 
 def _exact_title_match(entry: dict[str, Any], title: str) -> bool:
@@ -1188,12 +1302,11 @@ def _search_old_vuln_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
             "suggestions": suggestions[:8],
             "hint": f"未精确命中标题，请用 suggestions 里的 title 再查，或改用 query 模糊搜索。{kind_hint}",
         }
-    docs = []
-    for e in entries:
-        if query and query not in _search_blob(e):
-            continue
-        docs.append(_public_doc(e))
-    return {"ok": True, "docs": docs, "count": len(docs)}
+    docs, hint = _search_docs_for_query(entries, query)
+    out: dict[str, Any] = {"ok": True, "docs": docs, "count": len(docs)}
+    if hint:
+        out["hint"] = hint
+    return out
 
 
 def register_common_tools() -> None:
@@ -1447,8 +1560,10 @@ def register_common_tools() -> None:
             name="SearchOldVuln",
             description=(
                 "搜索本项目漏洞库：侦察阶段历史漏洞（kind=old，含已修复 patched 与未修复 unpatched）"
-                "与本项目已提交报告（kind=found）。默认返回标题与摘要；kind=old 带 fix_status；kind=found 会带上 submission_tier、root_cause_key。"
-                "传入 title 可看全文。提交前查重；Reviewer 标 duplicate_grouped 时必须原样复用已有 root_cause_key。"
+                "与本项目已提交报告（kind=found）。query 按关键词分词召回（不必整句连续命中）；"
+                "默认返回标题与摘要；kind=old 带 fix_status；kind=found 会带上 submission_tier、root_cause_key。"
+                "传入 title 可看全文。提交与审核前必须查重：kind=old 入口/sink 同类的公开洞不要当新 CVE；"
+                "Reviewer 标 duplicate_grouped 时必须原样复用已有 root_cause_key。"
                 "kind=found 含 merged_into_id：已并入条目勿再交相同受影响点。"
             ),
             parameters={

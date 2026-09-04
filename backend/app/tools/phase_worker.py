@@ -19,6 +19,7 @@ from ..services.affected_locations import (
     parse_locations,
 )
 from ..services.duplicate_guard import soft_duplicate_gate
+from ..services.known_public import soft_known_public_gate
 from ..services.paths import vuln_dir
 from ..services.poc_script import (
     POC_CODE_TOOL_DESCRIPTION,
@@ -380,6 +381,20 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
             if blocked:
                 return {"ok": False, "error": blocked}
 
+    known_public = soft_known_public_gate(
+        ctx,
+        args,
+        tool="SubmitVuln",
+        title=str(args.get("title") or ""),
+        source_sink=str(args.get("source_sink") or ""),
+        http_request=str(args.get("http_request") or ""),
+        file_path=file_path,
+        vuln_type=vtype,
+        mining_path=mining_path,
+    )
+    if known_public:
+        return known_public
+
     soft = soft_duplicate_gate(
         ctx,
         args,
@@ -548,11 +563,14 @@ def _default_report(
         if bypass
         else ""
     )
-    desc_second = (
-        f"第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，"
+    cause = (
+        f"成因概要（{vtype}）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
         f"数据流为 {args.get('source_sink')}；说明与历史漏洞文档的关系（原 CVE/补丁与当前变体或仍可利用点）。"
         if bypass
-        else f"第二段：该漏洞位于 `{args.get('file_path')}:{args.get('line_no')}`，数据流为 {args.get('source_sink')}。"
+        else (
+            f"成因概要（{vtype}）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
+            f"数据流为 {args.get('source_sink')}。"
+        )
     )
     return f"""---
 title: {args.get('title')}
@@ -561,17 +579,10 @@ summary: {args.get('source_sink', '')[:200]}
 
 # {args.get('title')}
 
-## 摘要
-- 漏洞技术类型：{vtype}
-- 严重度：待 Reviewer 填写 CVSS 3.1 与 CVSS 4.0 向量（分数由系统计算，不按类型映射）
-- CWE：{args.get('cwe')}
-- 位置：{args.get('file_path')}:{args.get('line_no')}
-- 配置前提：{config_premise_label(args.get('config_premise')) or args.get('config_premise')}
-
 ## 漏洞描述
-第一段：待根据厂商与产品资料补全系统介绍。
+待补全产品功能定位（一句话）。
 
-{desc_second}
+{cause}
 
 ## 漏洞危害
 - 已证明危害：{args.get('expected_evidence')}
@@ -831,6 +842,8 @@ def register_worker_tools() -> None:
                 "应填写 root_cause_key（类型:稳定锚点）。"
                 "若与已有洞同 file_path+vuln_type 或同 root_cause_key，首次调用会提醒复查；"
                 "确认仍要单独交时，再次调用并传 confirm_not_duplicate=true（仅本会话提醒过一次后才接受）。"
+                "若与侦察历史漏洞（kind=old）同一入口/sink，首次调用会提醒这是已公开同类洞，不要当新 CVE；"
+                "确认公开文未覆盖的新链时，再次调用并传 confirm_not_known_public=true（仅本会话提醒过一次后才接受）。"
                 "不要按漏洞类型填写严重度；入库严重度为 pending，由 Reviewer 填写 CVSS 3.1 与 CVSS 4.0 向量，分数由系统计算。"
                 "必填 config_premise=default|specific（默认配置/特定配置）。"
                 "特定配置指须改应用自身配置才成立，且该配置不是官方已明确警示会导致安全风险的选项；"
@@ -896,6 +909,13 @@ def register_worker_tools() -> None:
                         "description": (
                             "疑似重复提醒后仍确认单独提交时传 true。"
                             "仅本会话已因同一指纹被提醒过一次后才接受；首次带上会被拒绝。"
+                        ),
+                    },
+                    "confirm_not_known_public": {
+                        "type": "boolean",
+                        "description": (
+                            "疑似已公开同类洞提醒后，确认是公开公告未覆盖的新链时传 true。"
+                            "仅本会话已因同一入口/sink 被提醒过一次后才接受；首次带上会被拒绝。"
                         ),
                     },
                     "fofa_fingerprint": {"type": "string"},

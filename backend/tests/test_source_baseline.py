@@ -104,7 +104,7 @@ def test_submit_vuln_blocks_known_patched_cve_on_bypass(tmp_env, project):
             "expected_evidence": "escape",
             "config_premise": "default",
             "root_cause_key": "path_traversal:stripPrefix",
-            "report_md": "## 摘要\n\nCVE-2026-54563\n\n## 漏洞描述\n\nx\n\n## 漏洞危害\n\nx\n\n"
+            "report_md": "## 漏洞描述\n\nCVE-2026-54563\n\nx\n\n## 漏洞危害\n\nx\n\n"
             "## 漏洞厂商全称\n\nCloudreve\n\n## 已知受影响产品及版本\n\n<4.16.0\n\n"
             "## 互联网资产证明\n\n### 精准测绘语法\n\n#### FOFA\n\n```\ntitle=\"x\"\n```\n\n"
             "## 漏洞技术细节\n\n### 补丁绕过简析\n\nx\n\n### Source → Sink\n\nx\n\n"

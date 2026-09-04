@@ -53,6 +53,6 @@ SubmitVuln 之前必须再做一次独立核对，不要凭「方法上没有权
 ## 流程
 1. 读注入的地图与鉴权，自己选前台入口或高危执行面，Read/Grep 分析。需要阅读无源码 class/jar 时用 `ListBytecode` / `DecompileJava`（不入定权；queued 勿空转轮询，完成后系统会注入通知）。Grep 反编译树须显式 `root=workspace/decompiled/...`。漏洞代码同时写 `jar!class` 与反编译路径。
 2. 满足闸门且**再核前台可达**后才 SubmitVuln（前台优先；能打出 RCE 效果的优先深挖并写清利用链）。`auth_premise` 必须写真实前提（无需登录 / 经某绕过无需登录），禁止把后台接口写成未授权。
-3. SearchOldVuln 去重；pending 同根因用 AppendAffectedLocations。
+3. SearchOldVuln 去重（kind=old 入口/sink 同类的公开洞不要当新发现；pending 同根因用 AppendAffectedLocations）。
 4. 已看过、已排除的路径记在本轮记录里，继续挖；不要试图提前收工。
 5. 工具列表出现 FinishRound 且本趟探索收束后再调用。系统不会按权重派下一份文件。

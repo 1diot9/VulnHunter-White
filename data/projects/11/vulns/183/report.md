@@ -1,12 +1,8 @@
-## 摘要
-
-MemoBoard 是一个基于 Flask 的内网备忘录应用。其 `GET /api/users` 接口存在未授权 SQL 注入漏洞。该接口无任何鉴权检查，`name` 查询参数被直接字符串拼接到 SQL 语句中，攻击者可通过注入获取数据库中所有用户的密码（包括管理员 admin 的明文密码）及邮箱等敏感信息。
-
 ## 漏洞描述
 
-MemoBoard 是一款使用 Flask 3.0.3 框架开发的内网备忘录看板应用，采用 SQLite 数据库存储用户与备忘录数据。应用提供 `GET /api/users` 接口用于按用户名查询用户信息，该接口无任何身份认证要求。
+MemoBoard 是一款基于 Flask 的内网备忘录看板应用。
 
-该接口的 `name` 查询参数被直接拼接到 SQL 语句 `SELECT id, name, role, email, password FROM users WHERE name = '{name}'` 中（`board/engine.py` 第 71 行），未使用参数化查询。攻击者可通过构造如 `' OR 1=1 --` 的注入 payload，使 WHERE 条件恒真，从而返回所有用户记录。由于查询 SELECT 列表包含 `password` 字段，攻击者可直接获取包括 admin 在内的所有用户明文密码。
+`GET /api/users` 无鉴权，`name` 查询参数被直接拼接到 SQL（`board/engine.py`），未使用参数化查询，构成未授权 SQL 注入。
 
 ## 漏洞危害
 

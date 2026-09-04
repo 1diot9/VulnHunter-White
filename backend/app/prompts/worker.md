@@ -84,7 +84,7 @@ SSRF 能发到内网 ≠ 能读云元数据。提交前必须在报告「漏洞�
 ## 流程
 1. 按角色 Read/Grep 分析注入焦点（入口沿调用链，Service/Util 回推 caller，控面看匹配与绕过）。Read 若 truncated=true，必须用返回的 next_offset 继续读完，不要增大 max_bytes。焦点若在 `workspace/decompiled/...`，Grep 须显式 `root=` 该 output_root 或父目录。需要阅读未纳入定权的 class/jar 时用 `ListBytecode` / `DecompileJava`（不入定权；queued 勿空转轮询）。漏洞代码同时写 `jar!class` 与反编译路径。
 2. 仅当满足上方提交闸门时 SubmitVuln（必填：title（中文）, vuln_type, cwe, file_path, line_no, source_sink, auth_premise, config_premise, http_request, expected_evidence；有 HTTP 面时必填 poc_code；并填 root_cause_key、report_md、advisory_md）。不要把「发现不安全 API」当成发现漏洞。
-3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 是已修复历史洞，本轮只当线索，不要做绕过挖掘。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。
+3. 开轮后可用 SearchOldVuln 查看 `kind=old`（侦察阶段已收齐）。query 按关键词分词，不必整句连续命中。`fix_status=unpatched` 来自未关闭 GitHub Issues，提交前用来去重，不要当新发现再报一遍；`patched` 以及入口/sink 同类的公开 CVE/公告都不要当新洞（不要用「旧洞已修、当前链多了默认开关」再报一遍）。不要把框架 CVE 清单当成待报的本项目新洞。提交前必须再 SearchOldVuln 查重（`kind=old` 侦察旧漏洞，`kind=found` 本项目已提交）；同根因 pending 用 AppendAffectedLocations，不要拆报告。若 SubmitVuln 提示疑似已公开同类洞，不要提交。
 4. 对照 docs/auth.md：已知且允许的业务能力设 intended_behavior=true。
 5. 边读边把已确认无漏洞的其它文件 FinishFile，然后继续挖；不要因为不能当入口就标记。仅当本轮注入焦点已按角色分析完后，才 FinishFile 它并 FinishRound；`report` 对齐 `templates/round-report.md`。
 6. 系统按当前启发式范围结束挖掘阶段（默认全部未 skip 文件；轻量模式仅权重 100 的入口），无需调用结束工具。范围内焦点审完后不要再 SubmitVuln。

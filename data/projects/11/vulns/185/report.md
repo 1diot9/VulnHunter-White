@@ -1,12 +1,8 @@
-## 摘要
-
-MemoBoard 的备忘录创建接口 `POST /api/notes` 无需认证，备忘录 body 内容被原样存入数据库。公开页面 `GET /notes` 使用 Jinja2 的 `| safe` 过滤器渲染 body，跳过 HTML 转义，导致存储型 XSS。攻击者可注入恶意 JavaScript，在其他用户（含 admin）访问公开备忘录页面时执行，实现会话劫持等攻击。
-
 ## 漏洞描述
 
-MemoBoard 是一款基于 Flask 3.0.3 框架开发的内网备忘录看板应用。应用提供 `POST /api/notes` 接口用于创建备忘录，该接口无任何身份认证要求，匿名用户即可创建。备忘录的 body 字段被原样存入 SQLite 数据库。
+MemoBoard 是一款基于 Flask 的内网备忘录看板应用。
 
-公开页面 `GET /notes` 使用 Jinja2 模板 `templates/notes.html` 渲染所有备忘录。其中 body 字段使用 `{{ n.body | safe }}` 渲染，`| safe` 过滤器跳过了 Jinja2 默认的 HTML 自动转义。攻击者可在 body 中注入 `<script>` 标签等 HTML/JavaScript 代码，当其他用户（包括管理员）访问 `/notes` 页面时，恶意脚本在其浏览器中执行，构成存储型 XSS。
+`POST /api/notes` 无认证写入的备忘录 body，在 `GET /notes` 中经 Jinja2 `| safe` 原样渲染，构成存储型 XSS。
 
 ## 漏洞危害
 

@@ -1,12 +1,8 @@
-## 摘要
-
-MemoBoard 的备忘录获取接口 `GET /api/notes/<id>` 存在 IDOR（不安全直接对象引用）漏洞。该接口读取了 `X-User` 请求头但未用于属主校验，任何用户（含匿名）可通过遍历 note_id 读取其他用户的私密备忘录，包括 bob 的薪资信息（"Confidential: bob salary review = 128000"）。
-
 ## 漏洞描述
 
-MemoBoard 是一款基于 Flask 3.0.3 框架开发的内网备忘录看板应用。应用提供 `GET /api/notes/<int:note_id>` 接口用于获取单条备忘录。该接口的设计意图是仅允许备忘录作者读取自己的备忘录，代码中读取了 `X-User` 请求头作为当前用户身份标识，但从未将其与备忘录的 `author` 字段进行比对校验。
+MemoBoard 是一款基于 Flask 的内网备忘录看板应用。
 
-接口直接根据 `note_id` 查询数据库并返回结果，无任何属主校验。攻击者可通过遍历 note_id（1, 2, 3...）读取所有用户的备忘录，包括标记为机密的薪资信息。
+`GET /api/notes/<id>` 读取了 `X-User` 却未与备忘录 `author` 比对，可按 note_id 越权读取他人私密备忘录。
 
 ## 漏洞危害
 

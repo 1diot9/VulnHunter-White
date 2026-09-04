@@ -88,7 +88,7 @@ def test_chinese_title_block_reason_unit():
     assert (
         chinese_title_block_reason(
             "登录处 SQL 注入",
-            report_md="# SQL Injection in login\n\n## 摘要\nx\n",
+            report_md="# SQL Injection in login\n\n## 漏洞描述\nx\n",
         )
         == CHINESE_TITLE_ERROR
     )
@@ -132,7 +132,7 @@ def test_submit_vuln_rejects_english_report_h1(tmp_env, project):
         "poc_code": "print(1)\n",
         "expected_evidence": "ok",
         "config_premise": "default",
-        "report_md": "# SQL Injection in login\n\n## 摘要\nx\n",
+        "report_md": "# SQL Injection in login\n\n## 漏洞描述\nx\n",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),
@@ -399,7 +399,6 @@ def test_missing_report_headings_bypass_requires_patch_section():
 
     minimal = "\n".join(
         [
-            "## 摘要",
             "## 漏洞描述",
             "## 漏洞危害",
             "## 漏洞厂商全称",
@@ -459,7 +458,7 @@ def test_cve_record_initialize_and_fill(tmp_env, project):
         "poc_code": "print(1)\n",
         "expected_evidence": "500",
         "config_premise": "default",
-        "report_md": "# SQL 注入演示\n\n## 摘要\nx\n## 漏洞描述\nx\n## 漏洞危害\nx\n## 漏洞厂商全称\nx\n## 已知受影响产品及版本\nx\n## 互联网资产证明\nx\n## 漏洞技术细节\nx\n## 同根因受影响点\nx\n## 复现证明\nx\n## 修复方案\nx\n## 备注\nx\n",
+        "report_md": "# SQL 注入演示\n\n## 漏洞描述\nx\n## 漏洞危害\nx\n## 漏洞厂商全称\nx\n## 已知受影响产品及版本\nx\n## 互联网资产证明\nx\n## 漏洞技术细节\nx\n## 同根因受影响点\nx\n## 复现证明\nx\n## 修复方案\nx\n## 备注\nx\n",
     }
     out = registry.dispatch(
         ToolContext(project_id=project, role="worker", phase="worker"),

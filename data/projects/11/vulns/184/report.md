@@ -1,14 +1,8 @@
-## 摘要
-
-MemoBoard 的运维 ping 接口 `GET /api/tools/ping` 存在命令注入漏洞。该接口需要 admin 会话，但 `host` 参数被直接拼接到 shell 命令 `echo MEMO-PING {host}` 中通过 `subprocess.getoutput` 执行，攻击者可通过分号注入任意命令实现 RCE。admin 凭据可通过同项目 SQLi 漏洞泄露，形成攻击链。
-
 ## 漏洞描述
 
-MemoBoard 是一款基于 Flask 3.0.3 框架开发的内网备忘录看板应用。应用提供 `GET /api/tools/ping` 运维 ping 接口，仅限 admin 角色会话访问。该接口的 `host` 查询参数被直接拼接到 shell 命令字符串 `f"echo MEMO-PING {host}"` 中，通过 `subprocess.getoutput` 在 shell 中执行。攻击者可通过构造 `host=;id` 等注入 payload，利用 shell 分号分隔符执行任意系统命令，命令输出通过 HTTP 响应原样返回，实现远程代码执行（RCE）。
+MemoBoard 是一款基于 Flask 的内网备忘录看板应用。
 
-admin 会话可通过以下方式获取：
-1. 利用 `GET /api/users` 的 SQL 注入漏洞拖取 admin 明文密码（admin123）
-2. 使用种子数据默认凭据 admin/admin123 登录
+`GET /api/tools/ping` 将 `host` 参数直接拼入 shell 命令并由 `subprocess.getoutput` 执行，构成命令注入。
 
 ## 漏洞危害
 

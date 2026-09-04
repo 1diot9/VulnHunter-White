@@ -543,7 +543,8 @@ def test_submit_and_confirm_flow(tmp_env, project):
     assert "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N" in advisory
     report = (vuln_dir(project, vuln_id) / "report.md").read_text(encoding="utf-8")
     assert "**产出时间**：" in report
-    assert report.index("**产出时间**：") < report.index("## 摘要")
+    assert report.index("**产出时间**：") < report.index("## 漏洞描述")
+    assert "## 摘要" not in report
     assert "## 漏洞描述" in report
     assert "## 互联网资产证明" in report
     assert "### 触发条件" in report
@@ -1898,14 +1899,17 @@ def test_openai_tools_for_role_contains_expected(tmp_env, project):
     assert "不要用来改 PoC" in reviewer_descs["MarkFalsePositive"]
     assert "无害/受限文件操作" in reviewer_descs["ConfirmVuln"]
     assert "不可获取且不可预测" in reviewer_descs["ConfirmVuln"]
+    assert "已公开同类洞" in reviewer_descs["ConfirmVuln"]
     assert "无害/受限文件操作" in reviewer_descs["MarkFalsePositive"]
     assert "不可获取且不可预测" in reviewer_descs["MarkFalsePositive"]
+    assert "已公开同类洞" in reviewer_descs["MarkFalsePositive"]
     worker_descs = {
         t["function"]["name"]: t["function"]["description"]
         for t in registry.openai_tools_for_role("worker")
     }
     assert "无害/受限文件操作" in worker_descs["SubmitVuln"]
     assert "不可获取且不可预测" in worker_descs["SubmitVuln"]
+    assert "已公开同类洞" in worker_descs["SubmitVuln"]
     lab_names = {t["function"]["name"] for t in registry.openai_tools_for_role("reviewer_lab")}
     assert "FinishLab" in lab_names
     assert "Write" in lab_names
