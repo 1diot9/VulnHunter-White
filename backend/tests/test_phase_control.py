@@ -33,6 +33,100 @@ def test_project_pause_pauses_all_phases(tmp_env, project):
     assert pipeline.get_phase_states(project)["project_paused"] is True
 
 
+def test_request_resume_syncs_github_while_still_paused(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    seen: dict[str, object] = {}
+
+    def fake_sync(pid: int):
+        seen["paused"] = pipeline.is_project_paused(pid)
+        seen["pid"] = pid
+        return {"skipped": False, "updated": False, "error": None, "index": {}}
+
+    monkeypatch.setattr(pipeline, "sync_github_source", fake_sync)
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        db.commit()
+    pipeline.request_pause(project)
+    pipeline.request_resume(project)
+    assert seen.get("pid") == project
+    assert seen.get("paused") is True
+    assert pipeline.is_project_paused(project) is False
+
+
+def test_request_resume_skips_github_sync_for_zip(tmp_env, project, monkeypatch):
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    called: list[int] = []
+    monkeypatch.setattr(
+        pipeline,
+        "sync_github_source",
+        lambda pid: called.append(pid) or {"skipped": True, "updated": False, "error": None},
+    )
+    pipeline.request_pause(project)
+    pipeline.request_resume(project)
+    assert called == []
+    assert pipeline.is_project_paused(project) is False
+
+
+def test_request_resume_continues_when_github_sync_fails(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    monkeypatch.setattr(
+        pipeline,
+        "sync_github_source",
+        lambda pid: {"skipped": False, "updated": False, "error": "git ls-remote 失败", "index": {}},
+    )
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        db.commit()
+    pipeline.request_pause(project)
+    pipeline.request_resume(project)
+    assert pipeline.is_project_paused(project) is False
+
+
+def test_maybe_sync_github_on_resume_marks_lab_rebuild(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(
+        pipeline,
+        "sync_github_source",
+        lambda pid: {
+            "skipped": False,
+            "updated": True,
+            "error": None,
+            "old_sha": "aaaaaaaa",
+            "new_sha": "bbbbbbbb",
+            "changed_paths": ["app/Main.java"],
+            "index": {"added": 0, "removed": 0, "unaudited": 1},
+        },
+    )
+    notes: dict[str, object] = {}
+    monkeypatch.setattr(pipeline, "lab_had_docker_lab", lambda pid: True)
+    monkeypatch.setattr(
+        pipeline,
+        "invalidate_lab_for_rebuild",
+        lambda pid, reason: notes.setdefault("lab", reason),
+    )
+    monkeypatch.setattr(
+        "app.code_intelligence.service.mark_stale_if_source_changed",
+        lambda pid, force=False: notes.setdefault("stale_force", force),
+    )
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        db.commit()
+    pipeline._maybe_sync_github_on_resume(project)
+    assert "当前 src" in str(notes.get("lab") or "")
+    assert notes.get("stale_force") is True
+
+
 def test_completed_project_pause_keeps_completed_status(tmp_env, project):
     from app.models import Project, SessionLocal
 

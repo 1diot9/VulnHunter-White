@@ -80,6 +80,7 @@ from ..services.ingest import (
     clone_github,
     extract_zip,
     prefilter_extensions,
+    sync_github_source,
 )
 from ..services.lab import (
     clear_lab_bring_up_failed,
@@ -89,6 +90,7 @@ from ..services.lab import (
     format_lab_repairs_for_prompt,
     handoff_lab_for_repair,
     increment_lab_setup_timeout_streak,
+    invalidate_lab_for_rebuild,
     lab_bring_up_failed,
     lab_had_docker_lab,
     lab_naming,
@@ -545,6 +547,12 @@ class DynamicVerifyRequestError(RuntimeError):
         self.status_code = status_code
 
 
+class InternetVerifyRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def is_static_only_vuln(vuln: Vuln) -> bool:
     if vuln.status == "static_only":
         return True
@@ -620,6 +628,26 @@ def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple
         proj is not None
         and can_append_dynamic_verify(vuln, project_verify_mode(proj))
         and proj.status not in ("cancelled", "error", "pending", "ingesting")
+    )
+    return can, queued
+
+
+def internet_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple[bool, bool]:
+    """Whether this confirmed frontend vuln can be (re)queued for FOFA internet verify."""
+    from .verifier import CONFIRMED_STATUSES, VERIFIER_PENDING, normalize_verifier_status
+
+    queued = normalize_verifier_status(vuln.verifier_status) == VERIFIER_PENDING
+    proj = project
+    if proj is None:
+        with SessionLocal() as db:
+            proj = db.get(Project, vuln.project_id)
+    merged = vuln.status == "merged" or bool(getattr(vuln, "merged_into_id", None))
+    can = bool(
+        proj is not None
+        and proj.status not in ("cancelled", "error", "pending", "ingesting")
+        and vuln.status in CONFIRMED_STATUSES
+        and (vuln.attack_surface or "") == "frontend"
+        and not merged
     )
     return can, queued
 
@@ -700,6 +728,7 @@ def request_dynamic_verify(vuln_id: int, *, followup_kind: str = "") -> dict[str
     )
     _force_new_run.discard((proj.id, "reviewer"))
     if _pause_event(proj.id).is_set():
+        _sync_github_before_unpause(proj.id)
         for phase in CONTROL_PHASES:
             if phase != "reviewer":
                 _phase_pause_event(proj.id, phase).set()
@@ -726,12 +755,181 @@ def request_dynamic_verify(vuln_id: int, *, followup_kind: str = "") -> dict[str
     return {"ok": True, "vuln_id": vuln.id, "project_id": proj.id, "phase_run_id": run_id}
 
 
+def request_internet_verify(vuln_id: int) -> dict[str, Any]:
+    """Manually queue FOFA internet verification for one confirmed frontend vuln.
+
+    Enables project Verifier if it was off. Re-queues skipped / failed / verified / none.
+    Does not enqueue sibling vulns.
+    """
+    from .verifier import (
+        CONFIRMED_STATUSES,
+        VERIFIER_AWAITING_USER,
+        VERIFIER_PENDING,
+        normalize_verifier_status,
+    )
+
+    with SessionLocal() as db:
+        vuln = db.get(Vuln, vuln_id)
+        if not vuln:
+            raise InternetVerifyRequestError("漏洞不存在", status_code=404)
+        proj = db.get(Project, vuln.project_id)
+        if not proj:
+            raise InternetVerifyRequestError("项目不存在", status_code=404)
+
+        if proj.status in ("cancelled", "error", "pending", "ingesting"):
+            raise InternetVerifyRequestError("当前项目状态不可发起互联网验证")
+        if vuln.status == "merged" or vuln.merged_into_id:
+            raise InternetVerifyRequestError("该漏洞已并入其他报告")
+        if vuln.status not in CONFIRMED_STATUSES:
+            raise InternetVerifyRequestError("仅已确认的前台漏洞可发起互联网验证")
+        if (vuln.attack_surface or "") != "frontend":
+            raise InternetVerifyRequestError("仅前台漏洞可发起互联网验证")
+
+        current = normalize_verifier_status(vuln.verifier_status)
+        if current == VERIFIER_PENDING:
+            raise InternetVerifyRequestError("该漏洞已在互联网验证中", status_code=409)
+        if current == VERIFIER_AWAITING_USER:
+            raise InternetVerifyRequestError(
+                "该漏洞正在等待「验证确认」页处理，请先跳过或同意后再发起",
+                status_code=409,
+            )
+
+        enabled = not bool(proj.verifier_enabled)
+        if enabled:
+            proj.verifier_enabled = True
+        vuln.verifier_status = VERIFIER_PENDING
+        if proj.status in ("completed", "paused"):
+            proj.status = "auditing"
+            proj.phase = "verifier"
+            proj.error = None
+        project_id = int(proj.id)
+        db.commit()
+
+    _abandon_verifier_runs_for_vuln(project_id, vuln_id, reason="用户再次发起互联网验证")
+    if _pause_event(project_id).is_set():
+        for phase in CONTROL_PHASES:
+            if phase != "verifier":
+                _phase_pause_event(project_id, phase).set()
+        _pause_event(project_id).clear()
+    _phase_pause_event(project_id, "verifier").clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    _queue_inject_vuln(project_id, "verifier", vuln_id)
+    if enabled:
+        note_verifier_enabled(project_id)
+        live_log.system(
+            project_id,
+            f"用户对漏洞 #{vuln_id} 发起互联网验证，已开启 Verifier",
+            phase="verifier",
+        )
+    else:
+        live_log.system(
+            project_id,
+            f"用户对漏洞 #{vuln_id} 再次发起互联网验证",
+            phase="verifier",
+        )
+    start_audit(project_id)
+    kick_verifier(project_id)
+    return {
+        "ok": True,
+        "vuln_id": int(vuln_id),
+        "project_id": project_id,
+        "verifier_status": VERIFIER_PENDING,
+        "verifier_enabled": True,
+    }
+
+
+def _maybe_sync_github_on_resume(project_id: int) -> None:
+    """Pull upstream GitHub HEAD if it moved; zip / failures keep the current snapshot."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj or (proj.source_type or "").strip() != "github":
+            return
+    live_log.system(project_id, "正在检查上游仓库是否有更新")
+    try:
+        result = sync_github_source(project_id)
+    except Exception as e:  # noqa: BLE001
+        live_log.system(project_id, f"检查上游仓库失败: {e}，仍用当前源码续跑")
+        return
+    if result.get("skipped"):
+        return
+    err = str(result.get("error") or "").strip()
+    if err:
+        live_log.system(project_id, f"检查上游仓库失败: {err}，仍用当前源码续跑")
+        return
+    if not result.get("updated"):
+        live_log.system(project_id, "上游仓库无更新，继续使用当前源码")
+        return
+    old = str(result.get("old_sha") or "")[:7] or "?"
+    new = str(result.get("new_sha") or "")[:7] or "?"
+    idx = result.get("index") if isinstance(result.get("index"), dict) else {}
+    n_changed = len(result.get("changed_paths") or [])
+    live_log.system(
+        project_id,
+        (
+            f"已同步上游最新代码 {old} → {new}："
+            f"变更 {n_changed} 个路径，"
+            f"新索引 {int(idx.get('added') or 0)}，"
+            f"删除 {int(idx.get('removed') or 0)}，"
+            f"待重审 {int(idx.get('unaudited') or 0)}"
+        ),
+    )
+    try:
+        from ..code_intelligence.service import mark_stale_if_source_changed
+
+        mark_stale_if_source_changed(project_id, force=True)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if lab_had_docker_lab(project_id):
+            invalidate_lab_for_rebuild(project_id, "上游源码已更新，靶场需按当前 src/ 重建")
+            live_log.system(project_id, "源码已更新，已标记靶场需按当前源码重建")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from .source_baseline import BASELINE_PENDING, run_source_baseline_check
+
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if proj:
+                proj.source_baseline_status = BASELINE_PENDING
+                db.commit()
+        if recon_old_vulns_ready(project_id):
+            report = run_source_baseline_check(project_id)
+            if report.status == "stale":
+                live_log.system(
+                    project_id,
+                    (
+                        f"源码更新后基线检查：发现 {len(report.issues)} 条上游已修复 CVE "
+                        "仍落在当前版本范围内，请在项目详情页判定是否继续"
+                    ),
+                    phase="recon-old-vuln",
+                )
+            else:
+                live_log.system(project_id, "源码更新后基线检查：未发现版本滞后问题", phase="recon-old-vuln")
+    except Exception as e:  # noqa: BLE001
+        live_log.system(project_id, f"源码更新后基线检查失败: {e}")
+
+
+def _sync_github_before_unpause(project_id: int) -> None:
+    """When leaving project pause, sync GitHub src/ before workers can read it."""
+    paused = _pause_event(project_id).is_set()
+    if not paused:
+        with SessionLocal() as db:
+            proj = db.get(Project, project_id)
+            if not proj or proj.status != "paused":
+                return
+    _maybe_sync_github_on_resume(project_id)
+
+
 def request_resume(project_id: int) -> None:
     from .token_budget import token_budget_block_reason
 
     blocked = token_budget_block_reason(project_id)
     if blocked:
         raise ValueError(blocked)
+    _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     for phase in CONTROL_PHASES:
         _phase_pause_event(project_id, phase).clear()
@@ -791,6 +989,8 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
     _force_new_run.discard((project_id, "recon"))
 
     was_paused = _pause_event(project_id).is_set()
+    if was_paused:
+        _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, "recon").clear()
     cancel = _cancel_event(project_id)
@@ -1144,6 +1344,15 @@ def _abandon_db_phase_runs(project_id: int, db_phases: tuple[str, ...], *, reaso
             _finish_phase_run(pr.id, "cancelled", reason)
 
 
+def _abandon_verifier_runs_for_vuln(project_id: int, vuln_id: int, *, reason: str) -> None:
+    """Drop leftover Verifier checkpoints for this vuln so a manual retry starts a fresh round."""
+    for pr in list_resumable_runs(project_id, "verifier"):
+        if pr.vuln_id is None or int(pr.vuln_id) != int(vuln_id):
+            continue
+        _release_adopted(project_id, pr.id)
+        _finish_phase_run(pr.id, "cancelled", reason)
+
+
 def _abandon_phase_checkpoints(project_id: int, phase: str, *, reason: str = "用户新跑") -> None:
     _abandon_db_phase_runs(project_id, CONTROL_DB_PHASES[control_phase(phase)], reason=reason)
 
@@ -1205,6 +1414,14 @@ def _take_pending_inject(project_id: int, phase: str) -> list[dict[str, Any]]:
     key = (project_id, control_phase(phase))
     with _lock:
         return list(_pending_inject.pop(key, []))
+
+
+def _queue_inject_vuln(project_id: int, phase: str, vuln_id: int) -> None:
+    key = (project_id, control_phase(phase))
+    with _lock:
+        items = list(_pending_inject.get(key, []))
+        items.append({"vuln_id": int(vuln_id)})
+        _pending_inject[key] = items
 
 
 def _take_inject_file(project_id: int, worker_id: str) -> FileWeight | None:
@@ -2198,6 +2415,8 @@ def request_conversation_continue(project_id: int, log_phase: str, message: str 
 
     control = _log_phase_control(lp)
     was_paused = _pause_event(project_id).is_set()
+    if was_paused:
+        _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, control).clear()
     cancel = _cancel_event(project_id)
@@ -2277,6 +2496,8 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
         _abandon_db_phase_runs(project_id, (db_phase,), reason="用户新开对话")
 
     was_paused = _pause_event(project_id).is_set()
+    if was_paused:
+        _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, control).clear()
     cancel = _cancel_event(project_id)
@@ -2403,6 +2624,7 @@ def request_unconstrained_start(project_id: int) -> dict[str, Any]:
             proj.error = None
         db.commit()
 
+    _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     cancel = _cancel_event(project_id)
     if cancel.is_set():

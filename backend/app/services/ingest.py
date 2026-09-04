@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -347,6 +348,95 @@ def detect_identity(src_root: Path, github_url: str | None = None) -> str | None
     return None
 
 
+_GIT_LS_REMOTE_TIMEOUT = 45
+_GIT_FETCH_TIMEOUT = 180
+_GIT_CLONE_TIMEOUT = 600
+
+
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    try:
+        from .http_client import proxy_url
+
+        proxy = (proxy_url() or "").strip()
+    except Exception:  # noqa: BLE001
+        proxy = ""
+    if proxy:
+        env["http_proxy"] = proxy
+        env["https_proxy"] = proxy
+        env["HTTP_PROXY"] = proxy
+        env["HTTPS_PROXY"] = proxy
+    return env
+
+
+def _run_git(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    cmd = ["git", "-c", "core.longpaths=true", *args]
+    return subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd is not None else None,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=_git_env(),
+    )
+
+
+def _github_pat(explicit: str | None = None) -> str:
+    raw = (explicit or "").strip()
+    if raw:
+        return raw
+    try:
+        from .github_probe import _saved_github_pat
+
+        return (_saved_github_pat() or "").strip()
+    except Exception:  # noqa: BLE001
+        return (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+
+
+def _authenticated_github_url(url: str, pat: str | None = None) -> str:
+    clone_url = (url or "").strip()
+    token = _github_pat(pat)
+    if token and "github.com" in clone_url:
+        clone_url = re.sub(
+            r"https://(www\.)?github\.com/",
+            f"https://{token}@github.com/",
+            clone_url,
+        )
+    if clone_url and not clone_url.endswith(".git") and "github.com" in clone_url:
+        clone_url = clone_url.rstrip("/") + ".git"
+    return clone_url
+
+
+def _parse_ls_remote_head(stdout: str) -> str:
+    for line in (stdout or "").splitlines():
+        text = line.strip()
+        if not text or text.lower().startswith("ref:"):
+            continue
+        sha = text.split()[0].strip().lower()
+        if re.fullmatch(r"[0-9a-f]{7,64}", sha):
+            return sha
+    raise RuntimeError("无法解析上游 HEAD")
+
+
+def _git_head_sha(src: Path) -> str:
+    proc = _run_git(["rev-parse", "HEAD"], cwd=src, timeout=15)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "git rev-parse 失败").strip())
+    sha = (proc.stdout or "").strip().split()[0].lower()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
+        raise RuntimeError("无法解析本地 HEAD")
+    return sha
+
+
 def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
     dest = project_root(project_id) / "src"
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -360,38 +450,206 @@ def clone_github(project_id: int, url: str, pat: str | None = None) -> Path:
         pass
     # clear_decompiled → workspace_dir → ensure_project_dirs 会把 src/ 再建出来
     force_rmtree(dest)
-    clone_url = url.strip()
-    if pat and "github.com" in clone_url:
-        # https://TOKEN@github.com/owner/repo.git
-        clone_url = re.sub(
-            r"https://(www\.)?github\.com/",
-            f"https://{pat}@github.com/",
-            clone_url,
-        )
-    if not clone_url.endswith(".git") and "github.com" in clone_url:
-        clone_url = clone_url.rstrip("/") + ".git"
+    clone_url = _authenticated_github_url(url, pat)
     # git -c 让本次 clone 的 checkout 绕过 Windows MAX_PATH；clone -c 写入新仓
     # 本地配置，后续 git 操作同样生效。XWiki 等深层树否则会 Filename too long。
-    proc = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.longpaths=true",
-            "clone",
-            "-c",
-            "core.longpaths=true",
-            "--depth",
-            "1",
-            clone_url,
-            str(dest),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
+    proc = _run_git(
+        ["clone", "-c", "core.longpaths=true", "--depth", "1", clone_url, str(dest)],
+        timeout=_GIT_CLONE_TIMEOUT,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git clone 失败: {proc.stderr or proc.stdout}")
     return dest
+
+
+def refresh_file_index_after_sync(
+    project_id: int,
+    changed_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Keep FileWeight in sync after src/ changes: add new, drop missing, un-audit changed."""
+    ensure_project_dirs(project_id)
+    root = src_dir(project_id)
+    with SessionLocal() as db:
+        ext_rows = indexed_weight_exts(db, [project_id]).get(project_id) or []
+    allowed = {str(row["ext"]) for row in ext_rows if row.get("ext")} | set(SOURCE_EXTS)
+    files = _collect(root, frozenset(allowed)) if allowed else []
+    present = {str(fp.relative_to(root)).replace("\\", "/") for fp in files}
+    changed = {
+        str(p or "").replace("\\", "/").lstrip("./")
+        for p in (changed_paths or [])
+        if str(p or "").strip()
+    }
+    added = 0
+    removed = 0
+    unaudited = 0
+    with SessionLocal() as db:
+        rows = db.query(FileWeight).filter(FileWeight.project_id == project_id).all()
+        by_path = {str(r.path).replace("\\", "/"): r for r in rows}
+        for rel, row in list(by_path.items()):
+            if rel in present:
+                continue
+            db.delete(row)
+            removed += 1
+            by_path.pop(rel, None)
+        for rel in sorted(present):
+            row = by_path.get(rel)
+            if row is None:
+                skip = is_test_path(rel)
+                db.add(
+                    FileWeight(
+                        project_id=project_id,
+                        path=rel,
+                        weight=None if not skip else 0,
+                        skipped=skip,
+                        audited=False,
+                        has_source=False,
+                    )
+                )
+                added += 1
+                continue
+            if rel not in changed:
+                continue
+            dirty = False
+            if row.audited:
+                row.audited = False
+                dirty = True
+            if row.claimed_by:
+                row.claimed_by = None
+                row.claimed_at = None
+                dirty = True
+            if dirty:
+                unaudited += 1
+        db.commit()
+    return {"added": added, "removed": removed, "unaudited": unaudited}
+
+
+def sync_github_source(project_id: int) -> dict[str, Any]:
+    """Fast-forward a GitHub project's src/ to upstream HEAD when it moved.
+
+    Zip projects and missing URLs are skipped. Network / git failures return
+    ``error`` instead of raising so resume can continue on the current snapshot.
+    """
+    empty_index = {"added": 0, "removed": 0, "unaudited": 0}
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return {"skipped": True, "updated": False, "error": None, "index": empty_index}
+        if (proj.source_type or "").strip() != "github":
+            return {"skipped": True, "updated": False, "error": None, "index": empty_index}
+        source_url = (proj.source_url or "").strip()
+    if not source_url:
+        return {
+            "skipped": False,
+            "updated": False,
+            "error": "缺少 GitHub URL",
+            "index": empty_index,
+        }
+
+    fetch_url = _authenticated_github_url(source_url)
+    src = src_dir(project_id)
+    git_dir = src / ".git"
+
+    def _result(**kwargs: Any) -> dict[str, Any]:
+        payload = {
+            "skipped": False,
+            "updated": False,
+            "error": None,
+            "old_sha": None,
+            "new_sha": None,
+            "changed_paths": [],
+            "index": empty_index,
+        }
+        payload.update(kwargs)
+        return payload
+
+    try:
+        remote = _run_git(
+            ["ls-remote", fetch_url, "HEAD"],
+            timeout=_GIT_LS_REMOTE_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return _result(error="未安装 Git，无法检查上游更新")
+    except subprocess.TimeoutExpired:
+        return _result(error="检查上游超时")
+    except Exception as exc:  # noqa: BLE001
+        return _result(error=str(exc) or exc.__class__.__name__)
+    if remote.returncode != 0:
+        return _result(error=(remote.stderr or remote.stdout or "git ls-remote 失败").strip())
+    try:
+        remote_sha = _parse_ls_remote_head(remote.stdout)
+    except RuntimeError as exc:
+        return _result(error=str(exc))
+
+    if not git_dir.is_dir():
+        try:
+            clone_github(project_id, source_url)
+        except Exception as exc:  # noqa: BLE001
+            return _result(error=f"本地缺少 .git，重新克隆失败: {exc}")
+        index = refresh_file_index_after_sync(project_id, None)
+        new_sha = None
+        try:
+            new_sha = _git_head_sha(src_dir(project_id))
+        except Exception:  # noqa: BLE001
+            new_sha = remote_sha
+        return _result(updated=True, old_sha=None, new_sha=new_sha, index=index)
+
+    try:
+        local_sha = _git_head_sha(src)
+    except Exception as exc:  # noqa: BLE001
+        return _result(error=f"读取本地 HEAD 失败: {exc}")
+    if local_sha == remote_sha or (
+        len(local_sha) >= 7 and remote_sha.startswith(local_sha)
+    ) or (
+        len(remote_sha) >= 7 and local_sha.startswith(remote_sha)
+    ):
+        return _result(old_sha=local_sha, new_sha=remote_sha)
+
+    try:
+        fetched = _run_git(
+            ["fetch", "--depth", "1", fetch_url, "HEAD"],
+            cwd=src,
+            timeout=_GIT_FETCH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return _result(error="同步上游超时", old_sha=local_sha, new_sha=remote_sha)
+    except Exception as exc:  # noqa: BLE001
+        return _result(error=str(exc) or exc.__class__.__name__, old_sha=local_sha)
+    if fetched.returncode != 0:
+        return _result(
+            error=(fetched.stderr or fetched.stdout or "git fetch 失败").strip(),
+            old_sha=local_sha,
+            new_sha=remote_sha,
+        )
+
+    changed: list[str] = []
+    diff = _run_git(
+        ["diff", "-z", "--name-only", "HEAD", "FETCH_HEAD"],
+        cwd=src,
+        timeout=30,
+    )
+    if diff.returncode == 0 and diff.stdout:
+        changed = [p.replace("\\", "/") for p in diff.stdout.split("\0") if p.strip()]
+
+    reset = _run_git(["reset", "--hard", "FETCH_HEAD"], cwd=src, timeout=60)
+    if reset.returncode != 0:
+        return _result(
+            error=(reset.stderr or reset.stdout or "git reset 失败").strip(),
+            old_sha=local_sha,
+            new_sha=remote_sha,
+            changed_paths=changed,
+        )
+    try:
+        new_sha = _git_head_sha(src)
+    except Exception:  # noqa: BLE001
+        new_sha = remote_sha
+    index = refresh_file_index_after_sync(project_id, changed)
+    return _result(
+        updated=True,
+        old_sha=local_sha,
+        new_sha=new_sha,
+        changed_paths=changed,
+        index=index,
+    )
 
 
 def extract_zip(project_id: int, zip_path: Path) -> Path:

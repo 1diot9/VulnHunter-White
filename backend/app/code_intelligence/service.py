@@ -192,11 +192,11 @@ def _log(project_id: int, text: str) -> None:
     live_log.system(project_id, text, phase=CODE_INTEL_PHASE, role="code_intel")
 
 
-def mark_stale_if_source_changed(project_id: int) -> bool:
+def mark_stale_if_source_changed(project_id: int, *, force: bool = False) -> bool:
     """If src/ changed after a ready index, mark stale. Does not rebuild."""
     now = time.time()
     last = _last_stale_check.get(project_id, 0.0)
-    if now - last < _STALE_CHECK_SEC:
+    if not force and now - last < _STALE_CHECK_SEC:
         return False
     _last_stale_check[project_id] = now
     with SessionLocal() as db:

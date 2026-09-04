@@ -13,6 +13,8 @@ from app.services.ingest import (
     indexed_weight_exts,
     is_test_path,
     path_source_ext,
+    refresh_file_index_after_sync,
+    sync_github_source,
 )
 from app.services.paths import src_dir
 
@@ -228,3 +230,181 @@ def test_backfill_missing_source_exts_indexes_new_languages(tmp_env, project, mo
     assert "metabase/api.clj" in out["added"]
     again = backfill_missing_source_exts(project)
     assert again["added_count"] == 0
+
+
+def test_parse_ls_remote_head_and_auth_url():
+    from app.services.ingest import _authenticated_github_url, _parse_ls_remote_head
+
+    assert _parse_ls_remote_head("abc1234deadbeef\tHEAD\n") == "abc1234deadbeef"
+    assert (
+        _parse_ls_remote_head("ref: refs/heads/main\tHEAD\nabc1234deadbeef\tHEAD\n")
+        == "abc1234deadbeef"
+    )
+    assert _authenticated_github_url("https://github.com/acme/demo", pat="ghp_x") == (
+        "https://ghp_x@github.com/acme/demo.git"
+    )
+
+
+class _GitProc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_refresh_file_index_after_sync_add_remove_unaudit(tmp_env, project):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    src = src_dir(project)
+    (src / "app" / "Old.java").write_text("class Old {}\n", encoding="utf-8")
+    build_file_index(project)
+    with Session() as db:
+        main = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/Main.java")
+            .one()
+        )
+        main.audited = True
+        main.weight = 100
+        main.claimed_by = "w1"
+        old = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.path == "app/Old.java")
+            .one()
+        )
+        old.audited = True
+        old.weight = 80
+        db.commit()
+
+    (src / "app" / "Old.java").unlink()
+    (src / "app" / "New.java").write_text("class New {}\n", encoding="utf-8")
+    (src / "app" / "Main.java").write_text("public class Main { public void login() { int x = 1; } }\n", encoding="utf-8")
+
+    out = refresh_file_index_after_sync(project, ["app/Main.java", "app/Old.java", "app/New.java"])
+    assert out["added"] == 1
+    assert out["removed"] == 1
+    assert out["unaudited"] == 1
+
+    with Session() as db:
+        rows = {
+            r.path.replace("\\", "/"): r
+            for r in db.query(models.FileWeight).filter(models.FileWeight.project_id == project)
+        }
+        assert "app/Old.java" not in rows
+        assert rows["app/New.java"].audited is False
+        assert rows["app/New.java"].weight is None
+        assert rows["app/Main.java"].audited is False
+        assert rows["app/Main.java"].claimed_by is None
+        assert rows["app/Main.java"].weight == 100
+
+
+def test_sync_github_source_skips_zip(tmp_env, project):
+    out = sync_github_source(project)
+    assert out["skipped"] is True
+    assert out["updated"] is False
+    assert out["error"] is None
+
+
+def test_sync_github_source_no_update(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+    from app.services import ingest as ingest_mod
+    from app.services.paths import src_dir as src_of
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        db.commit()
+    (src_of(project) / ".git").mkdir(parents=True, exist_ok=True)
+
+    def fake_git(args, **kwargs):
+        if args[:1] == ["ls-remote"]:
+            return _GitProc(stdout="abc1234deadbeef\tHEAD\n")
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return _GitProc(stdout="abc1234deadbeef\n")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(ingest_mod, "_run_git", fake_git)
+    out = sync_github_source(project)
+    assert out["skipped"] is False
+    assert out["updated"] is False
+    assert out["error"] is None
+
+
+def test_sync_github_source_fetches_when_head_moved(tmp_env, project, monkeypatch):
+    from app.models import FileWeight, Project, SessionLocal
+    from app.services import ingest as ingest_mod
+    from app.services.paths import src_dir as src_of
+
+    src = src_of(project)
+    (src / ".git").mkdir(parents=True, exist_ok=True)
+    build_file_index(project)
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        main = (
+            db.query(FileWeight)
+            .filter(FileWeight.project_id == project, FileWeight.path == "app/Main.java")
+            .one()
+        )
+        main.audited = True
+        main.weight = 100
+        db.commit()
+
+    commands: list[str] = []
+
+    def fake_git(args, **kwargs):
+        commands.append(args[0])
+        if args[:1] == ["ls-remote"]:
+            return _GitProc(stdout="ffffffffffffffffffffffffffffffffffffffff\tHEAD\n")
+        if args[:2] == ["rev-parse", "HEAD"]:
+            if "fetch" in commands:
+                return _GitProc(stdout="ffffffffffffffffffffffffffffffffffffffff\n")
+            return _GitProc(stdout="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+        if args[:1] == ["fetch"]:
+            return _GitProc()
+        if args[:1] == ["diff"]:
+            return _GitProc(stdout="app/Main.java\0app/New.java\0")
+        if args[:1] == ["reset"]:
+            (src / "app" / "New.java").write_text("class New {}\n", encoding="utf-8")
+            (src / "app" / "Main.java").write_text("class Main { void n() {} }\n", encoding="utf-8")
+            return _GitProc()
+        raise AssertionError(args)
+
+    monkeypatch.setattr(ingest_mod, "_run_git", fake_git)
+    out = sync_github_source(project)
+    assert out["updated"] is True
+    assert out["old_sha"].startswith("aaa")
+    assert out["new_sha"].startswith("fff")
+    assert "app/Main.java" in out["changed_paths"]
+    assert out["index"]["added"] == 1
+    assert out["index"]["unaudited"] == 1
+    with SessionLocal() as db:
+        rows = {
+            r.path: r
+            for r in db.query(FileWeight).filter(FileWeight.project_id == project)
+        }
+        assert rows["app/Main.java"].audited is False
+        assert rows["app/New.java"].weight is None
+
+
+def test_sync_github_source_ls_remote_failure(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+    from app.services import ingest as ingest_mod
+    from app.services.paths import src_dir as src_of
+
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        db.commit()
+    (src_of(project) / ".git").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        ingest_mod,
+        "_run_git",
+        lambda args, **kwargs: _GitProc(returncode=1, stderr="Repository not found"),
+    )
+    out = sync_github_source(project)
+    assert out["updated"] is False
+    assert "Repository not found" in (out["error"] or "")
