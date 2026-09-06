@@ -34,6 +34,7 @@ from ..services.fofa import test_connectivity as test_fofa_connectivity
 from ..services.github_probe import test_connectivity as test_github_connectivity
 from ..services.llm_probe import list_models, test_connectivity
 from ..services.access_token import update_access_token_hash
+from ..services.llm_gate import clamp_min_request_interval
 from ..services.llm_settings import (
     apply_endpoints_to_settings_row,
     assert_safe_llm_base_url,
@@ -109,6 +110,10 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             limit = max(1, int(body.llm_thread_limit))
             row.llm_thread_limit = limit
             scale_single_endpoint_inflight(row, limit)
+        if body.llm_min_request_interval_sec is not None:
+            row.llm_min_request_interval_sec = clamp_min_request_interval(
+                body.llm_min_request_interval_sec, default=2.0
+            )
         if body.github_pat is not None:
             row.github_pat = body.github_pat
         if body.fofa_key is not None:

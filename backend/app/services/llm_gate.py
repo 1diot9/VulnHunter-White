@@ -1,7 +1,7 @@
-"""Per-endpoint LLM cooldown (429 / quota / auth / 5xx).
+"""Per-endpoint LLM cooldown (429 / quota / auth / 5xx) and request-start pacing.
 
-Inflight Agent slots are gated by llm_thread.py; this module only tracks
-health/cooldown state shared with the pool scheduler.
+Inflight Agent slots are gated by llm_thread.py; this module tracks health /
+cooldown and FIFO-paces HTTP request starts on the same Base URL.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from typing import Iterator, Literal
 
@@ -19,6 +20,37 @@ _RATE_LIMIT_BASE = 30.0
 _RATE_LIMIT_CAP = 90.0
 _QUOTA_COOLDOWN = 5 * 60.0
 _TRANSIENT_COOLDOWN = 10.0
+_INTERVAL_CAP = 60.0
+
+
+def clamp_min_request_interval(value: object, *, default: float = 2.0) -> float:
+    """Clamp same-endpoint min request interval to [0, 60] seconds."""
+    try:
+        n = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        n = default
+    if n < 0:
+        return 0.0
+    return min(_INTERVAL_CAP, n)
+
+
+def resolve_min_request_interval_sec() -> float:
+    """Settings-page interval, falling back to config default (2s)."""
+    from ..config import settings
+
+    default = clamp_min_request_interval(
+        getattr(settings, "llm_min_request_interval_sec", 2.0), default=2.0
+    )
+    try:
+        from .llm_settings import get_settings_row
+
+        row = get_settings_row()
+        raw = getattr(row, "llm_min_request_interval_sec", None)
+        if raw is not None:
+            return clamp_min_request_interval(raw, default=default)
+    except Exception:  # noqa: BLE001
+        pass
+    return default
 
 
 def compact_llm_error(message: str, kind: str = "") -> str:
@@ -71,15 +103,85 @@ class EndpointHealth:
 
 
 class LlmRequestGate:
-    """Per-endpoint cooldown registry."""
+    """Per-endpoint cooldown registry plus FIFO request-start pacer."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_id: dict[str, EndpointHealth] = {}
+        self._pace_cond = threading.Condition()
+        self._pace_queues: dict[str, deque[int]] = {}
+        self._pace_ticket = 0
+        self._pace_last: dict[str, float] = {}
 
     def reset(self) -> None:
         with self._lock:
             self._by_id.clear()
+        with self._pace_cond:
+            self._pace_queues.clear()
+            self._pace_last.clear()
+            self._pace_ticket = 0
+            self._pace_cond.notify_all()
+
+    def wait_request_interval(
+        self,
+        endpoint_id: str,
+        interval_sec: float,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[float, int]:
+        """FIFO-pace request *starts* on one endpoint.
+
+        Later callers queue behind the current one. Returns ``(waited_sec, queued_ahead)``.
+        ``queued_ahead`` is counted at enqueue time. Does not start the HTTP call.
+        """
+        interval = clamp_min_request_interval(interval_sec, default=0.0)
+        eid = (endpoint_id or "").strip() or "_default"
+        if interval <= 0:
+            return 0.0, 0
+        started = time.time()
+        granted = False
+        queued_ahead = 0
+        ticket = -1
+        with self._pace_cond:
+            ticket = self._pace_ticket
+            self._pace_ticket += 1
+            q = self._pace_queues.setdefault(eid, deque())
+            queued_ahead = len(q)
+            q.append(ticket)
+        try:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return time.time() - started, queued_ahead
+                with self._pace_cond:
+                    q = self._pace_queues.get(eid)
+                    if q is None or ticket not in q:
+                        return time.time() - started, queued_ahead
+                    at_front = q[0] == ticket
+                    now = time.time()
+                    due = self._pace_last.get(eid, 0.0) + interval
+                    if at_front and now >= due:
+                        q.popleft()
+                        if not q:
+                            self._pace_queues.pop(eid, None)
+                        self._pace_last[eid] = now
+                        granted = True
+                        self._pace_cond.notify_all()
+                        return now - started, queued_ahead
+                    timeout = 0.05
+                    if at_front and due > now:
+                        timeout = min(0.25, max(0.01, due - now))
+                    self._pace_cond.wait(timeout=timeout)
+        finally:
+            if not granted:
+                with self._pace_cond:
+                    q = self._pace_queues.get(eid)
+                    if q is not None:
+                        try:
+                            q.remove(ticket)
+                        except ValueError:
+                            pass
+                        if not q:
+                            self._pace_queues.pop(eid, None)
+                    self._pace_cond.notify_all()
 
     def clear_on_settings_save(self) -> None:
         """Drop cooldowns/disables after settings change."""

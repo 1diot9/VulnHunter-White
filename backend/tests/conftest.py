@@ -148,6 +148,7 @@ def tmp_env(tmp_path, monkeypatch):
         row = db.query(models.AppSettings).first()
         if row is not None:
             row.cli_tools_dir = str(cli_tools)
+            row.llm_min_request_interval_sec = 0.0
             db.commit()
 
     from app.tools import register_all_tools

@@ -53,6 +53,7 @@ class SettingsOut(BaseModel):
     llm_roles: dict[str, LlmRoleAssignment] = Field(default_factory=dict)
     llm_endpoints: list[LlmPoolEndpointOut] = Field(default_factory=list)
     llm_thread_limit: int = 6
+    llm_min_request_interval_sec: float = 2.0
     github_pat_set: bool = False
     fofa_key_set: bool = False
     fofa_base_url: str = "https://fofa.info"
@@ -91,6 +92,7 @@ class SettingsUpdate(BaseModel):
     llm_roles: dict[str, LlmRoleAssignment] | None = None
     llm_endpoints: list[LlmPoolEndpointIn] | None = None
     llm_thread_limit: int | None = None
+    llm_min_request_interval_sec: float | None = None
     github_pat: str | None = None
     fofa_key: str | None = None
     fofa_base_url: str | None = None

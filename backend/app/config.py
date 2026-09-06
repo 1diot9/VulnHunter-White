@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # LLM error handling (AutoPoc-aligned)
     rate_limit_sleep_sec: int = 90
     rate_limit_max_retries: int = 20
+    # Min seconds between request *starts* on the same pool endpoint (0 = off).
+    llm_min_request_interval_sec: float = 2.0
     request_backoff_retries: int = 3
     phase_max_resumes: int = 2
     recon_max_resumes: int = 8

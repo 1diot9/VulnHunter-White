@@ -23,6 +23,7 @@ def test_health_and_settings(tmp_env):
         assert "fix_concurrency" not in body
         assert "llm_thread_limit" in body
         assert body["llm_thread_limit"] == 6
+        assert body["llm_min_request_interval_sec"] == 0.0
         assert body["http_proxy"] == ""
         assert body["chat_proxy"] == ""
         assert "cli_tools_dir" in body
@@ -54,6 +55,21 @@ def test_health_and_settings(tmp_env):
         cleared = client.put("/api/settings", json={"http_proxy": "", "chat_proxy": ""})
         assert cleared.json()["http_proxy"] == ""
         assert cleared.json()["chat_proxy"] == ""
+
+
+def test_llm_min_request_interval_roundtrip(tmp_env):
+    from app.main import app
+
+    with TestClient(app) as client:
+        upd = client.put("/api/settings", json={"llm_min_request_interval_sec": 2})
+        assert upd.status_code == 200
+        assert upd.json()["llm_min_request_interval_sec"] == 2.0
+        got = client.get("/api/settings")
+        assert got.json()["llm_min_request_interval_sec"] == 2.0
+        off = client.put("/api/settings", json={"llm_min_request_interval_sec": 0})
+        assert off.json()["llm_min_request_interval_sec"] == 0.0
+        capped = client.put("/api/settings", json={"llm_min_request_interval_sec": 99})
+        assert capped.json()["llm_min_request_interval_sec"] == 60.0
 
 
 def test_llm_endpoints_pool_save_and_read(tmp_env):

@@ -20,6 +20,7 @@ from ..schemas import (
     SettingsOut,
 )
 from .access_token import is_access_token_configured
+from .llm_gate import clamp_min_request_interval
 
 LlmRole = Literal["recon", "worker", "reviewer", "verifier"]
 LLM_ROLES: tuple[LlmRole, ...] = ("recon", "worker", "reviewer", "verifier")
@@ -495,6 +496,9 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         llm_roles=roles_for_api(row),
         llm_endpoints=endpoints,
         llm_thread_limit=thread_limit,
+        llm_min_request_interval_sec=clamp_min_request_interval(
+            getattr(row, "llm_min_request_interval_sec", None), default=2.0
+        ),
         github_pat_set=bool((row.github_pat or "").strip()),
         fofa_key_set=bool((getattr(row, "fofa_key", None) or "").strip()),
         fofa_base_url=(getattr(row, "fofa_base_url", None) or "").strip() or "https://fofa.info",

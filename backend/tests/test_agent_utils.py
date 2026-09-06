@@ -607,6 +607,74 @@ def test_llm_gate_quota_cooldown_is_five_minutes_not_half_hour():
     assert snap["ep-401"]["disabled"] is True
 
 
+def test_llm_gate_request_interval_zero_does_not_wait():
+    from app.services.llm_gate import LlmRequestGate
+
+    gate = LlmRequestGate()
+    t0 = time.time()
+    waited, queued = gate.wait_request_interval("ep-a", 0, None)
+    assert waited == 0.0
+    assert queued == 0
+    assert time.time() - t0 < 0.2
+
+
+def test_llm_gate_request_interval_queues_fifo():
+    from app.services.llm_gate import LlmRequestGate
+
+    gate = LlmRequestGate()
+    order: list[str] = []
+    starts: dict[str, float] = {}
+    interval = 0.12
+
+    def worker(name: str) -> None:
+        _waited, _queued = gate.wait_request_interval("ep-a", interval, None)
+        starts[name] = time.time()
+        order.append(name)
+
+    t_a = threading.Thread(target=worker, args=("a",))
+    t_a.start()
+    t_a.join(timeout=2)
+    t_b = threading.Thread(target=worker, args=("b",))
+    t_b.start()
+    time.sleep(0.03)
+    t_c = threading.Thread(target=worker, args=("c",))
+    t_c.start()
+    t_b.join(timeout=3)
+    t_c.join(timeout=3)
+    assert not t_b.is_alive() and not t_c.is_alive()
+    assert order == ["a", "b", "c"]
+    assert starts["b"] - starts["a"] >= interval - 0.04
+    assert starts["c"] - starts["b"] >= interval - 0.04
+
+
+def test_llm_gate_request_interval_cancel_releases_queue():
+    from app.services.llm_gate import LlmRequestGate
+
+    gate = LlmRequestGate()
+    cancel = threading.Event()
+    second_done = threading.Event()
+    waited_box: list[float] = []
+
+    def first() -> None:
+        gate.wait_request_interval("ep-a", 2.0, None)
+
+    def second() -> None:
+        waited, _queued = gate.wait_request_interval("ep-a", 2.0, cancel)
+        waited_box.append(waited)
+        second_done.set()
+
+    t1 = threading.Thread(target=first)
+    t1.start()
+    t1.join(timeout=2)
+    t2 = threading.Thread(target=second)
+    t2.start()
+    time.sleep(0.08)
+    cancel.set()
+    assert second_done.wait(timeout=2)
+    t2.join(timeout=2)
+    assert waited_box and waited_box[0] < 1.5
+
+
 def test_llm_gate_acquire_does_not_serialize():
     from app.services.llm_gate import llm_slot
 

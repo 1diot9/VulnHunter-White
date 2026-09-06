@@ -512,6 +512,7 @@ export type Settings = {
   llm_roles: Record<string, { provider_id: string; model: string; reasoning_effort: string }>
   llm_endpoints: LlmPoolEndpoint[]
   llm_thread_limit: number
+  llm_min_request_interval_sec: number
   github_pat_set: boolean
   fofa_key_set: boolean
   fofa_base_url: string

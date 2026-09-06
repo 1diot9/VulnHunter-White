@@ -15,7 +15,7 @@ from ..config import settings
 from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
 from ..services.http_client import chat_http_client, chat_http_timeout, conclude_http_timeout
 from ..services.live_log import live_log
-from ..services.llm_gate import llm_gate, llm_slot
+from ..services.llm_gate import llm_gate, llm_slot, resolve_min_request_interval_sec
 from ..services.llm_thread import SlotHandle, llm_thread_limiter, llm_thread_slot
 from ..services.llm_settings import (
     ResolvedLlm,
@@ -293,6 +293,7 @@ class AgentLoop:
         self._announce_next_chat = bool(resumed)
         self._rate_limit_retries = 0
         self._transient_retries = 0
+        self._pace_waited = 0.0
         if self.silent and self.log_path:
             from ..services.cli_tool_index import file_event_log
 
@@ -583,6 +584,7 @@ class AgentLoop:
             self._maybe_inject_steer(messages)
             self._maybe_inject_decompile_notices(messages)
 
+            self._pace_waited = 0.0
             try:
                 resp, usage, retry_after = self._chat(messages, tools, remaining)
             except AuthError as e:
@@ -679,6 +681,8 @@ class AgentLoop:
                     messages.append({"role": "user", "content": TRANSIENT_RESUME})
                 self._persist(messages)
                 continue
+            finally:
+                deadline += float(self._pace_waited or 0.0)
 
             self._transient_retries = 0
             self._accumulate_tokens(result, usage)
@@ -1102,6 +1106,7 @@ class AgentLoop:
         remaining: float,
     ) -> tuple[dict[str, Any], dict[str, int], float | None]:
         last_err: Exception | None = None
+        self._pace_waited = 0.0
         est_tokens = estimate_tokens(messages, tools)
         # Allow extra attempts when failing over across endpoints
         max_attempts = max(
@@ -1125,6 +1130,26 @@ class AgentLoop:
                     self._live.system(
                         self.project_id,
                         f"端点 {eid} 冷却中，约 {cd:.0f}s 后请求模型",
+                        phase=self.phase,
+                        role=self.role,
+                    )
+                waited, queued = llm_gate.wait_request_interval(
+                    eid,
+                    resolve_min_request_interval_sec(),
+                    self.cancel_event,
+                )
+                self._pace_waited += waited
+                if self._cancelled():
+                    raise TransientError("cancelled")
+                if waited >= 0.2:
+                    interval = resolve_min_request_interval_sec()
+                    extra = f"，前方 {queued} 个" if queued else ""
+                    self._live.system(
+                        self.project_id,
+                        (
+                            f"端点 {eid} 最小请求间隔 {interval:g}s，排队等待 {waited:.1f}s{extra}"
+                            "（不计入阶段超时与读超时）"
+                        ),
                         phase=self.phase,
                         role=self.role,
                     )

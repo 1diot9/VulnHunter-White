@@ -23,7 +23,7 @@ from ..config import settings
 from ..models import PhaseRun, SessionLocal, Vuln
 from ..prompts import load_prompt
 from ..services.http_client import chat_http_client, chat_http_timeout
-from ..services.llm_gate import llm_gate
+from ..services.llm_gate import llm_gate, resolve_min_request_interval_sec
 from ..services.llm_settings import resolve_llm
 from .cve_record import format_cve_record_json, write_cve_record
 from .paths import project_root, vuln_dir
@@ -703,6 +703,12 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
             with chat_http_client(timeout=timeout) as client:
                 for _attempt in range(max(2, pool_n + 1)):
                     url, headers, body, consume = _build_followup_request(llm, messages, drop_keys)
+                    eid = llm.endpoint_id or handle.endpoint_id
+                    llm_gate.wait_request_interval(
+                        eid,
+                        resolve_min_request_interval_sec(),
+                        None,
+                    )
                     try:
                         with client.stream("POST", url, headers=headers, json=body) as res:
                             if res.status_code == 400:

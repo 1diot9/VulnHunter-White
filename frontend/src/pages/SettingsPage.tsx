@@ -156,6 +156,7 @@ export default function SettingsPage() {
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
   const [contextWindow, setContextWindow] = useState(128000)
+  const [minRequestInterval, setMinRequestInterval] = useState(2)
   const [httpProxy, setHttpProxy] = useState('')
   const [chatProxy, setChatProxy] = useState('')
   const [cliToolsDir, setCliToolsDir] = useState('tools/cli')
@@ -244,6 +245,9 @@ export default function SettingsPage() {
         setDefaultModel(eps[0].model)
       }
       setContextWindow(x.context_window || 128000)
+      setMinRequestInterval(
+        Number.isFinite(x.llm_min_request_interval_sec) ? x.llm_min_request_interval_sec : 2,
+      )
       setFofaBaseUrl(x.fofa_base_url || 'https://fofa.info')
       setHttpProxy(x.http_proxy || '')
       setChatProxy(x.chat_proxy || '')
@@ -492,6 +496,10 @@ export default function SettingsPage() {
         default_model: defaultModel,
         default_base_url: first?.base_url?.trim() || '',
         llm_thread_limit: totalThreadLimit,
+        llm_min_request_interval_sec: Math.max(
+          0,
+          Math.min(60, Number(minRequestInterval) || 0),
+        ),
         context_window: contextWindow,
         http_proxy: httpProxy.trim(),
         chat_proxy: chatProxy.trim(),
@@ -558,6 +566,9 @@ export default function SettingsPage() {
         })),
       )
       if (next.default_model) setDefaultModel(next.default_model)
+      if (Number.isFinite(next.llm_min_request_interval_sec)) {
+        setMinRequestInterval(next.llm_min_request_interval_sec)
+      }
       setGithubPat('')
       setFofaKey('')
       setMsg('已保存')
@@ -737,7 +748,22 @@ export default function SettingsPage() {
           </div>
           <div className="text-xs text-slate-500">
             可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。新会话按负载均匀分配，同一会话粘滞到所选
-            URL；429 冷却该端点并换路。额度用尽的端点即使空闲也不再优先选中，有其它可用端点时直接跳过。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。
+            URL；429 冷却该端点并换路。额度用尽的端点即使空闲也不再优先选中，有其它可用端点时直接跳过。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
+          </div>
+          <div className="flex max-w-xs items-center gap-2">
+            <Label className="shrink-0 whitespace-nowrap">请求间隔（秒）</Label>
+            <Input
+              type="number"
+              min={0}
+              max={60}
+              step={0.5}
+              value={minRequestInterval}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                setMinRequestInterval(Number.isFinite(n) ? n : 0)
+              }}
+              title="同一 Base URL 两次请求开始时间的最小间隔；0 表示不限制"
+            />
           </div>
           <div className="space-y-3">
             {endpoints.map((ep, index) => (

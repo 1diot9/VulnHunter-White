@@ -39,6 +39,7 @@ class AppSettings(Base):
     worker_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     fix_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     llm_thread_limit: Mapped[int] = mapped_column(Integer, default=6)
+    llm_min_request_interval_sec: Mapped[float] = mapped_column(Float, default=2.0)
     github_pat: Mapped[str | None] = mapped_column(Text, nullable=True)
     fofa_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     fofa_base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -488,6 +489,7 @@ def _ensure_columns() -> None:
         "app_settings": {
             "fix_concurrency": "INTEGER DEFAULT 1",
             "llm_thread_limit": "INTEGER DEFAULT 6",
+            "llm_min_request_interval_sec": "REAL DEFAULT 2.0",
             "fofa_key": "TEXT",
             "fofa_base_url": "VARCHAR(1024)",
             "http_proxy": "VARCHAR(1024)",
