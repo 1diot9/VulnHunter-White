@@ -5856,6 +5856,7 @@ def _run_reviewer_once(project_id: int) -> None:
                     "true 且前台确认后该路径结束（当前 Worker 轮仍会跑完）。"
                     "本条始终走赏金闸门，即使项目是全量/自定义模式。"
                     "Worker 若声称前台，须独立核验无认证可达，不要照抄；核完其实要登录则标后台，不要为结束路径硬标 frontend。"
+                    "须管理员先加入攻击者设备/邮箱/Webhook/SNMP 源的不是前台，标 backend+admin，rce_effect=false。"
                 )
 
         if _give_up_exhausted_review(project_id, vuln_id):

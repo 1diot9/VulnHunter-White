@@ -35,17 +35,18 @@
 - **间接消费型**（JDBC 连接池 / SQL 防火墙 / 解析库等组件本身无直接 HTTP 入口，须上游业务应用传入输入）：Confirm 时 `exposure_mode=indirect_consumer`；在报告 **`### 触发条件`** 写明不能直接向组件发请求、真实环境须先找到上游可利用注入点。CVSS 须 **AC:H** 且 **AV 不得为 N**（通常 AV:L）；未在真实业务入口证明完整上游链时，C/I/A 至多一项 H，价值分层标 `low_impact`，不要标 `frontend`/`cve_candidate`。仅 harness/单测直调组件 API 不算上游链 proven；只有从业务 HTTP/API 入口打通全链才可传 `upstream_chain_proven=true` 放宽。
 
 ### Worker 声称前台时必须核验无认证可达
-Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / 无需登录 / 未授权 / 无认证」**只是声称，不能直接采信**。准备标 `attack_surface=frontend`（PR:N）之前，必须对照 `docs/auth.md` 与源码再核一遍：攻击者**无本应用账号、不带登录 Cookie / Session / Authorization / 业务 token** 能否穿过过滤器、拦截器、Spring Security / Shiro / 权限注解到达 sink。
+Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / 无需登录 / 未授权 / 无认证」**只是声称，不能直接采信**。准备标 `attack_surface=frontend`（PR:N）之前，必须对照 `docs/auth.md` 与源码再核一遍：攻击者**无本应用账号、不带登录 Cookie / Session / Authorization / 业务 token**，且**不必先由管理员把攻击者控制的设备 / 邮箱 / Webhook / SNMP 源加进系统**，能否穿过过滤器、拦截器、Spring Security / Shiro / 权限注解，把恶意输入送到 sink。
 
 - 方法或类上没有 `@PreAuthorize` / `@RequiresPermissions` **不够**：要看全局规则、路径前缀、`excludePathPatterns` / `antMatchers` / `filterChainDefinition` 是否**精确覆盖**该 URL。
 - 用默认口令登录再打、需要任意已登录会话、需要后台菜单权限 → **不是前台**。默认口令本身按成立性否决误报；其余漏洞若仍成立，按后台 Confirm（`attack_surface=backend` + `required_account`），本轮改报告「触发条件」，不要为了改分类打回。
+- **管理员先加入的可信源不是前台**：利用须管理员先把攻击者控制的设备、邮箱、Webhook、SNMP agent、回调 URL 等登记进系统，再靠轮询/回调把 payload 带进来 → 标 `backend` + `required_account=admin`（PR:H）。不要用「SNMP / 邮件 / 回调本身不用登录本应用」把这种洞标成 `frontend` / PR:N。后续 sink 即使无鉴权，也只是后台已信任源的消费。
 - 只有认证绕过让未登录请求真正打通时，才维持前台。
 - 不要为了结束无约束路径，把后台洞标成 `frontend`，也不要把 `rce_effect=true` 套在非前台上。
 
 ### 价值分层规则
 价值只分两类，不要再用仅公告 / 加固建议这种拆法：
-- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网（含有回显读正文、外带内网信息，以及仅响应差别探测内网端口）、**存储型 XSS（持久化后在其他用户浏览器执行）**、**1-click CSRF（受害者打开恶意页面后立即触发 RCE 或其他高危操作）**、**有服务端机密危害的源码硬编码密钥（可伪造 token、绕过签名、解密本不该公开的服务端密文等）**等；影响强、复现清晰，值得单独提交 CVE。不要把前端传输混淆 AES/公开下发密钥标成此项。不要把普通 CSRF（仅缺 token、改资料/登出/点赞等低危状态变更，或需多次点击/二次确认）标成此项。
-- `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、普通 CSRF（仅缺 token / 低危状态变更）、影响达不到 CVE 强度的问题。
+- `cve_candidate`（有 CVE 价值）：未认证或低权限可达，且能造成 RCE、任意文件读写、认证绕过、跨租户/跨用户越权读写删、敏感凭证/API Key 泄露、可利用 SSRF 到内网（含有回显读正文、外带内网信息，以及仅响应差别探测内网端口）、**存储型 XSS（持久化后在其他用户浏览器执行）**、**1-click CSRF（受害者打开恶意页面后立即触发 RCE 或其他高危操作）**、**有服务端机密危害的源码硬编码密钥（可伪造 token、绕过签名、解密本不该公开的服务端密文等）**等；影响强、复现清晰，值得单独提交 CVE。不要把前端传输混淆 AES/公开下发密钥标成此项。不要把普通 CSRF（仅缺 token、改资料/登出/点赞等低危状态变更，或需多次点击/二次确认）标成此项。不要把「须管理员先加入攻击者设备/邮箱/Webhook」的可信源注入标成前台 CVE。
+- `low_impact`（低危害难利用）：漏洞成立但危害低或很难利用，例如 CORS/安全头、开放重定向、弱随机、单点限速绕过、反射 XSS、普通 CSRF（仅缺 token / 低危状态变更）、**须管理员先把攻击者控制的设备/邮箱/回调加进系统才有注入面、且还叠加特定配置**、影响达不到 CVE 强度的问题。
 
 另外一个是流程标记，不是价值分类：
 - `duplicate_grouped`：危害或鉴权前提**明显不同**、但仍属同一根因家族、值得单独留档的变体。同一根因同一危害、只是方法不同 → **不要**用本标记，改用 `MergeIntoVuln` 并入主报告。若仍用本标记，**必须原样复用** SearchOldVuln `kind=found` 里该主报告已有的 `root_cause_key`。
@@ -85,7 +86,7 @@ Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / �
    - 4.0 向量：`CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`
    - 度量（3.1）：AV=N|A|L|P，AC=L|H，PR=N|L|H，UI=N|R，S=U|C，C/I/A=H|L|N
    - 度量（4.0）：AT=N|P，UI=N|P|A，VC/VI/VA 为脆弱系统，SC/SI/SA 为后续系统（无跨边界时全 N）
-   - **PR 必须与攻击面一致**（硬校验，两套向量都要）：前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。不要用「SNMP/设备侧注入」把后台洞写成 PR:N。
+   - **PR 必须与攻击面一致**（硬校验，两套向量都要）：前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。须管理员先加入攻击者设备/邮箱/Webhook/SNMP 源的，标后台管理员（PR:H），不要用「设备侧不用登录」写成 PR:N。
    - XSS 默认 3.1 `UI:R/S:C/C:L/I:L/A:N`，4.0 `UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N`，不要因 Cookie/账户接管把 C/I 或 VC/VI 标 H。
    - 分数阈值：9.0–10.0 critical，7.0–8.9 high，4.0–6.9 medium，0.1–3.9 low。
 6. 资产证明审核：报告必须包含 `## 互联网资产证明`（旧报告中的 `## 应用搜索指纹` 视为等价），并分别给出 FOFA 与 X 情报社区查询语句。测绘语句不允许出现「或」/`||`。**指纹是项目级的**（`docs/app-fingerprints.json`），全项目只识别一次，本条 Confirm 写入报告即可，不要每条洞重新搜。
@@ -93,7 +94,7 @@ Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / �
    - **无漏洞环境**：复用项目指纹；仍是占位则让 Confirm 自动写入共享指纹，不要编造 hash，不要为此 ReturnToWorker，也不要每条再搜一遍互联网。
    - 「基础环境搭建」应引用 `docs/lab.md`，不要在漏洞报告内重复镜像、端口、凭据。
 7. 确认：ConfirmVuln 必须标注攻击面、CVSS 3.1 / 4.0 向量和价值分层：
-   - `attack_surface=frontend`：前台漏洞（公开/未登录可打到）。**须独立核验无认证可达**，不要照抄 Worker。核完其实要登录 → 改标 `backend`，不要硬标前台。
+   - `attack_surface=frontend`：前台漏洞（公开/未登录可打到，且不必先由管理员登记攻击者控制的设备/源）。**须独立核验无认证可达**，不要照抄 Worker。核完其实要登录、或须管理员先加入攻击者设备/邮箱/回调 → 改标 `backend`，不要硬标前台。
    - `attack_surface=backend`：后台漏洞，且必须再标 `required_account`：
      - `user`：普通权限账号即可利用
      - `admin`：需要管理员账号

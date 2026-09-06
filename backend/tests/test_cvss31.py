@@ -104,6 +104,8 @@ def test_expected_pr_follows_attack_surface():
     err = cvss_pr_alignment_error(xss_inflated, "backend", "user")
     assert err is not None
     assert "PR:L" in err
+    assert "改标 attack_surface=frontend" not in err
+    assert "required_account=admin" in err
     assert cvss_pr_alignment_error(xss_inflated, "frontend") is None
 
     aligned = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N")

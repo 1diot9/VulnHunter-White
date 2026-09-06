@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
 import { api, formatProjectsListError, type Project, type ProjectRunStatusCounts } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
@@ -35,6 +35,10 @@ const EMPTY_STATUS_COUNTS: ProjectRunStatusCounts = {
   completed: 0,
 }
 
+function isInteractiveCardTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest('a, button, input, textarea, select, [role="menuitem"]'))
+}
+
 function CreateProjectButton({ onClick }: { onClick: () => void }) {
   return (
     <Button
@@ -58,6 +62,7 @@ const RUN_STATUS_FILTERS: { key: RunStatusFilter; label: string }[] = [
 ]
 
 export default function HomePage() {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [total, setTotal] = useState(0)
   const [statusCounts, setStatusCounts] = useState<ProjectRunStatusCounts>(EMPTY_STATUS_COUNTS)
@@ -281,7 +286,20 @@ export default function HomePage() {
           ? projects.map((p) => {
           const runStatus = formatProjectRunStatus(p.status, p.project_paused)
           return (
-          <Card key={p.id} className="w-full">
+          <Card
+            key={p.id}
+            className="w-full cursor-pointer transition-colors hover:bg-muted/40"
+            onClick={(e: MouseEvent<HTMLDivElement>) => {
+              if (e.defaultPrevented || isInteractiveCardTarget(e.target)) return
+              if (window.getSelection()?.toString()) return
+              const href = `/projects/${p.id}`
+              if (e.metaKey || e.ctrlKey) {
+                window.open(href, '_blank', 'noopener,noreferrer')
+                return
+              }
+              navigate(href)
+            }}
+          >
             <CardHeader>
               <div className="min-w-0">
                 <CardTitle>

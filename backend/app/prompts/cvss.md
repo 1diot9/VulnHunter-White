@@ -16,9 +16,9 @@ ConfirmVuln / SetCveRecordField 只填基础向量（8 个度量），不要手�
 | 后台 | 普通权限 user | PR:L |
 | 后台 | 管理员 admin | PR:H |
 
-- 不要用「SNMP / 设备侧 / 邮件 / 回调注入不需要登录」把**后台**洞写成 PR:N。若攻击者确实无需本应用账号即可注入，且受害者页面也未认证，应标 `attack_surface=frontend` 再用 PR:N。
+- 不要用「SNMP / 设备侧 / 邮件 / 回调注入不需要登录」把**后台**洞写成 PR:N。若利用须管理员先把攻击者控制的设备、邮箱、Webhook、SNMP agent 等登记进系统，再靠轮询/回调注入，应标 `attack_surface=backend` + `required_account=admin`（PR:H）。只有攻击者能从本应用公开/未登录接口直接送入 payload、且不必先由管理员登记攻击者控制的源时，才标 `frontend` / PR:N。
 - 需要登录才能改数据或打接口 → 不是 PR:N。需要管理员账号 → PR:H，不要写成 PR:L。
-- 需要登录不是 AC:H（那是 PR）。
+- 需要登录不是 AC:H（那是 PR）。管理员先加入攻击者设备也不是 PR:N。
 
 **间接消费型（exposure_mode=indirect_consumer）**
 - 适用：JDBC 连接池 / SQL 防火墙（如 Druid WallFilter）/ 编解码库 / 中间件 consumer 等**本身无直接 HTTP/RPC 入口**，缺陷只在「上游应用把攻击者输入传入组件 API」时才能利用。

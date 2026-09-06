@@ -67,7 +67,11 @@ export function DeleteProjectButton({
         type="button"
         variant={variant}
         size={size}
-        onClick={openDialog}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          openDialog()
+        }}
       >
         删除
       </Button>
