@@ -105,6 +105,13 @@ VulnHunter-White 的特点：
 | udecode/plate           | [GHSA-p8g2-cf33-p28j](https://github.com/udecode/plate/security/advisories/GHSA-p8g2-cf33-p28j) | DoS      | 6.5      |
 | udecode/plate           | [GHSA-r3c4-jjfg-3vvx](https://github.com/udecode/plate/security/advisories/GHSA-r3c4-jjfg-3vvx) | XSS      | 6.1      |
 | filebrowser/filebrowser | GHSA-448h-jr2h-3vhp                                          | DoS      | 6.5      |
+| http4s/http4s           | [GHSA-gq9p-f254-h286](https://github.com/http4s/http4s/security/advisories/GHSA-gq9p-f254-h286) | DoS      | 7.5      |
+| http4s/http4s           | [GHSA-3q2f-8v8m-249p](https://github.com/http4s/http4s/security/advisories/GHSA-3q2f-8v8m-249p) | DoS      | 8.2      |
+| http4s/http4s           | [GHSA-3jm4-mm2v-96qj](https://github.com/http4s/http4s/security/advisories/GHSA-3jm4-mm2v-96qj) | DoS      | 7.5      |
+| http4s/http4s           | [GHSA-gw3w-mpf8-v247](https://github.com/http4s/http4s/security/advisories/GHSA-gw3w-mpf8-v247) | DoS      | 7.5      |
+| http4s/http4s           | [GHSA-h2xv-5x52-7qvw](https://github.com/http4s/http4s/security/advisories/GHSA-h2xv-5x52-7qvw) | DoS      | 7.5      |
+| http4s/http4s           | [GHSA-3p4m-6fv5-mjq7](https://github.com/http4s/http4s/security/advisories/GHSA-3p4m-6fv5-mjq7) | DoS      | 7.5      |
+| http4s/http4s           | [GHSA-g7xf-9x49-v632](https://github.com/http4s/http4s/security/advisories/GHSA-g7xf-9x49-v632) | DoS      | 7.5      |
 | YunaiV/ruoyi-vue-pro    | NCC-2026-08501                                               | XSS      | 6.9      |
 
 目前还有十多个处于Draft状态的未公开漏洞，后续公开后会补充。
