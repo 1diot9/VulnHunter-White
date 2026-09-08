@@ -98,6 +98,12 @@ VulnHunter-White 的特点：
 | udecode/plate           | [GHSA-5pmq-h882-6g62](https://github.com/udecode/plate/security/advisories/GHSA-5pmq-h882-6g62) | XML注入  | 6.1      |
 | udecode/plate           | [GHSA-fm23-57g4-6m2p](https://github.com/udecode/plate/security/advisories/GHSA-fm23-57g4-6m2p) | XSS      | 5.4      |
 | udecode/plate           | [GHSA-qrfj-mgw8-j9c6](https://github.com/udecode/plate/security/advisories/GHSA-qrfj-mgw8-j9c6) | XSS      | 6.1      |
+| udecode/plate           | [GHSA-vjm2-6pxg-8vm8](https://github.com/udecode/plate/security/advisories/GHSA-vjm2-6pxg-8vm8) | XSS      | 6.1      |
+| udecode/plate           | [GHSA-q8r4-6wh4-76hm](https://github.com/udecode/plate/security/advisories/GHSA-q8r4-6wh4-76hm) | RCE      | High     |
+| udecode/plate           | [GHSA-6gwv-m56p-wc8m](https://github.com/udecode/plate/security/advisories/GHSA-6gwv-m56p-wc8m) | 鉴权缺失 | 6.9      |
+| udecode/plate           | [GHSA-2q2r-jqh4-grp3](https://github.com/udecode/plate/security/advisories/GHSA-2q2r-jqh4-grp3) | 鉴权缺失 | 6.9      |
+| udecode/plate           | [GHSA-p8g2-cf33-p28j](https://github.com/udecode/plate/security/advisories/GHSA-p8g2-cf33-p28j) | DoS      | 6.5      |
+| udecode/plate           | [GHSA-r3c4-jjfg-3vvx](https://github.com/udecode/plate/security/advisories/GHSA-r3c4-jjfg-3vvx) | XSS      | 6.1      |
 | filebrowser/filebrowser | GHSA-448h-jr2h-3vhp                                          | DoS      | 6.5      |
 | YunaiV/ruoyi-vue-pro    | NCC-2026-08501                                               | XSS      | 6.9      |
 
