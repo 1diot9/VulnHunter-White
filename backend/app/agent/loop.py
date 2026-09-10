@@ -16,7 +16,7 @@ from ..models import PhaseRun, SessionLocal, TokenUsage, utcnow
 from ..services.http_client import chat_http_client, chat_http_timeout, conclude_http_timeout
 from ..services.live_log import live_log
 from ..services.llm_gate import llm_gate, llm_slot, resolve_min_request_interval_sec
-from ..services.llm_thread import SlotHandle, llm_thread_limiter, llm_thread_slot
+from ..services.llm_thread import SlotHandle, llm_thread_limiter
 from ..services.llm_settings import (
     ResolvedLlm,
     bind_llm_to_endpoint,
@@ -399,6 +399,41 @@ class AgentLoop:
             time.sleep(0.05)
         return not self._cancelled()
 
+    def _acquire_llm_slot(self) -> bool:
+        prefer = self.llm.endpoint_id if (self.llm.endpoint_id and not self._llm_injected) else None
+        handle = llm_thread_limiter.acquire(
+            self.cancel_event,
+            project_id=self.project_id,
+            phase=self.phase,
+            role=self.role,
+            prefer_endpoint=prefer,
+        )
+        if handle is None:
+            return False
+        if not self._llm_injected:
+            self._bind_slot_endpoint(handle)
+        else:
+            self._slot_handle = handle
+        return True
+
+    def _release_llm_slot(self, *, log: str = "") -> None:
+        handle = self._slot_handle
+        if handle is None:
+            return
+        llm_thread_limiter.release(handle)
+        self._slot_handle = None
+        if not log:
+            return
+        try:
+            self._live.system(
+                self.project_id,
+                log,
+                phase=self.phase,
+                role=self.role,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _persist(self, messages: list[dict[str, Any]], *, status: str = "running") -> None:
         if not self.phase_run_id:
             return
@@ -460,24 +495,15 @@ class AgentLoop:
         return True
 
     def run(self) -> LoopResult:
-        prefer = self.llm.endpoint_id if (self.llm.endpoint_id and not self._llm_injected) else None
-        with llm_thread_slot(
-            self.cancel_event,
-            project_id=self.project_id,
-            phase=self.phase,
-            role=self.role,
-            prefer_endpoint=prefer,
-        ) as handle:
-            if handle is None:
-                result = LoopResult(ok=False, state=self.state)
-                result.cancelled = True
-                result.stop_reason = "cancelled"
-                return result
-            if not self._llm_injected:
-                self._bind_slot_endpoint(handle)
-            else:
-                self._slot_handle = handle
+        if not self._acquire_llm_slot():
+            result = LoopResult(ok=False, state=self.state)
+            result.cancelled = True
+            result.stop_reason = "cancelled"
+            return result
+        try:
             return self._run_loop()
+        finally:
+            self._release_llm_slot()
 
     def _run_loop(self) -> LoopResult:
         if not self.silent:
@@ -530,6 +556,9 @@ class AgentLoop:
             if self._paused():
                 self._persist(messages, status="paused")
                 paused_at = time.time()
+                self._release_llm_slot(
+                    log="已暂停，已释放 LLM 线程名额，续跑后重新排队",
+                )
                 if not self._wait_while_paused():
                     result.cancelled = True
                     result.stop_reason = "cancelled"
@@ -540,6 +569,10 @@ class AgentLoop:
                     return result
                 deadline += time.time() - paused_at
                 self._persist(messages, status="running")
+                if not self._acquire_llm_slot():
+                    result.cancelled = True
+                    result.stop_reason = "cancelled"
+                    return result
                 continue
             if self._enforce_token_budget():
                 continue

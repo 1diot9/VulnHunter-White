@@ -32,6 +32,7 @@ class LlmPoolEndpointIn(BaseModel):
     api_key: str | None = None
     model: str = ""
     max_inflight: int = 6
+    disabled: bool = False
 
 
 class LlmPoolEndpointOut(BaseModel):
@@ -40,6 +41,7 @@ class LlmPoolEndpointOut(BaseModel):
     api_key_set: bool = False
     model: str = ""
     max_inflight: int = 6
+    disabled: bool = False
 
 
 class LlmRoleAssignment(BaseModel):

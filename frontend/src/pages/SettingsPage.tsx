@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const domesticEndpointHints = [
@@ -149,8 +150,9 @@ export default function SettingsPage() {
       api_key_set: boolean
       model: string
       max_inflight: number
+      disabled: boolean
     }>
-  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, model: '', max_inflight: 6 }])
+  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, model: '', max_inflight: 6, disabled: false }])
   const [wireApi, setWireApi] = useState<'chat' | 'anthropic'>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
@@ -229,6 +231,7 @@ export default function SettingsPage() {
                 api_key_set: x.default_api_key_set,
                 model: x.default_model || '',
                 max_inflight: x.llm_thread_limit || 6,
+                disabled: false,
               },
             ]
       setEndpoints(
@@ -239,6 +242,7 @@ export default function SettingsPage() {
           api_key_set: !!ep.api_key_set,
           model: ep.model || '',
           max_inflight: Math.max(1, ep.max_inflight || 6),
+          disabled: !!ep.disabled,
         })),
       )
       if (!x.default_model && eps[0]?.model) {
@@ -264,7 +268,15 @@ export default function SettingsPage() {
   }, [models, modelFilter])
 
   const totalThreadLimit = useMemo(
-    () => endpoints.reduce((sum, ep) => sum + Math.max(1, ep.max_inflight || 1), 0),
+    () =>
+      endpoints.reduce(
+        (sum, ep) => (ep.disabled ? sum : sum + Math.max(1, ep.max_inflight || 1)),
+        0,
+      ),
+    [endpoints],
+  )
+  const enabledCount = useMemo(
+    () => endpoints.filter((ep) => !ep.disabled).length,
     [endpoints],
   )
 
@@ -290,7 +302,13 @@ export default function SettingsPage() {
 
   function updateEndpoint(
     id: string,
-    patch: Partial<{ base_url: string; api_key: string; model: string; max_inflight: number }>,
+    patch: Partial<{
+      base_url: string
+      api_key: string
+      model: string
+      max_inflight: number
+      disabled: boolean
+    }>,
   ) {
     setEndpoints((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)))
   }
@@ -309,13 +327,21 @@ export default function SettingsPage() {
           api_key_set: false,
           model: defaultModel.trim(),
           max_inflight: 6,
+          disabled: false,
         },
       ]
     })
   }
 
   function removeEndpoint(id: string) {
-    setEndpoints((prev) => (prev.length <= 1 ? prev : prev.filter((ep) => ep.id !== id)))
+    setEndpoints((prev) => {
+      if (prev.length <= 1) return prev
+      const target = prev.find((ep) => ep.id === id)
+      if (!target) return prev
+      const enabledLeft = prev.filter((ep) => ep.id !== id && !ep.disabled).length
+      if (!target.disabled && enabledLeft < 1) return prev
+      return prev.filter((ep) => ep.id !== id)
+    })
   }
 
   async function fetchModels(endpointId?: string) {
@@ -491,7 +517,7 @@ export default function SettingsPage() {
   async function save() {
     setMsg('')
     try {
-      const first = endpoints[0]
+      const first = endpoints.find((ep) => !ep.disabled) || endpoints[0]
       const body: Record<string, unknown> = {
         default_model: defaultModel,
         default_base_url: first?.base_url?.trim() || '',
@@ -512,6 +538,7 @@ export default function SettingsPage() {
           api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
           model: ep.model.trim(),
           max_inflight: Math.max(1, ep.max_inflight || 1),
+          disabled: !!ep.disabled,
         })),
       }
       if (githubPat.trim()) body.github_pat = githubPat.trim()
@@ -531,6 +558,7 @@ export default function SettingsPage() {
             api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
             model: ep.model.trim(),
             max_inflight: Math.max(1, ep.max_inflight || 1),
+            disabled: !!ep.disabled,
           })),
         },
       ]
@@ -553,6 +581,7 @@ export default function SettingsPage() {
                 api_key_set: next.default_api_key_set,
                 model: next.default_model || '',
                 max_inflight: next.llm_thread_limit || 6,
+                disabled: false,
               },
             ]
       setEndpoints(
@@ -563,6 +592,7 @@ export default function SettingsPage() {
           api_key_set: !!ep.api_key_set,
           model: ep.model || '',
           max_inflight: Math.max(1, ep.max_inflight || 6),
+          disabled: !!ep.disabled,
         })),
       )
       if (next.default_model) setDefaultModel(next.default_model)
@@ -747,8 +777,8 @@ export default function SettingsPage() {
             </Button>
           </div>
           <div className="text-xs text-slate-500">
-            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。新会话按负载均匀分配，同一会话粘滞到所选
-            URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
+            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配，同一会话粘滞到所选
+            URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
           </div>
           <div className="flex max-w-xs items-center gap-2">
             <Label className="shrink-0 whitespace-nowrap">请求间隔（秒）</Label>
@@ -769,18 +799,36 @@ export default function SettingsPage() {
             {endpoints.map((ep, index) => (
               <div
                 key={ep.id}
-                className="space-y-2 rounded-lg border border-foreground/10 bg-muted/20 p-3"
+                className={`space-y-2 rounded-lg border border-foreground/10 bg-muted/20 p-3${ep.disabled ? ' opacity-60' : ''}`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">
                     端点 {index + 1}
                     <span className="ml-1.5 tabular-nums opacity-70">{ep.id}</span>
+                    {ep.disabled ? <span className="ml-1.5 text-red-300">已禁用</span> : null}
                   </span>
-                  {endpoints.length > 1 ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => removeEndpoint(ep.id)}>
-                      删除
-                    </Button>
-                  ) : null}
+                  <div className="flex items-center gap-2">
+                    <Label className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                      <Checkbox
+                        checked={ep.disabled}
+                        disabled={!ep.disabled && enabledCount <= 1}
+                        title={
+                          !ep.disabled && enabledCount <= 1
+                            ? '至少保留一个未禁用的端点'
+                            : '禁用后不参与分配，配置仍保留'
+                        }
+                        onCheckedChange={(checked) =>
+                          updateEndpoint(ep.id, { disabled: checked === true })
+                        }
+                      />
+                      禁用
+                    </Label>
+                    {endpoints.length > 1 ? (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => removeEndpoint(ep.id)}>
+                        删除
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
                 <EndpointHealthLine health={usageById.get(ep.id)} />
                 <Input
@@ -873,6 +921,7 @@ export default function SettingsPage() {
                   </Button>
                   <span className="text-xs text-slate-500">
                     {ep.model.trim() || defaultModel.trim() || '未指定模型'} · 并发 {ep.max_inflight}
+                    {ep.disabled ? ' · 不参与分配' : ''}
                   </span>
                 </div>
               </div>
@@ -1173,6 +1222,7 @@ export default function SettingsPage() {
                               api_key_set: false,
                               model: defaultModel.trim(),
                               max_inflight: 6,
+                              disabled: false,
                             },
                           ]
                         }

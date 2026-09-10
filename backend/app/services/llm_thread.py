@@ -1,8 +1,10 @@
 """Per-endpoint FIFO limiter for LLM-interacting agent threads.
 
-Each AgentLoop occupies one slot on one Base URL for the session duration.
-Capacity is the sum of per-endpoint max_inflight. On 429/quota the session can
-rebind to another healthy endpoint without releasing the global wait queue.
+Each AgentLoop occupies one slot on one Base URL while it is actively running.
+Pause releases the slot so other sessions can proceed; resume re-acquires
+(sticky to the last endpoint when possible). Capacity is the sum of per-endpoint
+max_inflight. On 429/quota the session can rebind to another healthy endpoint
+without releasing the global wait queue.
 """
 
 from __future__ import annotations
@@ -186,6 +188,7 @@ class LlmThreadLimiter:
                             "api_key": "",
                             "model": str(getattr(ep, "model", "") or ""),
                             "max_inflight": int(getattr(ep, "max_inflight", DEFAULT_LLM_THREAD_LIMIT) or DEFAULT_LLM_THREAD_LIMIT),
+                            "disabled": bool(getattr(ep, "disabled", False)),
                         }
                     )
                 elif isinstance(ep, dict):
@@ -198,6 +201,8 @@ class LlmThreadLimiter:
             new_buckets: dict[str, _EndpointBucket] = {}
             new_order: list[str] = []
             for item in raw:
+                if bool(item.get("disabled")):
+                    continue
                 eid = str(item.get("id") or "").strip()
                 if not eid:
                     continue

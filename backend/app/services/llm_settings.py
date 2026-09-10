@@ -176,6 +176,21 @@ def _clamp_inflight(value: Any, *, default: int = DEFAULT_ENDPOINT_INFLIGHT) -> 
     return max(1, n)
 
 
+def endpoint_disabled(item: Any) -> bool:
+    """True when the user turned the endpoint off in settings."""
+    if item is None:
+        return False
+    if isinstance(item, dict):
+        val = item.get("disabled")
+    else:
+        val = getattr(item, "disabled", False)
+    if val is None:
+        return False
+    if isinstance(val, str):
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    return bool(val)
+
+
 def _new_endpoint_id(used: set[str], index: int) -> str:
     for i in range(index, index + 1000):
         eid = f"ep-{i}"
@@ -211,6 +226,7 @@ def _normalize_endpoint_dicts(
                 "api_key": key,
                 "model": model,
                 "max_inflight": _clamp_inflight(item.get("max_inflight")),
+                "disabled": endpoint_disabled(item),
             }
         )
     if out:
@@ -224,6 +240,7 @@ def _normalize_endpoint_dicts(
                 "api_key": "",
                 "model": "",
                 "max_inflight": _clamp_inflight(fallback_inflight),
+                "disabled": False,
             }
         ]
     return [
@@ -233,6 +250,7 @@ def _normalize_endpoint_dicts(
             "api_key": (fallback_key or "").strip(),
             "model": "",
             "max_inflight": _clamp_inflight(fallback_inflight),
+            "disabled": False,
         }
     ]
 
@@ -278,6 +296,7 @@ def endpoints_for_api(row: AppSettings | None) -> list[LlmPoolEndpointOut]:
             api_key_set=bool(str(ep.get("api_key") or "").strip()),
             model=str(ep.get("model") or "").strip(),
             max_inflight=_clamp_inflight(ep.get("max_inflight")),
+            disabled=endpoint_disabled(ep),
         )
         for ep in load_pool_endpoints_raw(row)
     ]
@@ -305,6 +324,8 @@ def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint
 
     out: list[PoolEndpoint] = []
     for ep in load_pool_endpoints_raw(row):
+        if endpoint_disabled(ep):
+            continue
         url = normalize_llm_base_url(str(ep.get("base_url") or ""))
         if not url:
             continue
@@ -352,10 +373,13 @@ def merge_endpoints_update(
                 "api_key": api_key,
                 "model": (item.model or "").strip(),
                 "max_inflight": _clamp_inflight(item.max_inflight),
+                "disabled": bool(item.disabled),
             }
         )
     if not merged:
         raise ValueError("至少保留一个 Base URL 端点")
+    if all(endpoint_disabled(ep) for ep in merged):
+        raise ValueError("至少保留一个未禁用的端点")
     return merged
 
 
@@ -388,7 +412,7 @@ def apply_endpoints_to_settings_row(
         providers = [provider] + [p for p in providers if p is not provider]
 
     wire = normalize_wire_api(wire_api or str(provider.get("wire_api") or "chat"))
-    first = endpoints[0]
+    first = next((ep for ep in endpoints if not endpoint_disabled(ep)), endpoints[0])
     provider["base_url"] = str(first.get("base_url") or "")
     provider["api_key"] = str(first.get("api_key") or "")
     provider["wire_api"] = wire
@@ -406,7 +430,14 @@ def apply_endpoints_to_settings_row(
     first_model = str(first.get("model") or "").strip()
     if first_model and not (row.default_model or "").strip():
         row.default_model = first_model
-    row.llm_thread_limit = max(1, sum(_clamp_inflight(ep.get("max_inflight")) for ep in endpoints))
+    row.llm_thread_limit = max(
+        1,
+        sum(
+            _clamp_inflight(ep.get("max_inflight"))
+            for ep in endpoints
+            if not endpoint_disabled(ep)
+        ),
+    )
 
 
 def scale_single_endpoint_inflight(row: AppSettings, thread_limit: int) -> bool:
@@ -449,6 +480,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
                         api_key_set=bool(str(ep.get("api_key") or "").strip()),
                         model=str(ep.get("model") or "").strip(),
                         max_inflight=_clamp_inflight(ep.get("max_inflight")),
+                        disabled=endpoint_disabled(ep),
                     )
                     for ep in eps
                 ],
@@ -488,7 +520,8 @@ def _proxy_for_api(row: AppSettings, field: str, *env_attrs: str) -> str:
 
 def settings_out_from_row(row: AppSettings) -> SettingsOut:
     endpoints = endpoints_for_api(row)
-    thread_limit = max(1, sum(ep.max_inflight for ep in endpoints)) if endpoints else max(
+    enabled_caps = [ep.max_inflight for ep in endpoints if not ep.disabled]
+    thread_limit = max(1, sum(enabled_caps)) if enabled_caps else max(
         1, int(getattr(row, "llm_thread_limit", None) or 6)
     )
     return SettingsOut(

@@ -162,6 +162,28 @@ def test_multi_endpoint_parallel_capacity():
     assert lim.snapshot()[0] == 0
 
 
+def test_disabled_endpoint_is_skipped_by_pool():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {
+                "id": "ep-a",
+                "base_url": "https://a.example/v1",
+                "api_key": "ka",
+                "max_inflight": 4,
+                "disabled": True,
+            },
+            {"id": "ep-b", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 2},
+        ]
+    )
+    assert lim.current_limit() == 2
+    handles = [lim.acquire() for _ in range(2)]
+    assert all(h is not None and h.endpoint_id == "ep-b" for h in handles)
+    for h in handles:
+        lim.release(h)
+    assert lim.snapshot()[0] == 0
+
+
 def test_acquire_spreads_evenly_even_when_preferring_first():
     """New sessions must not fill the sticky first endpoint before using others."""
     lim = LlmThreadLimiter()
@@ -355,6 +377,71 @@ def test_agent_loop_run_occupies_one_slot(tmp_env, project, monkeypatch):
     t2.join(timeout=3)
     assert second_got == [True]
     assert llm_thread_limiter.snapshot()[0] == 0
+
+
+def test_paused_loop_releases_llm_slot(tmp_env, project, monkeypatch):
+    from app.models import PhaseRun, SessionLocal
+
+    llm_thread_limiter.reset()
+    llm_thread_limiter.set_limit_override(1)
+    pause = threading.Event()
+    pause.set()
+    chatting = threading.Event()
+
+    def fake_chat(self, messages, tools, remaining):
+        chatting.set()
+        return (
+            {"choices": [{"message": {"content": "done", "tool_calls": []}}]},
+            {"prompt_tokens": 1, "completion_tokens": 1, "cached_tokens": 0, "total_tokens": 2},
+            None,
+        )
+
+    monkeypatch.setattr(AgentLoop, "_chat", fake_chat)
+    run_id = pipeline._new_phase_run(project, "worker", "worker")
+    loop = AgentLoop(
+        project_id=project,
+        role="worker",
+        phase="worker",
+        system_prompt="sys",
+        user_prompt="u",
+        phase_run_id=run_id,
+        pause_event=pause,
+        stop_when=lambda st: True,
+    )
+
+    def _phase_paused() -> bool:
+        with SessionLocal() as db:
+            pr = db.get(PhaseRun, run_id)
+            return bool(pr and pr.status == "paused")
+
+    t = threading.Thread(target=loop.run)
+    t.start()
+    try:
+        assert _wait_until(lambda: _phase_paused() and llm_thread_limiter.snapshot()[0] == 0)
+        assert t.is_alive()
+        assert not chatting.is_set()
+
+        second_got: list[bool] = []
+
+        def second() -> None:
+            with llm_thread_slot() as handle:
+                second_got.append(handle is not None)
+
+        t2 = threading.Thread(target=second)
+        t2.start()
+        t2.join(timeout=3)
+        assert second_got == [True]
+        assert llm_thread_limiter.snapshot()[0] == 0
+
+        pause.clear()
+        assert chatting.wait(timeout=3)
+        t.join(timeout=3)
+        assert not t.is_alive()
+        assert llm_thread_limiter.snapshot()[0] == 0
+    finally:
+        pause.clear()
+        t.join(timeout=3)
+        llm_thread_limiter.reset()
 
 
 def _followup_pool(monkeypatch):

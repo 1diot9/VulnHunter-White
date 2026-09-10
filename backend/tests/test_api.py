@@ -207,6 +207,67 @@ def test_llm_endpoints_pool_save_and_read(tmp_env):
         assert keep.json()["llm_endpoints"][1]["max_inflight"] == 3
 
 
+def test_llm_endpoint_disabled_skips_pool(tmp_env):
+    from app.main import app
+    from app.services.llm_settings import pool_endpoints_resolved
+    from app.services.llm_thread import llm_thread_limiter
+
+    with TestClient(app) as client:
+        upd = client.put(
+            "/api/settings",
+            json={
+                "default_model": "gpt-pool",
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": "sk-a",
+                        "max_inflight": 2,
+                        "disabled": True,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": "sk-b",
+                        "max_inflight": 3,
+                    },
+                ],
+            },
+        )
+        assert upd.status_code == 200, upd.text
+        body = upd.json()
+        assert body["llm_endpoints"][0]["disabled"] is True
+        assert body["llm_endpoints"][1]["disabled"] is False
+        assert body["llm_thread_limit"] == 3
+        ids = {ep.id for ep in pool_endpoints_resolved()}
+        assert ids == {"ep-2"}
+        assert llm_thread_limiter.current_limit() == 3
+
+        rejected = client.put(
+            "/api/settings",
+            json={
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": None,
+                        "max_inflight": 2,
+                        "disabled": True,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": None,
+                        "max_inflight": 3,
+                        "disabled": True,
+                    },
+                ],
+            },
+        )
+        assert rejected.status_code == 400
+        assert "未禁用" in rejected.json()["detail"]
+
+
 def test_llm_thread_usage_api(tmp_env):
     import threading
     import time
