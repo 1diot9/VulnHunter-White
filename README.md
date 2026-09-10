@@ -48,6 +48,7 @@ VulnHunter-White 的特点：
 - 支持**靶场动态**、**局部 harness**、**纯静态**三种审核验证方式
 - 可选 **FOFA 互联网验证**与 **Human-in-the-loop** 确认
 - 挖掘与审核结束后可选**攻击链串联**
+- 项目详情可将勾选的产出与侦察历史漏洞对照，检查是否已经公开
 - 设置页可配**模型商池**；每项目可设 Token 用量上限；可从公开 GHSA **发现仓库**
 - 漏洞产出含**产出日历**、中文报告 / Advisory / CVE JSON
 
@@ -93,26 +94,28 @@ VulnHunter-White 的特点：
 
 ## 成果展示
 
-| 应用名称                | 漏洞编号                                                     | 漏洞类型 | CVSS评分 |
-| ----------------------- | ------------------------------------------------------------ | -------- | -------- |
-| udecode/plate           | [GHSA-5pmq-h882-6g62](https://github.com/udecode/plate/security/advisories/GHSA-5pmq-h882-6g62) | XML注入  | 6.1      |
-| udecode/plate           | [GHSA-fm23-57g4-6m2p](https://github.com/udecode/plate/security/advisories/GHSA-fm23-57g4-6m2p) | XSS      | 5.4      |
-| udecode/plate           | [GHSA-qrfj-mgw8-j9c6](https://github.com/udecode/plate/security/advisories/GHSA-qrfj-mgw8-j9c6) | XSS      | 6.1      |
-| udecode/plate           | [GHSA-vjm2-6pxg-8vm8](https://github.com/udecode/plate/security/advisories/GHSA-vjm2-6pxg-8vm8) | XSS      | 6.1      |
-| udecode/plate           | [GHSA-q8r4-6wh4-76hm](https://github.com/udecode/plate/security/advisories/GHSA-q8r4-6wh4-76hm) | RCE      | High     |
-| udecode/plate           | [GHSA-6gwv-m56p-wc8m](https://github.com/udecode/plate/security/advisories/GHSA-6gwv-m56p-wc8m) | 鉴权缺失 | 6.9      |
-| udecode/plate           | [GHSA-2q2r-jqh4-grp3](https://github.com/udecode/plate/security/advisories/GHSA-2q2r-jqh4-grp3) | 鉴权缺失 | 6.9      |
-| udecode/plate           | [GHSA-p8g2-cf33-p28j](https://github.com/udecode/plate/security/advisories/GHSA-p8g2-cf33-p28j) | DoS      | 6.5      |
-| udecode/plate           | [GHSA-r3c4-jjfg-3vvx](https://github.com/udecode/plate/security/advisories/GHSA-r3c4-jjfg-3vvx) | XSS      | 6.1      |
-| filebrowser/filebrowser | GHSA-448h-jr2h-3vhp                                          | DoS      | 6.5      |
-| http4s/http4s           | [GHSA-gq9p-f254-h286](https://github.com/http4s/http4s/security/advisories/GHSA-gq9p-f254-h286) | DoS      | 7.5      |
-| http4s/http4s           | [GHSA-3q2f-8v8m-249p](https://github.com/http4s/http4s/security/advisories/GHSA-3q2f-8v8m-249p) | DoS      | 8.2      |
-| http4s/http4s           | [GHSA-3jm4-mm2v-96qj](https://github.com/http4s/http4s/security/advisories/GHSA-3jm4-mm2v-96qj) | DoS      | 7.5      |
-| http4s/http4s           | [GHSA-gw3w-mpf8-v247](https://github.com/http4s/http4s/security/advisories/GHSA-gw3w-mpf8-v247) | DoS      | 7.5      |
-| http4s/http4s           | [GHSA-h2xv-5x52-7qvw](https://github.com/http4s/http4s/security/advisories/GHSA-h2xv-5x52-7qvw) | DoS      | 7.5      |
-| http4s/http4s           | [GHSA-3p4m-6fv5-mjq7](https://github.com/http4s/http4s/security/advisories/GHSA-3p4m-6fv5-mjq7) | DoS      | 7.5      |
-| http4s/http4s           | [GHSA-g7xf-9x49-v632](https://github.com/http4s/http4s/security/advisories/GHSA-g7xf-9x49-v632) | DoS      | 7.5      |
-| YunaiV/ruoyi-vue-pro    | NCC-2026-08501                                               | XSS      | 6.9      |
+| 应用名称                | 漏洞编号                                                     | 漏洞类型     | CVSS评分 |
+| ----------------------- | ------------------------------------------------------------ | ------------ | -------- |
+| udecode/plate           | [GHSA-5pmq-h882-6g62](https://github.com/udecode/plate/security/advisories/GHSA-5pmq-h882-6g62) | XML注入      | 6.1      |
+| udecode/plate           | [GHSA-fm23-57g4-6m2p](https://github.com/udecode/plate/security/advisories/GHSA-fm23-57g4-6m2p) | XSS          | 5.4      |
+| udecode/plate           | [GHSA-qrfj-mgw8-j9c6](https://github.com/udecode/plate/security/advisories/GHSA-qrfj-mgw8-j9c6) | XSS          | 6.1      |
+| udecode/plate           | [GHSA-vjm2-6pxg-8vm8](https://github.com/udecode/plate/security/advisories/GHSA-vjm2-6pxg-8vm8) | XSS          | 6.1      |
+| udecode/plate           | [GHSA-q8r4-6wh4-76hm](https://github.com/udecode/plate/security/advisories/GHSA-q8r4-6wh4-76hm) | RCE          | High     |
+| udecode/plate           | [GHSA-6gwv-m56p-wc8m](https://github.com/udecode/plate/security/advisories/GHSA-6gwv-m56p-wc8m) | 鉴权缺失     | 6.9      |
+| udecode/plate           | [GHSA-2q2r-jqh4-grp3](https://github.com/udecode/plate/security/advisories/GHSA-2q2r-jqh4-grp3) | 鉴权缺失     | 6.9      |
+| udecode/plate           | [GHSA-p8g2-cf33-p28j](https://github.com/udecode/plate/security/advisories/GHSA-p8g2-cf33-p28j) | DoS          | 6.5      |
+| udecode/plate           | [GHSA-r3c4-jjfg-3vvx](https://github.com/udecode/plate/security/advisories/GHSA-r3c4-jjfg-3vvx) | XSS          | 6.1      |
+| filebrowser/filebrowser | GHSA-448h-jr2h-3vhp                                          | DoS          | 6.5      |
+| http4s/http4s           | [GHSA-gq9p-f254-h286](https://github.com/http4s/http4s/security/advisories/GHSA-gq9p-f254-h286) | DoS          | 7.5      |
+| http4s/http4s           | [GHSA-3q2f-8v8m-249p](https://github.com/http4s/http4s/security/advisories/GHSA-3q2f-8v8m-249p) | DoS          | 8.2      |
+| http4s/http4s           | [GHSA-3jm4-mm2v-96qj](https://github.com/http4s/http4s/security/advisories/GHSA-3jm4-mm2v-96qj) | DoS          | 7.5      |
+| http4s/http4s           | [GHSA-gw3w-mpf8-v247](https://github.com/http4s/http4s/security/advisories/GHSA-gw3w-mpf8-v247) | DoS          | 7.5      |
+| http4s/http4s           | [GHSA-h2xv-5x52-7qvw](https://github.com/http4s/http4s/security/advisories/GHSA-h2xv-5x52-7qvw) | DoS          | 7.5      |
+| http4s/http4s           | [GHSA-3p4m-6fv5-mjq7](https://github.com/http4s/http4s/security/advisories/GHSA-3p4m-6fv5-mjq7) | DoS          | 7.5      |
+| http4s/http4s           | [GHSA-g7xf-9x49-v632](https://github.com/http4s/http4s/security/advisories/GHSA-g7xf-9x49-v632) | DoS          | 7.5      |
+| getgrav/grav            | [GHSA-59qm-58v5-gvc5](https://github.com/getgrav/grav/security/advisories/GHSA-59qm-58v5-gvc5) | 沙箱逃逸     | 7.1      |
+| netty/netty             | [GHSA-q9pg-8h3j-8hvm](https://github.com/netty/netty/security/advisories/GHSA-q9pg-8h3j-8hvm) | HTTP路由绕过 | 6.5      |
+| YunaiV/ruoyi-vue-pro    | NCC-2026-08501                                               | XSS          | 6.9      |
 
 目前还有十多个处于Draft状态的未公开漏洞，后续公开后会补充。
 
@@ -238,7 +241,7 @@ Linux / macOS：`sh scripts/build-sandbox.sh`。
 docker build -t vulnhunter/sandbox:latest docker/sandbox
 ```
 
-成功后 `docker images` 里应有 `vulnhunter/sandbox:latest`。镜像不存在时局部验证无法起 harness 沙箱，会退回静态。
+成功后 `docker images` 里应有 `vulnhunter/sandbox:latest`。镜像含 Python / PHP / Node / Ruby / Go / JDK / Bash / **gcc（C）**，没有 rustc / g++。镜像不存在时局部验证无法起 harness 沙箱，会退回静态。已构建过旧镜像的，改 Dockerfile 后需重新执行上面的构建。
 
 ### 5. 集成验证沙箱镜像（L3 integration，要用 L3 集成验证时必做）
 
@@ -463,14 +466,15 @@ pytest
 | 面 | 内容 |
 | --- | --- |
 | 审计范围 | 凡 Web 项目均可审计（不限语言） |
-| 项目与挖掘配置 | 创建时选择赏金（默认）/ 全量 / 自定义模式；勾选挖掘路径：启发式（默认开，可开轻量版只挖权重 100）、快速扫描（默认关）、历史漏洞绕过（默认关）、无约束扫描（默认关），至少开一条。每项目可单独选模型，不选则用设置页全局模型；可设 Token 用量上限；可粘贴或上传文本作为 Worker 额外人工提示。发现仓库页从公开 GHSA 筛可审计仓。GitHub 项目从暂停续跑时会先检查并同步上游最新代码（失败则仍用当前快照）；zip 不受影响 |
+| 项目与挖掘配置 | 创建时选择赏金（默认）/ 全量 / 自定义模式；勾选挖掘路径：启发式（默认开，可开轻量版只挖权重 100）、快速扫描（默认关）、历史漏洞绕过（默认关）、无约束扫描（默认关），至少开一条。每项目可单独选模型，不选则用设置页全局模型；可设 Token 用量上限；可粘贴或上传文本作为 Worker 额外人工提示。发现仓库页从公开 GHSA 筛可审计仓。GitHub 项目从暂停续跑时会先检查并同步上游最新代码（成功会在列表与详情提示已拉取的提交；失败则仍用当前快照）；zip 不受影响 |
 | 挖掘路径 | 须等 **Recon 完成**；若创建时勾选了代码库，还须等其首次构建结束（失败则降级继续）。**启发式**：按文件定权挖掘；权重 100 为用户可控入口（HTTP、WebSocket / RPC / MQ / 回调等），低权按角色回推、控面或薄扫。**快速扫描**：Semgrep → 代码筛 → Agent 精筛 → 按 Sink 回推；覆盖 SAST Sink，鉴权 / IDOR / 业务逻辑仍靠启发式。**历史漏洞绕过**：以历史漏洞文档为输入，每轮尝试绕过补丁或确认未修复洞仍可打。**无约束扫描**：固定 1 个 Worker，只注入代码地图与鉴权；始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束该路径。各开启路径都结束后项目才 `completed` |
 | 代码库 | 创建时可选，默认关。开启后与 Recon 并列。CodeGraph 只索引 `src/` 源码；未安装则构建时自动装到 `data/tools/codegraph`。失败降级为 Read/Grep。源码变化标过期，由用户点重建。关闭会删除该项目 `src/.codegraph/`。Worker / Reviewer 可用调用图短查询；测试可打开图浏览器 |
 | 审计模式 | 赏金模式按可利用高危害类型收口（含存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥等；普通 CSRF / 前端 AES 混淆 / 公开下发密钥不入库）；全量模式保留低危害项（CORS、反射 XSS、缺速率限制等）；自定义模式无赏金硬闸门，完全按提示词判定。无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）以及不可获取且不可预测的 UUID，挖掘与审核都丢弃，不进入漏洞列表。设置页可管理命名自定义提示词；项目选用时写入快照 |
-| 动态验证 | 创建时默认关闭（仅静态复核）。**靶场动态**：Reviewer 搭 Docker 靶场并跑 HTTP PoC（`poc.py -u`）。**局部验证**：按漏洞深度分 L1/L2（harness 沙箱，`evidence_level=harness`）与 L3 集成验证（integration 沙箱起 loopback 服务并跑 `poc.py`，通过后 `evidence_level=dynamic`）。靶场可用时 `ConfirmVuln` 系统再跑落盘 `poc.py`，退出码非 0 拒绝确认。PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 debug MCP。有 HTTP 面时 `poc.py` 须支持 `-u/--url`、`--proxy`（空则直连）、RCE 的 `-c/--cmd`。`harness.py` 与 `poc.py` 职责分离；输出默认英语，`--zh` 切中文 |
+| 动态验证 | 创建时默认关闭（仅静态复核）。**靶场动态**：Reviewer 搭 Docker 靶场并跑 HTTP PoC（`poc.py -u`）。**局部验证**：按漏洞深度分 L1/L2（harness 沙箱，`evidence_level=harness`；语言为 Python/PHP/JS/Ruby/Go/Java/Bash/C，Rust/C++ 仅静态）与 L3 集成验证（integration 沙箱起 loopback 服务并跑 `poc.py`，通过后 `evidence_level=dynamic`）。靶场可用时 `ConfirmVuln` 系统再跑落盘 `poc.py`，退出码非 0 拒绝确认。PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 debug MCP。有 HTTP 面时 `poc.py` 须支持 `-u/--url`、`--proxy`（空则直连）、RCE 的 `-c/--cmd`。`harness.py` 与 `poc.py` 职责分离；输出默认英语，`--zh` 切中文 |
 | 互联网验证 | 可选 Verifier，默认关，可在项目设置开启。确认前台漏洞后用 FOFA 搜同款目标；先按报告和 PoC 理解利用本质，优先跑原 `poc.py`；没有可用 HTTP PoC 时按报告构造 payload，不自动跳过；失效时在同链上调整利用方式再测（默认每批 10、成功 3 即结束，最多 5 轮共 50 目标）；墙钟超时后该条直接 fail，不再新开轮；指纹按项目采集复用；破坏性操作需人工确认 |
 | 攻击链串联 | 可选，默认关；挖掘完成且审核队列清空后，根据已确认漏洞尝试多步利用 |
-| 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 并发之和为全局 LLM 线程上限（单端点默认 6），新会话均匀分配、同一会话粘滞、超出按到达顺序排队；同一端点发请求默认最少间隔 2 秒（可关），排队不计超时；额度用尽的端点不因空闲被优先选中 |
+| 产出漏洞去重 | 项目详情「本项目漏洞」勾选后对照侦察历史漏洞，检查是否已经公开；日志在阶段日志「产出去重」 |
+| 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 并发之和为全局 LLM 线程上限（单端点默认 6），新会话均匀分配、同一会话粘滞、超出按到达顺序排队；同一端点发请求默认最少间隔 2 秒（可关），排队不计超时；429 / 额度用尽只冷却该端点，结束后重新参与分配 |
 | 历史漏洞 | 先 GHSA / GitHub Issues 爬虫落盘（第一阶段禁止 WebSearch），再 WebSearch 补漏；只收集不读源码。公开洞标 `patched`，未修复来自未关闭 Issues（`unpatched`） |
 | 设置与运维 | 手动清理 X 天前 SSE 实时日志；CLI 工具目录（默认 `tools/cli`）供 Reviewer `SearchTools` 检索后 Shell 执行；可配置 CodeGraph 路径 |
 | 进度重置 | 可重置启发式 Worker 挖掘进度（保留漏洞产出与侦察文档），用于换模型重审；快速扫描 Sink 队列与历史漏洞绕过进度不重置 |

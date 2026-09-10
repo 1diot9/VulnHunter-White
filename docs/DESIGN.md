@@ -125,7 +125,7 @@ VulnHunter-White 的特点：
 | SearchGitHubIssues | 查本仓库未关闭 Issues |
 | ReadCveRecord | 读取本条漏洞的 CVE 5.2 JSON 填表状态 |
 | SetCveRecordField | 按字段写入 `cve.json`；未知填 `VULNHUNTER_PENDING`，不要整文件覆盖 |
-| RunCode | 局部验证沙箱执行 `harness.py`（仅 harness 审核轮注入） |
+| RunCode | 局部验证沙箱执行 harness（Python/PHP/JS/Ruby/Go/Java/Bash/C；仅 harness 审核轮注入） |
 | SearchTools | 检索 `tools/cli` 已索引的用户 CLI（审核轮） |
 | FinishIndex | CLI 静默索引轮写入口与描述后结束 |
 | ListBytecode | 枚举 `src/` 下 `.class` / `.jar` / `.war`（不受普通 Glob 后缀忽略限制；默认仍跳过 `target` 等） |
@@ -157,7 +157,7 @@ VulnHunter-White 的特点：
 #### 超时与限流
 
 4. 各阶段墙钟超时：侦察 3600s，盖章轮 1800s，Worker 一轮 7200s，审核静态 1800s，靶场动态再加 Docker 1800s，Verifier / 攻击链 / Semgrep / Sink 筛选各 1800s。审核超时后最多再跑一轮（强制仅静态），再超时标误报。Verifier 超时直接将该条标 fail，不再新开轮。其它阶段最多超时 2 次，此后抢救落盘并保留基本产出。
-5. LLM 429 休眠 90s 再试，最多 20 次；其它瞬时失败最多退避 3 次。设置页模型商池：同一协议多个 Base URL（各自 Key、模型、并发上限），全局线程上限 = 各端点并发之和（单端点默认 6）；新会话按利用率均匀分配，同一会话粘滞到所选端点，满则按到达顺序排队。同一端点两次发请求默认至少间隔 2 秒（设置页可改，0 关闭），后来的请求按到达顺序排队，排队时间不计入阶段超时与 HTTP 读超时。某端点 429 / 额度用尽 / 5xx 只冷却该端点并立刻换路，不拖垮全池。额度用尽的端点即使冷却结束、占用为 0，只要池里还有其它可用端点就不会再被选中（漏洞报告追问同样走线程池并换路）。项目级 `llm_model` 仍优先。
+5. LLM 429 休眠 90s 再试，最多 20 次；其它瞬时失败最多退避 3 次。设置页模型商池：同一协议多个 Base URL（各自 Key、模型、并发上限），全局线程上限 = 各端点并发之和（单端点默认 6）；新会话按利用率均匀分配，同一会话粘滞到所选端点，满则按到达顺序排队。同一端点两次发请求默认至少间隔 2 秒（设置页可改，0 关闭），后来的请求按到达顺序排队，排队时间不计入阶段超时与 HTTP 读超时。某端点 429 / 额度用尽 / 5xx 只冷却该端点并立刻换路，不拖垮全池；冷却结束后重新参与分配（漏洞报告追问同样走线程池并换路）。项目级 `llm_model` 仍优先。
 
 #### 工具执行容错
 
@@ -354,7 +354,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 | SearchTools | 搜索已索引的用户 CLI |
 | SearchGHSA / SearchOldVuln | 查公告与已提交报告 |
 | ReadCveRecord / SetCveRecordField | 收口 CVE JSON（`descriptions` 须含入口→sink、漏洞代码路径与原文、HTTP/API PoC） |
-| RunCode | 仅局部验证轮：在沙箱跑 `harness.py` |
+| RunCode | 仅局部验证轮：在沙箱跑 harness（含 C / gcc；无 rustc） |
 
 要点：
 
@@ -373,7 +373,7 @@ Reviewer 仅在入口 / sink / 根因分析错误时 `ReturnToWorker`；PoC 与�
 | **module** | 同沙箱内 import 项目 `src/` 模块，按真实调用序打 payload | `harness` |
 | **integration**（L3） | `vulnhunter/integration-sandbox:latest`：容器内临时装依赖 → 起 `127.0.0.1:$PORT` 服务 → 跑 `poc.py` | **`dynamic`** |
 
-L1/L2 规则不变：公开入口吃 HTTP/请求对象时用 **httptest 同进程**（仍为 harness）；YAML/编解码等无请求面 API 不要包 HTTP。
+L1/L2 规则不变：公开入口吃 HTTP/请求对象时用 **httptest 同进程**（仍为 harness）；YAML/编解码等无请求面 API 不要包 HTTP。`RunCode` 语言为 Python / PHP / JS / Ruby / Go / Java / Bash / **C（gcc + glibc）**；镜像无 rustc / g++，Rust / C++ 标 `unsupported_language` 后仅静态确认，不要反复探测编译器。C harness 不要依赖 OpenSSL 等第三方库。
 
 L3 通过 `ConfirmVuln(harness_depth=integration, integration_start=...)` 触发；须报告已有「### 局部验证」章节。integration 沙箱与 harness 沙箱不同（bridge 网络、可写、含 npm）。沙箱不可用时可用 `env/env.json` 的 `local_service_url`（仅 loopback）走本机 fallback。
 
@@ -404,6 +404,17 @@ Reviewer 复核数据流是否用户可控、防护是否有效、权限标注�
 | FinishAttackChain | 结束阶段（有链或无链都必须调用） |
 
 挖掘与审核结束后，根据已确认漏洞尝试多步串联；优先危害最大、利用最简单的链写详文，其余一句话索引。有本地 Docker 靶场时，对纯 HTTP/脚本可打通的详文链编写串联脚本并由系统对靶场复测；含 XSS / CSRF 等需用户交互的链跳过动态验证。
+
+### 4.8.1 产出漏洞去重（vuln_dedup）
+
+| 工具 | 用途 |
+| --- | --- |
+| SearchOldVuln | 只搜侦察历史漏洞（`kind=old`，新收录优先） |
+| Read | 读产出报告与源码，核对入口 / sink |
+| RecordVulnDedup | 记录一条结论；同一入口/sink 的已公开洞默认标误报 |
+| FinishVulnDedup | 结束本轮并写入 `docs/vuln-dedup.md` |
+
+用户在项目详情「本项目漏洞」勾选产出后点 **产出漏洞去重**，系统开一轮独立 Agent，逐条与历史漏洞（尤其最新收录）对比是否已经公开。日志在阶段日志的「产出去重」Tab；不阻塞挖掘/审核，也不是项目完成闸门。
 
 ### 4.9 产品能力与运维
 
