@@ -50,6 +50,7 @@ PHASE_GROUPS: dict[str, frozenset[str]] = {
     "reviewer-review": frozenset({"reviewer"}),
     "verifier": frozenset({"verifier"}),
     "attack_chain": frozenset({"attack_chain", "attack-chain"}),
+    "vuln_dedup": frozenset({"vuln_dedup", "vuln-dedup"}),
 }
 
 # 日志轮次按小阶段独立计数；recon / worker 目录历史上可能混有子阶段事件。
@@ -70,6 +71,7 @@ LOG_PHASES = (
     "reviewer",
     "verifier",
     "attack_chain",
+    "vuln_dedup",
 )
 CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
@@ -78,6 +80,7 @@ CONTROL_LOG_PHASES: dict[str, tuple[str, ...]] = {
     "reviewer": ("reviewer-lab", "reviewer"),
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
+    "vuln_dedup": ("vuln_dedup",),
 }
 _SESSION_START_MARK = "新开对话"
 
@@ -578,6 +581,8 @@ def log_phase_of(phase: str | None) -> str | None:
         return "verifier"
     if p in ("attack_chain", "attack-chain"):
         return "attack_chain"
+    if p in ("vuln_dedup", "vuln-dedup"):
+        return "vuln_dedup"
     return None
 
 
@@ -623,6 +628,8 @@ def control_phase_of(phase: str | None) -> str | None:
         return "verifier"
     if p in PHASE_GROUPS["attack_chain"]:
         return "attack_chain"
+    if p in PHASE_GROUPS["vuln_dedup"]:
+        return "vuln_dedup"
     return None
 
 

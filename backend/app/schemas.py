@@ -295,8 +295,8 @@ class LabSetupRetryBody(BaseModel):
     user_message: str = Field(default="", max_length=WORKER_HINT_MAX)
 
 
-class SourceBaselineDecisionBody(BaseModel):
-    action: Literal["acknowledge", "recheck"]
+class VulnDedupBody(BaseModel):
+    vuln_ids: list[int] = Field(default_factory=list)
 
 
 class ProjectLabOut(BaseModel):
@@ -442,9 +442,8 @@ class ProjectOut(BaseModel):
     worker_hint: str = ""
     recon_hint: str = ""
     max_token_usage: int = 0
-    source_baseline_status: str = "pending"
-    source_baseline_blocks_mining: bool = False
-    source_baseline: dict[str, Any] | None = None
+    source_sync_error: str | None = None
+    source_sync_notice: str | None = None
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime
@@ -521,6 +520,8 @@ class ProjectListItemOut(BaseModel):
     unconstrained_done: bool = False
     llm_model: str = ""
     max_token_usage: int = 0
+    source_sync_error: str | None = None
+    source_sync_notice: str | None = None
     error: str | None = None
     worker_concurrency: int | None = None
     created_at: datetime

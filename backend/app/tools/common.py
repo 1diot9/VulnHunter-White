@@ -1197,6 +1197,10 @@ def _old_vuln_entries(project_id: int) -> list[dict[str, Any]]:
         text = fp.read_text(encoding="utf-8", errors="ignore")
         meta, body = _parse_frontmatter(text)
         fix_status = _normalize_fix_status(meta.get("fix_status"))
+        try:
+            mtime = fp.stat().st_mtime
+        except OSError:
+            mtime = 0.0
         entries.append(
             {
                 "kind": KIND_OLD,
@@ -1207,6 +1211,7 @@ def _old_vuln_entries(project_id: int) -> list[dict[str, Any]]:
                 "meta": meta,
                 "fix_status": fix_status or "",
                 "fix_status_label": _fix_status_label(fix_status),
+                "mtime": mtime,
             }
         )
     return entries
@@ -1282,6 +1287,10 @@ def _search_old_vuln_handler(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if role == "attack_chain":
         entries = _found_vuln_entries(ctx)
         kind_hint = "本阶段只允许查看本项目已确认产出（kind=found，confirmed/static_only），禁止历史旧漏洞。"
+    elif role == "vuln_dedup":
+        entries = _old_vuln_entries(ctx.project_id)
+        entries.sort(key=lambda e: float(e.get("mtime") or 0), reverse=True)
+        kind_hint = "本阶段只允许查看侦察历史漏洞（kind=old，新收录在前），禁止用 kind=found 互相去重。"
     else:
         entries = _old_vuln_entries(ctx.project_id) + _found_vuln_entries(ctx)
         kind_hint = "kind=old 为侦察旧漏洞，kind=found 为本项目已提交。"

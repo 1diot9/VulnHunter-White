@@ -11,7 +11,7 @@ from typing import Any
 from .paths import project_root, summaries_dir, workspace_dir
 
 _SUMMARY_NAME = re.compile(
-    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|unconstrained-worker|unconstrained-round|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain)"
+    r"^(?P<phase>recon(?:-old-vuln-ghsa|-old-vuln|-source-ext|-mark)?|worker|fast-worker|bypass-worker|unconstrained-worker|unconstrained-round|sink-triage|fix|reviewer(?:-lab)?|verifier|attack_chain|vuln_dedup)"
     r"(?:-vuln-(?P<vuln_id>\d+))?"
     r"(?:-(?P<kind>round|rescue))?"
     r"-(?P<n>\d+)\.md$"
@@ -43,6 +43,7 @@ _PHASE_META: dict[str, tuple[str, str, str]] = {
     "reviewer-lab": ("reviewer", "审核", "lab"),
     "verifier": ("verifier", "验证", "verify"),
     "attack_chain": ("attack_chain", "攻击链", "chain"),
+    "vuln_dedup": ("vuln_dedup", "产出去重", "dedup"),
 }
 
 _CONTROL_LABEL = {
@@ -51,6 +52,7 @@ _CONTROL_LABEL = {
     "reviewer": "审核",
     "verifier": "验证",
     "attack_chain": "攻击链",
+    "vuln_dedup": "产出去重",
 }
 _SUB_LABEL = {
     "map": "地图/鉴权",
@@ -66,6 +68,7 @@ _SUB_LABEL = {
     "reviewer": "审核",
     "verify": "互联网验证",
     "chain": "攻击链串联",
+    "dedup": "产出漏洞去重",
 }
 _KIND_LABEL = {"doc": "文档", "round": "审计", "summary": "摘要", "rescue": "抢救"}
 
@@ -76,10 +79,11 @@ _DOC_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("docs/old-vulns/index.md", "recon", "old_vulns", "历史漏洞索引"),
     ("docs/lab.md", "reviewer", "lab", "动态环境搭建"),
     ("docs/attack-chains/index.md", "attack_chain", "chain", "攻击链索引"),
+    ("docs/vuln-dedup.md", "vuln_dedup", "dedup", "产出漏洞去重"),
 )
 _DOC_BY_REL = {rel: (control, subphase, title) for rel, control, subphase, title in _DOC_SPECS}
 _PREVIEW_CHARS = 8192
-_CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain")
+_CONTROL_PHASES = ("recon", "worker", "reviewer", "verifier", "attack_chain", "vuln_dedup")
 
 
 @dataclass(frozen=True)

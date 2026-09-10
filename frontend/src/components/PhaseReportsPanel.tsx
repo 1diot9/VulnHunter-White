@@ -14,6 +14,7 @@ const PHASES = [
   ['reviewer', '审核'],
   ['verifier', '验证'],
   ['attack_chain', '攻击链'],
+  ['vuln_dedup', '产出去重'],
 ] as const
 
 const SUB_TABS: Record<string, readonly [string, string][]> = {
@@ -44,6 +45,10 @@ const SUB_TABS: Record<string, readonly [string, string][]> = {
   attack_chain: [
     ['all', '全部'],
     ['chain', '攻击链串联'],
+  ],
+  vuln_dedup: [
+    ['all', '全部'],
+    ['dedup', '产出漏洞去重'],
   ],
 }
 
@@ -91,7 +96,9 @@ export default function PhaseReportsPanel({
           ? 'verifier'
           : initialPhase === 'attack_chain'
             ? 'attack_chain'
-            : 'worker',
+            : initialPhase === 'vuln_dedup'
+              ? 'vuln_dedup'
+              : 'worker',
   )
   const [sub, setSub] = useState('all')
   const [reportList, setReportList] = useState<PhaseReportList>(EMPTY_REPORT_LIST)

@@ -408,16 +408,6 @@ def _submit_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return soft
 
     mining_path = _resolve_mining_path(ctx)
-    from ..services.source_baseline import known_patched_cve_submit_block_reason
-
-    patched_block = known_patched_cve_submit_block_reason(
-        ctx.project_id,
-        args,
-        mining_path=mining_path,
-    )
-    if patched_block:
-        return {"ok": False, "error": patched_block}
-
     report_md_raw = args.get("report_md")
     if report_md_raw:
         report_title_blocked = chinese_title_block_reason(report_md=str(report_md_raw))

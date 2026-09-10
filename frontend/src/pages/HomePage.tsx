@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
+import { AlertTriangleIcon, ChevronLeftIcon, ChevronRightIcon, CloudDownloadIcon, Loader2Icon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
 import { api, formatProjectsListError, type Project, type ProjectRunStatusCounts } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { DeleteProjectButton } from '../components/DeleteProjectButton'
@@ -288,7 +288,7 @@ export default function HomePage() {
           return (
           <Card
             key={p.id}
-            className="w-full cursor-pointer transition-colors hover:bg-muted/40"
+            className="relative w-full cursor-pointer transition-colors hover:bg-muted/40"
             onClick={(e: MouseEvent<HTMLDivElement>) => {
               if (e.defaultPrevented || isInteractiveCardTarget(e.target)) return
               if (window.getSelection()?.toString()) return
@@ -327,6 +327,24 @@ export default function HomePage() {
               </div>
               <CardAction>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {p.source_sync_error ? (
+                    <span
+                      className="text-amber-400"
+                      title="上游源码同步失败，详见项目详情"
+                      aria-label="上游源码同步失败"
+                    >
+                      <AlertTriangleIcon className="size-4" />
+                    </span>
+                  ) : null}
+                  {p.source_sync_notice ? (
+                    <span
+                      className="text-sky-400"
+                      title={p.source_sync_notice}
+                      aria-label="已拉取上游最新代码"
+                    >
+                      <CloudDownloadIcon className="size-4" />
+                    </span>
+                  ) : null}
                   <GithubLink project={p} variant="button" />
                   <Badge
                     variant={

@@ -48,6 +48,8 @@ const PHASE_LABEL: Record<string, string> = {
   verifier: '验证',
   attack_chain: '攻击链',
   'attack-chain': '攻击链',
+  vuln_dedup: '产出去重',
+  'vuln-dedup': '产出去重',
   fix: '修复',
   mine: '挖掘',
 }
@@ -124,6 +126,9 @@ export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
   if (phaseFilter === 'verifier') return p === 'verifier'
   if (phaseFilter === 'attack_chain' || phaseFilter === 'attack-chain') {
     return p === 'attack_chain' || p === 'attack-chain'
+  }
+  if (phaseFilter === 'vuln_dedup' || phaseFilter === 'vuln-dedup') {
+    return p === 'vuln_dedup' || p === 'vuln-dedup'
   }
   return p === phaseFilter
 }

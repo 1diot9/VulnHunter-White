@@ -31,6 +31,7 @@ import {
   formatTargetKindHint,
   formatTokens,
   projectStatusBadgeVariant,
+  saveBlob,
   tokenBudgetReached,
 } from '../lib/utils'
 import {
@@ -52,6 +53,7 @@ const PHASE_TABS = [
   ['reviewer', '审核'],
   ['verifier', '验证'],
   ['attack_chain', '攻击链'],
+  ['vuln_dedup', '产出去重'],
 ] as const
 const REVIEWER_LOG_TABS = [
   ['reviewer-lab', '环境搭建'],
@@ -84,9 +86,10 @@ function isSessionStart(ev: LogEvent): boolean {
   return ev.kind === 'system' && (ev.text || '').includes('新开对话')
 }
 
-function controlPhaseOf(logPhase: string): 'recon' | 'code-intel' | 'worker' | 'reviewer' | 'verifier' | 'attack_chain' {
+function controlPhaseOf(logPhase: string): 'recon' | 'code-intel' | 'worker' | 'reviewer' | 'verifier' | 'attack_chain' | 'vuln_dedup' {
   if (logPhase === 'verifier') return 'verifier'
   if (logPhase === 'attack_chain' || logPhase === 'attack-chain') return 'attack_chain'
+  if (logPhase === 'vuln_dedup' || logPhase === 'vuln-dedup') return 'vuln_dedup'
   if (logPhase === 'code-intel' || logPhase === 'code_intel') return 'code-intel'
   if (logPhase === 'reviewer' || logPhase === 'reviewer-lab' || logPhase === 'reviewer_lab' || logPhase === 'reviewer-review') return 'reviewer'
   if (
@@ -107,6 +110,7 @@ function controlPhaseOf(logPhase: string): 'recon' | 'code-intel' | 'worker' | '
 }
 
 function defaultPhaseTab(phase: string, status: string): string {
+  if (phase === 'vuln_dedup' || phase === 'vuln-dedup') return 'vuln_dedup'
   if (phase === 'attack_chain' || phase === 'attack-chain') return 'attack_chain'
   if (phase === 'code_intel' || phase === 'code-intel') return 'code-intel'
   if (phase === 'verifier') return 'verifier'
@@ -137,6 +141,7 @@ export default function ProjectDetailPage() {
   const [events, setEvents] = useState<LogEvent[]>([])
   const [vulns, setVulns] = useState<Vuln[]>([])
   const [vulnsLoading, setVulnsLoading] = useState(false)
+  const [selectedVulnIds, setSelectedVulnIds] = useState<number[]>([])
   const [detailVulnId, setDetailVulnId] = useState<number | null>(null)
   const [tab, setTab] = useState<'logs' | 'reports' | 'vulns'>('logs')
   const [phaseFilter, setPhaseFilter] = useState(() =>
@@ -152,8 +157,8 @@ export default function ProjectDetailPage() {
   const [actionError, setActionError] = useState('')
   const [graphOpen, setGraphOpen] = useState(false)
   const [runBusy, setRunBusy] = useState(false)
-  const [baselineBusy, setBaselineBusy] = useState(false)
   const [ciBusy, setCiBusy] = useState(false)
+  const [dedupBusy, setDedupBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const oldestRef = useRef(0)
   const fileEndRef = useRef(0)
@@ -210,6 +215,7 @@ export default function ProjectDetailPage() {
     setStreamFrom(null)
     setEvents([])
     setVulns([])
+    setSelectedVulnIds([])
     setDetailVulnId(null)
     setHasOlder(false)
     setRevealLimit(LOG_PAGE)
@@ -590,59 +596,19 @@ export default function ProjectDetailPage() {
         </div>
       </div>
       {actionError ? <p className="text-sm text-red-300">{actionError}</p> : null}
-      {project.source_baseline_status === 'stale' ? (
+      {project.source_sync_error ? (
         <Card className="border-amber-500/40 bg-amber-950/30">
-          <CardContent className="space-y-3 pt-4 text-sm text-amber-100">
-            <p className="font-medium text-amber-50">源码基线检查：当前导入版本落后于上游已修复 CVE</p>
-            <p>
-              当前源码版本 {project.source_baseline?.source_version || '（未识别）'}
-              {project.source_baseline?.source_commit
-                ? `（commit ${project.source_baseline.source_commit}）`
-                : ''}
-              。以下已知 CVE 在上游已修复，但当前快照仍落在官方受影响范围内；在判定前挖掘将被阻塞。
-            </p>
-            <ul className="list-disc space-y-1 pl-5 text-amber-100/90">
-              {(project.source_baseline?.issues || []).slice(0, 8).map((issue) => (
-                <li key={issue.cve || issue.title}>
-                  {issue.cve ? `${issue.cve}：` : ''}
-                  {issue.title}（{issue.affected_range}）
-                </li>
-              ))}
-            </ul>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                disabled={baselineBusy}
-                onClick={() => {
-                  setBaselineBusy(true)
-                  void api
-                    .sourceBaselineDecision(projectId, 'acknowledge')
-                    .then(applyProject)
-                    .catch((e) => setActionError(formatApiError(e)))
-                    .finally(() => setBaselineBusy(false))
-                }}
-              >
-                继续审计当前快照
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={baselineBusy}
-                onClick={() => {
-                  setBaselineBusy(true)
-                  void api
-                    .sourceBaselineDecision(projectId, 'recheck')
-                    .then(applyProject)
-                    .catch((e) => setActionError(formatApiError(e)))
-                    .finally(() => setBaselineBusy(false))
-                }}
-              >
-                重新检查
-              </Button>
-            </div>
-            <p className="text-xs text-amber-200/80">
-              若需切换到含修复的 release tag，请手动更新 `src/` 后点「重新检查」。已知 CVE 提交将被系统自动判为误报。
-            </p>
+          <CardContent className="space-y-2 pt-4 text-sm text-amber-100">
+            <p className="font-medium text-amber-50">上游源码同步失败，已继续使用当前快照审计</p>
+            <p className="break-words text-amber-100/90">{project.source_sync_error}</p>
+          </CardContent>
+        </Card>
+      ) : null}
+      {project.source_sync_notice ? (
+        <Card className="border-sky-500/40 bg-sky-950/30">
+          <CardContent className="space-y-2 pt-4 text-sm text-sky-100">
+            <p className="font-medium text-sky-50">已拉取上游最新代码，后续审计按当前快照进行</p>
+            <p className="break-words text-sky-100/90">{project.source_sync_notice}</p>
           </CardContent>
         </Card>
       ) : null}
@@ -938,11 +904,50 @@ export default function ProjectDetailPage() {
         </Card>
       ) : tab === 'vulns' ? (
         <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={dedupBusy || (!selectedVulnIds.length && vulns.length === 0)}
+              onClick={() => {
+                const ids = selectedVulnIds.length ? selectedVulnIds : vulns.map((v) => v.id)
+                if (!ids.length) return
+                setActionError('')
+                setDedupBusy(true)
+                void api
+                  .requestVulnDedup(projectId, ids)
+                  .then(() => {
+                    setTab('logs')
+                    selectPhase('vuln_dedup')
+                  })
+                  .catch((e) => setActionError(formatApiError(e)))
+                  .finally(() => setDedupBusy(false))
+              }}
+            >
+              {dedupBusy ? '去重中…' : '产出漏洞去重'}
+            </Button>
+            <Button
+              onClick={() => {
+                const ids = selectedVulnIds.length ? selectedVulnIds : vulns.map((v) => v.id)
+                if (!ids.length) return
+                void api
+                  .downloadVulns(ids)
+                  .then((blob) => saveBlob(blob, 'vulns.zip'))
+                  .catch(() => undefined)
+              }}
+              disabled={!selectedVulnIds.length && vulns.length === 0}
+            >
+              批量下载
+            </Button>
+          </div>
           <Card className="gap-0 divide-y divide-border py-0">
             <VulnGroupList
               vulns={vulns}
               activeId={detailVulnId}
+              selectedIds={selectedVulnIds}
               emptyText={vulnsLoading ? '加载漏洞…' : '暂无漏洞'}
+              onToggleSelect={(vid, checked) =>
+                setSelectedVulnIds((prev) => (checked ? [...prev, vid] : prev.filter((x) => x !== vid)))
+              }
               onSelectVuln={setDetailVulnId}
               projectKindById={new Map([[project.id, project.target_kind]])}
             />

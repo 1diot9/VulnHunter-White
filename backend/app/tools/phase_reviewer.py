@@ -268,14 +268,16 @@ def _commit_false_positive(
     message: str,
     *,
     fp_kind: str | None = None,
+    end_review: bool = True,
 ) -> dict[str, Any]:
     vuln.status = "false_positive"
     vuln.fp_kind = fp_kind
     vuln.return_reason = reason
     _append_false_positive_reason(vuln.project_id, int(vuln_id), reason)
     db.commit()
-    ctx.state["review_done"] = True
-    ctx.state["review_verdict"] = "false_positive"
+    if end_review:
+        ctx.state["review_done"] = True
+        ctx.state["review_verdict"] = "false_positive"
     return {"ok": True, "vuln_id": int(vuln_id), "status": "false_positive", "message": message}
 
 
@@ -492,22 +494,6 @@ def _confirm_vuln(ctx, args: dict[str, Any]) -> dict[str, Any]:
         early_vuln = db.get(Vuln, int(vuln_id))
         if not early_vuln or early_vuln.project_id != ctx.project_id:
             return {"ok": False, "error": "漏洞不存在"}
-        from ..services.source_baseline import (
-            FP_KIND_KNOWN_CVE_PATCHED,
-            known_patched_cve_false_positive_reason,
-        )
-
-        fp_reason = known_patched_cve_false_positive_reason(ctx.project_id, early_vuln)
-        if fp_reason:
-            return _commit_false_positive(
-                ctx,
-                db,
-                early_vuln,
-                int(vuln_id),
-                fp_reason,
-                "已知 CVE 在旧源码快照上复现，系统自动判为误报",
-                fp_kind=FP_KIND_KNOWN_CVE_PATCHED,
-            )
         known_public = soft_known_public_gate(
             ctx,
             args,

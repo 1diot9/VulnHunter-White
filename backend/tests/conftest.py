@@ -53,7 +53,6 @@ def tmp_env(tmp_path, monkeypatch):
     import app.services.github_issues as github_issues
     import app.services.github_probe as github_probe
     import app.services.pipeline as pipeline
-    import app.services.source_baseline as source_baseline
     import app.services.token_budget as token_budget
     import app.services.verifier as verifier_service
     import app.services.harness_ask as harness_ask
@@ -65,6 +64,7 @@ def tmp_env(tmp_path, monkeypatch):
     import app.tools.phase_reviewer as phase_reviewer
     import app.tools.phase_verifier as phase_verifier
     import app.tools.phase_attack_chain as phase_attack_chain
+    import app.tools.phase_vuln_dedup as phase_vuln_dedup
     import app.tools.phase_cve_record as phase_cve_record
     import app.tools.phase_worker as phase_worker
     import app.api.discoveries as api_discoveries
@@ -87,6 +87,7 @@ def tmp_env(tmp_path, monkeypatch):
         phase_reviewer,
         phase_verifier,
         phase_attack_chain,
+        phase_vuln_dedup,
         phase_cve_record,
         ingest,
         llm_settings,
@@ -103,7 +104,6 @@ def tmp_env(tmp_path, monkeypatch):
         harness_ask,
         asset_proof,
         pipeline,
-        source_baseline,
         token_budget,
         sink_queue,
         bypass_queue,

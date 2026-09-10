@@ -1180,6 +1180,27 @@ def test_project_weight_exts_marks_agent_added(tmp_env, project):
         assert row["weight_exts"] == body["weight_exts"]
 
 
+def test_project_source_sync_notice_in_detail_and_list(tmp_env, project):
+    from app.main import app
+    from app.models import Project, SessionLocal
+
+    notice = "2026-09-10 10:00 已同步上游最新代码 aaaaaaa → bbbbbbb：变更 1 个路径，新索引 0，删除 0，待重审 1"
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_sync_notice = notice
+        p.source_sync_error = None
+        db.commit()
+
+    with TestClient(app) as client:
+        body = client.get(f"/api/projects/{project}").json()
+        assert body["source_sync_notice"] == notice
+        assert body["source_sync_error"] is None
+        listed = client.get("/api/projects", params={"limit": 100}).json()
+        row = next(p for p in listed["items"] if p["id"] == project)
+        assert row["source_sync_notice"] == notice
+        assert row.get("source_sync_error") in (None, "")
+
+
 def test_project_token_usage_counts(tmp_env, project):
     from app.main import app
     from app.models import SessionLocal, TokenUsage

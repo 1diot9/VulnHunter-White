@@ -50,11 +50,18 @@ def test_request_resume_syncs_github_while_still_paused(tmp_env, project, monkey
         p.source_type = "github"
         p.source_url = "https://github.com/owner/demo"
         db.commit()
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_sync_error = "上次失败"
+        db.commit()
     pipeline.request_pause(project)
     pipeline.request_resume(project)
     assert seen.get("pid") == project
     assert seen.get("paused") is True
     assert pipeline.is_project_paused(project) is False
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        assert not (p.source_sync_error or "").strip()
 
 
 def test_request_resume_skips_github_sync_for_zip(tmp_env, project, monkeypatch):
@@ -88,6 +95,35 @@ def test_request_resume_continues_when_github_sync_fails(tmp_env, project, monke
     pipeline.request_pause(project)
     pipeline.request_resume(project)
     assert pipeline.is_project_paused(project) is False
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        assert p.source_sync_error == "git ls-remote 失败"
+
+
+def test_request_resume_from_completed_syncs_github(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    seen: list[int] = []
+    monkeypatch.setattr(
+        pipeline,
+        "sync_github_source",
+        lambda pid: seen.append(pid)
+        or {"skipped": False, "updated": False, "error": None, "index": {}},
+    )
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        p.status = "completed"
+        p.phase = "done"
+        db.commit()
+    pipeline.request_resume(project)
+    assert seen == [project]
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        assert not (p.source_sync_error or "").strip()
+        assert p.status != "completed"
 
 
 def test_maybe_sync_github_on_resume_marks_lab_rebuild(tmp_env, project, monkeypatch):
@@ -125,6 +161,51 @@ def test_maybe_sync_github_on_resume_marks_lab_rebuild(tmp_env, project, monkeyp
     pipeline._maybe_sync_github_on_resume(project)
     assert "当前 src" in str(notes.get("lab") or "")
     assert notes.get("stale_force") is True
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        notice = (p.source_sync_notice or "").strip()
+        assert "已同步上游最新代码" in notice
+        assert "aaaaaaa" in notice
+        assert "bbbbbbb" in notice
+        assert not (p.source_sync_error or "").strip()
+
+
+def test_source_sync_notice_kept_when_upstream_unchanged(tmp_env, project, monkeypatch):
+    from app.models import Project, SessionLocal
+
+    monkeypatch.setattr(
+        pipeline,
+        "sync_github_source",
+        lambda pid: {"skipped": False, "updated": False, "error": None, "index": {}},
+    )
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        p.source_type = "github"
+        p.source_url = "https://github.com/owner/demo"
+        p.source_sync_notice = "上次已同步 abc → def"
+        p.source_sync_error = "旧错误"
+        db.commit()
+    pipeline._maybe_sync_github_on_resume(project)
+    with SessionLocal() as db:
+        p = db.get(Project, project)
+        assert p.source_sync_notice == "上次已同步 abc → def"
+        assert not (p.source_sync_error or "").strip()
+
+
+def test_source_sync_notice_text_includes_sha_and_index():
+    text = pipeline._source_sync_notice_text(
+        {
+            "old_sha": "aaaaaaaa",
+            "new_sha": "bbbbbbbb",
+            "changed_paths": ["a.py", "b.py"],
+            "index": {"added": 1, "removed": 2, "unaudited": 3},
+        }
+    )
+    assert "已同步上游最新代码 aaaaaaa → bbbbbbb" in text
+    assert "变更 2 个路径" in text
+    assert "新索引 1" in text
+    assert "删除 2" in text
+    assert "待重审 3" in text
 
 
 def test_completed_project_pause_keeps_completed_status(tmp_env, project):

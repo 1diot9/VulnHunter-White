@@ -639,16 +639,6 @@ export default function VulnDetailDialog({
               {detail.http_request ? (
                 <pre className="overflow-auto rounded bg-black/40 p-3 text-xs text-slate-200">{detail.http_request}</pre>
               ) : null}
-              {detail.poc_code ? (
-                <div>
-                  <div className="mb-1 text-xs text-slate-400">
-                    {
-                      'PoC：python poc.py -u <目标>；--proxy 设 HTTP 代理（空则直连）；RCE 可加 -c <命令>，有回显会打印'
-                    }
-                  </div>
-                  <pre className="overflow-auto rounded bg-black/40 p-3 text-xs text-slate-200">{detail.poc_code}</pre>
-                </div>
-              ) : null}
               <VulnFollowUpPanel
                 vulnId={detail.id}
                 onReportApplied={async () => {

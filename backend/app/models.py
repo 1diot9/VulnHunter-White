@@ -136,8 +136,10 @@ class Project(Base):
     recon_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 项目 Token 上限（输入+输出合计）；0 = 不限制，到达后自动暂停
     max_token_usage: Mapped[int] = mapped_column(Integer, default=0)
-    # pending | ok | stale | acknowledged — 源码基线是否落后于上游已修复 CVE
-    source_baseline_status: Mapped[str] = mapped_column(String(32), default="pending")
+    # 重启时同步上游失败原因；成功或未检查则为空
+    source_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 最近一次成功拉取上游的说明（提交与变更摘要）；无更新则保留上次
+    source_sync_notice: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -536,7 +538,8 @@ def _ensure_columns() -> None:
             "code_intel_error": "TEXT",
             "code_intel_source_hash": "VARCHAR(64)",
             "code_intel_version": "VARCHAR(64)",
-            "source_baseline_status": "VARCHAR(32) DEFAULT 'pending'",
+            "source_sync_error": "TEXT",
+            "source_sync_notice": "TEXT",
         },
         "vulns": {
             "attack_surface": "VARCHAR(32)",

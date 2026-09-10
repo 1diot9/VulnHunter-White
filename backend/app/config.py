@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     timeout_reviewer_wrapup_grace: int = 600
     timeout_verifier: int = 1800
     timeout_attack_chain: int = 1800
+    timeout_vuln_dedup: int = 1800
     timeout_docker: int = 2700
     timeout_semgrep: int = 1800
     timeout_sink_triage: int = 1800

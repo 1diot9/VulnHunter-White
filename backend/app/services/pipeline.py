@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -154,6 +154,8 @@ _code_intel_threads: dict[int, threading.Thread] = {}
 _reviewer_threads: dict[int, threading.Thread] = {}
 _verifier_threads: dict[int, threading.Thread] = {}
 _attack_chain_threads: dict[int, threading.Thread] = {}
+_vuln_dedup_threads: dict[int, threading.Thread] = {}
+_vuln_dedup_locks: dict[int, threading.Lock] = {}
 _reviewer_inflight: dict[int, bool] = {}
 _verifier_inflight: dict[int, bool] = {}
 _attack_chain_inflight: dict[int, bool] = {}
@@ -163,6 +165,8 @@ _pending_conversation_message: dict[tuple[int, str], str] = {}
 _fast_prepare_threads: dict[int, threading.Thread] = {}
 _fast_last_dir: dict[int, str] = {}
 _DB_LOCK_RETRY_SECONDS = 1.0
+_SOURCE_SYNC_UNSET = object()
+_CST = timezone(timedelta(hours=8))
 
 # Role pools: Recon 1 / Worker 2 (mine 1 + fix 1) / Reviewer 1
 RECON_POOL = 1
@@ -170,7 +174,7 @@ WORKER_MINE_POOL = 1
 WORKER_FIX_POOL = 1
 REVIEWER_POOL = 1
 
-CONTROL_PHASES = ("recon", "code_intel", "worker", "reviewer", "verifier", "attack_chain")
+CONTROL_PHASES = ("recon", "code_intel", "worker", "reviewer", "verifier", "attack_chain", "vuln_dedup")
 CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "recon": ("recon", "recon-source-ext", "recon-old-vuln", "recon-old-vuln-ghsa", "recon-mark"),
     "code_intel": ("code_intel",),
@@ -178,6 +182,7 @@ CONTROL_DB_PHASES: dict[str, tuple[str, ...]] = {
     "reviewer": ("reviewer", "reviewer-lab"),
     "verifier": ("verifier",),
     "attack_chain": ("attack_chain",),
+    "vuln_dedup": ("vuln_dedup",),
 }
 CONTROL_LABELS = {
     "recon": "侦察",
@@ -186,6 +191,7 @@ CONTROL_LABELS = {
     "reviewer": "审核",
     "verifier": "验证",
     "attack_chain": "攻击链",
+    "vuln_dedup": "产出去重",
 }
 RECON_RERUN_SUBPHASES = ("map", "old_vulns")
 RECON_RERUN_LABELS = {"map": "地图/鉴权", "old_vulns": "历史漏洞"}
@@ -280,6 +286,8 @@ def control_phase(phase: str) -> str:
         return "verifier"
     if p in ("attack_chain", "attack-chain"):
         return "attack_chain"
+    if p in ("vuln_dedup", "vuln-dedup"):
+        return "vuln_dedup"
     raise ValueError(f"未知阶段: {phase}")
 
 
@@ -372,6 +380,8 @@ def reset_runtime_state() -> None:
         _reviewer_threads.clear()
         _verifier_threads.clear()
         _attack_chain_threads.clear()
+        _vuln_dedup_threads.clear()
+        _vuln_dedup_locks.clear()
         _reviewer_inflight.clear()
         _verifier_inflight.clear()
         _attack_chain_inflight.clear()
@@ -840,6 +850,21 @@ def request_internet_verify(vuln_id: int) -> dict[str, Any]:
     }
 
 
+def _source_sync_notice_text(result: dict[str, Any]) -> str:
+    old = str(result.get("old_sha") or "")[:7] or "?"
+    new = str(result.get("new_sha") or "")[:7] or "?"
+    idx = result.get("index") if isinstance(result.get("index"), dict) else {}
+    n_changed = len(result.get("changed_paths") or [])
+    stamp = datetime.now(_CST).strftime("%Y-%m-%d %H:%M")
+    return (
+        f"{stamp} 已同步上游最新代码 {old} → {new}："
+        f"变更 {n_changed} 个路径，"
+        f"新索引 {int(idx.get('added') or 0)}，"
+        f"删除 {int(idx.get('removed') or 0)}，"
+        f"待重审 {int(idx.get('unaudited') or 0)}"
+    )
+
+
 def _maybe_sync_github_on_resume(project_id: int) -> None:
     """Pull upstream GitHub HEAD if it moved; zip / failures keep the current snapshot."""
     with SessionLocal() as db:
@@ -850,31 +875,25 @@ def _maybe_sync_github_on_resume(project_id: int) -> None:
     try:
         result = sync_github_source(project_id)
     except Exception as e:  # noqa: BLE001
-        live_log.system(project_id, f"检查上游仓库失败: {e}，仍用当前源码续跑")
+        reason = str(e) or e.__class__.__name__
+        _set_source_sync_state(project_id, error=reason)
+        live_log.system(project_id, f"检查上游仓库失败: {reason}，仍用当前源码续跑")
         return
     if result.get("skipped"):
+        _set_source_sync_state(project_id, error=None)
         return
     err = str(result.get("error") or "").strip()
     if err:
+        _set_source_sync_state(project_id, error=err)
         live_log.system(project_id, f"检查上游仓库失败: {err}，仍用当前源码续跑")
         return
     if not result.get("updated"):
+        _set_source_sync_state(project_id, error=None)
         live_log.system(project_id, "上游仓库无更新，继续使用当前源码")
         return
-    old = str(result.get("old_sha") or "")[:7] or "?"
-    new = str(result.get("new_sha") or "")[:7] or "?"
-    idx = result.get("index") if isinstance(result.get("index"), dict) else {}
-    n_changed = len(result.get("changed_paths") or [])
-    live_log.system(
-        project_id,
-        (
-            f"已同步上游最新代码 {old} → {new}："
-            f"变更 {n_changed} 个路径，"
-            f"新索引 {int(idx.get('added') or 0)}，"
-            f"删除 {int(idx.get('removed') or 0)}，"
-            f"待重审 {int(idx.get('unaudited') or 0)}"
-        ),
-    )
+    notice = _source_sync_notice_text(result)
+    _set_source_sync_state(project_id, error=None, notice=notice)
+    live_log.system(project_id, notice)
     try:
         from ..code_intelligence.service import mark_stale_if_source_changed
 
@@ -887,39 +906,64 @@ def _maybe_sync_github_on_resume(project_id: int) -> None:
             live_log.system(project_id, "源码已更新，已标记靶场需按当前源码重建")
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from .source_baseline import BASELINE_PENDING, run_source_baseline_check
 
-        with SessionLocal() as db:
-            proj = db.get(Project, project_id)
-            if proj:
-                proj.source_baseline_status = BASELINE_PENDING
-                db.commit()
-        if recon_old_vulns_ready(project_id):
-            report = run_source_baseline_check(project_id)
-            if report.status == "stale":
-                live_log.system(
-                    project_id,
-                    (
-                        f"源码更新后基线检查：发现 {len(report.issues)} 条上游已修复 CVE "
-                        "仍落在当前版本范围内，请在项目详情页判定是否继续"
-                    ),
-                    phase="recon-old-vuln",
-                )
-            else:
-                live_log.system(project_id, "源码更新后基线检查：未发现版本滞后问题", phase="recon-old-vuln")
-    except Exception as e:  # noqa: BLE001
-        live_log.system(project_id, f"源码更新后基线检查失败: {e}")
+
+def _clip_source_sync_text(text: str | None) -> str | None:
+    clipped = (text or "").strip() or None
+    if clipped and len(clipped) > 4000:
+        return clipped[:4000]
+    return clipped
+
+
+def _set_source_sync_state(
+    project_id: int,
+    *,
+    error: str | None | object = _SOURCE_SYNC_UNSET,
+    notice: str | None | object = _SOURCE_SYNC_UNSET,
+) -> None:
+    error_set = error is not _SOURCE_SYNC_UNSET
+    notice_set = notice is not _SOURCE_SYNC_UNSET
+    error_text = _clip_source_sync_text(error if isinstance(error, str) or error is None else None) if error_set else None
+    notice_text = (
+        _clip_source_sync_text(notice if isinstance(notice, str) or notice is None else None) if notice_set else None
+    )
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return
+        dirty = False
+        if error_set:
+            current = (getattr(proj, "source_sync_error", None) or "").strip() or None
+            if current != error_text:
+                proj.source_sync_error = error_text
+                dirty = True
+        if notice_set:
+            current = (getattr(proj, "source_sync_notice", None) or "").strip() or None
+            if current != notice_text:
+                proj.source_sync_notice = notice_text
+                dirty = True
+        if not dirty:
+            return
+        proj.updated_at = utcnow()
+        db.commit()
+
+
+def _set_source_sync_error(project_id: int, error: str | None) -> None:
+    _set_source_sync_state(project_id, error=error)
+
+
+def _should_sync_source_on_restart(project_id: int) -> bool:
+    if _pause_event(project_id).is_set():
+        return True
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return False
+        return (proj.status or "") in ("paused", "completed")
 
 
 def _sync_github_before_unpause(project_id: int) -> None:
-    """When leaving project pause, sync GitHub src/ before workers can read it."""
-    paused = _pause_event(project_id).is_set()
-    if not paused:
-        with SessionLocal() as db:
-            proj = db.get(Project, project_id)
-            if not proj or proj.status != "paused":
-                return
+    """When restarting a paused/completed project, sync GitHub src/ first."""
     _maybe_sync_github_on_resume(project_id)
 
 
@@ -989,7 +1033,7 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
     _force_new_run.discard((project_id, "recon"))
 
     was_paused = _pause_event(project_id).is_set()
-    if was_paused:
+    if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, "recon").clear()
@@ -1046,6 +1090,8 @@ def request_lab_setup_retry(project_id: int, user_message: str = "") -> dict[str
     reset_lab_setup_for_retry(project_id, user_message)
 
     was_paused = _pause_event(project_id).is_set()
+    if _should_sync_source_on_restart(project_id):
+        _sync_github_before_unpause(project_id)
     _phase_pause_event(project_id, "reviewer").clear()
     cancel = _cancel_event(project_id)
     if cancel.is_set():
@@ -1212,12 +1258,12 @@ def _set_project_running(project_id: int) -> None:
 
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        if proj and proj.status != "completed":
+        if proj and proj.status not in ("cancelled", "error"):
             recon_done = bool(proj.recon_done)
             ci_ready = code_intel_ready_for_mining(proj)
             if recon_done and ci_ready:
                 proj.status = "auditing"
-                if proj.phase in ("pending", "recon", "code_intel"):
+                if proj.phase in ("pending", "recon", "code_intel", "done"):
                     proj.phase = "worker"
             elif recon_done:
                 proj.status = "recon"
@@ -1232,41 +1278,12 @@ def _set_project_running(project_id: int) -> None:
 def mining_prereqs_met(project_id: int) -> bool:
     """Recon has finished; Code Intelligence has settled if the project enabled it."""
     from ..code_intelligence.service import code_intel_ready_for_mining
-    from .source_baseline import source_baseline_blocks_mining
 
-    if source_baseline_blocks_mining(project_id):
-        return False
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not proj.recon_done:
             return False
         return code_intel_ready_for_mining(proj)
-
-
-def _maybe_run_source_baseline_check(project_id: int) -> None:
-    if not recon_old_vulns_ready(project_id):
-        return
-    from .source_baseline import BASELINE_PENDING, run_source_baseline_check
-
-    with SessionLocal() as db:
-        proj = db.get(Project, project_id)
-        if not proj:
-            return
-        status = str(getattr(proj, "source_baseline_status", None) or BASELINE_PENDING)
-        if status != BASELINE_PENDING:
-            return
-    report = run_source_baseline_check(project_id)
-    if report.status == "stale":
-        live_log.system(
-            project_id,
-            (
-                f"源码基线检查：发现 {len(report.issues)} 条上游已修复 CVE "
-                "仍落在当前导入版本范围内，请在项目详情页判定是否继续审计当前快照"
-            ),
-            phase="recon-old-vuln",
-        )
-    else:
-        live_log.system(project_id, "源码基线检查：未发现版本滞后问题", phase="recon-old-vuln")
 
 
 def _wait_if_paused(project_id: int, cancel: threading.Event, phase: str | None = None) -> bool:
@@ -1516,6 +1533,9 @@ def _phase_thread_alive(project_id: int, phase: str) -> bool:
         return t is not None and t.is_alive()
     if control == "attack_chain":
         t = _attack_chain_threads.get(project_id)
+        return t is not None and t.is_alive()
+    if control == "vuln_dedup":
+        t = _vuln_dedup_threads.get(project_id)
         return t is not None and t.is_alive()
     for t in _threads.get(project_id, []):
         name = t.name or ""
@@ -2159,6 +2179,9 @@ def _phase_system_prompt(
     verify_mode: str | None = None,
 ) -> str:
     base = load_prompt(name).rstrip()
+    if name == "vuln_dedup.md":
+        parts = [base, _target_kind_overlay(project_id)]
+        return "\n\n".join(p for p in parts if p) + "\n"
     if name == "worker-unconstrained.md":
         overlay = load_prompt("modes/bounty.md").strip()
         parts = [base, overlay, _target_kind_overlay(project_id)]
@@ -2362,6 +2385,8 @@ def _log_phase_control(log_phase: str) -> str:
         return "verifier"
     if lp == "attack_chain":
         return "attack_chain"
+    if lp in ("vuln_dedup", "vuln-dedup"):
+        return "vuln_dedup"
     return control_phase(lp)
 
 
@@ -2413,9 +2438,15 @@ def request_conversation_continue(project_id: int, log_phase: str, message: str 
     save_checkpoint(cp, status="running")
     set_phase_run_status(run_id, "running")
 
+    if lp in ("vuln_dedup", "vuln-dedup"):
+        _phase_pause_event(project_id, "vuln_dedup").clear()
+        live_log.system(project_id, "用户接续对话（vuln_dedup）", phase=cp.phase, role=cp.role)
+        _kick_vuln_dedup_thread(project_id)
+        return {"ok": True, "action": "continue", "log_phase": "vuln_dedup", **get_phase_states(project_id)}
+
     control = _log_phase_control(lp)
     was_paused = _pause_event(project_id).is_set()
-    if was_paused:
+    if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, control).clear()
@@ -2447,6 +2478,9 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
 
     lp = normalize_log_phase(log_phase)
     _set_conversation_message(project_id, lp, message)
+
+    if lp in ("vuln_dedup", "vuln-dedup"):
+        return request_vuln_dedup(project_id, vuln_ids=None, user_message=message)
 
     if lp == "recon-map":
         if not recon_map_ready(project_id):
@@ -2496,7 +2530,7 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
         _abandon_db_phase_runs(project_id, (db_phase,), reason="用户新开对话")
 
     was_paused = _pause_event(project_id).is_set()
-    if was_paused:
+    if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
     _phase_pause_event(project_id, control).clear()
@@ -3029,7 +3063,6 @@ def _maybe_mark_recon_done(project_id: int) -> bool:
     if apply_recon_done(project_id):
         live_log.system(project_id, "侦察门闩已满足，系统标记 recon_done")
         _ensure_project_fingerprints_once(project_id)
-        _maybe_run_source_baseline_check(project_id)
         return True
     return False
 
@@ -4163,11 +4196,8 @@ def _run_recon_old_vulns(project_id: int, cancel: threading.Event) -> bool:
         return False
     if recon_old_vulns_ready(project_id):
         _finish_resumable_phase(project_id, "recon-old-vuln-ghsa")
-        _maybe_run_source_baseline_check(project_id)
         return True
     ok = _run_recon_old_vuln_ghsa(project_id, cancel)
-    if ok:
-        _maybe_run_source_baseline_check(project_id)
     return ok
 
 
@@ -6259,3 +6289,198 @@ def json_dumps(obj: Any) -> str:
     import json
 
     return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def _vuln_dedup_lock(project_id: int) -> threading.Lock:
+    with _lock:
+        lock = _vuln_dedup_locks.get(project_id)
+        if lock is None:
+            lock = threading.Lock()
+            _vuln_dedup_locks[project_id] = lock
+        return lock
+
+
+def _kick_vuln_dedup_thread(project_id: int) -> None:
+    t = threading.Thread(
+        target=_run_vuln_dedup_thread,
+        args=(project_id,),
+        daemon=True,
+        name=f"vh-vuln-dedup-{project_id}",
+    )
+    with _lock:
+        _vuln_dedup_threads[project_id] = t
+        _threads.setdefault(project_id, []).append(t)
+    t.start()
+
+
+def request_vuln_dedup(
+    project_id: int,
+    vuln_ids: list[int] | None = None,
+    *,
+    user_message: str = "",
+) -> dict[str, Any]:
+    """User-triggered one-shot: compare selected produced vulns against historical (kind=old)."""
+    from ..tools.phase_vuln_dedup import load_request, resolve_vuln_ids, save_request
+    from .conversation_archive import clear_archived
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可去重")
+
+    ids = resolve_vuln_ids(project_id, vuln_ids)
+    prev = load_request(project_id)
+    try:
+        run_id = int(prev.get("run_id") or 0) + 1
+    except (TypeError, ValueError):
+        run_id = 1
+    save_request(
+        project_id,
+        {
+            "run_id": run_id,
+            "vuln_ids": ids,
+            "consumed": False,
+            "user_message": (user_message or "").strip(),
+        },
+    )
+    _force_new_run.add((project_id, "vuln_dedup"))
+    clear_archived(project_id, "vuln_dedup")
+    _abandon_db_phase_runs(project_id, ("vuln_dedup",), reason="用户开始产出漏洞去重")
+    _bump_phase_generation(project_id, "vuln_dedup")
+    _phase_pause_event(project_id, "vuln_dedup").clear()
+    live_log.system(
+        project_id,
+        f"开始产出漏洞去重，共 {len(ids)} 条",
+        phase="vuln_dedup",
+        role="vuln_dedup",
+    )
+    _kick_vuln_dedup_thread(project_id)
+    return {"ok": True, "vuln_ids": ids, "count": len(ids), **get_phase_states(project_id)}
+
+
+def _run_vuln_dedup_thread(project_id: int) -> None:
+    with _vuln_dedup_lock(project_id):
+        try:
+            _run_vuln_dedup_once(project_id)
+        except Exception as e:  # noqa: BLE001
+            live_log.error(project_id, f"产出漏洞去重异常: {e}", phase="vuln_dedup")
+
+
+def _run_vuln_dedup_once(project_id: int) -> None:
+    from ..tools.phase_vuln_dedup import (
+        catalog_for_ids,
+        load_request,
+        path_hints_for_catalog,
+        recent_old_vulns,
+        save_request,
+        write_report,
+    )
+
+    force_new = _consume_force_new(project_id, "vuln_dedup")
+    if not force_new:
+        cp = _adopt_resumable(project_id, "vuln_dedup")
+        if cp:
+            try:
+                loop = _loop_from_checkpoint(
+                    cp,
+                    cancel=_cancel_event(project_id),
+                    stop_when=lambda st: bool(st.get("vuln_dedup_done")),
+                    timeout_sec=settings.timeout_vuln_dedup,
+                )
+                loop.pause_event = _phase_pause_event(project_id, "vuln_dedup")
+                result = loop.run()
+            finally:
+                _release_adopted(project_id, cp.phase_run_id)
+            if result.stop_reason == "auth_error":
+                _pause_for_auth(project_id, result.error or "auth_error")
+                return
+            _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
+            live_log.system(
+                project_id,
+                f"产出漏洞去重结束 reason={result.stop_reason}",
+                phase="vuln_dedup",
+            )
+            return
+
+    req = load_request(project_id)
+    if req.get("consumed"):
+        return
+    ids = [int(v) for v in (req.get("vuln_ids") or []) if int(v) > 0]
+    if not ids:
+        live_log.system(project_id, "没有待去重的产出漏洞", phase="vuln_dedup")
+        return
+    req["consumed"] = True
+    save_request(project_id, req)
+
+    catalog = catalog_for_ids(project_id, ids)
+    recent = recent_old_vulns(project_id)
+    hints = path_hints_for_catalog(project_id, catalog)
+    if not recent:
+        write_report(
+            project_id,
+            [
+                {
+                    "vuln_id": item["vuln_id"],
+                    "verdict": "uncertain",
+                    "old_title": "",
+                    "reason": "项目尚无历史漏洞文档，无法对照是否已公开",
+                    "marked_false_positive": False,
+                }
+                for item in catalog
+            ],
+            notes="没有 docs/old-vulns 文档，跳过模型对比。",
+        )
+        live_log.system(
+            project_id,
+            "没有历史漏洞文档，无法去重；已写入 docs/vuln-dedup.md",
+            phase="vuln_dedup",
+            role="vuln_dedup",
+        )
+        return
+
+    extra = (req.get("user_message") or "").strip()
+    system = _phase_system_prompt(project_id, "vuln_dedup.md")
+    body = _initial_prompt(
+        "vuln_dedup.md",
+        vuln_count=len(catalog),
+        catalog=json_dumps(catalog),
+        recent_old=json_dumps(recent),
+        path_hints=json_dumps(hints),
+        **_agent_prompt_vars(project_id),
+    )
+    if extra:
+        body = f"{body.rstrip()}\n\n## 用户说明\n{extra}\n"
+    user = _prompt_with_summary("vuln_dedup", project_id, body)
+    run_id = _new_phase_run(project_id, "vuln_dedup", "vuln_dedup")
+    _start_log_session(project_id, "vuln_dedup", extra=f"{len(catalog)} 条", role="vuln_dedup")
+    loop = AgentLoop(
+        project_id=project_id,
+        role="vuln_dedup",
+        phase="vuln_dedup",
+        system_prompt=system,
+        user_prompt=user,
+        phase_run_id=run_id,
+        cancel_event=_loop_cancel(project_id, "vuln_dedup"),
+        pause_event=_phase_pause_event(project_id, "vuln_dedup"),
+        timeout_sec=settings.timeout_vuln_dedup,
+        context_window=_context_window(),
+        stop_when=lambda st: bool(st.get("vuln_dedup_done")),
+    )
+    result = loop.run()
+    if result.stop_reason == "auth_error":
+        _pause_for_auth(project_id, result.error or "auth_error")
+        return
+    _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
+    if not result.state.get("vuln_dedup_done"):
+        write_report(
+            project_id,
+            list(result.state.get("dedup_results") or []),
+            notes=f"会话结束未显式收工（{result.stop_reason}）",
+        )
+    live_log.system(
+        project_id,
+        f"产出漏洞去重结束 reason={result.stop_reason} recorded={len(result.state.get('dedup_results') or [])}",
+        phase="vuln_dedup",
+    )
