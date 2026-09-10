@@ -81,3 +81,6 @@ def test_stamp_advisory_keeps_both_cvss_lines():
     assert cvss40.vector in out
     assert "**Severity:** High" in out
     assert out.count("**CVSS") == 2
+    assert out.count("**CVSS 3.1:**") == 1
+    assert out.count("**CVSS 4.0:**") == 1
+    assert "- **CWE:** CWE-89" in out

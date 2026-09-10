@@ -90,6 +90,42 @@ def test_stamp_advisory_replaces_old_cvss_lines():
     assert "**CVSS 4.0:** 8.7 High" in out
     assert cvss40.vector in out
     assert "**Severity:** High" in out
+    assert out.count("**CVSS 3.1:**") == 1
+    assert out.count("**CVSS 4.0:**") == 1
+    assert out.count("CVSS:3.1/") == 1
+    assert out.count("CVSS:4.0/") == 1
+    assert "- **CWE:** CWE-89" in out
+
+
+def test_stamp_advisory_drops_duplicate_agent_cvss_lines():
+    from app.cvss40 import parse_cvss40
+
+    src = (
+        "## Severity / CWE\n\n"
+        "- **Severity:** Low\n"
+        "- **CVSS 3.1:** 9.8 Critical — `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`\n"
+        "- **CVSS 4.0:** 9.3 Critical — `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`\n"
+        "- **CWE:** CWE-94\n"
+        "- **CVSS 3.1**: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H\n"
+        "- **CVSS 4.0**: CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N\n"
+        "CVSS 3.1 vector: `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`\n"
+        "CVSS 4.0: `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`\n"
+        "  (AC:H note that must not remain as a second score block)\n"
+    )
+    result = parse_cvss31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N")
+    cvss40 = parse_cvss40("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N")
+    out = stamp_advisory_cvss31(src, result, cvss40)
+    twice = stamp_advisory_cvss31(out, result, cvss40)
+    assert out.count("**CVSS 3.1:**") == 1
+    assert out.count("**CVSS 4.0:**") == 1
+    assert out.count("CVSS:3.1/") == 1
+    assert out.count("CVSS:4.0/") == 1
+    assert "- **CWE:** CWE-94" in out
+    assert "**CVSS 3.1**: " not in out
+    assert "vector:" not in out.lower()
+    assert "AC:H note" not in out
+    assert twice.count("**CVSS 3.1:**") == 1
+    assert twice.count("**CVSS 4.0:**") == 1
 
 
 def test_expected_pr_follows_attack_surface():

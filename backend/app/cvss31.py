@@ -71,8 +71,13 @@ SEVERITY_EN: dict[str, str] = {
 }
 
 _VECTOR_TOKEN_RE = re.compile(r"^([A-Za-z]{1,4}):([A-Za-z])$")
-_ADVISORY_CVSS_LINE_RE = re.compile(r"(?m)^-\s*\*\*CVSS\s+[0-9]+(?:\.[0-9]+)?:\*\*.*\n?")
+# Agent drafts vary: `- **CVSS 3.1:**`, `- **CVSS 3.1**:`, `CVSS 3.1 vector:`, bare `CVSS 3.1:`.
+_ADVISORY_CVSS_LINE_RE = re.compile(
+    r"(?i)^(?:[-*]\s+)?(?:\*\*)?CVSS\b(?:\s*v?\s*[0-9]+(?:\.[0-9]+)?)?(?:\*\*)?\s*(?:vector)?\s*[:：]"
+)
 _ADVISORY_SEVERITY_LINE_RE = re.compile(r"(?m)^-\s*\*\*Severity:\*\*.*$")
+_ADVISORY_SEVERITY_HEADING_RE = re.compile(r"(?im)^##[ \t]*Severity[ \t]*/[ \t]*CWE[ \t]*$")
+_ADVISORY_NEXT_H2_RE = re.compile(r"(?m)^##[ \t]+")
 
 CVE_VECTOR_PATH = "containers.cna.metrics[0].cvssV3_1.vectorString"
 CVE_SCORE_PATH = "containers.cna.metrics[0].cvssV3_1.baseScore"
@@ -309,40 +314,70 @@ def parse_cvss31(raw: Any) -> Cvss31Result:
     return Cvss31Result(vector=vector, metrics=seen, score=score, severity=severity)
 
 
+def _strip_advisory_cvss_lines(section: str) -> str:
+    """Drop every CVSS score/vector line (and indented notes under them) in a section."""
+    out: list[str] = []
+    skip_cont = False
+    for line in section.split("\n"):
+        if _ADVISORY_CVSS_LINE_RE.match(line):
+            skip_cont = True
+            continue
+        if skip_cont and line[:1] in {" ", "\t"} and line.strip():
+            continue
+        skip_cont = False
+        out.append(line)
+    return "\n".join(out)
+
+
+def _rewrite_advisory_severity_section(section: str, sev_line: str, cvss_block: str) -> str:
+    if _ADVISORY_SEVERITY_LINE_RE.search(section):
+        section = _ADVISORY_SEVERITY_LINE_RE.sub(sev_line, section, count=1)
+    else:
+        section = sev_line + "\n" + section.lstrip("\n")
+    section = _strip_advisory_cvss_lines(section)
+    match = _ADVISORY_SEVERITY_LINE_RE.search(section)
+    if match is None:
+        rebuilt = cvss_block + "\n" + section.lstrip("\n")
+    else:
+        insert_at = match.end()
+        after = section[insert_at:]
+        if after.startswith("\n"):
+            insert_at += 1
+            after = section[insert_at:]
+        rebuilt = section[:insert_at] + cvss_block + "\n" + after.lstrip("\n")
+    rebuilt = re.sub(r"\n{3,}", "\n\n", rebuilt)
+    if rebuilt and not rebuilt.endswith("\n"):
+        rebuilt += "\n"
+    return rebuilt
+
+
 def stamp_advisory_cvss31(text: str, result: Cvss31Result, cvss40: Any | None = None) -> str:
-    """Replace CVSS 3.x/4.x lines in advisory.md with computed 3.1 and 4.0 lines."""
+    """Replace CVSS 3.x/4.x lines in advisory.md with a single computed 3.1 / 4.0 pair."""
     body = (text or "").replace("\r\n", "\n")
     cvss_lines = [f"- **CVSS 3.1:** {result.score:.1f} {result.severity_en} — `{result.vector}`"]
     if cvss40 is not None:
         cvss_lines.append(
             f"- **CVSS 4.0:** {cvss40.score:.1f} {cvss40.severity_en} — `{cvss40.vector}`"
         )
-    cvss_block = "\n".join(cvss_lines) + "\n"
+    cvss_block = "\n".join(cvss_lines)
     sev_line = f"- **Severity:** {result.severity_en}"
+    heading = _ADVISORY_SEVERITY_HEADING_RE.search(body)
+    if heading is not None:
+        heading_end = heading.end()
+        if heading_end < len(body) and body[heading_end] == "\n":
+            heading_end += 1
+        next_h2 = _ADVISORY_NEXT_H2_RE.search(body, heading_end)
+        section_end = next_h2.start() if next_h2 else len(body)
+        section = _rewrite_advisory_severity_section(
+            body[heading_end:section_end],
+            sev_line,
+            cvss_block,
+        )
+        return body[: heading.start()] + body[heading.start() : heading_end] + section + body[section_end:]
     if _ADVISORY_SEVERITY_LINE_RE.search(body):
         body = _ADVISORY_SEVERITY_LINE_RE.sub(sev_line, body, count=1)
-    if _ADVISORY_CVSS_LINE_RE.search(body):
-        first = True
-
-        def _replace(match: re.Match[str]) -> str:
-            nonlocal first
-            if first:
-                first = False
-                return cvss_block
-            return ""
-
-        body = _ADVISORY_CVSS_LINE_RE.sub(_replace, body)
-        body = re.sub(r"\n{3,}", "\n\n", body)
-        return body
     marker = "## Severity / CWE"
-    idx = body.find(marker)
-    if idx != -1:
-        insert_at = body.find("\n", idx)
-        if insert_at == -1:
-            insert_at = len(body)
-        block = f"\n\n{sev_line}\n{cvss_block}"
-        return body[: insert_at + 1] + block + body[insert_at + 1 :].lstrip("\n")
-    return body.rstrip() + f"\n\n{marker}\n\n{sev_line}\n{cvss_block}"
+    return body.rstrip() + f"\n\n{marker}\n\n{sev_line}\n{cvss_block}\n"
 
 
 def apply_cvss31_to_cve_record(record: dict[str, Any], result: Cvss31Result) -> None:
