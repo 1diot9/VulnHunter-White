@@ -572,6 +572,12 @@ def test_llm_gate_compacts_json_error_and_keeps_reason_during_cooldown():
 
     raw = '{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}'
     assert compact_llm_error(raw, "quota") == "You exceeded your current quota"
+    alibaba = (
+        '{"error":{"message":"Allocated quota exceeded, please increase your quota limit. '
+        'For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit",'
+        '"id":"681d8707-766f-98d0-841b-3951b22f94bc","type":"insufficient_qu'
+    )
+    assert compact_llm_error(alibaba, "quota").startswith("Allocated quota exceeded")
     prefixed = 'HTTP 429: {"error":{"message":"Rate limit reached"}}'
     assert compact_llm_error(prefixed, "rate_limit") == "Rate limit reached"
 

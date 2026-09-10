@@ -721,7 +721,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                                 raise FollowUpLlmError(f"LLM HTTP 400: {text[:300]}")
                             if res.status_code == 401:
                                 text = res.read().decode("utf-8", errors="replace")
-                                rebound = failover(handle, "auth", "401 密钥无效", text[:240])
+                                rebound = failover(handle, "auth", "401 密钥无效", text)
                                 if rebound is None:
                                     raise FollowUpLlmError("401 密钥无效，请检查设置页模型配置")
                                 handle = rebound
@@ -729,7 +729,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                             if res.status_code >= 400:
                                 text = res.read().decode("utf-8", errors="replace")
                                 if _is_quota_response(res.status_code, text):
-                                    rebound = failover(handle, "quota", "额度用尽", text[:240])
+                                    rebound = failover(handle, "quota", "额度用尽", text)
                                     if rebound is None:
                                         raise FollowUpLlmError(f"LLM HTTP {res.status_code}: {text[:300]}")
                                     handle = rebound
@@ -748,7 +748,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                                         handle,
                                         "rate_limit",
                                         "429 限流",
-                                        text[:240],
+                                        text,
                                         retry_after=retry_after,
                                     )
                                     if rebound is None:
@@ -782,7 +782,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
                     except ChatStreamProviderError as e:
                         text = str(e)
                         if _looks_like_quota_exhausted(text):
-                            rebound = failover(handle, "quota", "额度用尽", text[:240])
+                            rebound = failover(handle, "quota", "额度用尽", text)
                             if rebound is None:
                                 raise FollowUpLlmError(text) from e
                             handle = rebound

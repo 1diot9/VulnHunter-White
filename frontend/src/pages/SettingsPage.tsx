@@ -748,7 +748,7 @@ export default function SettingsPage() {
           </div>
           <div className="text-xs text-slate-500">
             可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。新会话按负载均匀分配，同一会话粘滞到所选
-            URL；429 冷却该端点并换路。额度用尽的端点即使空闲也不再优先选中，有其它可用端点时直接跳过。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
+            URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 各端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
           </div>
           <div className="flex max-w-xs items-center gap-2">
             <Label className="shrink-0 whitespace-nowrap">请求间隔（秒）</Label>
@@ -1202,13 +1202,11 @@ export default function SettingsPage() {
 function EndpointHealthLine({ health }: { health: LlmEndpointUsage | undefined }) {
   if (!health) return null
   const skip = endpointSkipLabel(health)
-  const reason = endpointCooldownReason(health)
-  if (!skip && !reason) return null
+  const reason = skip ? endpointCooldownReason(health) : ''
+  if (!skip) return null
   return (
     <div className="text-xs break-all">
-      {skip ? (
-        <span className={health.disabled ? 'text-red-300' : 'text-amber-200'}>{skip}</span>
-      ) : null}
+      <span className={health.disabled ? 'text-red-300' : 'text-amber-200'}>{skip}</span>
       {reason ? <span className="mt-0.5 block whitespace-pre-wrap text-slate-400">{reason}</span> : null}
     </div>
   )

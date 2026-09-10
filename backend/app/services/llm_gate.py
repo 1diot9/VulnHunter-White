@@ -7,6 +7,7 @@ cooldown and FIFO-paces HTTP request starts on the same Base URL.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -60,15 +61,29 @@ def compact_llm_error(message: str, kind: str = "") -> str:
     return (extracted or text or kind)[:240]
 
 
+_TRUNCATED_MESSAGE_RE = re.compile(r'"message"\s*:\s*"((?:\\.|[^"\\])*)')
+
+
 def _extract_provider_message(text: str) -> str:
     brace = text.find("{")
     if brace < 0:
         return ""
+    raw = text[brace:]
     try:
-        obj = json.loads(text[brace:])
+        obj = json.loads(raw)
     except json.JSONDecodeError:
-        return ""
+        return _message_from_truncated_json(raw)
     return _walk_error_message(obj)
+
+
+def _message_from_truncated_json(text: str) -> str:
+    m = _TRUNCATED_MESSAGE_RE.search(text)
+    if not m:
+        return ""
+    try:
+        return str(json.loads(f'"{m.group(1)}"')).strip()
+    except json.JSONDecodeError:
+        return m.group(1).replace('\\"', '"').strip()
 
 
 def _walk_error_message(obj: object) -> str:

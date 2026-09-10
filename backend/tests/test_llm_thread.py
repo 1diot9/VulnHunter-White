@@ -250,8 +250,8 @@ def _expire_cooldown(eid: str) -> None:
             h.cooldown_until = 0.0
 
 
-def test_quota_exhausted_not_picked_when_other_endpoint_free():
-    """Idle quota endpoints must not win by lowest utilization."""
+def test_quota_exhausted_skipped_during_cooldown_then_reenters():
+    """Quota endpoints cool down like 429, then re-enter the pool."""
     lim = LlmThreadLimiter()
     lim.refresh_pool(
         [
@@ -262,19 +262,23 @@ def test_quota_exhausted_not_picked_when_other_endpoint_free():
     busy = lim.acquire(prefer_endpoint="ep-1")
     assert busy is not None and busy.endpoint_id == "ep-1"
     llm_gate.note_error("ep-2", "quota", message="insufficient_quota")
-    _expire_cooldown("ep-2")
-    assert llm_gate.is_available("ep-2")
-    assert llm_gate.last_error_kind("ep-2") == "quota"
+    assert not llm_gate.is_available("ep-2")
     h = lim.acquire()
     assert h is not None
     assert h.endpoint_id == "ep-1"
+    _expire_cooldown("ep-2")
+    assert llm_gate.is_available("ep-2")
+    recovered = lim.acquire()
+    assert recovered is not None
+    assert recovered.endpoint_id == "ep-2"
     idle = lim.pick_idle_endpoint()
-    assert idle == "ep-1"
+    assert idle == "ep-2"
+    lim.release(recovered)
     lim.release(h)
     lim.release(busy)
 
 
-def test_quota_exhausted_is_last_resort_when_others_full():
+def test_quota_exhausted_is_usable_when_others_full():
     lim = LlmThreadLimiter()
     lim.refresh_pool(
         [
@@ -458,12 +462,11 @@ def test_call_reviewer_llm_fails_over_quota_endpoint(monkeypatch):
         llm_thread_limiter.reset()
 
 
-def test_call_reviewer_llm_skips_known_quota_endpoint(monkeypatch):
+def test_call_reviewer_llm_skips_quota_endpoint_while_cooling(monkeypatch):
     from app.services.vuln_followup import _call_reviewer_llm
 
     seen = _followup_pool(monkeypatch)
     llm_gate.note_error("ep-2", "quota", message="insufficient_quota")
-    _expire_cooldown("ep-2")
     try:
         answer = _call_reviewer_llm(1, [{"role": "user", "content": "q"}])
         assert answer == "ok-from-ep-1"

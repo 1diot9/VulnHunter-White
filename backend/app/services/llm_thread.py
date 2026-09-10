@@ -314,34 +314,25 @@ class LlmThreadLimiter:
 
         Chooses the lowest utilization (used/cap), then the lowest inflight count.
         ``prefer`` is a tie-breaker only: a sticky first endpoint is not filled to
-        capacity before other pools are used.
-
-        Quota-exhausted endpoints stay out of the first pass even after cooldown:
-        they sit at used=0 (everyone already failed over) and would otherwise win
-        every idle pick. They are last-resort only when nothing else has capacity.
+        capacity before other pools are used. Quota / 429 / 5xx only skip an
+        endpoint while its cooldown is active; after that it re-enters the pool.
         """
         now = time.time()
-
-        def choose(*, allow_quota: bool) -> str | None:
-            best_id: str | None = None
-            best_key: tuple[float, int, int, int] | None = None
-            for idx, eid in enumerate(self._order):
-                b = self._buckets[eid]
-                if b.used >= b.cap:
-                    continue
-                if not llm_gate.is_available(eid, now=now):
-                    continue
-                if not allow_quota and llm_gate.last_error_kind(eid) == "quota":
-                    continue
-                util = b.used / b.cap
-                sticky = 0 if (prefer and eid == prefer) else 1
-                key = (util, b.used, sticky, idx)
-                if best_key is None or key < best_key:
-                    best_key = key
-                    best_id = eid
-            return best_id
-
-        return choose(allow_quota=False) or choose(allow_quota=True)
+        best_id: str | None = None
+        best_key: tuple[float, int, int, int] | None = None
+        for idx, eid in enumerate(self._order):
+            b = self._buckets[eid]
+            if b.used >= b.cap:
+                continue
+            if not llm_gate.is_available(eid, now=now):
+                continue
+            util = b.used / b.cap
+            sticky = 0 if (prefer and eid == prefer) else 1
+            key = (util, b.used, sticky, idx)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_id = eid
+        return best_id
 
     def _wait_deadline_locked(self) -> float:
         ids = list(self._order)

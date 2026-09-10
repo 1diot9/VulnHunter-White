@@ -1177,7 +1177,7 @@ class AgentLoop:
                             client, url, headers, body, est_tokens, consume=consume
                         )
                 if status == 401:
-                    llm_gate.note_error(eid, "auth", message=(err_text or "")[:240])
+                    llm_gate.note_error(eid, "auth", message=err_text or "")
                     if self._try_rebind_endpoint("401 密钥无效"):
                         continue
                     raise AuthError("401 密钥无效，请检查设置页模型配置")
@@ -1188,7 +1188,7 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
-                    llm_gate.note_error(eid, "quota", message=(err_text or "")[:240])
+                    llm_gate.note_error(eid, "quota", message=err_text or "")
                     if self._try_rebind_endpoint("额度用尽"):
                         continue
                     raise RateLimitError("quota exhausted", quota=True)
@@ -1207,7 +1207,7 @@ class AgentLoop:
                         role=self.role,
                     )
                     llm_gate.note_error(
-                        eid, "rate_limit", retry_after=retry_after, message=(err_text or "")[:240]
+                        eid, "rate_limit", retry_after=retry_after, message=err_text or ""
                     )
                     if self._try_rebind_endpoint("429 限流"):
                         continue
@@ -1261,7 +1261,7 @@ class AgentLoop:
             except ChatStreamProviderError as e:
                 text = str(e)
                 if _looks_like_quota_exhausted(text):
-                    llm_gate.note_error(eid, "quota", message=text[:240])
+                    llm_gate.note_error(eid, "quota", message=text)
                     if self._try_rebind_endpoint("额度用尽"):
                         continue
                     raise RateLimitError("quota exhausted", quota=True) from e
@@ -1272,11 +1272,11 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                     )
-                    llm_gate.note_error(eid, "rate_limit", message=text[:240])
+                    llm_gate.note_error(eid, "rate_limit", message=text)
                     if self._try_rebind_endpoint("429 限流"):
                         continue
                     raise RateLimitError("429 rate limited") from e
-                llm_gate.note_error(eid, "transient", message=text[:240])
+                llm_gate.note_error(eid, "transient", message=text)
                 if self._try_rebind_endpoint("流式错误"):
                     continue
                 last_err = e
