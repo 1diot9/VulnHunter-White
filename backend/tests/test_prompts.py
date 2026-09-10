@@ -156,9 +156,14 @@ def test_reviewer_prompt_requires_attack_surface_and_severity_factors():
     assert "无认证可达" in text
     assert "不要照抄 Worker" in text
     assert "管理员先加入的可信源不是前台" in text
+    assert "普通用户打开页面中招不是前台" in text
+    assert "unix-agent" in text
+    assert "required_account=admin" in text
     assert "无认证可达" in load_prompt("initial/reviewer.md")
     assert "不要标 attack_surface=frontend" in load_prompt("initial/reviewer.md")
     assert "SNMP 不用登录" in load_prompt("initial/reviewer.md")
+    assert "unix-agent" in load_prompt("initial/reviewer.md")
+    assert "普通用户打开页面中招不是前台" in load_prompt("initial/reviewer.md")
     assert "互联网资产证明" in text
     assert "FOFA" in text
     assert "X 情报社区" in text
@@ -271,6 +276,8 @@ def test_cvss_scoring_prompt_covers_metrics_and_is_injected(tmp_env, project):
     assert "PR:L" in spec.description
     assert "独立核验无认证可达" in spec.description
     assert "SNMP 源" in spec.description
+    assert "unix-agent" in spec.description
+    assert "普通用户打开页面中招" in spec.description
     vector_desc = spec.parameters["properties"]["cvss_vector"]["description"]
     assert "CVSS 3.1 度量标准" in vector_desc
     assert "Cookie" in vector_desc
@@ -383,7 +390,9 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "不要 docker" in bounty_worker
     assert "禁止主动搭建漏洞利用环境" not in bounty_worker
     assert "被测应用必须是" in bounty_worker
-    assert "旧应用镜像" in bounty_worker
+    assert "不要写成未认证前台 CVE" in bounty_worker
+    assert "后台管理员" in bounty_worker
+    assert "unix-agent" in bounty_worker
     full = load_prompt("modes/full.md")
     assert "全量模式" in full
     assert "low_impact" in full
@@ -393,6 +402,8 @@ def test_audit_mode_overlay_prompts(tmp_env, project):
     assert "无害/受限文件操作" in full
     assert "不可获取且不可预测" in full
     assert "不要标 `low_impact` 入库" in full
+    assert "unix-agent" in full
+    assert "backend" in full and "admin" in full
 
     from app.models import Project, SessionLocal
     from app.services import pipeline
@@ -660,9 +671,11 @@ def test_unconstrained_worker_prompts():
     assert "方法无注解" in worker
     assert "docs/auth.md" in worker
     assert "SNMP agent" in worker
+    assert "unix-agent" in worker
     assert "再核一次是否真的前台可达" in initial
     assert "auth_premise" in initial
     assert "SNMP 源" in initial
+    assert "unix-agent" in initial
 
 
 def test_recon_source_ext_prompt_and_map_does_not_add_ext():

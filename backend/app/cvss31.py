@@ -188,8 +188,9 @@ def cvss_pr_alignment_error(
         f"当前标注为{declared}，须写 PR:{expected}（{_PR_SURFACE_HINT[expected]}），"
         f"向量里是 PR:{actual}。"
         "前台未认证 → PR:N；后台普通权限 → PR:L；后台管理员 → PR:H。"
-        "不要用「SNMP/设备侧/邮件/回调注入不需要应用账号」把后台洞写成 PR:N；"
-        "须管理员先加入攻击者控制的设备/源时，应标 attack_surface=backend 且 required_account=admin。"
+        "不要用「SNMP/unix-agent/设备侧/邮件/回调注入不需要应用账号」把后台洞写成 PR:N；"
+        "须管理员先加入攻击者控制的设备/源时，应标 attack_surface=backend 且 required_account=admin，"
+        "不要标 user；普通用户打开页面中招不是前台。"
     )
 
 

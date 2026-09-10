@@ -46,6 +46,8 @@ def test_initial_hint_mentions_mode_rules():
     assert "Docker 靶场" in bounty
     assert "无害/受限文件操作" in bounty
     assert "不可获取且不可预测" in bounty
+    assert "后台管理员" in bounty
+    assert "unix-agent" in bounty
     full = initial_hint("full")
     assert "全量模式" in full
     assert "低危害难利用" in full

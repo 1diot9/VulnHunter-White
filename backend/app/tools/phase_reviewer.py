@@ -1172,8 +1172,9 @@ def register_reviewer_tools() -> None:
                 "必须标注 attack_surface=frontend|backend（前台/后台）；"
                 "Worker 声称前台时须独立核验无认证可达，不要照抄 auth_premise；"
                 "核完其实要登录则标 backend，不要硬标 frontend。"
-                "须管理员先把攻击者控制的设备/邮箱/Webhook/SNMP 源加进系统再注入的，"
-                "不是前台，标 backend + required_account=admin，不要用「设备侧不用登录」硬标 frontend。"
+                "须管理员先把攻击者控制的设备/邮箱/Webhook/SNMP 源/unix-agent 加进系统再注入的，"
+                "不是前台，必须标 backend + required_account=admin，不要标 user；"
+                "不要用「设备侧/unix-agent 不用登录」或「普通用户打开页面中招」硬标 frontend。"
                 "后台漏洞必须再标 required_account=user|admin（普通权限账号/管理员账号）。"
                 "evidence_level=static_only|dynamic|mcp|harness。"
                 "关闭动态验证、或本条已因连续超时/搭建失败被强制仅静态时必须 static_only；"
@@ -1232,11 +1233,18 @@ def register_reviewer_tools() -> None:
                     },
                     "attack_surface": {
                         "type": "string",
-                        "description": "必填。frontend=前台，backend=后台。也可写中文：前台 / 后台",
+                        "description": (
+                            "必填。frontend=前台，backend=后台。也可写中文：前台 / 后台。"
+                            "须管理员先加入攻击者设备/邮箱/Webhook/SNMP/unix-agent 源的，"
+                            "必须 backend，禁止 frontend。"
+                        ),
                     },
                     "required_account": {
                         "type": "string",
-                        "description": "后台必填。user=普通权限账号，admin=管理员账号。也可写中文：普通权限 / 管理员",
+                        "description": (
+                            "后台必填。user=普通权限账号，admin=管理员账号。也可写中文：普通权限 / 管理员。"
+                            "须管理员先加入攻击者设备/源才能注入的，必须 admin，不要标 user。"
+                        ),
                     },
                     "exposure_mode": {
                         "type": "string",
