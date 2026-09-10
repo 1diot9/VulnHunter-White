@@ -15,6 +15,8 @@ type PreviewProps = {
   dynamicVerifyEnabled: boolean
   dynamicVerifyMode?: 'off' | 'lab' | 'harness'
   manualLab: boolean
+  /** False on Docker Desktop — lab means manual target only. */
+  dockerLabBuildEnabled?: boolean
   verifierEnabled: boolean
   attackChainEnabled?: boolean
   codeIntelEnabled?: boolean
@@ -41,6 +43,7 @@ function buildNodes({
   dynamicVerifyEnabled,
   dynamicVerifyMode,
   manualLab,
+  dockerLabBuildEnabled = true,
   verifierEnabled,
   attackChainEnabled = false,
   codeIntelEnabled = false,
@@ -52,9 +55,10 @@ function buildNodes({
 }: PreviewProps): FlowNode[] {
   const bounty = auditMode !== 'full'
   const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
-  const useManual = verifyMode === 'lab' && manualLab
+  const useManual = verifyMode === 'lab' && (manualLab || !dockerLabBuildEnabled)
   const labOn = verifyMode === 'lab'
   const harnessOn = verifyMode === 'harness'
+  const labTag = !dockerLabBuildEnabled && labOn ? '人工靶场' : labOn ? '靶场动态' : harnessOn ? '局部验证' : '静态'
   const heuristicOn = heuristicEnabled !== false
   const liteOn = heuristicOn && heuristicLite === true
   const fastOn = fastEnabled === true
@@ -150,26 +154,32 @@ function buildNodes({
     {
       id: 'reviewer',
       title: '审核',
-      tag: labOn ? '靶场动态' : harnessOn ? '局部验证' : '静态',
+      tag: labTag,
       body: labOn
         ? useManual
-          ? '优先用你提供的靶场，不可达再回退 Docker。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。'
+          ? dockerLabBuildEnabled
+            ? '优先用你提供的靶场，不可达再回退 Docker。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。'
+            : '使用你提供的人工靶场 URL。Reviewer 改 PoC 并复现；不可达时仅静态或误报，不自动搭靶场。'
           : '独立环境轮搭建 Docker 靶场。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。'
         : harnessOn
           ? '不搭整项目靶场。Reviewer 抽出函数、mock 依赖，在沙箱跑 harness；打通记为局部验证。'
           : '只做静态复核。能证明默认可利用则以 static_only 入库，不搭靶场。',
       hint: labOn
-        ? '靶场动态开启后，Reviewer 才搭靶场并收口 HTTP PoC；PoC 不可用需改写时才用 debug MCP。靶场只提供默认部署。'
+        ? dockerLabBuildEnabled
+          ? '靶场动态开启后，Reviewer 才搭靶场并收口 HTTP PoC；PoC 不可用需改写时才用 debug MCP。靶场只提供默认部署。'
+          : 'Docker 版仅支持人工靶场：填本机或局域网地址；127.0.0.1 会改写为 host.docker.internal。'
         : harnessOn
-          ? '局部验证与靶场动态互斥。无 Docker 或 mock 失败不因此误报。'
+          ? '局部验证与自动靶场互斥。无 Docker 或 mock 失败不因此误报。'
           : '默认关闭动态验证。静态已能证明默认可利用时直接入库，不跑 Docker。',
       chips: labOn
         ? [
             {
               id: 'lab',
-              label: useManual ? '人工靶场优先' : '环境搭建',
+              label: useManual ? '人工靶场' : '环境搭建',
               hint: useManual
-                ? '审核时优先用人工靶场地址；不可达再回退 Docker 靶场。'
+                ? dockerLabBuildEnabled
+                  ? '审核时优先用人工靶场地址；不可达再回退 Docker 靶场。'
+                  : '只打用户提供的地址；不可达不自动搭建。'
                 : '用 Docker 搭建默认可复用靶场，供动态复现；不是制造利用条件。',
             },
             {
@@ -182,11 +192,11 @@ function buildNodes({
           ? [
               {
                 id: 'harness',
-                label: '沙箱 harness',
-                hint: 'RunCode 在一次性 sibling 容器执行；脚本写入 harness.py。不要把 mock 抄进 poc.py；纯库洞无安装面可不交 poc.py。',
+                label: '沙箱 RunCode',
+                hint: '在 sibling 沙箱执行 harness；公开入口吃 HTTP 时用同进程请求级验证。',
               },
             ]
-          : [{ id: 'static', label: 'static_only', hint: '不搭靶场；静态证据充分即可确认入库。' }],
+          : [],
     },
     {
       id: 'verifier',
@@ -359,6 +369,7 @@ function summaryText({
   dynamicVerifyEnabled,
   dynamicVerifyMode,
   manualLab,
+  dockerLabBuildEnabled = true,
   verifierEnabled,
   attackChainEnabled = false,
   codeIntelEnabled = false,
@@ -385,8 +396,10 @@ function summaryText({
   const verifyMode = dynamicVerifyMode || (dynamicVerifyEnabled ? 'lab' : 'off')
   const review =
     verifyMode === 'lab'
-      ? manualLab
-        ? '靶场动态（人工靶场优先）'
+      ? !dockerLabBuildEnabled || manualLab
+        ? dockerLabBuildEnabled
+          ? '靶场动态（人工靶场优先）'
+          : '人工靶场'
         : '靶场动态'
       : verifyMode === 'harness'
         ? '局部验证'

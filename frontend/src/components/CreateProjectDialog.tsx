@@ -22,7 +22,11 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { type AuditMode, type TargetKind } from '@/lib/utils'
+import { useRuntime } from '@/lib/runtime'
+import { DOCKER_MANUAL_LAB_HINT } from './dockerLabCopy'
+import { MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
 
 function formatUploadError(e: unknown): string {
   return formatApiError(e, '源码 zip 上传超时，请检查体积后重试，或改用 GitHub 导入')
@@ -45,6 +49,7 @@ export function CreateProjectDialog({
   initialUrl = '',
   initialTargetKind,
 }: Props) {
+  const { dockerLabBuildEnabled } = useRuntime()
   const [url, setUrl] = useState('')
   const [auditMode, setAuditMode] = useState<AuditMode>('bounty')
   const [targetKind, setTargetKind] = useState<TargetKind>('web')
@@ -74,6 +79,13 @@ export function CreateProjectDialog({
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
   const labMode = dynamicVerifyMode === 'lab'
   const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
+
+  useEffect(() => {
+    // Docker Desktop default: harness (sandboxes are auto-built).
+    if (!dockerLabBuildEnabled && !verifyTouched && targetKind === 'web') {
+      setDynamicVerifyMode('harness')
+    }
+  }, [dockerLabBuildEnabled, verifyTouched, targetKind])
 
   useEffect(() => {
     advancedOpenRef.current = advancedOpen
@@ -110,6 +122,9 @@ export function CreateProjectDialog({
       setDynamicVerifyMode('harness')
       setVerifierEnabled(false)
       setManualLab(false)
+    } else if (!dockerLabBuildEnabled) {
+      setDynamicVerifyMode('harness')
+      setVerifierEnabled(false)
     } else {
       setDynamicVerifyMode('off')
       setVerifierEnabled(false)
@@ -122,11 +137,15 @@ export function CreateProjectDialog({
   }
 
   function createOpts() {
+    if (labMode && !dockerLabBuildEnabled && !manualLabPrompt.trim()) {
+      throw new Error('人工靶场须填写环境说明（地址/账号等）')
+    }
+    const useManual = labMode && (dockerLabBuildEnabled ? manualLab : true)
     return {
       target_kind: targetKind,
       custom_audit_mode_id: auditMode === 'custom' ? customModeId : null,
-      manual_lab: labMode && manualLab,
-      manual_lab_prompt: labMode && manualLab ? manualLabPrompt : '',
+      manual_lab: useManual,
+      manual_lab_prompt: useManual ? manualLabPrompt : '',
       verifier_enabled: verifierEnabled,
       attack_chain_enabled: attackChainEnabled,
       code_intel_enabled: codeIntelEnabled,
@@ -262,18 +281,38 @@ export function CreateProjectDialog({
               />
               <DynamicVerifyToggle
                 mode={dynamicVerifyMode}
+                dockerLabBuildEnabled={dockerLabBuildEnabled}
                 onModeChange={(mode) => {
                   setVerifyTouched(true)
                   setDynamicVerifyMode(mode)
+                  if (mode === 'lab' && !dockerLabBuildEnabled) {
+                    setManualLab(true)
+                  }
                 }}
               />
-              {labMode ? (
+              {labMode && dockerLabBuildEnabled ? (
                 <ManualLabToggle
                   enabled={manualLab}
                   prompt={manualLabPrompt}
                   onEnabledChange={setManualLab}
                   onPromptChange={setManualLabPrompt}
                 />
+              ) : null}
+              {labMode && !dockerLabBuildEnabled ? (
+                <div className="space-y-2">
+                  <Label htmlFor="create-manual-lab" className="font-medium">
+                    人工靶场说明
+                  </Label>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{DOCKER_MANUAL_LAB_HINT}</p>
+                  <Textarea
+                    id="create-manual-lab"
+                    value={manualLabPrompt}
+                    onChange={(e) => setManualLabPrompt(e.target.value)}
+                    placeholder={MANUAL_LAB_PLACEHOLDER}
+                    rows={4}
+                    disabled={busy}
+                  />
+                </div>
               ) : null}
               <VerifierToggle
                 enabled={verifierEnabled}
@@ -289,7 +328,8 @@ export function CreateProjectDialog({
               auditMode={auditMode}
               dynamicVerifyEnabled={dynamicVerifyEnabled}
               dynamicVerifyMode={dynamicVerifyMode}
-              manualLab={manualLab}
+              manualLab={labMode && (dockerLabBuildEnabled ? manualLab : true)}
+              dockerLabBuildEnabled={dockerLabBuildEnabled}
               verifierEnabled={verifierEnabled}
               attackChainEnabled={attackChainEnabled}
               codeIntelEnabled={codeIntelEnabled}

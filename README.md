@@ -10,7 +10,7 @@
 
 Windows 用根目录 `start.cmd` / `stop.cmd`；**Linux / macOS** 用 `sh start.sh` / `sh stop.sh`。
 
-本项目暂不支持Docker部署，需要自行构建完毕后启动，构建步骤详见[启动前要做的构建](#启动前要做的构建)
+**Windows Docker Desktop（可选）**：`docker\desktop\start.cmd` 一键起容器版（WSL2 后端）；停止用同目录 `stop.cmd`。详见 [Docker Desktop 一键启动](#docker-desktop-一键启动windows)。
 
 ## 目录索引
 
@@ -28,6 +28,7 @@ Windows 用根目录 `start.cmd` / `stop.cmd`；**Linux / macOS** 用 `sh start.
   - [6. Debug MCP](#6-debug-mcp仅靶场动态--需要改写调试-poc-时)
   - [7. 快速扫描用的 Semgrep](#7-快速扫描用的-semgrep)
   - [8. 可选环境变量](#8-可选环境变量)
+- [Docker Desktop 一键启动（Windows）](#docker-desktop-一键启动windows)
 - [一键启停](#一键启停)
   - [首次打开：设置页](#首次打开设置页)
 - [手动启动](#手动启动)
@@ -330,6 +331,36 @@ GITHUB_TOKEN=
 
 `VULNHUNTER_ACCESS_TOKEN` 为全局访问令牌：配置后打开前端需先输入才能查看数据或调用功能；也可在设置页用当前令牌修改（修改后以设置为准）。未配置则不启用入口闸门。`OPENAI_API_KEY` 也可作回退，日常请在设置页填写。`VULNHUNTER_HOST` 默认 `127.0.0.1`（仅本机）；局域网访问设 `0.0.0.0` 或启动时加 `--lan`。
 
+## Docker Desktop 一键启动（Windows）
+
+适用于 **Docker Desktop + WSL2 后端**。应用跑在 Linux 容器里，通过挂载 `docker.sock` 在宿主引擎上构建并运行局部验证沙箱（DooD）。**不**自动搭建被测应用的 Docker 靶场；验证方式为关闭 / 局部验证 / **人工靶场**。本机根目录 `start.cmd` 仍可使用完整靶场动态。
+
+要求：
+
+- Docker Desktop 已安装并正在运行（托盘可见）
+- 能无交互执行 `docker version` / `docker compose`
+- 磁盘与网络足够：首次会构建应用镜像，并在缺镜像时构建 `vulnhunter/sandbox`、`vulnhunter/integration-sandbox`（可能十几分钟）
+- 挂载套接字等于把宿主 Docker 权限交给该容器，仅建议本机自用
+
+启动（在任意目录执行均可）：
+
+```bat
+docker\desktop\start.cmd
+```
+
+浏览器打开 `http://127.0.0.1:16788`（前后端同端口；静态 UI 由 FastAPI 托管）。停止：
+
+```bat
+docker\desktop\stop.cmd
+```
+
+说明：
+
+- 数据目录仍是仓库根下的 `data/`（与本机启动共用）
+- 人工靶场可填 `http://127.0.0.1:<端口>`，容器内会改写为 `host.docker.internal`
+- 默认端口 **16788**（与本机 `start.cmd` 的 16780 错开，可并行）；可用环境变量 `VULNHUNTER_PORT` 覆盖
+- 第一期仅保证 Windows Docker Desktop；Linux 原生部署请继续用 `start.sh`
+
 ## 一键启停
 
 **Windows**（仓库根目录双击，或 CMD）：
@@ -474,7 +505,7 @@ pytest
 | 互联网验证 | 可选 Verifier，默认关，可在项目设置开启。确认前台漏洞后用 FOFA 搜同款目标；先按报告和 PoC 理解利用本质，优先跑原 `poc.py`；没有可用 HTTP PoC 时按报告构造 payload，不自动跳过；失效时在同链上调整利用方式再测（默认每批 10、成功 3 即结束，最多 5 轮共 50 目标）；墙钟超时后该条直接 fail，不再新开轮；指纹按项目采集复用；破坏性操作需人工确认 |
 | 攻击链串联 | 可选，默认关；挖掘完成且审核队列清空后，根据已确认漏洞尝试多步利用 |
 | 产出漏洞去重 | 项目详情「本项目漏洞」勾选后对照侦察历史漏洞，检查是否已经公开；日志在阶段日志「产出去重」 |
-| 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 并发之和为全局 LLM 线程上限（单端点默认 6），新会话均匀分配、同一会话粘滞、超出按到达顺序排队；同一端点发请求默认最少间隔 2 秒（可关），排队不计超时；429 / 额度用尽只冷却该端点，结束后重新参与分配 |
+| 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 未禁用端点并发之和为全局 LLM 线程上限（单端点默认 6），新会话均匀分配、同一会话粘滞、超出按到达顺序排队；设置页可禁用端点；项目暂停后释放名额、续跑再排队；同一端点发请求默认最少间隔 2 秒（可关），排队不计超时；429 / 额度用尽只冷却该端点，结束后重新参与分配 |
 | 历史漏洞 | 先 GHSA / GitHub Issues 爬虫落盘（第一阶段禁止 WebSearch），再 WebSearch 补漏；只收集不读源码。公开洞标 `patched`，未修复来自未关闭 Issues（`unpatched`） |
 | 设置与运维 | 手动清理 X 天前 SSE 实时日志；CLI 工具目录（默认 `tools/cli`）供 Reviewer `SearchTools` 检索后 Shell 执行；可配置 CodeGraph 路径 |
 | 进度重置 | 可重置启发式 Worker 挖掘进度（保留漏洞产出与侦察文档），用于换模型重审；快速扫描 Sink 队列与历史漏洞绕过进度不重置 |
@@ -488,6 +519,7 @@ pytest
 - `tools/cli` — 用户放置的 CLI 工具（一目录一工具；Reviewer SearchTools）
 - `docker/sandbox` — 局部验证 harness 沙箱镜像（L1/L2）
 - `docker/integration-sandbox` — L3 集成验证沙箱镜像
+- `docker/desktop` — Windows Docker Desktop 一键启动（compose / Dockerfile / start.cmd）
 - `scripts` — 启停、测试、构建沙箱
 - `data/projects/{id}` — 项目隔离工作区（运行态，不要提交）
 - `docs/DESIGN.md` — 架构与设计说明

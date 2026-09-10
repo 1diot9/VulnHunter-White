@@ -23,6 +23,8 @@ from ..dynamic_verify import (
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
     apply_verify_mode,
+    assert_verify_mode_allowed_for_runtime,
+    effective_project_verify_mode,
     is_lab_mode,
     project_verify_mode,
     project_verify_mode_values,
@@ -84,6 +86,7 @@ from ..schemas import (
 )
 from ..services.ingest import indexed_weight_exts
 from ..services.lab import (
+    finish_manual_lab,
     get_lab_status,
     lab_setup_state,
     patch_lab_ports,
@@ -346,7 +349,7 @@ def _project_out(
     summary = summary or _project_summaries(db, [p.id]).get(p.id, _empty_project_summary())
     if weight_exts is None:
         weight_exts = indexed_weight_exts(db, [p.id]).get(p.id, [])
-    verify_mode = project_verify_mode(p)
+    verify_mode = effective_project_verify_mode(p)
     lab_done, lab_failed = lab_setup_state(p.id)
     if include_phase_states:
         phase_fields = _phase_state_fields(p.id)
@@ -803,6 +806,11 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
             manual_lab=body.manual_lab,
             manual_lab_prompt=manual_lab_prompt,
         )
+        assert_verify_mode_allowed_for_runtime(
+            verify_mode,
+            manual_lab=body.manual_lab,
+            manual_lab_prompt=manual_lab_prompt,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with SessionLocal() as db:
@@ -850,6 +858,8 @@ def create_project_github(body: ProjectCreate) -> ProjectOut:
         pat = (settings_row.github_pat if settings_row else None) or None
         out = _project_out(db, p)
     ensure_project_dirs(pid)
+    if verify_mode == VERIFY_MODE_LAB and manual_lab_prompt:
+        finish_manual_lab(pid, manual_lab_prompt)
     try:
         from ..services.github_discover import mark_candidate_imported
 
@@ -908,6 +918,11 @@ async def create_project_zip(
             manual_lab=manual_lab,
             manual_lab_prompt=prompt,
         )
+        assert_verify_mode_allowed_for_runtime(
+            verify_mode,
+            manual_lab=manual_lab,
+            manual_lab_prompt=prompt,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     custom_id = None
@@ -957,6 +972,8 @@ async def create_project_zip(
         pid = p.id
         out = _project_out(db, p)
     ensure_project_dirs(pid)
+    if verify_mode == VERIFY_MODE_LAB and prompt:
+        finish_manual_lab(pid, prompt)
     tmp = Path(tempfile.mkdtemp(prefix="vh-zip-"))
     zip_path = tmp / "src.zip"
     try:
@@ -1142,6 +1159,18 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
                 )
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
+            manual_for_gate = body.manual_lab if body.manual_lab is not None else p.manual_lab
+            prompt_for_gate = (
+                prompt if prompt is not None else (p.manual_lab_prompt or "")
+            )
+            try:
+                assert_verify_mode_allowed_for_runtime(
+                    next_verify,
+                    manual_lab=manual_for_gate,
+                    manual_lab_prompt=prompt_for_gate,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
             apply_verify_mode(p, next_verify)
             if next_verify != VERIFY_MODE_LAB:
                 if body.manual_lab is None and prompt is None:
@@ -1154,6 +1183,14 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             p.recon_hint = recon or None
         if token_cap is not None:
             p.max_token_usage = token_cap
+        try:
+            assert_verify_mode_allowed_for_runtime(
+                project_verify_mode(p),
+                manual_lab=p.manual_lab,
+                manual_lab_prompt=p.manual_lab_prompt,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         db.commit()
         db.refresh(p)
         out = _project_out(db, p)
@@ -1278,6 +1315,8 @@ def update_project(project_id: int, body: ProjectUpdate) -> ProjectOut:
             )
     if sync_notes:
         sync_manual_lab_notes(project_id, notes_text)
+        if out.dynamic_verify_mode == VERIFY_MODE_LAB and notes_text:
+            finish_manual_lab(project_id, notes_text)
     if restarted:
         start_audit(project_id)
     return out

@@ -155,12 +155,53 @@ def apply_verify_mode(proj: Any, mode: str) -> str:
     return normalized
 
 
+def project_has_manual_lab(proj: Any) -> bool:
+    if proj is None:
+        return False
+    if bool(getattr(proj, "manual_lab", False)):
+        return True
+    return bool(str(getattr(proj, "manual_lab_prompt", None) or "").strip())
+
+
+def assert_verify_mode_allowed_for_runtime(
+    mode: str,
+    *,
+    manual_lab: Any = None,
+    manual_lab_prompt: Any = None,
+) -> None:
+    """Docker Desktop: allow lab only with a non-empty manual lab note (no auto build)."""
+    from .services.runtime import docker_lab_build_enabled
+
+    if docker_lab_build_enabled():
+        return
+    chosen = normalize_verify_mode(mode)
+    if chosen != VERIFY_MODE_LAB:
+        return
+    wants_manual = bool(manual_lab) or bool(str(manual_lab_prompt or "").strip())
+    if not wants_manual:
+        raise ValueError(
+            "Docker 版不支持自动搭建靶场；请改用局部验证，或选择人工靶场并填写环境说明"
+        )
+
+
+def effective_project_verify_mode(proj: Any) -> str:
+    """Stored mode, remapped in Docker when lab has no manual note (treat as harness)."""
+    from .services.runtime import docker_lab_build_enabled
+
+    mode = project_verify_mode(proj)
+    if docker_lab_build_enabled():
+        return mode
+    if is_lab_mode(mode) and not project_has_manual_lab(proj):
+        return VERIFY_MODE_HARNESS
+    return mode
+
+
 def project_is_harness(project_id: int) -> bool:
     from .models import Project, SessionLocal
 
     with SessionLocal() as db:
         proj = db.get(Project, int(project_id))
-        return is_harness_mode(project_verify_mode(proj))
+        return is_harness_mode(effective_project_verify_mode(proj))
 
 
 def normalize_evidence_level(raw: Any) -> str | None:

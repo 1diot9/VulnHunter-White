@@ -344,6 +344,7 @@ def _extract_urls(text: str) -> list[str]:
 
 
 def lab_target_urls(project_id: int) -> list[str]:
+    from .docker_paths import rewrite_loopback_urls
     from .lab import lab_bring_up_failed, lab_ready, load_env
 
     urls: list[str] = []
@@ -364,7 +365,7 @@ def lab_target_urls(project_id: int) -> list[str]:
     for item in urls:
         if item not in unique:
             unique.append(item)
-    return unique
+    return rewrite_loopback_urls(unique)
 
 
 def has_lab_target(project_id: int) -> bool:

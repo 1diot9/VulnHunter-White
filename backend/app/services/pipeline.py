@@ -56,9 +56,9 @@ from ..dynamic_verify import (
     VERIFY_MODE_HARNESS,
     VERIFY_MODE_LAB,
     VERIFY_MODE_OFF,
+    effective_project_verify_mode,
     is_harness_mode,
     is_lab_mode,
-    project_verify_mode,
     review_timeouts_before_static,
     review_timeouts_exhausted,
     static_after_review_timeouts,
@@ -600,6 +600,8 @@ def can_append_dynamic_verify(vuln: Vuln, verify_mode: str) -> bool:
     - harness-confirmed (sink/module) + poc → append L3 integration (harness project)
     - harness-confirmed → append Docker lab only (upgrade evidence to dynamic/mcp)
     """
+    from .runtime import docker_lab_build_enabled
+
     if vuln.status == "merged":
         return False
     if not verify_mode_enabled(verify_mode):
@@ -609,6 +611,9 @@ def can_append_dynamic_verify(vuln: Vuln, verify_mode: str) -> bool:
     if is_harness_mode(verify_mode) and is_harness_integration_upgradeable(vuln):
         return True
     if is_harness_confirmed_vuln(vuln) and is_lab_mode(verify_mode):
+        # Docker Desktop: no auto lab build — cannot upgrade harness → Docker lab.
+        if not docker_lab_build_enabled():
+            return False
         return True
     return False
 
@@ -636,7 +641,7 @@ def dynamic_verify_flags(vuln: Vuln, *, project: Project | None = None) -> tuple
             proj = db.get(Project, vuln.project_id)
     can = bool(
         proj is not None
-        and can_append_dynamic_verify(vuln, project_verify_mode(proj))
+        and can_append_dynamic_verify(vuln, effective_project_verify_mode(proj))
         and proj.status not in ("cancelled", "error", "pending", "ingesting")
     )
     return can, queued
@@ -675,7 +680,7 @@ def request_dynamic_verify(vuln_id: int, *, followup_kind: str = "") -> dict[str
         db.expunge(proj)
     if proj.status in ("cancelled", "error", "pending", "ingesting"):
         raise DynamicVerifyRequestError("当前项目状态不可追加动态验证")
-    verify_mode = project_verify_mode(proj)
+    verify_mode = effective_project_verify_mode(proj)
     if not verify_mode_enabled(verify_mode):
         raise DynamicVerifyRequestError("请先在项目设置中开启靶场动态或局部验证")
     if vuln.status == "merged":
@@ -1886,7 +1891,7 @@ def _read_attack_chain_enabled(project_id: int) -> bool:
 def _read_dynamic_verify_mode(project_id: int) -> str:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
-        return project_verify_mode(proj)
+        return effective_project_verify_mode(proj)
 
 
 def _read_dynamic_verify_enabled(project_id: int) -> bool:
@@ -1894,7 +1899,30 @@ def _read_dynamic_verify_enabled(project_id: int) -> bool:
 
 
 def _reviewer_has_lab_work(project_id: int) -> bool:
+    from .lab import finish_manual_lab
+    from .runtime import docker_lab_build_enabled
+
     if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
+        return False
+    # Docker Desktop: never schedule auto lab build; mark setup done once.
+    if not docker_lab_build_enabled():
+        if not lab_setup_finished(project_id):
+            _enabled, prompt = _read_manual_lab(project_id)
+            if prompt:
+                finish_manual_lab(project_id, prompt)
+            else:
+                mark_lab_setup_finished(
+                    project_id,
+                    skipped=True,
+                    notes="跳过自动靶场搭建（Docker 发行版）",
+                    via="docker-runtime",
+                )
+        return False
+    # Host: manual lab skips Docker setup.
+    _enabled, prompt = _read_manual_lab(project_id)
+    if prompt:
+        if not lab_setup_finished(project_id):
+            finish_manual_lab(project_id, prompt)
         return False
     return not lab_setup_finished(project_id) or bool(list_resumable_runs(project_id, "reviewer-lab"))
 
@@ -2065,6 +2093,8 @@ def _pending_lab_repair_review_note(project_id: int) -> str:
 
 
 def _reviewer_lab_note(project_id: int) -> str:
+    from .runtime import docker_lab_build_enabled
+
     mode = _read_dynamic_verify_mode(project_id)
     repair_note = _pending_lab_repair_review_note(project_id)
     if mode == VERIFY_MODE_OFF:
@@ -2078,17 +2108,19 @@ def _reviewer_lab_note(project_id: int) -> str:
         return f"{extra}{_BRINGUP_FAILED_NOTE}\n{_ASSET_PROOF_LAB_HINT}"
     _enabled, prompt = _read_manual_lab(project_id)
     docker_note = _docker_lab_note(project_id)
+    allow_docker_fallback = docker_lab_build_enabled()
     if prompt:
         parts = [
             "优先使用用户提供的人工靶场（地址、账号、路径以用户说明为准）：",
             prompt,
         ]
-        if docker_note:
+        if allow_docker_fallback and docker_note:
             parts.append("若人工环境不可达，回退到已有 Docker 靶场：")
             parts.append(docker_note)
         else:
             parts.append(
-                "Docker 靶场尚未就绪。若人工环境不可达，无法动态验证时用 evidence_level=static_only 或误报。"
+                "若人工环境不可达，无法动态验证时用 evidence_level=static_only 或误报。"
+                + ("" if allow_docker_fallback else "（Docker 版不自动搭建靶场，不要尝试 docker build 被测应用。）")
             )
         parts.append(_ASSET_PROOF_LAB_HINT)
         return "\n".join(parts)
@@ -5548,8 +5580,27 @@ def _lab_system_prompt(project_id: int) -> str:
 def _run_reviewer_lab(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     try:
+        from .runtime import docker_lab_build_enabled
+
         if not is_lab_mode(_read_dynamic_verify_mode(project_id)):
             _finish_resumable_phase(project_id, "reviewer-lab")
+            return
+        # Docker Desktop / manual-only: never auto-build the audited app image.
+        if not docker_lab_build_enabled() or bool(_read_manual_lab(project_id)[1]):
+            if not lab_setup_finished(project_id):
+                mark_lab_setup_finished(
+                    project_id,
+                    skipped=True,
+                    notes="跳过自动靶场搭建（人工靶场或 Docker 发行版）",
+                    via="manual-or-docker-runtime",
+                )
+            _finish_resumable_phase(project_id, "reviewer-lab")
+            live_log.system(
+                project_id,
+                "跳过环境搭建轮（人工靶场 / Docker 版不自动搭靶场）",
+                phase="reviewer-lab",
+                role="reviewer_lab",
+            )
             return
         if lab_setup_finished(project_id):
             _finish_resumable_phase(project_id, "reviewer-lab")
@@ -5886,7 +5937,9 @@ def _run_reviewer_once(project_id: int) -> None:
                     "true 且前台确认后该路径结束（当前 Worker 轮仍会跑完）。"
                     "本条始终走赏金闸门，即使项目是全量/自定义模式。"
                     "Worker 若声称前台，须独立核验无认证可达，不要照抄；核完其实要登录则标后台，不要为结束路径硬标 frontend。"
-                    "须管理员先加入攻击者设备/邮箱/Webhook/SNMP 源的不是前台，标 backend+admin，rce_effect=false。"
+                    "须管理员先加入攻击者设备/邮箱/Webhook/SNMP/unix-agent 源的不是前台，"
+                    "标 backend+admin，不要标 user，rce_effect=false。"
+                    "不要因「设备侧不用登录」或「普通用户打开页面中招」硬标 frontend。"
                 )
 
         if _give_up_exhausted_review(project_id, vuln_id):

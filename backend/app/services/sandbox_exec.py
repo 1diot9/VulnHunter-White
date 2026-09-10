@@ -350,7 +350,10 @@ def _execute_harness_raw(
     try:
         host_dir = Path(work.name)
         (host_dir / filename).write_text(code, encoding="utf-8")
-        host_bind = str(host_dir)
+        from .docker_paths import ensure_sandbox_bind_readable, to_host_bind_path
+
+        ensure_sandbox_bind_readable(host_dir)
+        host_bind = to_host_bind_path(host_dir)
         container = None
         try:
             container = client.containers.run(

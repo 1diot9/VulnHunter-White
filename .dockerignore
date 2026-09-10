@@ -1,0 +1,22 @@
+# Used when building docker/desktop (compose context = repo root).
+.git
+.github
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+frontend/dist
+frontend/tsconfig.tsbuildinfo
+data/projects/*
+!data/projects/11/
+!data/projects/11/**
+data/logs
+data/tmp
+data/run
+data/app.db
+data/app.db-*
+data/tools
+backend/.venv
+*.pyc
+AGENTS.md

@@ -17,6 +17,15 @@ _PUBLIC = frozenset(
 )
 
 
+def _path_needs_token(path: str) -> bool:
+    """Only gate API and OpenAPI docs; SPA static assets stay public."""
+    if path in {"/docs", "/redoc", "/openapi.json"} or path.startswith("/docs/") or path.startswith(
+        "/redoc/"
+    ):
+        return True
+    return path == "/api" or path.startswith("/api/")
+
+
 class AccessTokenMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -28,6 +37,10 @@ class AccessTokenMiddleware:
         method = (scope.get("method") or "").upper()
         path = scope.get("path") or ""
         if method == "OPTIONS" or (method, path) in _PUBLIC:
+            await self.app(scope, receive, send)
+            return
+        # Docker Desktop SPA serves UI from the same origin; only gate API/docs.
+        if not _path_needs_token(path):
             await self.app(scope, receive, send)
             return
         expected = configured_token_hash()

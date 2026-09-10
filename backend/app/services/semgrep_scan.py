@@ -96,14 +96,18 @@ def run_semgrep_scan(
         pass
     args: list[str] = []
     if kind == "docker":
+        from .docker_paths import to_host_bind_path
+
+        src_bind = to_host_bind_path(src)
+        out_bind = to_host_bind_path(out_path.parent)
         args = [
             *prefix,
             "run",
             "--rm",
             "-v",
-            f"{src.resolve()}:/src",
+            f"{src_bind}:/src",
             "-v",
-            f"{out_path.parent.resolve()}:/out",
+            f"{out_bind}:/out",
             "-w",
             "/src",
             SEMGREP_IMAGE,

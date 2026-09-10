@@ -356,10 +356,16 @@ def request_ui(project_id: int) -> dict[str, Any]:
 
     Prefer `codegraph ui` / `web` when the installed CLI has it. Official
     v1.6.0 does not; then fall back to the in-app explorer (`builtin`).
+    Docker Desktop: always use builtin — host browsers cannot reach container loopback.
     """
+    from ..services.runtime import is_docker_runtime
+
     payload = status_payload(project_id)
     if payload["status"] not in ("ready", "stale"):
         return {"ok": False, "error": "代码库尚未就绪，无法打开图浏览器"}
+    if is_docker_runtime():
+        _log(project_id, "Docker 版改用内置调用图浏览（容器内 127.0.0.1 浏览器不可达）")
+        return {"ok": True, "builtin": True, "url": ""}
     binary = find_codegraph()
     if binary is None:
         return {"ok": False, "error": "未找到 codegraph CLI"}

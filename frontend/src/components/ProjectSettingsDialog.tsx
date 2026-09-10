@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, formatApiError, type Project } from '../api'
 import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode } from './DynamicVerifyToggle'
 import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
+import { DOCKER_MANUAL_LAB_HINT } from './dockerLabCopy'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
 import { MaxTokenUsageField, formatMaxTokenUsageInput, parseMaxTokenUsageInput } from './MaxTokenUsageField'
@@ -23,6 +24,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { normalizeTargetKind, type TargetKind } from '@/lib/utils'
+import { useRuntime } from '@/lib/runtime'
 
 export function ProjectSettingsButton({
   project,
@@ -33,6 +35,7 @@ export function ProjectSettingsButton({
   onSaved: (project: Project) => void
   disabled?: boolean
 }) {
+  const { dockerLabBuildEnabled } = useRuntime()
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
   const [targetKind, setTargetKind] = useState<TargetKind>(normalizeTargetKind(project.target_kind))
@@ -102,6 +105,9 @@ export function ProjectSettingsButton({
     setSaving(true)
     setError('')
     try {
+      if (dynamicVerifyMode === 'lab' && !dockerLabBuildEnabled && !prompt.trim()) {
+        throw new Error('人工靶场须填写环境说明（地址/账号等）')
+      }
       const text = dynamicVerifyMode === 'lab' ? prompt.trim() : ''
       const canEditPaths = project.status === 'paused' || project.status === 'completed'
       const next = await api.updateProject(project.id, {
@@ -161,7 +167,9 @@ export function ProjectSettingsButton({
           <DialogHeader>
             <DialogTitle>项目配置</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象、代码库与挖掘路径仅在项目暂停或完成后可改；人工靶场说明仅靶场动态下生效。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
+              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象、代码库与挖掘路径仅在项目暂停或完成后可改
+              {dockerLabBuildEnabled ? '；人工靶场说明仅靶场动态下生效' : '；人工靶场须填写环境说明'}
+              。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -200,13 +208,19 @@ export function ProjectSettingsButton({
                 setUnconstrainedEnabled(nextU)
               }}
             />
-            <DynamicVerifyToggle mode={dynamicVerifyMode} onModeChange={setDynamicVerifyMode} />
+            <DynamicVerifyToggle
+              mode={dynamicVerifyMode}
+              dockerLabBuildEnabled={dockerLabBuildEnabled}
+              onModeChange={setDynamicVerifyMode}
+            />
             {dynamicVerifyMode === 'lab' ? (
               <div className="space-y-2">
                 <Label htmlFor="manual-lab-prompt" className="font-medium">
                   人工靶场描述
                 </Label>
-                <p className="text-xs leading-relaxed text-muted-foreground">{MANUAL_LAB_HINT}</p>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {dockerLabBuildEnabled ? MANUAL_LAB_HINT : DOCKER_MANUAL_LAB_HINT}
+                </p>
                 <Textarea
                   id="manual-lab-prompt"
                   value={prompt}

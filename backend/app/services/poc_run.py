@@ -32,15 +32,18 @@ POC_RUN_FAIL_HINT = (
 
 def resolve_lab_target_url(project_id: int) -> str | None:
     """Prefer a running Docker lab URL; else the first manual/lab URL. Skip stale Docker URLs after bring-up failure."""
+    from .docker_paths import rewrite_loopback_url
     from .lab import lab_bring_up_failed, lab_ready, load_env
 
     env = load_env(project_id)
     if lab_ready(env) and not lab_bring_up_failed(project_id):
         target = str((env or {}).get("target_url") or "").strip()
         if target:
-            return target
+            return rewrite_loopback_url(target)
     urls = lab_target_urls(project_id)
-    return urls[0] if urls else None
+    if not urls:
+        return None
+    return rewrite_loopback_url(urls[0])
 
 
 def _clean_env() -> dict[str, str]:

@@ -1,0 +1,23 @@
+# VulnHunter-White Docker Desktop edition (Windows + WSL2).
+# Run via start.cmd in this directory — do not place compose at repo root.
+services:
+  vulnhunter:
+    build:
+      context: ../..
+      dockerfile: docker/desktop/Dockerfile
+    image: vulnhunter/app:desktop
+    container_name: vulnhunter-desktop
+    ports:
+      - "${VULNHUNTER_PORT:-16788}:16788"
+    environment:
+      VULNHUNTER_RUNTIME: docker
+      VULNHUNTER_HOST: "0.0.0.0"
+      VULNHUNTER_PORT: "16788"
+      VULNHUNTER_HOST_DATA: ${VULNHUNTER_HOST_DATA}
+      VULNHUNTER_DEMO_SEED: ${VULNHUNTER_DEMO_SEED:-1}
+    volumes:
+      - ../../data:/data
+      - //var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -480,6 +480,7 @@ export type LlmPoolEndpoint = {
   api_key_set: boolean
   model: string
   max_inflight: number
+  disabled: boolean
 }
 
 export type Settings = {
@@ -1331,6 +1332,14 @@ export const api = {
     return { blob, filename }
   },
   authStatus: () => request<{ ok: boolean; required: boolean }>('/api/auth/status', { timeoutMs: 15_000 }),
+  health: () =>
+    request<{
+      ok: boolean
+      service?: string
+      runtime?: string
+      docker_lab_build_enabled?: boolean
+      manual_lab_allowed?: boolean
+    }>('/api/health', { timeoutMs: 15_000 }),
   authLogin: (token: string) =>
     request<{ ok: boolean; required: boolean }>('/api/auth/login', {
       method: 'POST',

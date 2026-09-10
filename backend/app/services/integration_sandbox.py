@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
+from .docker_paths import to_host_bind_path
 from .lab import LAB_LABEL_KEY, LAB_LABEL_VALUE
 from .paths import data_tmp_dir
 
@@ -188,6 +189,9 @@ def run_integration_sandbox(
             poc_filename=poc_host.name,
         )
         (host_dir / "integration_run.sh").write_text(script, encoding="utf-8")
+        from .docker_paths import ensure_sandbox_bind_readable
+
+        ensure_sandbox_bind_readable(host_dir)
         container = None
         try:
             container = client.containers.run(
@@ -207,9 +211,9 @@ def run_integration_sandbox(
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],
                 volumes={
-                    str(workspace_host.resolve()): {"bind": "/workspace", "mode": "rw"},
-                    str(poc_host.parent.resolve()): {"bind": "/vuln", "mode": "ro"},
-                    str(host_dir.resolve()): {"bind": "/runner", "mode": "ro"},
+                    to_host_bind_path(workspace_host): {"bind": "/workspace", "mode": "rw"},
+                    to_host_bind_path(poc_host.parent): {"bind": "/vuln", "mode": "ro"},
+                    to_host_bind_path(host_dir): {"bind": "/runner", "mode": "ro"},
                 },
                 tmpfs=dict(_INTEGRATION_TMPFS),
                 working_dir="/workspace",
