@@ -470,6 +470,10 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "success" in text
     assert "JDK 8" in text
     assert "java-release: 17" in text
+    assert "unsupported_language" in text or "rustc" in text
+    assert "language=c" in text
+    assert "gcc" in text
+    assert "UTF-8" in text
     assert "请求级加强验证" in text
     assert "httptest" in text
     assert "不要只拷" in text
@@ -482,6 +486,7 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "运行时实际数据" in followup
     assert "JDK 8" in followup
     assert "java-release: 17" in followup
+    assert "language=c" in followup
     assert "请求级加强验证" in followup
     with SessionLocal() as db:
         p = db.get(Project, project)

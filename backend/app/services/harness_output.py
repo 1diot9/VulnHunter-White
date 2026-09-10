@@ -110,6 +110,10 @@ _INTERP_RE = re.compile(
 )
 
 
+_CANNED_VERDICT_WORD_RE = re.compile(
+    r"(?i)(?:VULNERABILITY\s+CONFIRMED|\bSUCCESS\b|\bCONFIRMED\b)"
+)
+_BASH_LANGS = frozenset({"bash", "sh", "shell"})
 _OUTPUT_CALL_RE = re.compile(
     r"(?is)(?:console\.log|System\.out\.print(?:ln)?|fmt\.Print[lf]?n?|"
     r"var_dump|var_export|printf|println|print|echo|puts)\s*[\(\s]([^;\n]*)"
@@ -126,21 +130,26 @@ def harness_output_block_reason(code: str | None, *, language: str | None = None
         try:
             tree = ast.parse(text)
         except SyntaxError:
-            return _generic_block_reason(text)
+            return _generic_block_reason(text, language=lang)
         if _PythonHarnessOutput(tree).blocked():
             return HARNESS_OUTPUT_ERROR
         return None
-    return _generic_block_reason(text)
+    return _generic_block_reason(text, language=lang)
 
 
-def _generic_block_reason(text: str) -> str | None:
+def _generic_block_reason(text: str, *, language: str | None = None) -> str | None:
+    lang = (language or "").strip().lower()
     calls = list(_OUTPUT_CALL_RE.finditer(text))
-    if not calls:
-        return HARNESS_OUTPUT_ERROR
     printed = " ".join(match.group(1) or "" for match in calls)
     if _FIXED_JSON_TRUE_RE.search(printed) or _FIXED_VERDICT_STR_RE.search(printed):
         return HARNESS_OUTPUT_ERROR
     if _FAKE_EVIDENCE_RE.search(printed):
+        return HARNESS_OUTPUT_ERROR
+    if lang in _BASH_LANGS:
+        if _CANNED_VERDICT_WORD_RE.search(printed) and not _INTERP_RE.search(printed):
+            return HARNESS_OUTPUT_ERROR
+        return None
+    if not calls:
         return HARNESS_OUTPUT_ERROR
     if not _INTERP_RE.search(printed):
         return HARNESS_OUTPUT_ERROR

@@ -15,12 +15,44 @@ from .paths import data_tmp_dir
 
 logger = logging.getLogger(__name__)
 
-_JAVA_CLASS_RE = re.compile(r"\b(?:public\s+)?class\s+(\w+)")
+_JAVA_PUBLIC_CLASS_RE = re.compile(
+    r"(?:^|\n)\s*public\s+(?:final\s+|abstract\s+)*class\s+(\w+)",
+    re.MULTILINE,
+)
+_JAVA_ANY_CLASS_RE = re.compile(
+    r"(?:^|\n)\s*(?:public\s+|final\s+|abstract\s+|strictfp\s+)*class\s+(\w+)",
+    re.MULTILINE,
+)
 _JAVA_RELEASE_RE = re.compile(
     r"(?im)^\s*(?://|/\*)\s*java-release\s*:\s*(\d+)\b"
 )
 _JAVA_RELEASE_DEFAULT = 8
 _JAVA_RELEASE_MAX = 17
+_SANDBOX_LANGUAGES = "python / php / javascript / ruby / go / java / bash / c"
+_UNSUPPORTED_LANGUAGES = frozenset(
+    {
+        "rust",
+        "rs",
+        "cpp",
+        "cc",
+        "cxx",
+        "c++",
+        "csharp",
+        "cs",
+        "kotlin",
+        "kt",
+        "scala",
+        "swift",
+    }
+)
+UNSUPPORTED_LANGUAGE_ERROR = (
+    "不支持的 language：沙箱镜像不含该语言的编译器（Rust / C++ 等，没有 rustc / g++）。"
+    f"可选: {_SANDBOX_LANGUAGES}。"
+    "C 用 language=c（gcc + glibc）。"
+    "不要用另一种语言复述源码再标 harness。"
+    "静态已能证明默认可利用则 ConfirmVuln(evidence_level=static_only)；"
+    "不要据此误报，也不要反复 RunCode 探测 rustc。"
+)
 
 # Docker tmpfs defaults to noexec. Go (and any compiled harness) writes a
 # binary under /tmp or $HOME and execs it; without exec that is EACCES.
@@ -32,6 +64,7 @@ _SANDBOX_TMPFS: dict[str, str] = {
 }
 
 _GO_BUILD_AND_RUN = "go build -o /tmp/harness main.go && /tmp/harness"
+_C_BUILD_AND_RUN = "gcc -O0 -o /tmp/harness run.c && /tmp/harness"
 
 _LANG_FILES: dict[str, tuple[str, str]] = {
     "python": ("run.py", "python3 run.py"),
@@ -45,6 +78,7 @@ _LANG_FILES: dict[str, tuple[str, str]] = {
     "rb": ("run.rb", "ruby run.rb"),
     "go": ("main.go", _GO_BUILD_AND_RUN),
     "golang": ("main.go", _GO_BUILD_AND_RUN),
+    "c": ("run.c", _C_BUILD_AND_RUN),
     "bash": ("run.sh", "bash run.sh"),
     "sh": ("run.sh", "bash run.sh"),
     "shell": ("run.sh", "bash run.sh"),
@@ -131,13 +165,76 @@ def _java_release(code: str) -> int:
     return n
 
 
+def normalize_harness_newlines(code: str) -> str:
+    """Host (Windows) CRLF breaks bash in the Linux sandbox."""
+    return (code or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _strip_java_comments(code: str) -> str:
+    """Drop // and /* */ so class-name matching ignores javadoc like 'class is' / '@class'."""
+    out: list[str] = []
+    i = 0
+    n = len(code)
+    in_str = False
+    quote = ""
+    while i < n:
+        ch = code[i]
+        if in_str:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(code[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                in_str = False
+            i += 1
+            continue
+        if ch in {'"', "'"}:
+            in_str = True
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n:
+            nxt = code[i + 1]
+            if nxt == "/":
+                i += 2
+                while i < n and code[i] != "\n":
+                    i += 1
+                continue
+            if nxt == "*":
+                i += 2
+                while i + 1 < n and not (code[i] == "*" and code[i + 1] == "/"):
+                    if code[i] == "\n":
+                        out.append("\n")
+                    i += 1
+                i = min(n, i + 2)
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def java_class_name(code: str) -> str:
+    stripped = _strip_java_comments(code or "")
+    match = _JAVA_PUBLIC_CLASS_RE.search(stripped)
+    if match:
+        return match.group(1)
+    match = _JAVA_ANY_CLASS_RE.search(stripped)
+    if match:
+        return match.group(1)
+    return "Main"
+
+
 def _java_run_spec(code: str) -> tuple[str, str]:
-    match = _JAVA_CLASS_RE.search(code or "")
-    name = match.group(1) if match else "Main"
+    name = java_class_name(code)
     release = _java_release(code)
     return (
         f"{name}.java",
-        f"javac --release {release} {name}.java && java {name}",
+        (
+            f"javac --release {release} -encoding UTF-8 {name}.java"
+            f" && java -Dfile.encoding=UTF-8 {name}"
+        ),
     )
 
 
@@ -158,18 +255,25 @@ def _sandbox_environment(description: str) -> dict[str, str]:
         "GOSUMDB": "off",
         "CGO_ENABLED": "0",
         "GOTOOLCHAIN": "local",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "JAVA_TOOL_OPTIONS": "-Dfile.encoding=UTF-8",
         "VULNHUNTER_HARNESS": (description or "")[:200],
     }
 
 
 def prepare_run(language: str, code: str) -> tuple[str, str]:
     lang = (language or "python").strip().lower()
+    if lang in _UNSUPPORTED_LANGUAGES:
+        raise ValueError(UNSUPPORTED_LANGUAGE_ERROR)
     if lang in ("java",):
         return _java_run_spec(code)
     spec = _LANG_FILES.get(lang)
     if not spec:
-        supported = "python / php / javascript / ruby / go / java / bash"
-        raise ValueError(f"不支持的 language={language!r}，可选: {supported}")
+        raise ValueError(
+            f"不支持的 language={language!r}，可选: {_SANDBOX_LANGUAGES}。"
+            "静态已能证明默认可利用则 ConfirmVuln(evidence_level=static_only)；不要据此误报。"
+        )
     return spec
 
 
@@ -198,6 +302,18 @@ def _execute_harness_raw(
     description: str = "",
 ) -> dict[str, Any]:
     timeout = max(5, min(int(timeout or 60), 180))
+    code = normalize_harness_newlines(code)
+    try:
+        filename, command = prepare_run(language, code)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "sandbox": sandbox_diagnosis(),
+        }
     diagnosis = sandbox_diagnosis()
     if not diagnosis["available"]:
         return {
@@ -222,17 +338,6 @@ def _execute_harness_raw(
                 "（Windows 可用 scripts\\build-sandbox.cmd）。"
                 "不要因此判误报，改为 static_only 或继续静态审核。"
             ),
-            "stdout": "",
-            "stderr": "",
-            "exit_code": -1,
-            "sandbox": diagnosis,
-        }
-    try:
-        filename, command = prepare_run(language, code)
-    except ValueError as exc:
-        return {
-            "ok": False,
-            "error": str(exc),
             "stdout": "",
             "stderr": "",
             "exit_code": -1,
@@ -341,7 +446,7 @@ def harness_debug_plan() -> dict[str, Any]:
         "sandbox": diagnosis,
         "steps": [
             "Read 报告与源码，确认文件和代码片段真实存在",
-            "按目标语言设计 mock / harness，用 RunCode 在沙箱执行；Java 默认 JDK 8，更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17",
+            "按目标语言设计 mock / harness，用 RunCode 在沙箱执行（Python/PHP/JS/Ruby/Go/Java/Bash/C）。C 用 gcc（language=c）；无 rustc / g++，Rust/C++ 不要探测编译器，静态已能证明则 static_only。Java 默认 JDK 8 且 javac -encoding UTF-8，更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17",
             "公开入口本身吃 HTTP/请求对象时，对 src/ 该 API 做同进程请求级加强验证（httptest/进程内客户端），禁止只拷内部 sink；无请求面 API 不要包 HTTP",
             "mock 失败或沙箱不可用不要判误报；静态已能证明默认可利用则 static_only",
             "打通后先 Write 报告「### 漏洞代码」（完整文件路径 + 源码原文），再 ConfirmVuln(evidence_level=harness)；脚本写入 harness.py；stdout 必须打印运行时实际数据，禁止写死成功字段；输出默认英语、--zh 切中文；不要把同一份 mock 写进 poc.py",

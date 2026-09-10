@@ -15,6 +15,9 @@ FAILURE_COMPILE = "compile_error"
 FAILURE_RUNTIME = "runtime_error"
 FAILURE_EXIT = "nonzero_exit"
 
+# Don't AskUser-park on these: Agent should static_only, not wait on the consent page.
+_NO_ASK_FAILURES = frozenset({FAILURE_UNSUPPORTED})
+
 _JAVA_PACKAGE = re.compile(r"error:\s*package\s+([\w.]+)\s+does not exist")
 _JAVA_SYMBOL = re.compile(
     r"error:\s*cannot find symbol\s*(?:\r?\n[^\n]*symbol:\s*(?:class|variable|method)\s+(\S+))?",
@@ -32,6 +35,38 @@ _JAVA_RELEASE_HINT = re.compile(
     re.I,
 )
 _JAVA_RELEASE_RE = re.compile(r"(?im)^\s*(?://|/\*)\s*java-release\s*:\s*(\d+)\b")
+_UNSUPPORTED_LANGS = frozenset(
+    {
+        "rust",
+        "rs",
+        "cpp",
+        "cc",
+        "cxx",
+        "c++",
+        "csharp",
+        "cs",
+        "kotlin",
+        "kt",
+        "scala",
+        "swift",
+    }
+)
+_C_INCLUDE = re.compile(
+    r"fatal error:\s*([^:\s]+):\s*No such file or directory",
+    re.I,
+)
+_C_UNDEF = re.compile(r"undefined reference to [`']([^'`]+)[`']")
+_RUSTC_MISSING_RE = re.compile(
+    r"rustc(?:\s+path:\s*<none>|\s+not\s+(?:found|available)| version: unavailable)"
+    r"|cannot run the target-language harness"
+    r"|sandbox (?:has )?no rustc"
+    r"|error:\s*rustc not",
+    re.I,
+)
+_CRLF_RE = re.compile(
+    r"set: -\r|invalid (?:option|trailing option) -- \r|`\$'do\\r''`|syntax error near unexpected token `fi'",
+    re.I,
+)
 
 
 def _code_java_release(code: str) -> int:
@@ -55,9 +90,8 @@ def note_runcode_result(
     if not isinstance(result, dict) or result.get("ok") is not False:
         state["runcode_fail_streak"] = 0
         return False
-    n = int(state.get("runcode_fail_streak") or 0) + 1
-    state["runcode_fail_streak"] = n
-    state["runcode_last_failure"] = {
+    klass = str(result.get("failure_class") or "")
+    last = {
         "failure_class": result.get("failure_class"),
         "error": result.get("error"),
         "hint": result.get("hint"),
@@ -66,6 +100,12 @@ def note_runcode_result(
         "exit_code": result.get("exit_code"),
         "java_release": result.get("java_release"),
     }
+    if klass in _NO_ASK_FAILURES:
+        state["runcode_last_failure"] = last
+        return False
+    n = int(state.get("runcode_fail_streak") or 0) + 1
+    state["runcode_fail_streak"] = n
+    state["runcode_last_failure"] = last
     limit = max(1, int(threshold or 3))
     return n >= limit
 
@@ -94,7 +134,14 @@ def annotate_run_code_result(
     out["signals"] = signals
     if lang in ("java",) or _JAVA_RELEASE_RE.search(code or ""):
         out.setdefault("java_release", _code_java_release(code or ""))
-    hint = _hint_for(failure, missing=missing, language=lang, java_release=out.get("java_release"))
+    hint = _hint_for(
+        failure,
+        missing=missing,
+        language=lang,
+        java_release=out.get("java_release"),
+        signals=signals,
+        blob=blob,
+    )
     if hint:
         out["hint"] = hint
     return out
@@ -112,12 +159,19 @@ def _classify(
         return FAILURE_SANDBOX, [], ["docker_unavailable"]
     if "沙箱镜像" in error and "不在本机" in error:
         return FAILURE_IMAGE, [], ["image_missing"]
-    if "不支持的 language" in error:
+    if (
+        language in _UNSUPPORTED_LANGS
+        or "不支持的 language" in error
+        or _RUSTC_MISSING_RE.search(blob)
+        or _RUSTC_MISSING_RE.search(error or "")
+    ):
         return FAILURE_UNSUPPORTED, [], ["unsupported_language"]
     if "超时" in error or "timeout" in err_l:
         return FAILURE_TIMEOUT, [], ["timeout"]
     if "禁止只打印" in error or "必须来自运行时" in error:
         return FAILURE_INVALID, [], ["canned_output"]
+    if _looks_like_crlf(blob):
+        return FAILURE_EXIT, [], ["crlf_newlines"]
 
     missing: list[str] = []
     signals: list[str] = []
@@ -148,6 +202,12 @@ def _classify(
     for m in _JS_MODULE.finditer(blob):
         missing.append(m.group(1))
         signals.append("node_module_missing")
+    for m in _C_INCLUDE.finditer(blob):
+        missing.append(m.group(1))
+        signals.append("c_header_missing")
+    for m in _C_UNDEF.finditer(blob):
+        missing.append(m.group(1))
+        signals.append("c_undefined_ref")
 
     missing = list(dict.fromkeys(missing))
     signals = list(dict.fromkeys(signals))
@@ -156,8 +216,13 @@ def _classify(
         return FAILURE_MISSING, missing, signals or ["missing_dependency"]
     if re.search(r"\berror:\s", blob) or "javac" in blob.lower() or "go build" in blob.lower():
         extra = list(signals)
+        if "illegal unicode escape" in blob:
+            extra.append("java_unicode_escape")
+        if "should be declared in a file named" in blob:
+            extra.append("java_filename_mismatch")
         if language == "java" and _JAVA_RELEASE_HINT.search(blob + "\n" + (code or "")):
             extra.append("java_language_level")
+        extra = list(dict.fromkeys(extra))
         return FAILURE_COMPILE, missing, extra or ["compile_error"]
     if re.search(
         r"Traceback \(most recent call last\)|Exception in thread|Error:\s|panic:",
@@ -169,14 +234,30 @@ def _classify(
     return FAILURE_EXIT, missing, signals or ["run_failed"]
 
 
+def _looks_like_crlf(blob: str) -> bool:
+    if _CRLF_RE.search(blob or ""):
+        return True
+    if "run.sh:" in (blob or "") and ("\r" in blob or "unexpected token" in blob):
+        return True
+    return "invalid option -- \r" in (blob or "") or "set: -\r" in (blob or "")
+
+
 def _hint_for(
     failure: str,
     *,
     missing: list[str],
     language: str,
     java_release: Any = None,
+    signals: list[str] | None = None,
+    blob: str = "",
 ) -> str:
     miss = "、".join(missing[:6]) if missing else ""
+    sigs = set(signals or [])
+    if "crlf_newlines" in sigs or (failure == FAILURE_EXIT and _looks_like_crlf(blob)):
+        return (
+            "脚本含 Windows CRLF（\\r），Linux 沙箱里 bash 会把 `set -u` / `fi` 当成语法错误。"
+            "系统写入沙箱前会把换行归一成 LF；不要因此误报。"
+        )
     if failure == FAILURE_SANDBOX:
         return (
             "Docker 不可用，局部验证沙箱没起来。"
@@ -186,6 +267,12 @@ def _hint_for(
         return (
             "沙箱镜像不在本机。不要因此误报。"
             "静态已能证明则 static_only；否则等镜像可用后再 RunCode。"
+        )
+    if failure == FAILURE_UNSUPPORTED:
+        return (
+            "沙箱镜像没有该语言的编译器（Rust / C++ 等，没有 rustc / g++）。"
+            "C 请用 language=c（gcc）。不要用另一种语言复述源码再标 harness，也不要反复探测 rustc。"
+            "静态已能证明默认可利用则 ConfirmVuln(evidence_level=static_only)；不要据此误报。"
         )
     if failure == FAILURE_TIMEOUT:
         return "沙箱超时。缩小 harness、去掉死循环后再跑；不要因此误报。"
@@ -202,15 +289,20 @@ def _hint_for(
                 "改为 mock 该依赖，或降到抽出函数级 harness，不要为了编过而拷一整模块。"
                 "不要因此误报。"
             )
+        if language == "c" or "c_header_missing" in sigs or "c_undefined_ref" in sigs:
+            return (
+                f"gcc 缺头文件或链接符号。{extra}"
+                "沙箱只有 gcc + glibc，没有 OpenSSL 等第三方库。"
+                "抽出函数并 mock，或缺库时 static_only。不要因此误报。"
+            )
         return f"缺依赖或符号。{extra}改 mock / 内联最小替代后再跑。不要因此误报。"
     if failure == FAILURE_COMPILE:
-        if language == "java":
-            rel = java_release or 8
+        if language == "java" or "java_unicode_escape" in sigs or "java_filename_mismatch" in sigs:
+            return _java_compile_hint(java_release=java_release, signals=sigs, blob=blob)
+        if language == "c":
             return (
-                f"javac 失败（当前 java-release={rel}）。"
-                "Java harness 默认 JDK 8：不要用 var/record/text block/List.of。"
-                "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
-                "不要因此误报。"
+                "gcc 编译失败。按 stderr 修语法后再 RunCode。"
+                "沙箱只有 glibc，不要链接 OpenSSL 等第三方库。不要因此误报。"
             )
         return "编译失败。按 stderr 修语法或导入后再 RunCode。不要因此误报。"
     if failure == FAILURE_RUNTIME:
@@ -219,3 +311,32 @@ def _hint_for(
             "区分「防护生效」与「mock 写错」。不要把 mock 失败当误报。"
         )
     return "RunCode 未成功。按 failure_class / stderr 修正后重试；沙箱或 mock 问题不要误报。"
+
+
+def _java_compile_hint(*, java_release: Any, signals: set[str], blob: str) -> str:
+    text = blob or ""
+    if "java_unicode_escape" in signals or "illegal unicode escape" in text:
+        return (
+            "javac 把注释里的 \\u 也当成 Unicode 转义（后面不是 4 位十六进制会编不过）。"
+            "不要在注释里写 \\uXXXX；沙箱已用 javac -encoding UTF-8，源码直接写 UTF-8 即可。"
+            "不要因此误报。"
+        )
+    if "java_filename_mismatch" in signals or "should be declared in a file named" in text:
+        return (
+            "Java 源文件名必须与 public class 一致。"
+            "不要在注释里写 class xxx / @class（会干扰文件名）。"
+            "系统按源码里的 public class 命名。不要因此误报。"
+        )
+    rel = java_release or 8
+    if "java_language_level" in signals:
+        return (
+            f"javac 失败（当前 java-release={rel}）。"
+            "Java harness 默认 JDK 8：不要用 var/record/text block/List.of。"
+            "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
+            "不要因此误报。"
+        )
+    return (
+        f"javac 失败（当前 java-release={rel}）。按 stderr 修语法或导入。"
+        "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
+        "不要因此误报。"
+    )

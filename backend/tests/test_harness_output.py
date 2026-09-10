@@ -69,6 +69,27 @@ print(f"confirmed={ok}")
     assert harness_output_block_reason(code) is None
 
 
+def test_allows_bash_toolchain_probe_without_interpolation():
+    probe = """#!/bin/bash
+which rustc 2>/dev/null && rustc --version 2>/dev/null
+echo "---done---"
+"""
+    assert harness_output_block_reason(probe, language="bash") is None
+    rustc_check = """#!/bin/bash
+echo "Checking for rustc..."
+which rustc 2>&1 || echo "rustc: not found"
+"""
+    assert harness_output_block_reason(rustc_check, language="bash") is None
+
+
+def test_rejects_bash_canned_success():
+    assert (
+        harness_output_block_reason('echo "VULNERABILITY CONFIRMED"\n', language="bash")
+        == HARNESS_OUTPUT_ERROR
+    )
+    assert harness_output_block_reason("echo SUCCESS\n", language="bash") == HARNESS_OUTPUT_ERROR
+
+
 def test_rejects_js_canned_and_allows_variable():
     assert (
         harness_output_block_reason(

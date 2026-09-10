@@ -7,7 +7,9 @@ RUN apt-get update \
         bash \
         ca-certificates \
         default-jdk-headless \
+        gcc \
         golang-go \
+        libc6-dev \
         nodejs \
         php-cli \
         python3 \

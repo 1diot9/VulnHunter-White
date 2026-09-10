@@ -49,20 +49,24 @@ def register_run_code_tool() -> None:
         ToolSpec(
             name="RunCode",
             description=(
-                "在隔离沙箱中执行你编写的局部验证 harness（Python/PHP/JS/Ruby/Go/Java/Bash）。"
+                "在隔离沙箱中执行你编写的局部验证 harness（Python/PHP/JS/Ruby/Go/Java/Bash/C）。"
+                "C 用 language=c（gcc + glibc）。沙箱没有 rustc / g++：不要 language=rust/c++，也不要 Bash 探测 rustc；"
+                "静态已能证明则 ConfirmVuln(evidence_level=static_only)，不要据此误报。"
                 "仅局部验证模式可用。抽出目标函数、mock 依赖、用多种 payload 观察 stdout/stderr/退出码。"
                 "最终输出必须打印运行时实际数据（返回值、查询结果、命令回显、渲染结果、异常原文）；"
                 "禁止只打印固定 SUCCESS/CONFIRMED，禁止写死 success=True / {\"success\": true}，"
                 "禁止把预期回显写成字面量。判定标签可以有，但必须同时打印实际数据。"
                 "脚本输出须中英双语：默认英语，必须 --zh 切中文标签/步骤/判定；注释与 --help 仍用英语；源码/payload/回显原文不要翻译。"
-                "Java harness 默认按 JDK 8 编写（javac --release 8）；不要用 var/record/text block 等 9+ 语法。"
+                "Java harness 默认按 JDK 8 编写（javac --release 8 -encoding UTF-8）；不要用 var/record/text block 等 9+ 语法；"
+                "不要在注释里写 \\uXXXX（javac 会当 Unicode 转义）。源码可直接 UTF-8。"
                 "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"
                 "不要在本机 shell 跑 harness。用另一种语言复述源码不算动态证据。"
                 "沙箱无网、跑完即删。失败（无 Docker、缺镜像、编译错误）不要据此误报。"
-                "返回含 failure_class（sandbox_unavailable/image_missing/compile_error/"
+                "返回含 failure_class（sandbox_unavailable/image_missing/unsupported_language/compile_error/"
                 "missing_dependency/runtime_error/timeout 等）、missing（缺的包/符号）、"
                 "signals、hint：按这些字段改 harness，不要只看 error 字符串。"
-                "连续多次失败后系统会 AskUser，等待用户在「验证确认」页决定继续或改为仅静态。"
+                "unsupported_language 时按 hint 改 static_only，系统不会为此挂起「验证确认」。"
+                "其它失败连续多次后系统会 AskUser，等待用户在「验证确认」页决定继续或改为仅静态。"
                 "脚本写入 harness.py，不要把同一份 mock 写进 poc.py。"
             ),
             parameters={
@@ -78,8 +82,8 @@ def register_run_code_tool() -> None:
                     "language": {
                         "type": "string",
                         "description": (
-                            "python / php / javascript / ruby / go / java / bash，默认 python。"
-                            "java 默认 JDK 8；更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17。"
+                            "python / php / javascript / ruby / go / java / bash / c，默认 python。"
+                            "C 用 gcc。没有 rust / c++。java 默认 JDK 8 + UTF-8；更高版本须在源码顶部写 // java-release: 11 或 // java-release: 17。"
                         ),
                     },
                     "timeout": {

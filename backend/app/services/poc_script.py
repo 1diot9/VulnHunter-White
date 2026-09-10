@@ -202,6 +202,7 @@ _HARNESS_NAMES = {
     "rb": "harness.rb",
     "go": "harness.go",
     "golang": "harness.go",
+    "c": "harness.c",
     "java": "Harness.java",
     "bash": "harness.sh",
     "sh": "harness.sh",
@@ -224,6 +225,7 @@ _HARNESS_EXT_LANG = {
     ".js": "javascript",
     ".rb": "ruby",
     ".go": "go",
+    ".c": "c",
     ".java": "java",
     ".sh": "bash",
 }
@@ -254,7 +256,9 @@ def write_harness_code(
 ) -> Path:
     path = harness_path(project_id, vuln_id, language=language)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(harness_code, encoding="utf-8")
+    from .sandbox_exec import normalize_harness_newlines
+
+    path.write_text(normalize_harness_newlines(harness_code), encoding="utf-8")
     return path
 
 
