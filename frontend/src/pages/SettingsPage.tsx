@@ -155,10 +155,27 @@ const responsesEndpointHints = [
 ]
 
 type WireApi = 'chat' | 'responses' | 'anthropic'
+type EndpointWire = '' | WireApi
+
+type EndpointDraft = {
+  id: string
+  base_url: string
+  api_key: string
+  api_key_set: boolean
+  model: string
+  wire_api: EndpointWire
+  max_inflight: number
+  disabled: boolean
+}
 
 function parseWireApi(value: string | undefined | null): WireApi {
   if (value === 'anthropic' || value === 'responses') return value
   return 'chat'
+}
+
+function parseEndpointWire(value: string | undefined | null): EndpointWire {
+  if (value === 'anthropic' || value === 'responses' || value === 'chat') return value
+  return ''
 }
 
 function wireApiLabel(wire: WireApi): string {
@@ -167,20 +184,47 @@ function wireApiLabel(wire: WireApi): string {
   return 'OpenAI Chat Completions'
 }
 
+function emptyEndpoint(id: string, model = ''): EndpointDraft {
+  return {
+    id,
+    base_url: '',
+    api_key: '',
+    api_key_set: false,
+    model,
+    wire_api: '',
+    max_inflight: 6,
+    disabled: false,
+  }
+}
+
+function draftFromApi(
+  ep: {
+    id?: string
+    base_url?: string
+    api_key_set?: boolean
+    model?: string
+    wire_api?: string
+    max_inflight?: number
+    disabled?: boolean
+  },
+  index: number,
+): EndpointDraft {
+  return {
+    id: ep.id || `ep-${index + 1}`,
+    base_url: ep.base_url || '',
+    api_key: '',
+    api_key_set: !!ep.api_key_set,
+    model: ep.model || '',
+    wire_api: parseEndpointWire(ep.wire_api),
+    max_inflight: Math.max(1, ep.max_inflight || 6),
+    disabled: !!ep.disabled,
+  }
+}
+
 export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
-  const [endpoints, setEndpoints] = useState<
-    Array<{
-      id: string
-      base_url: string
-      api_key: string
-      api_key_set: boolean
-      model: string
-      max_inflight: number
-      disabled: boolean
-    }>
-  >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, model: '', max_inflight: 6, disabled: false }])
+  const [endpoints, setEndpoints] = useState<EndpointDraft[]>([emptyEndpoint('ep-1')])
   const [wireApi, setWireApi] = useState<WireApi>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
@@ -262,17 +306,7 @@ export default function SettingsPage() {
                 disabled: false,
               },
             ]
-      setEndpoints(
-        eps.map((ep, i) => ({
-          id: ep.id || `ep-${i + 1}`,
-          base_url: ep.base_url || '',
-          api_key: '',
-          api_key_set: !!ep.api_key_set,
-          model: ep.model || '',
-          max_inflight: Math.max(1, ep.max_inflight || 6),
-          disabled: !!ep.disabled,
-        })),
-      )
+      setEndpoints(eps.map((ep, i) => draftFromApi(ep, i)))
       if (!x.default_model && eps[0]?.model) {
         setDefaultModel(eps[0].model)
       }
@@ -318,7 +352,7 @@ export default function SettingsPage() {
       model?: string
       wire_api?: string
     } = {
-      wire_api: wireApi,
+      wire_api: ep?.wire_api || wireApi,
     }
     if (ep?.id) body.endpoint_id = ep.id
     if (ep?.base_url.trim()) body.base_url = ep.base_url.trim()
@@ -334,6 +368,7 @@ export default function SettingsPage() {
       base_url: string
       api_key: string
       model: string
+      wire_api: EndpointWire
       max_inflight: number
       disabled: boolean
     }>,
@@ -348,15 +383,7 @@ export default function SettingsPage() {
       while (used.has(`ep-${n}`)) n += 1
       return [
         ...prev,
-        {
-          id: `ep-${n}`,
-          base_url: '',
-          api_key: '',
-          api_key_set: false,
-          model: defaultModel.trim(),
-          max_inflight: 6,
-          disabled: false,
-        },
+        emptyEndpoint(`ep-${n}`, defaultModel.trim()),
       ]
     })
   }
@@ -565,6 +592,7 @@ export default function SettingsPage() {
           base_url: ep.base_url.trim(),
           api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
           model: ep.model.trim(),
+          wire_api: ep.wire_api,
           max_inflight: Math.max(1, ep.max_inflight || 1),
           disabled: !!ep.disabled,
         })),
@@ -585,6 +613,7 @@ export default function SettingsPage() {
             base_url: ep.base_url.trim(),
             api_key: ep.api_key.trim() ? ep.api_key.trim() : null,
             model: ep.model.trim(),
+            wire_api: ep.wire_api,
             max_inflight: Math.max(1, ep.max_inflight || 1),
             disabled: !!ep.disabled,
           })),
@@ -612,17 +641,9 @@ export default function SettingsPage() {
                 disabled: false,
               },
             ]
-      setEndpoints(
-        nextEps.map((ep, i) => ({
-          id: ep.id || `ep-${i + 1}`,
-          base_url: ep.base_url || '',
-          api_key: '',
-          api_key_set: !!ep.api_key_set,
-          model: ep.model || '',
-          max_inflight: Math.max(1, ep.max_inflight || 6),
-          disabled: !!ep.disabled,
-        })),
-      )
+      setEndpoints(nextEps.map((ep, i) => draftFromApi(ep, i)))
+      const nextProvider = next.llm_providers?.find((p) => p.id === 'default') || next.llm_providers?.[0]
+      if (nextProvider?.wire_api) setWireApi(parseWireApi(nextProvider.wire_api))
       if (next.default_model) setDefaultModel(next.default_model)
       if (Number.isFinite(next.llm_min_request_interval_sec)) {
         setMinRequestInterval(next.llm_min_request_interval_sec)
@@ -785,7 +806,7 @@ export default function SettingsPage() {
       <Card>
         <CardContent className="space-y-3 p-4">
         <div className="space-y-1.5">
-          <Label>接口协议</Label>
+          <Label>全局接口协议</Label>
           <Select
             value={wireApi}
             onValueChange={(value) => {
@@ -805,10 +826,10 @@ export default function SettingsPage() {
           </Select>
           <div className="text-xs text-slate-500">
             {wireApi === 'anthropic'
-              ? '走 POST /messages：system 独立字段，工具为 tool_use / tool_result。适用于官方 Claude 及兼容 Anthropic Messages 的中转。'
+              ? '默认走 POST /messages：system 独立字段，工具为 tool_use / tool_result。各模型商未单独指定协议时使用此项。'
               : wireApi === 'responses'
-                ? '走 POST /responses：system 进 instructions，工具为 function / function_call_output。适用于官方 OpenAI Responses 及兼容该协议的中转。检查点仍按 Chat Completions 形状保存。'
-                : '走 POST /chat/completions。适用于 OpenAI 及兼容 Chat Completions 的模型商。'}
+                ? '默认走 POST /responses：system 进 instructions，工具为 function / function_call_output。各模型商未单独指定协议时使用此项。检查点仍按 Chat Completions 形状保存。'
+                : '默认走 POST /chat/completions。各模型商未单独指定协议时使用此项。'}
           </div>
         </div>
         <div className="space-y-1.5">
@@ -823,7 +844,7 @@ export default function SettingsPage() {
             </Button>
           </div>
           <div className="text-xs text-slate-500">
-            可添加多个 Base URL 扩展并行线程；每个端点可单独指定模型。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配，同一会话粘滞到所选
+            可添加多个 Base URL 扩展并行线程；每个端点可单独指定接口协议与模型，协议留空则用上方全局协议。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配，同一会话粘滞到所选
             URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
           </div>
           <div className="flex max-w-xs items-center gap-2">
@@ -877,11 +898,40 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <EndpointHealthLine health={usageById.get(ep.id)} />
+                <div className="space-y-1">
+                  <Label className="text-xs font-normal text-muted-foreground">接口协议</Label>
+                  <Select
+                    value={ep.wire_api || '__inherit__'}
+                    onValueChange={(value) => {
+                      if (value === '__inherit__' || value == null) {
+                        updateEndpoint(ep.id, { wire_api: '' })
+                        return
+                      }
+                      if (value === 'chat' || value === 'responses' || value === 'anthropic') {
+                        updateEndpoint(ep.id, { wire_api: value })
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue>
+                        {ep.wire_api
+                          ? wireApiLabel(ep.wire_api)
+                          : `跟随全局（${wireApiLabel(wireApi)}）`}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__inherit__">跟随全局（{wireApiLabel(wireApi)}）</SelectItem>
+                      <SelectItem value="chat">OpenAI Chat Completions</SelectItem>
+                      <SelectItem value="responses">OpenAI Responses</SelectItem>
+                      <SelectItem value="anthropic">Anthropic Messages</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <Input
                   value={ep.base_url}
                   onChange={(e) => updateEndpoint(ep.id, { base_url: e.target.value })}
                   placeholder={
-                    wireApi === 'anthropic'
+                    (ep.wire_api || wireApi) === 'anthropic'
                       ? 'https://api.anthropic.com/v1'
                       : 'https://api.openai.com/v1'
                   }
@@ -1264,17 +1314,7 @@ export default function SettingsPage() {
                     onClick={() => {
                       setEndpoints((prev) => {
                         if (!prev.length) {
-                          return [
-                            {
-                              id: 'ep-1',
-                              base_url: item.endpoint,
-                              api_key: '',
-                              api_key_set: false,
-                              model: defaultModel.trim(),
-                              max_inflight: 6,
-                              disabled: false,
-                            },
-                          ]
+                          return [{ ...emptyEndpoint('ep-1', defaultModel.trim()), base_url: item.endpoint }]
                         }
                         const emptyIdx = prev.findIndex((ep) => !ep.base_url.trim())
                         const idx = emptyIdx >= 0 ? emptyIdx : 0

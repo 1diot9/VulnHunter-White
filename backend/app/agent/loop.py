@@ -64,6 +64,7 @@ from .compression import (
     attach_todo_list,
     build_compressed_messages,
     clip_messages_for_summary,
+    drop_orphan_tool_messages,
     estimate_tokens,
     format_todo_list_block,
     needs_compress,
@@ -167,7 +168,7 @@ def _sanitize_chat_messages(
         if nm.get("content") is None:
             nm["content"] = ""
         out.append(nm)
-    return out
+    return drop_orphan_tool_messages(out)
 
 
 def _reasoning_text(message: dict[str, Any]) -> str:
@@ -352,7 +353,7 @@ class AgentLoop:
             # Test / anonymous override bucket — keep injected ResolvedLlm as-is
             if handle.endpoint_id == "_anon":
                 return
-        url, key, model = llm_thread_limiter.endpoint_creds(handle.endpoint_id)
+        url, key, model, wire = llm_thread_limiter.endpoint_creds(handle.endpoint_id)
         if not url:
             # Fall back to resolved pool entry
             for ep in pool_endpoints_resolved():
@@ -370,6 +371,7 @@ class AgentLoop:
                 api_key=key or self.llm.api_key,
                 model=model,
                 max_inflight=1,
+                wire_api=wire or self.llm.wire_api,
             ),
         )
 
@@ -582,7 +584,7 @@ class AgentLoop:
     def _run_loop_inner(self) -> LoopResult:
         deadline = time.time() + max(60, self.timeout_sec)
         if self._initial_messages:
-            messages: list[dict[str, Any]] = list(self._initial_messages)
+            messages: list[dict[str, Any]] = drop_orphan_tool_messages(self._initial_messages)
         else:
             messages = [
                 {"role": "system", "content": self.system_prompt},
@@ -1146,6 +1148,7 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> tuple[bool, str, dict[str, str], dict[str, Any], Any]:
+        messages = _sanitize_chat_messages(messages, model=self.llm.model)
         anthropic = is_anthropic_wire(self.llm.wire_api)
         if anthropic:
             url = anthropic_url(self.llm.base_url)
@@ -1163,7 +1166,7 @@ class AgentLoop:
             headers = responses_headers(self.llm.api_key)
             body = build_responses_body(
                 model=self.llm.model,
-                messages=_sanitize_chat_messages(messages, model=self.llm.model),
+                messages=messages,
                 tools=tools,
                 stream=True,
                 temperature=sampling_temperature(self.llm.model, settings.temperature),
@@ -1176,7 +1179,7 @@ class AgentLoop:
         }
         body = {
             "model": self.llm.model,
-            "messages": _sanitize_chat_messages(messages, model=self.llm.model),
+            "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
             "stream": True,

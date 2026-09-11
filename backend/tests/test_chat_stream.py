@@ -356,6 +356,34 @@ def test_sanitize_chat_messages_keeps_reasoning_for_kimi_k3():
     assert original[0]["reasoning_content"] == "plan"
 
 
+def test_sanitize_chat_messages_drops_orphan_tool_result():
+    out = _sanitize_chat_messages(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "摘要"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_7482e7b76e354826a8bfb6c3",
+                "content": "stale",
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_ok",
+                        "type": "function",
+                        "function": {"name": "Read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_ok", "content": "ok"},
+        ]
+    )
+    assert [m.get("role") for m in out] == ["system", "user", "assistant", "tool"]
+    assert out[-1]["tool_call_id"] == "call_ok"
+
+
 def test_chat_omits_temperature_for_kimi_k3(tmp_env, monkeypatch):
     resp = _FakeResponse(
         lines=[
@@ -445,6 +473,46 @@ def test_chat_sends_empty_string_for_null_assistant_content(tmp_env, monkeypatch
     assert msgs[1]["content"] == ""
     assert msgs[1]["tool_calls"][0]["id"] == "call_1"
     assert msgs[2]["content"] == ""
+
+
+def test_chat_omits_orphan_tool_result(tmp_env, monkeypatch):
+    resp = _FakeResponse(
+        lines=[
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+    )
+    client = _FakeClient(resp)
+    loop = _loop(monkeypatch, client)
+    loop._chat(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "摘要"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_7482e7b76e354826a8bfb6c3",
+                "content": "stale",
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_ok",
+                        "type": "function",
+                        "function": {"name": "Read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_ok", "content": "ok"},
+        ],
+        [],
+        remaining=1800,
+    )
+    msgs = client.captured["json"]["messages"]
+    assert [m.get("role") for m in msgs] == ["system", "user", "assistant", "tool"]
+    assert msgs[-1]["tool_call_id"] == "call_ok"
+    assert "call_7482e7b76e354826a8bfb6c3" not in json.dumps(msgs)
 
 
 def test_chat_drops_stream_options_on_400(tmp_env, monkeypatch):

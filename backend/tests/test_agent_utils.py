@@ -11,10 +11,13 @@ import pytest
 
 from app.agent.compression import (
     attach_todo_list,
+    build_compressed_messages,
     clip_messages_for_summary,
+    drop_orphan_tool_messages,
     estimate_tokens,
     format_todo_list_block,
     needs_compress,
+    recent_messages_for_compress,
 )
 from app.agent.loop import (
     AgentLoop,
@@ -192,6 +195,75 @@ def test_maybe_inject_todolist_disabled(tmp_env, project, monkeypatch):
     loop.watchdog.turn_count = 50
     loop._maybe_inject_todolist(messages)
     assert all("TodoList" not in str(m.get("content") or "") for m in messages)
+
+
+def _read_call(call_id: str) -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": "Read", "arguments": '{"path":"a.py"}'},
+    }
+
+
+def test_drop_orphan_tool_messages_keeps_paired_results():
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("call_keep")]},
+        {"role": "tool", "tool_call_id": "call_keep", "content": "ok"},
+        {"role": "tool", "tool_call_id": "call_keep", "content": "dup"},
+    ]
+    out = drop_orphan_tool_messages(messages)
+    assert [m.get("role") for m in out] == ["user", "assistant", "tool"]
+    assert out[-1]["content"] == "ok"
+
+
+def test_recent_messages_for_compress_walks_back_to_assistant():
+    messages = [{"role": "user", "content": "task"}]
+    messages.append(
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("call_keep")]}
+    )
+    messages.append({"role": "tool", "tool_call_id": "call_keep", "content": "body"})
+    messages.extend({"role": "assistant", "content": f"note {i}"} for i in range(11))
+    tail = recent_messages_for_compress(messages, last_n=12)
+    assert tail[0]["role"] == "assistant"
+    assert tail[1]["role"] == "tool"
+    assert tail[1]["tool_call_id"] == "call_keep"
+
+
+def test_build_compressed_messages_drops_unpaired_leading_tool():
+    messages = [{"role": "tool", "tool_call_id": "call_orphan", "content": "stale"}]
+    messages.extend({"role": "assistant", "content": f"note {i}"} for i in range(11))
+    out = build_compressed_messages("sys", "摘要", "注入", messages)
+    assert out[0]["role"] == "system"
+    assert out[1]["role"] == "user"
+    assert all(m.get("role") != "tool" for m in out)
+    assert "call_orphan" not in str(out)
+
+
+def test_compress_walks_back_to_keep_tool_pair(tmp_env, project):
+    loop = AgentLoop(
+        project_id=project,
+        role="unconstrained_worker",
+        phase="unconstrained-worker",
+        system_prompt="sys",
+        user_prompt="task",
+        worker_id="u1",
+    )
+    messages = [{"role": "user", "content": "task"}]
+    messages.append(
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("call_keep")]}
+    )
+    messages.append({"role": "tool", "tool_call_id": "call_keep", "content": "body"})
+    messages.extend({"role": "assistant", "content": f"note {i}"} for i in range(11))
+    out = loop._compress(messages, force_summary="摘要")
+    tools = [m for m in out if m.get("role") == "tool"]
+    assert len(tools) == 1
+    assert tools[0]["tool_call_id"] == "call_keep"
+    idx = out.index(tools[0])
+    assert out[idx - 1]["role"] == "assistant"
+    assert _read_call("call_keep")["id"] in {
+        str(tc.get("id")) for tc in (out[idx - 1].get("tool_calls") or []) if isinstance(tc, dict)
+    }
 
 
 def test_compress_appends_todolist(tmp_env, project):

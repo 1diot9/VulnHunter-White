@@ -482,7 +482,63 @@ def inject_worker_prior_block(project_id: int) -> str:
 
 SUMMARY_MESSAGE_TAIL = 100
 SUMMARY_MESSAGE_MAX_CHARS = 4000
+COMPRESS_RECENT_MESSAGES = 12
 _TODO_EMPTY_PLACEHOLDER = "（空）"
+
+
+def _assistant_tool_call_ids(message: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for tc in message.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        name = str(fn.get("name") or "").strip()
+        tid = str(tc.get("id") or name or "").strip()
+        if tid:
+            ids.append(tid)
+    return ids
+
+
+def drop_orphan_tool_messages(messages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Keep tool results only when a preceding assistant message advertised that id.
+
+    Providers reject ``tool result's tool id ... not found`` if compression or
+    resume splices a ``role=tool`` row without its matching ``tool_calls`` entry.
+    """
+    advertised: set[str] = set()
+    answered: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        if role == "assistant":
+            advertised.update(_assistant_tool_call_ids(message))
+            out.append(message)
+            continue
+        if role == "tool":
+            tid = str(message.get("tool_call_id") or message.get("id") or "").strip()
+            if tid and tid in advertised and tid not in answered:
+                answered.add(tid)
+                out.append(message)
+            continue
+        out.append(message)
+    return out
+
+
+def recent_messages_for_compress(
+    messages: list[dict[str, Any]] | None,
+    last_n: int = COMPRESS_RECENT_MESSAGES,
+) -> list[dict[str, Any]]:
+    """Last N messages, expanded left so an assistant/tool group is not split."""
+    rows = [m for m in (messages or []) if isinstance(m, dict)]
+    if not rows:
+        return []
+    n = max(1, int(last_n))
+    start = max(0, len(rows) - n)
+    while start > 0 and str(rows[start].get("role") or "") == "tool":
+        start -= 1
+    return drop_orphan_tool_messages(rows[start:])
 
 
 def clip_text_for_summary(text: str, limit: int = SUMMARY_MESSAGE_MAX_CHARS) -> str:
@@ -622,15 +678,17 @@ def build_compressed_messages(
     bootstrap: str,
     recent_messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    tail = list(recent_messages[-12:])
-    return [
-        {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": (
-                "以下是上下文压缩后的摘要与当前任务注入包。请从摘要处继续，不要重复已完成工作。\n\n"
-                f"## 摘要\n{summary}\n\n## 当前注入\n{bootstrap}"
-            ),
-        },
-        *tail,
-    ]
+    tail = recent_messages_for_compress(recent_messages)
+    return drop_orphan_tool_messages(
+        [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": (
+                    "以下是上下文压缩后的摘要与当前任务注入包。请从摘要处继续，不要重复已完成工作。\n\n"
+                    f"## 摘要\n{summary}\n\n## 当前注入\n{bootstrap}"
+                ),
+            },
+            *tail,
+        ]
+    )

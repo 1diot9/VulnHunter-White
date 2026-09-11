@@ -442,6 +442,74 @@ def test_merge_providers_rejects_unknown_wire():
         )
 
 
+def test_merge_endpoints_accepts_per_endpoint_wire():
+    from app.schemas import LlmPoolEndpointIn
+    from app.services.llm_settings import merge_endpoints_update
+
+    merged = merge_endpoints_update(
+        [],
+        [
+            LlmPoolEndpointIn(
+                id="ep-1",
+                base_url="https://chat.example/v1",
+                api_key="sk-a",
+                wire_api="",
+            ),
+            LlmPoolEndpointIn(
+                id="ep-2",
+                base_url="https://ant.example/v1",
+                api_key="sk-b",
+                wire_api="messages",
+            ),
+        ],
+    )
+    assert merged[0]["wire_api"] == ""
+    assert merged[1]["wire_api"] == "anthropic"
+
+
+def test_merge_endpoints_keeps_wire_when_omitted():
+    from app.schemas import LlmPoolEndpointIn
+    from app.services.llm_settings import merge_endpoints_update
+
+    merged = merge_endpoints_update(
+        [
+            {
+                "id": "ep-1",
+                "base_url": "https://ant.example/v1",
+                "api_key": "sk-old",
+                "wire_api": "anthropic",
+            }
+        ],
+        [
+            LlmPoolEndpointIn(
+                id="ep-1",
+                base_url="https://ant.example/v1",
+                api_key=None,
+            )
+        ],
+    )
+    assert merged[0]["wire_api"] == "anthropic"
+    assert merged[0]["api_key"] == "sk-old"
+
+
+def test_merge_endpoints_rejects_unknown_wire():
+    from app.schemas import LlmPoolEndpointIn
+    from app.services.llm_settings import merge_endpoints_update
+
+    with pytest.raises(ValueError, match="wire_api"):
+        merge_endpoints_update(
+            [],
+            [
+                LlmPoolEndpointIn(
+                    id="ep-1",
+                    base_url="https://x.example/v1",
+                    api_key="sk",
+                    wire_api="grpc",
+                )
+            ],
+        )
+
+
 def test_resolve_llm_anthropic_provider(tmp_env):
     from app.models import AppSettings, SessionLocal
     from app.services.llm_settings import resolve_llm

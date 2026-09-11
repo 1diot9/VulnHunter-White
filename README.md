@@ -406,7 +406,7 @@ Windows 按窗口标题结束进程，并释放上次记录的端口（以及默
 
 不配模型就无法创建并跑审计项目。若配置了全局访问令牌（`.env` 的 `VULNHUNTER_ACCESS_TOKEN` 或设置页），打开 UI 后需先输入令牌。然后到「设置」：
 
-1. 选择接口协议：OpenAI **Chat Completions**（默认）、OpenAI **Responses** 或 **Anthropic Messages**
+1. 选择**全局接口协议**：OpenAI **Chat Completions**（默认）、OpenAI **Responses** 或 **Anthropic Messages**。每个模型商端点可单独覆盖协议，未选则跟随全局
 2. 填写 **API Base URL**、**API Key**、默认**模型**（可先点拉取模型列表再保存）
 3. 可选：GitHub PAT（私有仓、提高 GHSA / Issues 限额）
 4. 若要开 Verifier：再填 **FOFA Key**（也可用 `VULNHUNTER_FOFA_KEY`）

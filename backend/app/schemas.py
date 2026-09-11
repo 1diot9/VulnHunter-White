@@ -31,6 +31,7 @@ class LlmPoolEndpointIn(BaseModel):
     base_url: str = ""
     api_key: str | None = None
     model: str = ""
+    wire_api: str | None = None
     max_inflight: int = 6
     disabled: bool = False
 
@@ -40,6 +41,7 @@ class LlmPoolEndpointOut(BaseModel):
     base_url: str
     api_key_set: bool = False
     model: str = ""
+    wire_api: str = ""
     max_inflight: int = 6
     disabled: bool = False
 

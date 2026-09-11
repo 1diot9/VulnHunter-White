@@ -479,6 +479,7 @@ export type LlmPoolEndpoint = {
   base_url: string
   api_key_set: boolean
   model: string
+  wire_api?: string
   max_inflight: number
   disabled: boolean
 }

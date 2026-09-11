@@ -619,7 +619,7 @@ def _bind_followup_llm(llm: Any, handle: Any) -> Any:
     if handle is None or not getattr(handle, "endpoint_id", ""):
         return llm
     eid = handle.endpoint_id
-    url, key, model = llm_thread_limiter.endpoint_creds(eid)
+    url, key, model, wire = llm_thread_limiter.endpoint_creds(eid)
     if url:
         return bind_llm_to_endpoint(
             llm,
@@ -629,6 +629,7 @@ def _bind_followup_llm(llm: Any, handle: Any) -> Any:
                 api_key=key or llm.api_key,
                 model=model,
                 max_inflight=1,
+                wire_api=wire or getattr(llm, "wire_api", "") or "chat",
             ),
         )
     for ep in pool_endpoints_resolved():

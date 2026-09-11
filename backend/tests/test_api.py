@@ -207,6 +207,73 @@ def test_llm_endpoints_pool_save_and_read(tmp_env):
         assert keep.json()["llm_endpoints"][1]["max_inflight"] == 3
 
 
+def test_llm_endpoint_wire_api_override_and_inherit(tmp_env):
+    from app.main import app
+    from app.services.llm_settings import (
+        ResolvedLlm,
+        bind_llm_to_endpoint,
+        pool_endpoints_resolved,
+        resolve_probe_target,
+    )
+
+    with TestClient(app) as client:
+        upd = client.put(
+            "/api/settings",
+            json={
+                "default_model": "fallback-model",
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": "sk-a",
+                        "max_inflight": 2,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": "sk-b",
+                        "wire_api": "anthropic",
+                        "max_inflight": 2,
+                    },
+                ],
+                "llm_providers": [
+                    {
+                        "id": "default",
+                        "name": "Default",
+                        "base_url": "https://pool-a.example/v1",
+                        "wire_api": "responses",
+                        "env_key": "OPENAI_API_KEY",
+                        "api_key": "sk-a",
+                    }
+                ],
+            },
+        )
+        assert upd.status_code == 200, upd.text
+        body = upd.json()
+        assert body["llm_providers"][0]["wire_api"] == "responses"
+        assert body["llm_endpoints"][0]["wire_api"] == ""
+        assert body["llm_endpoints"][1]["wire_api"] == "anthropic"
+
+        pool = {ep.id: ep for ep in pool_endpoints_resolved()}
+        assert pool["ep-1"].wire_api == "responses"
+        assert pool["ep-2"].wire_api == "anthropic"
+
+        base = ResolvedLlm(
+            base_url="https://x",
+            wire_api="responses",
+            model="fallback-model",
+            api_key="k",
+            source="provider:default",
+        )
+        assert bind_llm_to_endpoint(base, pool["ep-2"]).wire_api == "anthropic"
+        assert bind_llm_to_endpoint(base, pool["ep-1"]).wire_api == "responses"
+
+        _url, _key, _model, wire = resolve_probe_target(endpoint_id="ep-2")
+        assert wire == "anthropic"
+        _url, _key, _model, wire = resolve_probe_target(endpoint_id="ep-1")
+        assert wire == "responses"
+
+
 def test_llm_endpoint_disabled_skips_pool(tmp_env):
     from app.main import app
     from app.services.llm_settings import pool_endpoints_resolved

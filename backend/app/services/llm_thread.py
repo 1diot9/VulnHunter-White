@@ -37,6 +37,7 @@ class _EndpointBucket:
     cap: int
     used: int = 0
     model: str = ""
+    wire_api: str = ""
 
 
 def _read_pool_from_settings() -> list[dict[str, Any]]:
@@ -51,6 +52,7 @@ def _read_pool_from_settings() -> list[dict[str, Any]]:
                     "base_url": ep.base_url,
                     "api_key": ep.api_key,
                     "model": ep.model,
+                    "wire_api": ep.wire_api,
                     "max_inflight": ep.max_inflight,
                 }
                 for ep in pool
@@ -187,6 +189,7 @@ class LlmThreadLimiter:
                             "base_url": str(getattr(ep, "base_url", "") or ""),
                             "api_key": "",
                             "model": str(getattr(ep, "model", "") or ""),
+                            "wire_api": str(getattr(ep, "wire_api", "") or ""),
                             "max_inflight": int(getattr(ep, "max_inflight", DEFAULT_LLM_THREAD_LIMIT) or DEFAULT_LLM_THREAD_LIMIT),
                             "disabled": bool(getattr(ep, "disabled", False)),
                         }
@@ -211,7 +214,8 @@ class LlmThreadLimiter:
                 key = str(item.get("api_key") or "")
                 url = str(item.get("base_url") or "")
                 model = str(item.get("model") or "").strip()
-                if not key or not url or not model:
+                wire = str(item.get("wire_api") or "").strip()
+                if not key or not url or not model or not wire:
                     try:
                         from .llm_settings import pool_endpoints_resolved
 
@@ -220,12 +224,19 @@ class LlmThreadLimiter:
                                 key = key or pe.api_key
                                 url = url or pe.base_url
                                 model = model or pe.model
+                                wire = wire or pe.wire_api
                                 break
                     except Exception:  # noqa: BLE001
                         pass
                 used = min(old_used.get(eid, 0), cap)
                 new_buckets[eid] = _EndpointBucket(
-                    id=eid, base_url=url, api_key=key, cap=cap, used=used, model=model
+                    id=eid,
+                    base_url=url,
+                    api_key=key,
+                    cap=cap,
+                    used=used,
+                    model=model,
+                    wire_api=wire,
                 )
                 new_order.append(eid)
             if not new_buckets:
@@ -300,14 +311,14 @@ class LlmThreadLimiter:
                 "endpoints": endpoints,
             }
 
-    def endpoint_creds(self, endpoint_id: str) -> tuple[str, str, str]:
-        """Return (base_url, api_key, model) for a bound endpoint."""
+    def endpoint_creds(self, endpoint_id: str) -> tuple[str, str, str, str]:
+        """Return (base_url, api_key, model, wire_api) for a bound endpoint."""
         self._ensure_loaded()
         with self._lock:
             b = self._buckets.get(endpoint_id)
             if b is None:
-                return "", "", ""
-            return b.base_url, b.api_key, b.model
+                return "", "", "", ""
+            return b.base_url, b.api_key, b.model, b.wire_api
 
     def get_endpoint(self, endpoint_id: str) -> _EndpointBucket | None:
         self._ensure_loaded()

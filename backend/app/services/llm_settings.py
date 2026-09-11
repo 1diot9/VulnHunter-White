@@ -59,6 +59,30 @@ def normalize_wire_api(value: str | None) -> str:
     return wire if wire in _WIRE else "chat"
 
 
+def parse_optional_wire_api(value: str | None) -> str | None:
+    """Empty / inherit tokens mean follow the global provider protocol."""
+    raw = (value or "").strip().lower()
+    if not raw or raw in {"inherit", "default", "global", "follow"}:
+        return None
+    wire = _WIRE_ALIASES.get(raw, raw)
+    if wire not in _WIRE:
+        raise ValueError("wire_api 须为 chat、responses 或 anthropic")
+    return wire
+
+
+def stored_endpoint_wire(item: Any) -> str:
+    raw = item.get("wire_api") if isinstance(item, dict) else getattr(item, "wire_api", None)
+    try:
+        return parse_optional_wire_api(raw) or ""
+    except ValueError:
+        return ""
+
+
+def resolve_endpoint_wire(item: Any, fallback: str | None = None) -> str:
+    stored = stored_endpoint_wire(item)
+    return stored or normalize_wire_api(fallback)
+
+
 def normalize_llm_base_url(value: str | None) -> str:
     url = (value or "").strip()
     if not url:
@@ -147,6 +171,7 @@ class PoolEndpoint:
     api_key: str
     model: str = ""
     max_inflight: int = DEFAULT_ENDPOINT_INFLIGHT
+    wire_api: str = ""
 
 
 def _parse_json(raw: str | None, default: Any) -> Any:
@@ -230,6 +255,7 @@ def _normalize_endpoint_dicts(
                 "base_url": url,
                 "api_key": key,
                 "model": model,
+                "wire_api": stored_endpoint_wire(item),
                 "max_inflight": _clamp_inflight(item.get("max_inflight")),
                 "disabled": endpoint_disabled(item),
             }
@@ -244,6 +270,7 @@ def _normalize_endpoint_dicts(
                 "base_url": "",
                 "api_key": "",
                 "model": "",
+                "wire_api": "",
                 "max_inflight": _clamp_inflight(fallback_inflight),
                 "disabled": False,
             }
@@ -254,6 +281,7 @@ def _normalize_endpoint_dicts(
             "base_url": url,
             "api_key": (fallback_key or "").strip(),
             "model": "",
+            "wire_api": "",
             "max_inflight": _clamp_inflight(fallback_inflight),
             "disabled": False,
         }
@@ -300,6 +328,7 @@ def endpoints_for_api(row: AppSettings | None) -> list[LlmPoolEndpointOut]:
             base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
             api_key_set=bool(str(ep.get("api_key") or "").strip()),
             model=str(ep.get("model") or "").strip(),
+            wire_api=stored_endpoint_wire(ep),
             max_inflight=_clamp_inflight(ep.get("max_inflight")),
             disabled=endpoint_disabled(ep),
         )
@@ -335,6 +364,9 @@ def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint
         if not url:
             continue
         key = str(ep.get("api_key") or "").strip() or pool_fallback
+        ep_wire = resolve_endpoint_wire(ep, wire)
+        if not key and ep_wire == "anthropic":
+            key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         out.append(
             PoolEndpoint(
                 id=str(ep.get("id") or ""),
@@ -342,6 +374,7 @@ def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint
                 api_key=key,
                 model=str(ep.get("model") or "").strip(),
                 max_inflight=_clamp_inflight(ep.get("max_inflight")),
+                wire_api=ep_wire,
             )
         )
     return out
@@ -371,12 +404,20 @@ def merge_endpoints_update(
         url = assert_safe_llm_base_url(item.base_url)
         if not url:
             raise ValueError(f"端点 {eid}: Base URL 不能为空")
+        if item.wire_api is None:
+            ep_wire = stored_endpoint_wire(prev)
+        else:
+            try:
+                ep_wire = parse_optional_wire_api(item.wire_api) or ""
+            except ValueError as exc:
+                raise ValueError(f"端点 {eid}: {exc}") from exc
         merged.append(
             {
                 "id": eid,
                 "base_url": url,
                 "api_key": api_key,
                 "model": (item.model or "").strip(),
+                "wire_api": ep_wire,
                 "max_inflight": _clamp_inflight(item.max_inflight),
                 "disabled": bool(item.disabled),
             }
@@ -484,6 +525,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
                         base_url=normalize_llm_base_url(str(ep.get("base_url") or "")),
                         api_key_set=bool(str(ep.get("api_key") or "").strip()),
                         model=str(ep.get("model") or "").strip(),
+                        wire_api=stored_endpoint_wire(ep),
                         max_inflight=_clamp_inflight(ep.get("max_inflight")),
                         disabled=endpoint_disabled(ep),
                     )
@@ -664,7 +706,7 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
             first = pool[0]
             return ResolvedLlm(
                 base_url=first.base_url,
-                wire_api=wire,
+                wire_api=first.wire_api or wire,
                 model=model,
                 api_key=first.api_key,
                 source=f"provider:{provider_id}" + ("+project" if project_model else ""),
@@ -691,7 +733,7 @@ def resolve_llm(role: LlmRole = "worker", *, project_id: int | None = None) -> R
         model = model or ((row.default_model if row else "") or "").strip() or "gpt-4o"
         return ResolvedLlm(
             base_url=first.base_url,
-            wire_api="chat",
+            wire_api=first.wire_api or "chat",
             model=model,
             api_key=first.api_key,
             source="default" + ("+project" if project_model else ""),
@@ -720,7 +762,7 @@ def bind_llm_to_endpoint(llm: ResolvedLlm, endpoint: PoolEndpoint) -> ResolvedLl
         model = (endpoint.model or "").strip() or llm.model
     return ResolvedLlm(
         base_url=endpoint.base_url,
-        wire_api=llm.wire_api,
+        wire_api=normalize_wire_api(endpoint.wire_api or llm.wire_api),
         model=model,
         api_key=endpoint.api_key,
         source=llm.source,
@@ -803,6 +845,9 @@ def resolve_probe_target(
             saved_key = ep_key
         if ep_model:
             saved_model = ep_model
+        ep_wire = stored_endpoint_wire(matched)
+        if ep_wire:
+            saved_wire = ep_wire
 
     wire = normalize_wire_api(wire_api) if (wire_api or "").strip() else saved_wire
     default_url = "https://api.anthropic.com/v1" if wire == "anthropic" else "https://api.openai.com/v1"
