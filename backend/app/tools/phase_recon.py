@@ -389,19 +389,29 @@ def pick_unmarked_batch(project_id: int, limit: int) -> list[str]:
     return paths[:n]
 
 
-def paths_fully_marked(project_id: int, paths: list[str]) -> bool:
+def unmarked_paths(project_id: int, paths: list[str]) -> list[str]:
+    """Return indexed paths in ``paths`` that still need MarkWeight / MarkSource / MarkSkip.
+
+    Paths with no FileWeight row are omitted: the agent cannot mark them, and they
+    must not keep the batch gate open.
+    """
     want = [normalize_weight_path(p) for p in paths if normalize_weight_path(p)]
     if not want:
-        return True
+        return []
+    leftover: list[str] = []
     with SessionLocal() as db:
         by_path = _load_weight_rows(db, project_id, want)
         for p in want:
             row = _match_weight_row(p, by_path)
             if row is None:
-                return False
+                continue
             if not row.skipped and row.weight is None:
-                return False
-    return True
+                leftover.append(row.path)
+    return leftover
+
+
+def paths_fully_marked(project_id: int, paths: list[str]) -> bool:
+    return not unmarked_paths(project_id, paths)
 
 
 def apply_recon_done(project_id: int) -> bool:

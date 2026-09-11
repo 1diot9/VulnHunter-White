@@ -2251,6 +2251,57 @@ def test_recon_docs_ready_and_mark_batch(tmp_env, project):
     assert paths_fully_marked(project, batch) is True
 
 
+def test_paths_fully_marked_ignores_missing_index_rows(tmp_env, project):
+    from app.tools.phase_recon import paths_fully_marked, unmarked_paths
+
+    build_file_index(project)
+    batch = ["no/such.file"]
+    assert unmarked_paths(project, batch) == []
+    assert paths_fully_marked(project, batch) is True
+
+
+def test_unmarked_paths_lists_remaining_indexed_files(tmp_env, project):
+    from app.tools.phase_recon import unmarked_paths
+
+    src = src_dir(project)
+    (src / "app" / "Other.java").write_text("public class Other {}\n", encoding="utf-8")
+    build_file_index(project)
+    a, b = "app/Main.java", "app/Other.java"
+    assert set(unmarked_paths(project, [a, b, "ghost.py"])) == {a, b}
+    registry.dispatch(_ctx(project, "recon_mark"), "MarkWeight", {"path": a, "weight": 10})
+    assert unmarked_paths(project, [a, b, "ghost.py"]) == [b]
+
+
+def test_recon_mark_leftover_nudge_lists_exact_unmarked_paths(tmp_env, project):
+    from app.agent.loop import AgentLoop
+    from app.tools.phase_recon import unmarked_paths
+
+    build_file_index(project)
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        row = (
+            db.query(models.FileWeight)
+            .filter(models.FileWeight.project_id == project, models.FileWeight.weight.is_(None))
+            .order_by(models.FileWeight.path)
+            .first()
+        )
+        assert row is not None
+        leftover_path = row.path
+    loop = AgentLoop(
+        project_id=project,
+        role="recon_mark",
+        phase="recon-mark",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    loop.state["mark_paths"] = [leftover_path, "ghost.py"]
+    text = loop._recon_mark_leftover_nudge()
+    assert leftover_path in text
+    assert "ghost.py" not in text
+    assert unmarked_paths(project, [leftover_path]) == [leftover_path]
+
+
 def _add_maven_source(project_id: int, rel: str = "src/main/java/im/zfile/Foo.java") -> str:
     src = src_dir(project_id)
     fp = src / rel
