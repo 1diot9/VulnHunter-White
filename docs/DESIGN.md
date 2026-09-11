@@ -61,7 +61,7 @@ VulnHunter-White 的特点：
 
 ![容器管理](../assets/1787235734952-1d7d6474-e228-4a30-857c-4d83e64b4b9d.png)
 
-设置页面：Chat Completions / Anthropic Messages、自定义挖掘提示词、日志清理等，支持设置多个服务商作为 LLM 池（当前模型商主要测试过 GLM、DeepSeek、百炼）。
+设置页面：Chat Completions / OpenAI Responses / Anthropic Messages、自定义挖掘提示词、日志清理等，支持设置多个服务商作为 LLM 池（当前模型商主要测试过 GLM、DeepSeek、百炼）。
 
 ![image-20260827160330224](../assets/image-20260827160330224.png)
 

@@ -108,12 +108,29 @@ def test_apply_disable_thinking_for_default_thinking_models():
     o3 = apply_disable_thinking({"model": "o3-mini"}, "o3-mini")
     assert o3["reasoning_effort"] == "low"
 
+    o3_resp = apply_disable_thinking({"model": "o3-mini"}, "o3-mini", responses=True)
+    assert o3_resp["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in o3_resp
+
     gpt = apply_disable_thinking({"model": "gpt-4o"}, "gpt-4o")
     assert "thinking" not in gpt
     assert "enable_thinking" not in gpt
 
     claude = apply_disable_thinking({"model": "claude-sonnet-4"}, "claude-sonnet-4", anthropic=True)
     assert "thinking" not in claude
+
+
+def test_prepare_responses_body_remaps_max_tokens():
+    from app.agent.llm_compat import prepare_responses_body
+
+    body = prepare_responses_body(
+        {"model": "gpt-5", "max_tokens": 16, "temperature": 0.2},
+        "gpt-5",
+        temperature=0.2,
+    )
+    assert "temperature" not in body
+    assert "max_tokens" not in body
+    assert body["max_output_tokens"] == 16
 
 
 def test_param_to_drop_thinking_fields():

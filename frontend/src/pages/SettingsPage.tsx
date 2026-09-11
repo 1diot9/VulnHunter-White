@@ -139,6 +139,34 @@ const anthropicEndpointHints = [
   },
 ]
 
+const responsesEndpointHints = [
+  {
+    name: 'OpenAI 官方',
+    endpoint: 'https://api.openai.com/v1',
+    models: 'gpt-5, gpt-4.1, o4-mini',
+    note: '本项目会追加 /responses。gpt-5 / o 系列会自动省略 temperature。',
+  },
+  {
+    name: 'OpenRouter',
+    endpoint: 'https://openrouter.ai/api/v1',
+    models: 'openai/gpt-5, openai/gpt-4.1',
+    note: '需该模型支持 Responses；本项目会追加 /responses。',
+  },
+]
+
+type WireApi = 'chat' | 'responses' | 'anthropic'
+
+function parseWireApi(value: string | undefined | null): WireApi {
+  if (value === 'anthropic' || value === 'responses') return value
+  return 'chat'
+}
+
+function wireApiLabel(wire: WireApi): string {
+  if (wire === 'anthropic') return 'Anthropic Messages'
+  if (wire === 'responses') return 'OpenAI Responses'
+  return 'OpenAI Chat Completions'
+}
+
 export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
@@ -153,7 +181,7 @@ export default function SettingsPage() {
       disabled: boolean
     }>
   >([{ id: 'ep-1', base_url: '', api_key: '', api_key_set: false, model: '', max_inflight: 6, disabled: false }])
-  const [wireApi, setWireApi] = useState<'chat' | 'anthropic'>('chat')
+  const [wireApi, setWireApi] = useState<WireApi>('chat')
   const [githubPat, setGithubPat] = useState('')
   const [fofaKey, setFofaKey] = useState('')
   const [fofaBaseUrl, setFofaBaseUrl] = useState('https://fofa.info')
@@ -220,7 +248,7 @@ export default function SettingsPage() {
       setS(x)
       setDefaultModel(x.default_model || '')
       const provider = x.llm_providers?.find((p) => p.id === 'default') || x.llm_providers?.[0]
-      setWireApi(provider?.wire_api === 'anthropic' ? 'anthropic' : 'chat')
+      setWireApi(parseWireApi(provider?.wire_api))
       const eps =
         x.llm_endpoints?.length > 0
           ? x.llm_endpoints
@@ -673,13 +701,24 @@ export default function SettingsPage() {
 
   if (!s) return <div className="text-slate-400">加载中…</div>
 
-  const endpointHints = wireApi === 'anthropic' ? anthropicEndpointHints : domesticEndpointHints
+  const endpointHints =
+    wireApi === 'anthropic'
+      ? anthropicEndpointHints
+      : wireApi === 'responses'
+        ? responsesEndpointHints
+        : domesticEndpointHints
   const endpointHelpTitle =
-    wireApi === 'anthropic' ? '常见 Anthropic Messages 端点' : '常见国产模型通用端点'
+    wireApi === 'anthropic'
+      ? '常见 Anthropic Messages 端点'
+      : wireApi === 'responses'
+        ? '常见 OpenAI Responses 端点'
+        : '常见国产模型通用端点'
   const endpointHelpDescription =
     wireApi === 'anthropic'
       ? '这些地址填在 API Base URL；本项目会在地址后追加 /messages。默认模型填写对应模型名或平台接入点 ID。'
-      : '这些地址填在 API Base URL；默认模型填写对应模型名或控制台里的接入点 ID。各厂商可能调整模型名，最终以官方控制台为准。'
+      : wireApi === 'responses'
+        ? '这些地址填在 API Base URL；本项目会在地址后追加 /responses。检查点仍按 Chat Completions 形状保存。'
+        : '这些地址填在 API Base URL；默认模型填写对应模型名或控制台里的接入点 ID。各厂商可能调整模型名，最终以官方控制台为准。'
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -750,30 +789,37 @@ export default function SettingsPage() {
           <Select
             value={wireApi}
             onValueChange={(value) => {
-              if (value === 'anthropic' || value === 'chat') setWireApi(value)
+              if (value === 'anthropic' || value === 'chat' || value === 'responses') {
+                setWireApi(value)
+              }
             }}
           >
             <SelectTrigger className="w-full">
-              <SelectValue>
-                {wireApi === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'}
-              </SelectValue>
+              <SelectValue>{wireApiLabel(wireApi)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="chat">OpenAI Chat Completions</SelectItem>
+              <SelectItem value="responses">OpenAI Responses</SelectItem>
               <SelectItem value="anthropic">Anthropic Messages</SelectItem>
             </SelectContent>
           </Select>
           <div className="text-xs text-slate-500">
             {wireApi === 'anthropic'
               ? '走 POST /messages：system 独立字段，工具为 tool_use / tool_result。适用于官方 Claude 及兼容 Anthropic Messages 的中转。'
-              : '走 POST /chat/completions。适用于 OpenAI 及兼容 Chat Completions 的模型商。'}
+              : wireApi === 'responses'
+                ? '走 POST /responses：system 进 instructions，工具为 function / function_call_output。适用于官方 OpenAI Responses 及兼容该协议的中转。检查点仍按 Chat Completions 形状保存。'
+                : '走 POST /chat/completions。适用于 OpenAI 及兼容 Chat Completions 的模型商。'}
           </div>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <Label>模型商池（Base URL）</Label>
             <Button type="button" variant="ghost" size="sm" onClick={() => setEndpointHelpOpen(true)}>
-              {wireApi === 'anthropic' ? 'Anthropic 端点' : '国产模型端点'}
+              {wireApi === 'anthropic'
+                ? 'Anthropic 端点'
+                : wireApi === 'responses'
+                  ? 'Responses 端点'
+                  : '国产模型端点'}
             </Button>
           </div>
           <div className="text-xs text-slate-500">
@@ -835,7 +881,9 @@ export default function SettingsPage() {
                   value={ep.base_url}
                   onChange={(e) => updateEndpoint(ep.id, { base_url: e.target.value })}
                   placeholder={
-                    wireApi === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'
+                    wireApi === 'anthropic'
+                      ? 'https://api.anthropic.com/v1'
+                      : 'https://api.openai.com/v1'
                   }
                 />
                 <div className="grid gap-2 sm:grid-cols-[1fr_minmax(8rem,1fr)_7rem]">
@@ -963,7 +1011,9 @@ export default function SettingsPage() {
               <div className="text-xs text-slate-500">
                 {wireApi === 'anthropic'
                   ? '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /messages。'
-                  : '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 chat/completions。'}
+                  : wireApi === 'responses'
+                    ? '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /responses。'
+                    : '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 chat/completions。'}
               </div>
             )}
           </div>
@@ -1052,7 +1102,7 @@ export default function SettingsPage() {
           <Input
             value={chatProxy}
             onChange={(e) => setChatProxy(e.target.value)}
-            placeholder="留空则 Chat Completions 直连"
+            placeholder="留空则模型请求直连"
           />
           <div className="text-xs text-slate-500">代理不可用时自动直连，不必先清空。</div>
         </div>

@@ -311,6 +311,56 @@ def test_connectivity_anthropic_messages(tmp_env, monkeypatch):
     assert "stream" not in payload
 
 
+def test_connectivity_responses(tmp_env, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization", "")
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong"}],
+                    }
+                ],
+            },
+        )
+
+    _patch_http(monkeypatch, handler)
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/settings/llm/test",
+            json={
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "sk-live",
+                "model": "gpt-test",
+                "wire_api": "responses",
+            },
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["reply"] == "pong"
+    assert str(seen["url"]).endswith("/responses")
+    assert seen["auth"] == "Bearer sk-live"
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    assert payload["max_output_tokens"] == 16
+    assert payload["input"][0]["role"] == "user"
+    assert "stream" not in payload
+    assert "messages" not in payload
+
+
 def test_list_models_anthropic_headers(tmp_env, monkeypatch):
     seen: dict[str, str] = {}
 
@@ -358,6 +408,27 @@ def test_merge_providers_accepts_anthropic(tmp_env):
     )
     assert merged[0]["wire_api"] == "anthropic"
     assert merged[0]["env_key"] == "ANTHROPIC_API_KEY"
+
+
+def test_merge_providers_accepts_responses(tmp_env):
+    from app.schemas import LlmProviderIn
+    from app.services.llm_settings import merge_providers_update
+
+    merged = merge_providers_update(
+        [],
+        [
+            LlmProviderIn(
+                id="default",
+                name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                wire_api="response",
+                env_key="",
+                api_key="sk-live",
+            )
+        ],
+    )
+    assert merged[0]["wire_api"] == "responses"
+    assert merged[0]["env_key"] == "OPENAI_API_KEY"
 
 
 def test_merge_providers_rejects_unknown_wire():

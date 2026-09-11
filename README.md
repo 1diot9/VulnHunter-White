@@ -85,7 +85,7 @@ VulnHunter-White 的特点：
 
 ![容器管理](assets/1787235734952-1d7d6474-e228-4a30-857c-4d83e64b4b9d.png)
 
-设置页面：Chat Completions / Anthropic Messages、自定义挖掘提示词、日志清理等，支持设置多个服务商作为LLM池（当前模型商主要测试过 GLM、DeepSeek、百炼）
+设置页面：Chat Completions / OpenAI Responses / Anthropic Messages、自定义挖掘提示词、日志清理等，支持设置多个服务商作为LLM池（当前模型商主要测试过 GLM、DeepSeek、百炼）
 
 ![image-20260827160330224](./assets/image-20260827160330224.png)
 
@@ -138,7 +138,7 @@ VulnHunter-White 的特点：
 | Node.js | **20 LTS**（最低 18） | 需能执行 `node`、`npm`；前端 Vite 6 需要较新 Node |
 | Git | 2.x | 从 GitHub 导入仓库时 `git clone --depth 1`（Windows 会带 `core.longpaths`，避免 XWiki 等深层路径 `Filename too long`）；只上传 zip 也可不装，但建议装上 |
 | 空闲端口 | **16780**、**15173** | 后端 API / 前端开发服务器；被占用时用 `--backend-port` / `--frontend-port` 换端口，或先 `stop.cmd` / `sh stop.sh` |
-| LLM 接口 | 兼容 OpenAI Chat Completions 或 Anthropic Messages | 启动后在设置页填 Base URL、API Key、模型；没有模型无法跑 Agent |
+| LLM 接口 | 兼容 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages | 启动后在设置页填 Base URL、API Key、模型；没有模型无法跑 Agent |
 
 启动前在仓库外任意终端确认：
 
@@ -406,7 +406,7 @@ Windows 按窗口标题结束进程，并释放上次记录的端口（以及默
 
 不配模型就无法创建并跑审计项目。若配置了全局访问令牌（`.env` 的 `VULNHUNTER_ACCESS_TOKEN` 或设置页），打开 UI 后需先输入令牌。然后到「设置」：
 
-1. 选择接口协议：OpenAI **Chat Completions**（默认）或 **Anthropic Messages**
+1. 选择接口协议：OpenAI **Chat Completions**（默认）、OpenAI **Responses** 或 **Anthropic Messages**
 2. 填写 **API Base URL**、**API Key**、默认**模型**（可先点拉取模型列表再保存）
 3. 可选：GitHub PAT（私有仓、提高 GHSA / Issues 限额）
 4. 若要开 Verifier：再填 **FOFA Key**（也可用 `VULNHUNTER_FOFA_KEY`）

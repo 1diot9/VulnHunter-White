@@ -46,6 +46,15 @@ from .llm_compat import (
     sampling_temperature,
     strip_reasoning_fields,
 )
+from .responses_compat import (
+    build_responses_body,
+    consume_responses_stream,
+    is_responses_wire,
+    looks_like_responses_payload,
+    responses_headers,
+    responses_to_openai,
+    responses_url,
+)
 from .chat_stream import (
     ChatStreamCancelled,
     ChatStreamProviderError,
@@ -301,9 +310,44 @@ class AgentLoop:
         else:
             self._live = live_log
 
+    def _pool_failover_enabled(self) -> bool:
+        """Whether this loop should bind/rebind across the settings-page endpoint pool.
+
+        Pipeline passes ``resolve_llm()`` into AgentLoop (``source`` is
+        ``provider:…`` / ``default``). That must still follow the pool: disable an
+        endpoint, add another, or hit 429, and the session has to switch. Only
+        test helpers that inject ``source='test'`` pin URL/key and skip failover.
+        """
+        if not self._llm_injected:
+            return True
+        src = (self.llm.source or "").strip()
+        return src.startswith("provider:") or src.startswith("default")
+
+    def _recon_mark_leftover_nudge(self) -> str:
+        """List still-unmarked paths in this 盖章 batch so the model cannot skip them."""
+        if self.phase not in ("recon-mark", "recon_mark"):
+            return ""
+        paths = [str(p) for p in (self.state.get("mark_paths") or []) if p]
+        if not paths:
+            return ""
+        from ..tools.phase_recon import unmarked_paths
+
+        leftover = unmarked_paths(self.project_id, paths)
+        if not leftover:
+            return ""
+        shown = leftover[:80]
+        extra = f"\n（另有 {len(leftover) - 80} 个未列出）" if len(leftover) > 80 else ""
+        lines = "\n".join(f"- {p}" for p in shown)
+        return (
+            f"本批仍有 {len(leftover)} 个未盖章文件，请立刻用 MarkWeight / MarkSource / MarkSkip "
+            f"处理（路径必须与下列完全一致，不要改扩展名；仅索引找不到才跳过）：\n{lines}{extra}"
+        )
+
     def _bind_slot_endpoint(self, handle: SlotHandle) -> None:
         """Apply acquired pool endpoint credentials onto self.llm."""
         self._slot_handle = handle
+        if not self._pool_failover_enabled():
+            return
         if self._llm_injected and not handle.endpoint_id.startswith("ep-"):
             # Test / anonymous override bucket — keep injected ResolvedLlm as-is
             if handle.endpoint_id == "_anon":
@@ -400,7 +444,11 @@ class AgentLoop:
         return not self._cancelled()
 
     def _acquire_llm_slot(self) -> bool:
-        prefer = self.llm.endpoint_id if (self.llm.endpoint_id and not self._llm_injected) else None
+        prefer = (
+            self.llm.endpoint_id
+            if (self.llm.endpoint_id and self._pool_failover_enabled())
+            else None
+        )
         handle = llm_thread_limiter.acquire(
             self.cancel_event,
             project_id=self.project_id,
@@ -410,7 +458,7 @@ class AgentLoop:
         )
         if handle is None:
             return False
-        if not self._llm_injected:
+        if self._pool_failover_enabled():
             self._bind_slot_endpoint(handle)
         else:
             self._slot_handle = handle
@@ -624,7 +672,7 @@ class AgentLoop:
                 eid = self.llm.endpoint_id or (self._slot_handle.endpoint_id if self._slot_handle else "")
                 llm_gate.note_error(eid, "auth", message=str(e))
                 # Try another endpoint before giving up
-                if self._slot_handle is not None and not self._llm_injected:
+                if self._slot_handle is not None and self._pool_failover_enabled():
                     rebound = llm_thread_limiter.rebind(
                         self._slot_handle,
                         cancel_event=self.cancel_event,
@@ -665,7 +713,7 @@ class AgentLoop:
                     return result
                 self._rate_limit_retries += 1
                 # Prefer immediate failover to another healthy endpoint
-                if self._slot_handle is not None and not self._llm_injected:
+                if self._slot_handle is not None and self._pool_failover_enabled():
                     rebound = llm_thread_limiter.rebind(
                         self._slot_handle,
                         cancel_event=self.cancel_event,
@@ -768,10 +816,13 @@ class AgentLoop:
                     result.ok = True
                     result.stop_reason = "stop_when"
                     return result
+                leftover = self._recon_mark_leftover_nudge()
                 nudge, kind = self.watchdog.nudge_for_text_turn()
+                if leftover:
+                    nudge = f"{leftover}\n\n{nudge}"
                 self._live.system(
                     self.project_id,
-                    self.watchdog.text_turn_log(kind),
+                    leftover.split("\n", 1)[0] if leftover else self.watchdog.text_turn_log(kind),
                     phase=self.phase,
                     role=self.role,
                 )
@@ -1011,6 +1062,17 @@ class AgentLoop:
                     result.stop_reason = "round_finished"
                 return result
 
+            leftover = self._recon_mark_leftover_nudge()
+            if leftover:
+                self._live.system(
+                    self.project_id,
+                    leftover.split("\n", 1)[0],
+                    phase=self.phase,
+                    role=self.role,
+                )
+                messages.append({"role": "user", "content": leftover})
+                self._persist(messages)
+
             # Terminal tool flags
             if self.state.get("recon_finished") or self.state.get("audit_finished") or self.state.get("review_done") or self.state.get("fix_finished") or self.state.get("round_finished") or self.state.get("index_done"):
                 # round_finished alone shouldn't end entire worker process — scheduler decides
@@ -1096,6 +1158,17 @@ class AgentLoop:
                 temperature=sampling_temperature(self.llm.model, settings.temperature),
             )
             return True, url, headers, body, consume_anthropic_stream
+        if is_responses_wire(self.llm.wire_api):
+            url = responses_url(self.llm.base_url)
+            headers = responses_headers(self.llm.api_key)
+            body = build_responses_body(
+                model=self.llm.model,
+                messages=_sanitize_chat_messages(messages, model=self.llm.model),
+                tools=tools,
+                stream=True,
+                temperature=sampling_temperature(self.llm.model, settings.temperature),
+            )
+            return False, url, headers, body, consume_responses_stream
         url = self.llm.base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.llm.api_key}",
@@ -1114,7 +1187,7 @@ class AgentLoop:
 
     def _try_rebind_endpoint(self, reason: str) -> bool:
         """Cool current endpoint already noted; switch slot to another if possible."""
-        if self._slot_handle is None or self._llm_injected:
+        if self._slot_handle is None or not self._pool_failover_enabled():
             return False
         old_id = self._slot_handle.endpoint_id
         rebound = llm_thread_limiter.rebind(
@@ -1149,6 +1222,13 @@ class AgentLoop:
         for attempt in range(max_attempts):
             if self._cancelled():
                 raise TransientError("cancelled")
+            if (
+                self._pool_failover_enabled()
+                and self._slot_handle is not None
+                and llm_thread_limiter.get_endpoint(self._slot_handle.endpoint_id) is None
+            ):
+                if self._try_rebind_endpoint("当前端点已禁用或已移出模型商池"):
+                    continue
             _anthropic, url, headers, body, consume = self._rebuild_chat_request(messages, tools)
             for drop_key in list(self.state.get("_chat_drop_keys") or []):
                 body.pop(drop_key, None)
@@ -1675,6 +1755,15 @@ class AgentLoop:
                     temperature=sampling_temperature(self.llm.model, 0.2),
                     max_tokens=1024,
                 )
+            elif is_responses_wire(self.llm.wire_api):
+                url = responses_url(self.llm.base_url)
+                headers = responses_headers(self.llm.api_key)
+                payload = build_responses_body(
+                    model=self.llm.model,
+                    messages=prompt_msgs,
+                    temperature=sampling_temperature(self.llm.model, 0.2),
+                    max_output_tokens=1024,
+                )
             else:
                 url = self.llm.base_url.rstrip("/") + "/chat/completions"
                 headers = {
@@ -1694,6 +1783,10 @@ class AgentLoop:
                 isinstance(data, dict) and data.get("type") == "message"
             ):
                 data = anthropic_message_to_openai(data if isinstance(data, dict) else {})
+            elif is_responses_wire(self.llm.wire_api) or looks_like_responses_payload(
+                data if isinstance(data, dict) else None
+            ):
+                data = responses_to_openai(data if isinstance(data, dict) else {})
             summary = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "（空摘要）"
             return self._attach_current_todos(summary)
         except Exception as e:  # noqa: BLE001

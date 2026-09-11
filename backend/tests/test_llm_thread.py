@@ -7,6 +7,7 @@ import time
 
 from app.agent.loop import AgentLoop, LoopResult
 from app.services.llm_gate import llm_gate
+from app.services.llm_settings import ResolvedLlm
 from app.services.llm_thread import (
     DEFAULT_LLM_THREAD_LIMIT,
     LlmThreadLimiter,
@@ -182,6 +183,102 @@ def test_disabled_endpoint_is_skipped_by_pool():
     for h in handles:
         lim.release(h)
     assert lim.snapshot()[0] == 0
+
+
+def test_pipeline_resolved_llm_still_binds_and_failsover_when_endpoint_disabled():
+    """resolve_llm() injected by pipeline must follow the pool (not pin like tests)."""
+    llm_thread_limiter.reset()
+    llm_thread_limiter.refresh_pool(
+        [
+            {
+                "id": "ep-1",
+                "base_url": "https://old.example/v1",
+                "api_key": "k-old",
+                "model": "old-model",
+                "max_inflight": 1,
+            },
+            {
+                "id": "ep-2",
+                "base_url": "https://new.example/v1",
+                "api_key": "k-new",
+                "model": "new-model",
+                "max_inflight": 1,
+            },
+        ]
+    )
+    loop = AgentLoop(
+        project_id=1,
+        role="recon",
+        phase="recon",
+        system_prompt="s",
+        user_prompt="u",
+        llm=ResolvedLlm(
+            base_url="https://old.example/v1",
+            wire_api="chat",
+            model="old-model",
+            api_key="k-old",
+            source="provider:default",
+            endpoint_id="ep-1",
+        ),
+    )
+    assert loop._acquire_llm_slot()
+    assert loop.llm.endpoint_id == "ep-1"
+    llm_thread_limiter.refresh_pool(
+        [
+            {
+                "id": "ep-1",
+                "base_url": "https://old.example/v1",
+                "api_key": "k-old",
+                "model": "old-model",
+                "max_inflight": 1,
+                "disabled": True,
+            },
+            {
+                "id": "ep-2",
+                "base_url": "https://new.example/v1",
+                "api_key": "k-new",
+                "model": "new-model",
+                "max_inflight": 1,
+            },
+        ]
+    )
+    assert loop._try_rebind_endpoint("端点已禁用")
+    assert loop.llm.endpoint_id == "ep-2"
+    assert loop.llm.base_url == "https://new.example/v1"
+    assert loop.llm.api_key == "k-new"
+    loop._release_llm_slot()
+    llm_thread_limiter.reset()
+
+
+def test_test_injected_llm_does_not_rebind_off_pinned_url():
+    llm_thread_limiter.reset()
+    llm_thread_limiter.refresh_pool(
+        [
+            {"id": "ep-1", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 1},
+            {"id": "ep-2", "base_url": "https://b.example/v1", "api_key": "kb", "max_inflight": 1},
+        ]
+    )
+    loop = AgentLoop(
+        project_id=1,
+        role="worker",
+        phase="worker",
+        system_prompt="s",
+        user_prompt="u",
+        llm=ResolvedLlm(
+            base_url="http://llm.test/v1",
+            wire_api="chat",
+            model="pin",
+            api_key="k",
+            source="test",
+        ),
+    )
+    assert loop._acquire_llm_slot()
+    assert loop.llm.base_url == "http://llm.test/v1"
+    llm_gate.note_error(loop._slot_handle.endpoint_id, "rate_limit", retry_after=120)
+    assert loop._try_rebind_endpoint("429 限流") is False
+    assert loop.llm.base_url == "http://llm.test/v1"
+    loop._release_llm_slot()
+    llm_thread_limiter.reset()
 
 
 def test_acquire_spreads_evenly_even_when_preferring_first():

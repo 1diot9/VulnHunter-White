@@ -1,4 +1,4 @@
-"""List remote models and ping chat / Anthropic Messages for settings UI."""
+"""List remote models and ping chat / Responses / Anthropic Messages for settings UI."""
 
 from __future__ import annotations
 
@@ -16,6 +16,14 @@ from ..agent.anthropic_compat import (
     is_anthropic_wire,
 )
 from ..agent.llm_compat import prepare_chat_body
+from ..agent.responses_compat import (
+    build_responses_body,
+    is_responses_wire,
+    looks_like_responses_payload,
+    responses_headers,
+    responses_to_openai,
+    responses_url,
+)
 from ..schemas import LlmModelListOut, LlmProbeIn, LlmTestOut
 from .http_client import chat_http_client
 from .llm_settings import resolve_probe_target
@@ -158,7 +166,13 @@ def list_models(body: LlmProbeIn) -> LlmModelListOut:
             latency_ms=latency,
             error=(
                 "未解析到模型列表，请确认该接口兼容 GET /models"
-                + ("（Anthropic Messages）" if is_anthropic_wire(wire_api) else "（OpenAI）")
+                + (
+                    "（Anthropic Messages）"
+                    if is_anthropic_wire(wire_api)
+                    else "（OpenAI Responses）"
+                    if is_responses_wire(wire_api)
+                    else "（OpenAI）"
+                )
             ),
         )
     return LlmModelListOut(ok=True, models=models, count=len(models), latency_ms=latency)
@@ -185,6 +199,14 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
         url = anthropic_url(base_url)
         payload = build_anthropic_body(model=model, messages=probe_messages, max_tokens=16)
         headers = _headers(api_key, wire_api)
+    elif is_responses_wire(wire_api):
+        url = responses_url(base_url)
+        payload = build_responses_body(
+            model=model,
+            messages=probe_messages,
+            max_output_tokens=16,
+        )
+        headers = responses_headers(api_key)
     else:
         url = base_url + "/chat/completions"
         payload = prepare_chat_body(
@@ -222,5 +244,7 @@ def test_connectivity(body: LlmProbeIn) -> LlmTestOut:
         return LlmTestOut(ok=False, model=model, latency_ms=latency, error=err)
     if is_anthropic_wire(wire_api) or data.get("type") == "message":
         data = anthropic_message_to_openai(data)
+    elif is_responses_wire(wire_api) or looks_like_responses_payload(data):
+        data = responses_to_openai(data)
     reply = _choice_text(data)
     return LlmTestOut(ok=True, model=model, latency_ms=latency, reply=reply or None)

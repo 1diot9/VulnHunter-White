@@ -28,7 +28,12 @@ _RECON_AGENT_ROLES = frozenset(
     {"recon", "recon_mark", "recon_old_vuln", "recon_old_vuln_ghsa", "recon_source_ext"}
 )
 _WIRE = frozenset({"chat", "responses", "anthropic"})
-_WIRE_ALIASES = {"messages": "anthropic", "claude": "anthropic"}
+_WIRE_ALIASES = {
+    "messages": "anthropic",
+    "claude": "anthropic",
+    "response": "responses",
+    "openai-responses": "responses",
+}
 DEFAULT_ENDPOINT_INFLIGHT = 6
 _METADATA_HOSTS = frozenset(
     {

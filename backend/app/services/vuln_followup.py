@@ -16,7 +16,14 @@ from ..agent.anthropic_compat import (
     is_anthropic_wire,
 )
 from ..agent.llm_compat import param_to_drop, prepare_chat_body, sampling_temperature
-from ..agent.checkpoint import LoopCheckpoint, load_checkpoint
+from ..agent.responses_compat import (
+    build_responses_body,
+    consume_responses_stream,
+    is_responses_wire,
+    responses_headers,
+    responses_url,
+)
+from ..agent.checkpoint import load_checkpoint
 from ..agent.chat_stream import ChatStreamError, ChatStreamProviderError, consume_chat_stream
 from ..agent.compression import estimate_tokens
 from ..config import settings
@@ -641,6 +648,16 @@ def _build_followup_request(llm: Any, messages: list[dict[str, str]], drop_keys:
             temperature=sampling_temperature(llm.model, settings.temperature),
         )
         consume = consume_anthropic_stream
+    elif is_responses_wire(llm.wire_api):
+        url = responses_url(llm.base_url)
+        headers = responses_headers(llm.api_key)
+        body = build_responses_body(
+            model=llm.model,
+            messages=list(messages),
+            stream=True,
+            temperature=sampling_temperature(llm.model, settings.temperature),
+        )
+        consume = consume_responses_stream
     else:
         url = llm.base_url.rstrip("/") + "/chat/completions"
         headers = {

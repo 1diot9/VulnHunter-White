@@ -1,4 +1,4 @@
-"""Per-model Chat Completions / Anthropic request tweaks.
+"""Per-model Chat Completions / Responses / Anthropic request tweaks.
 
 Domestic and thinking models often lock sampling or reject extra OpenAI fields.
 Profiles omit those fields up front; HTTP 400 still drops the cited parameter
@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Any
 
 _REASONING_KEYS = ("reasoning_content", "reasoning", "thinking")
-_NEVER_DROP = frozenset({"model", "messages", "tools", "stream", "tool_choice"})
+_NEVER_DROP = frozenset(
+    {"model", "messages", "input", "instructions", "tools", "stream", "tool_choice"}
+)
 _DROP_ON_400 = (
     "temperature",
     "top_p",
@@ -21,15 +23,19 @@ _DROP_ON_400 = (
     "frequency_penalty",
     "stream_options",
     "reasoning_effort",
+    "reasoning",
     "enable_thinking",
     "chat_template_kwargs",
     "thinking",
     "max_tokens",
     "max_completion_tokens",
+    "max_output_tokens",
     "parallel_tool_calls",
     "stop",
     "logit_bias",
     "tool_choice",
+    "store",
+    "include",
 )
 
 # Kimi K3 / K2.5+ lock sampling. temperature=0.2 → HTTP 400.
@@ -130,11 +136,29 @@ def prepare_chat_body(
     return body
 
 
+def prepare_responses_body(
+    body: dict[str, Any],
+    model: str | None,
+    *,
+    temperature: float | None = None,
+) -> dict[str, Any]:
+    """Apply per-model omissions / renames on an OpenAI Responses body."""
+    profile = model_profile(model)
+    if temperature is not None or profile.omit_temperature:
+        apply_temperature(body, model, temperature)
+    if "max_tokens" in body:
+        body["max_output_tokens"] = body.pop("max_tokens")
+    if "max_completion_tokens" in body:
+        body["max_output_tokens"] = body.pop("max_completion_tokens")
+    return body
+
+
 def apply_disable_thinking(
     body: dict[str, Any],
     model: str | None,
     *,
     anthropic: bool = False,
+    responses: bool = False,
 ) -> dict[str, Any]:
     """Turn off long thinking for one-shot classify/probe calls.
 
@@ -150,7 +174,10 @@ def apply_disable_thinking(
     elif _QWEN_THINKING.search(slug):
         body["enable_thinking"] = False
     elif _OPENAI_REASONING.search(slug):
-        body["reasoning_effort"] = "low"
+        if responses:
+            body["reasoning"] = {"effort": "low"}
+        else:
+            body["reasoning_effort"] = "low"
     return body
 
 

@@ -330,6 +330,14 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
         prepare_chat_body,
         sampling_temperature,
     )
+    from ..agent.responses_compat import (
+        build_responses_body,
+        is_responses_wire,
+        looks_like_responses_payload,
+        responses_headers,
+        responses_to_openai,
+        responses_url,
+    )
     from ..config import settings
     from ..services.http_client import chat_http_client, chat_http_timeout
     from ..services.llm_settings import bind_llm_to_endpoint, pool_endpoints_resolved, resolve_llm
@@ -358,6 +366,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                         llm = bind_llm_to_endpoint(llm, ep)
                         break
             anthropic = is_anthropic_wire(llm.wire_api)
+            responses = is_responses_wire(llm.wire_api)
             if anthropic:
                 url = anthropic_url(llm.base_url)
                 headers = anthropic_headers(llm.api_key)
@@ -366,6 +375,15 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     messages=list(messages),
                     temperature=sampling_temperature(llm.model, settings.temperature),
                     max_tokens=_LLM_CLASSIFY_MAX_TOKENS,
+                )
+            elif responses:
+                url = responses_url(llm.base_url)
+                headers = responses_headers(llm.api_key)
+                body = build_responses_body(
+                    model=llm.model,
+                    messages=list(messages),
+                    temperature=sampling_temperature(llm.model, settings.temperature),
+                    max_output_tokens=_LLM_CLASSIFY_MAX_TOKENS,
                 )
             else:
                 url = llm.base_url.rstrip("/") + "/chat/completions"
@@ -379,7 +397,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     "max_tokens": _LLM_CLASSIFY_MAX_TOKENS,
                 }
                 prepare_chat_body(body, llm.model, temperature=settings.temperature)
-            apply_disable_thinking(body, llm.model, anthropic=anthropic)
+            apply_disable_thinking(body, llm.model, anthropic=anthropic, responses=responses)
 
             with chat_http_client(timeout=timeout) as client:
                 # One classify round. Extra POSTs are only to drop unknown fields on HTTP 400.
@@ -406,6 +424,8 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                         return None
                     if anthropic or data.get("type") == "message":
                         data = anthropic_message_to_openai(data)
+                    elif responses or looks_like_responses_payload(data):
+                        data = responses_to_openai(data)
                     return _choice_content(data) or None
     except Exception:  # noqa: BLE001
         logger.warning("discover target-kind LLM call failed", exc_info=True)
