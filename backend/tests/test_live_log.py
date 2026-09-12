@@ -330,6 +330,69 @@ def test_subphase_sessions_are_independent(tmp_env, project, monkeypatch, tmp_pa
     assert live_log.current_session(project, "recon-mark") == 2
 
 
+def test_old_vuln_websearch_opens_new_log_session(tmp_env, project, monkeypatch, tmp_path):
+    from app.services import pipeline
+    from app.services.live_log import log_phase_of
+
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+
+    assert log_phase_of("recon-old-vuln-ghsa") == "recon-old-vuln"
+    assert log_phase_of("recon_old_vuln_ghsa") == "recon-old-vuln"
+
+    live_log.system(project, "启动 GHSA 爬虫", phase="recon-old-vuln", role="recon_old_vuln", source="crawler")
+    pipeline._start_log_session(project, "recon-old-vuln", extra="历史漏洞/爬虫落盘", role="recon_old_vuln")
+    live_log.agent(project, "crawl-agent", phase="recon-old-vuln", role="recon_old_vuln")
+    pipeline._start_log_session(project, "recon-old-vuln-ghsa", extra="历史漏洞/搜索补漏", role="recon_old_vuln_ghsa")
+    live_log.agent(project, "websearch-agent", phase="recon-old-vuln-ghsa", role="recon_old_vuln_ghsa")
+
+    assert (tmp_path / "live-events" / "recon-old-vuln" / "round-1.jsonl").exists()
+    assert (tmp_path / "live-events" / "recon-old-vuln" / "round-2.jsonl").exists()
+    assert (tmp_path / "live-events" / "recon-old-vuln" / "round-3.jsonl").exists()
+    assert not (tmp_path / "live-events" / "recon-old-vuln-ghsa").exists()
+
+    latest = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln")
+    assert latest.session == 3
+    assert latest.session_count == 3
+    assert latest.events[0].get("session_start") is True
+    assert "新开对话" in latest.events[0]["text"]
+    assert "搜索补漏" in latest.events[0]["text"]
+    assert [e["text"] for e in latest.events][-1] == "websearch-agent"
+
+    crawl_agent = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln", session=2)
+    assert "crawl-agent" in [e["text"] for e in crawl_agent.events]
+    assert "websearch-agent" not in [e["text"] for e in crawl_agent.events]
+
+    crawler = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln", session=1)
+    assert [e["text"] for e in crawler.events] == ["启动 GHSA 爬虫"]
+
+
+def test_legacy_old_vuln_ghsa_dir_still_readable(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+    legacy = tmp_path / "live-events" / "recon-old-vuln-ghsa" / "round-1.jsonl"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "kind": "agent",
+                "text": "old-websearch",
+                "phase": "recon-old-vuln-ghsa",
+                "role": "recon_old_vuln_ghsa",
+                "session": 1,
+                "seq": 0,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    page = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln")
+    assert [e["text"] for e in page.events] == ["old-websearch"]
+
+
 def test_fast_worker_logs_are_separate_from_heuristic(tmp_env, project, monkeypatch, tmp_path):
     path = tmp_path / "live.events.jsonl"
     monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)

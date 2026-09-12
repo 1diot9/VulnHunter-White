@@ -154,6 +154,7 @@ export default function ProjectDetailPage() {
   const [logSession, setLogSession] = useState<number | null>(null)
   const [displaySession, setDisplaySession] = useState(1)
   const [sessionCount, setSessionCount] = useState(1)
+  const [phaseRunning, setPhaseRunning] = useState<boolean | null>(null)
   const [actionError, setActionError] = useState('')
   const [graphOpen, setGraphOpen] = useState(false)
   const [runBusy, setRunBusy] = useState(false)
@@ -193,6 +194,7 @@ export default function ProjectDetailPage() {
     setDisplaySession(1)
     setSessionCount(1)
     setLogSession(null)
+    setPhaseRunning(null)
   }
 
   useEffect(() => {
@@ -222,6 +224,7 @@ export default function ProjectDetailPage() {
     setLogSession(null)
     setDisplaySession(1)
     setSessionCount(1)
+    setPhaseRunning(null)
     setLoadError('')
   }, [projectId])
 
@@ -806,6 +809,7 @@ export default function ProjectDetailPage() {
             atTopRef={atTopRef}
             session={displaySession}
             sessionCount={sessionCount}
+            phaseRunning={phaseRunning}
             onSessionChange={(n) => {
               followLiveRef.current = n == null || n >= sessionCountRef.current
               const next = n ?? sessionCountRef.current
@@ -886,6 +890,7 @@ export default function ProjectDetailPage() {
               session={displaySession}
               sessionCount={sessionCount}
               projectStatus={project.status}
+              onRunningChange={setPhaseRunning}
               onSent={() => {
                 followLiveRef.current = true
                 displaySessionRef.current = sessionCountRef.current
@@ -907,6 +912,7 @@ export default function ProjectDetailPage() {
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               variant="outline"
+              title="对照侦察历史漏洞是否已公开，并核对最新源码是否还存在该漏洞"
               disabled={dedupBusy || (!selectedVulnIds.length && vulns.length === 0)}
               onClick={() => {
                 const ids = selectedVulnIds.length ? selectedVulnIds : vulns.map((v) => v.id)

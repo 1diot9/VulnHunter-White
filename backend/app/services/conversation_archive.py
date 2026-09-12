@@ -64,6 +64,8 @@ def normalize_log_phase(raw: str) -> str:
         "reconsourceext": "recon-source-ext",
         "recon-old-vuln": "recon-old-vuln",
         "reconoldvuln": "recon-old-vuln",
+        "recon-old-vuln-ghsa": "recon-old-vuln",
+        "reconoldvulnghsa": "recon-old-vuln",
         "recon-mark": "recon-mark",
         "reconmark": "recon-mark",
         "code-intel": "code-intel",

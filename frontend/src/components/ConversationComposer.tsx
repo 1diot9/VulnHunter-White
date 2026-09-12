@@ -18,6 +18,7 @@ type ConversationComposerProps = {
   sessionCount: number
   projectStatus: string
   onSent?: () => void
+  onRunningChange?: (running: boolean) => void
 }
 
 function isUnconstrainedPhase(logPhase: string) {
@@ -31,6 +32,7 @@ export function ConversationComposer({
   sessionCount,
   projectStatus,
   onSent,
+  onRunningChange,
 }: ConversationComposerProps) {
   const [state, setState] = useState<ConversationState | null>(null)
   const [message, setMessage] = useState('')
@@ -57,6 +59,15 @@ export function ConversationComposer({
     const t = window.setInterval(() => void refresh(), 4000)
     return () => window.clearInterval(t)
   }, [refresh])
+
+  useEffect(() => {
+    if (state == null) return
+    onRunningChange?.(Boolean(state.running))
+  }, [state, onRunningChange])
+
+  useEffect(() => {
+    return () => onRunningChange?.(false)
+  }, [onRunningChange])
 
   async function submit(action: 'steer' | 'continue' | 'new' | 'stop' | 'start') {
     if (busy || blocked) return

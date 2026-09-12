@@ -553,10 +553,9 @@ def log_phase_of(phase: str | None) -> str | None:
         return "recon"
     if p in ("recon-source-ext", "recon_source_ext"):
         return "recon-source-ext"
-    if p in ("recon-old-vuln", "recon_old_vuln"):
+    if p in ("recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"):
+        # 爬虫落盘与 WebSearch 补漏同属「历史漏洞」Tab，共用轮次目录。
         return "recon-old-vuln"
-    if p in ("recon-old-vuln-ghsa", "recon_old_vuln_ghsa"):
-        return "recon-old-vuln-ghsa"
     if p in ("recon-mark", "recon_mark"):
         return "recon-mark"
     if p in ("code_intel", "code-intel"):
@@ -602,7 +601,8 @@ def log_phases_for_filter(phase: str | None) -> tuple[str, ...] | None:
         return CONTROL_LOG_PHASES["verifier"]
     if phase in ("attack_chain", "attack-chain"):
         return CONTROL_LOG_PHASES["attack_chain"]
-    if phase in ("recon-old-vuln", "recon_old_vuln"):
+    if phase in ("recon-old-vuln", "recon_old_vuln", "recon-old-vuln-ghsa", "recon_old_vuln_ghsa"):
+        # 仍读旧的 recon-old-vuln-ghsa/ 目录，新事件写入 recon-old-vuln/。
         return ("recon-old-vuln", "recon-old-vuln-ghsa")
     if phase == "fast":
         return ("fast-worker", "sink-triage")

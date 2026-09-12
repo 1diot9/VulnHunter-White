@@ -120,6 +120,7 @@ def test_conversation_steer_when_running(tmp_env, project):
 
 def test_normalize_log_phase_aliases():
     assert normalize_log_phase("recon-map") == "recon-map"
+    assert normalize_log_phase("recon-old-vuln-ghsa") == "recon-old-vuln"
     assert normalize_log_phase("worker") == "mine"
     assert normalize_log_phase("fast-worker") == "fast"
 

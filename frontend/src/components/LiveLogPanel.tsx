@@ -17,6 +17,8 @@ type Props = {
   session?: number
   sessionCount?: number
   onSessionChange?: (session: number | null) => void
+  /** 当前小阶段是否仍有 Agent 在跑；最新一轮仅在此时显示「运行中」。 */
+  phaseRunning?: boolean | null
 }
 
 const PHASE_LABEL: Record<string, string> = {
@@ -252,6 +254,7 @@ export default function LiveLogPanel({
   session = 1,
   sessionCount = 1,
   onSessionChange,
+  phaseRunning = null,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
@@ -376,7 +379,9 @@ export default function LiveLogPanel({
     setShowJump(false)
   }
 
-  const isLive = session >= sessionCount
+  const isLatest = session >= sessionCount
+  const isLive = isLatest && phaseRunning !== false
+  const sessionStatus = isLive ? '运行中' : isLatest ? '已结束' : '历史'
   const goSession = (n: number) => {
     if (n < 1 || n > sessionCount) return
     onSessionChange?.(n >= sessionCount ? null : n)
@@ -447,7 +452,7 @@ export default function LiveLogPanel({
                 }
               }}
             />
-            / {sessionCount} 轮{isLive ? ' · 进行中' : ' · 历史'}
+            / {sessionCount} 轮 · {sessionStatus}
           </span>
           <Button
             type="button"
