@@ -49,6 +49,8 @@ def test_checkpoint_roundtrip(tmp_env, project):
         state={"round_id": 3},
         file_path="app/Main.java",
         last_prompt_tokens=42,
+        llm_endpoint_id="ep-3",
+        llm_model="sticky-model",
     )
     save_checkpoint(cp, status="paused")
     loaded = load_checkpoint(project, run_id)
@@ -56,6 +58,8 @@ def test_checkpoint_roundtrip(tmp_env, project):
     assert loaded.messages[2]["content"] == "I was looking at login"
     assert loaded.state["round_id"] == 3
     assert loaded.file_path == "app/Main.java"
+    assert loaded.llm_endpoint_id == "ep-3"
+    assert loaded.llm_model == "sticky-model"
     pipeline._finish_phase_run(run_id, "completed")
     assert load_checkpoint(project, run_id) is None
     assert checkpoint_exists(project, run_id) is False

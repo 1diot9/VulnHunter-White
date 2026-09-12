@@ -714,6 +714,8 @@ def test_worker_prompt_requires_asset_search_fingerprints():
     assert "外带内网信息" in text
     assert "仅响应差别（内网端口探测）" in text
     assert "标题须为中文" in text
+    assert "一两句成因概要" in text
+    assert "不要展开成原理长文" in text
     advisory = Path(__file__).resolve().parents[2] / "templates" / "vuln-advisory.md"
     advisory_text = advisory.read_text(encoding="utf-8")
     assert "## Title" in advisory_text
@@ -742,6 +744,8 @@ def test_report_format_prompt_is_shared_with_generation_and_revision(tmp_env, pr
     assert "标题须为中文" in text
     assert "## 漏洞描述" in text
     assert "不要写 `## 摘要`" in text
+    assert "一两句成因概要" in text
+    assert "不要在本节展开原理长文" in text
     assert "必须为英文 GitHub Advisory 填表稿" in text
     assert "不要把中文报告粘进去" in text
     assert "VULNHUNTER_PENDING" in text

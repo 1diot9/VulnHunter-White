@@ -112,7 +112,7 @@ Worker 只有静态能力；你可能有靶场 / harness / debug MCP。**PoC 与
 | 成立性不成立、赏金禁止类型、要种文件/第二个独立漏洞才打得通、默认口令、无害/受限文件操作、不可获取且不可预测的 UUID、与 kind=old 公开洞同一入口/sink | MarkFalsePositive |
 | Worker 声称前台但实际要登录、漏洞本身仍成立 | 本轮改报告「触发条件」，Confirm 标 `backend` + `required_account`，不要硬标前台、不要为此打回 |
 | PoC 形态（CLI、写死目标、缺 `--proxy`、本机地址未强制走代理、缺 `--zh`）、缺打印、默认输出写死中文或中英混排、同链 payload 细节（编码、参数名、鉴权头）；纯库洞误把 harness 抄进 `poc.py` 或加了未使用的 `-u/--proxy` | 本轮 Write `poc.py`（或纯库洞无安装面则删掉假脚本），ConfirmVuln 传 `poc_code` |
-| 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显/外带 vs 仅探测）；间接消费型「### 触发条件」未说明上游依赖 | 本轮 Write `report.md` 后 Confirm；须 `exposure_mode=indirect_consumer` 并按约束降 CVSS/分层 |
+| 指纹占位、`lab.md` 引用、报告缺段、中文报告标题为英文、危害写过头（如 SSRF 回显/外带 vs 仅探测）；「漏洞描述」把成因写成了原理长文（应收成一两句概要）；间接消费型「### 触发条件」未说明上游依赖 | 本轮 Write `report.md` 后 Confirm；须 `exposure_mode=indirect_consumer` 并按约束降 CVSS/分层 |
 | 局部验证缺 `### 漏洞代码`（完整路径 + 源码） | 本轮 Write `report.md` / `request.http` 后 Confirm（标题改成中文） |
 | 英文 GitHub Advisory 填表稿缺段、中英混写、不能直接粘进 Description、缺 `### Vulnerable code`（完整路径 + 源码）、缺 CVSS 3.1 / 4.0 向量、`### PoC` 无 HTTP 请求包或长字段未用占位符 | 本轮 Write `advisory.md`（对齐 `templates/vuln-advisory.md`；`## Severity / CWE` 须含 CVSS 3.1 与 CVSS 4.0 向量字符串，基础分由 ConfirmVuln 按向量计算，不要手填分数；`### Vulnerable code` 须含完整相对路径与源码原文；`### PoC` 须含 `http` 请求包，长字符串用占位符）或 ConfirmVuln 传 `advisory_md` |
 | CVE JSON 待填字段、占位符未替换、描述过短、缺漏洞代码（完整路径 + 源码）、缺 HTTP/API PoC 或未写入口→sink 链路、版本/参考链接 | `ReadCveRecord` 查看字段与 `quality_issues`，`SetCveRecordField` 逐字段写入（对齐 `templates/cve.json`；`descriptions[0].value` 须为英文详述，含漏洞代码路径与原文；supportingMedia 用 HTML 且漏洞代码与 PoC 放 `<pre>`）；不要 Write 整份 `cve.json` |

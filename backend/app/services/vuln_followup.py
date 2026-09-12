@@ -706,6 +706,7 @@ def _call_reviewer_llm(project_id: int, messages: list[dict[str, str]]) -> str:
             role="reviewer",
             reason=reason,
             wait=False,
+            prefer_model=(getattr(llm, "model", None) or "").strip() or None,
         )
         if rebound is None or rebound.endpoint_id == handle.endpoint_id:
             return None

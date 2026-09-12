@@ -1,5 +1,5 @@
 #!/bin/bash
-# Docker Desktop edition entrypoint: ensure sibling sandboxes, then start API+UI.
+# Docker edition entrypoint: ensure sibling sandboxes, then start API+UI.
 set -euo pipefail
 
 echo "[VulnHunter] runtime=docker starting…"
@@ -24,12 +24,12 @@ fi
 
 if [ ! -S /var/run/docker.sock ]; then
   echo "[VulnHunter] ERROR: /var/run/docker.sock not mounted."
-  echo "  Docker Desktop must be running; compose must bind //var/run/docker.sock."
+  echo "  Bind the host Docker socket (Linux: /var/run/docker.sock; Windows Desktop: //var/run/docker.sock)."
   exit 1
 fi
 
 if ! docker version >/dev/null 2>&1; then
-  echo "[VulnHunter] ERROR: docker CLI cannot talk to the Desktop engine."
+  echo "[VulnHunter] ERROR: docker CLI cannot talk to the host engine."
   docker version || true
   exit 1
 fi
@@ -49,6 +49,7 @@ ensure_image() {
 ensure_image "vulnhunter/sandbox:latest" "/app/docker/sandbox"
 ensure_image "vulnhunter/integration-sandbox:latest" "/app/docker/integration-sandbox"
 
+export HOME="${HOME:-/data}"
 export VULNHUNTER_RUNTIME="${VULNHUNTER_RUNTIME:-docker}"
 export VULNHUNTER_HOST="${VULNHUNTER_HOST:-0.0.0.0}"
 export VULNHUNTER_PORT="${VULNHUNTER_PORT:-16788}"

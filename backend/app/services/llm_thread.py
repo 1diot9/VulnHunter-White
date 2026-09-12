@@ -2,7 +2,8 @@
 
 Each AgentLoop occupies one slot on one Base URL while it is actively running.
 Pause releases the slot so other sessions can proceed; resume re-acquires
-(sticky to the last endpoint when possible). Capacity is the sum of per-endpoint
+(preferring the same model for prefix-cache hits, then sticky to the last
+endpoint when loads are equal). Capacity is the sum of per-endpoint
 max_inflight. On 429/quota the session can rebind to another healthy endpoint
 without releasing the global wait queue.
 """
@@ -325,26 +326,34 @@ class LlmThreadLimiter:
         with self._lock:
             return self._buckets.get(endpoint_id)
 
-    def _pick_endpoint_locked(self, *, prefer: str | None = None) -> str | None:
+    def _pick_endpoint_locked(
+        self, *, prefer: str | None = None, prefer_model: str | None = None
+    ) -> str | None:
         """Pick a healthy endpoint with remaining capacity, spreading load evenly.
 
-        Chooses the lowest utilization (used/cap), then the lowest inflight count.
-        ``prefer`` is a tie-breaker only: a sticky first endpoint is not filled to
-        capacity before other pools are used. Quota / 429 / 5xx only skip an
-        endpoint while its cooldown is active; after that it re-enters the pool.
+        Same-conversation ``prefer_model`` ranks matching endpoints first so
+        prompt-prefix cache can hit; an empty endpoint model is compatible.
+        Among those, chooses the lowest utilization (used/cap), then the lowest
+        inflight count. ``prefer`` is a tie-breaker only: a sticky first endpoint
+        is not filled to capacity before other same-model pools are used. Quota /
+        429 / 5xx only skip an endpoint while its cooldown is active; after that
+        it re-enters the pool.
         """
+        want = (prefer_model or "").strip()
         now = time.time()
         best_id: str | None = None
-        best_key: tuple[float, int, int, int] | None = None
+        best_key: tuple[int, float, int, int, int] | None = None
         for idx, eid in enumerate(self._order):
             b = self._buckets[eid]
             if b.used >= b.cap:
                 continue
             if not llm_gate.is_available(eid, now=now):
                 continue
+            ep_model = (b.model or "").strip()
+            model_mismatch = 0 if (not want or not ep_model or ep_model == want) else 1
             util = b.used / b.cap
             sticky = 0 if (prefer and eid == prefer) else 1
-            key = (util, b.used, sticky, idx)
+            key = (model_mismatch, util, b.used, sticky, idx)
             if best_key is None or key < best_key:
                 best_key = key
                 best_id = eid
@@ -362,6 +371,7 @@ class LlmThreadLimiter:
         phase: str = "",
         role: str = "",
         prefer_endpoint: str | None = None,
+        prefer_model: str | None = None,
     ) -> SlotHandle | None:
         self._ensure_loaded()
         logged_wait = False
@@ -384,7 +394,13 @@ class LlmThreadLimiter:
                     used = self._total_used_locked()
                     waiting = len(self._queue)
                     at_front = bool(self._queue and self._queue[0] == ticket)
-                    pick = self._pick_endpoint_locked(prefer=prefer_endpoint) if at_front else None
+                    pick = (
+                        self._pick_endpoint_locked(
+                            prefer=prefer_endpoint, prefer_model=prefer_model
+                        )
+                        if at_front
+                        else None
+                    )
                     if at_front and pick is not None:
                         self._queue.popleft()
                         self._buckets[pick].used += 1
@@ -443,11 +459,13 @@ class LlmThreadLimiter:
         role: str = "",
         reason: str = "",
         wait: bool = True,
+        prefer_model: str | None = None,
     ) -> SlotHandle | None:
         """Move an acquired slot to another healthy endpoint. Waits if pool is cold.
 
         ``wait=False`` returns immediately when no other healthy endpoint has
         capacity (interactive callers such as vuln follow-up).
+        ``prefer_model`` ranks same-model endpoints first for prefix-cache hits.
         """
         self._ensure_loaded()
         if handle is None:
@@ -462,7 +480,7 @@ class LlmThreadLimiter:
                 if current is None:
                     # Slot already released
                     return None
-                pick = self._pick_endpoint_locked(prefer=None)
+                pick = self._pick_endpoint_locked(prefer=None, prefer_model=prefer_model)
                 if pick is not None and pick != current:
                     # Transfer occupancy
                     if current in self._buckets:
@@ -547,6 +565,7 @@ def llm_thread_slot(
     phase: str = "",
     role: str = "",
     prefer_endpoint: str | None = None,
+    prefer_model: str | None = None,
 ) -> Iterator[SlotHandle | None]:
     handle = llm_thread_limiter.acquire(
         cancel_event,
@@ -554,6 +573,7 @@ def llm_thread_slot(
         phase=phase,
         role=role,
         prefer_endpoint=prefer_endpoint,
+        prefer_model=prefer_model,
     )
     try:
         yield handle

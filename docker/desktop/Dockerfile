@@ -1,5 +1,5 @@
-# VulnHunter-White — Docker Desktop app image (multi-stage).
-# Build context = repository root.
+# VulnHunter-White — Docker edition app image (multi-stage).
+# Build context = repository root. Windows Desktop / Linux Engine.
 
 # ---- frontend ----
 FROM node:20-bookworm-slim AS frontend
@@ -29,8 +29,15 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Docker CLI only (DooD against Desktop engine).
-RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+# Docker CLI only (DooD against the host engine). amd64 / arm64.
+ARG TARGETARCH
+RUN arch="${TARGETARCH:-amd64}" \
+    && case "$arch" in \
+         amd64) docker_arch=x86_64 ;; \
+         arm64) docker_arch=aarch64 ;; \
+         *) echo "unsupported TARGETARCH=$arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-27.5.1.tgz" \
     | tar -xz -C /tmp \
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker \

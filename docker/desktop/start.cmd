@@ -22,6 +22,12 @@ if errorlevel 1 (
 )
 
 if not defined VULNHUNTER_PORT set "VULNHUNTER_PORT=16788"
+if not defined DOCKER_SOCK set "DOCKER_SOCK=//var/run/docker.sock"
+if not defined VULNHUNTER_UID set "VULNHUNTER_UID=0"
+if not defined VULNHUNTER_GID set "VULNHUNTER_GID=0"
+if not defined DOCKER_GID set "DOCKER_GID=0"
+if not defined DOCKER_SECURITY_OPT set "DOCKER_SECURITY_OPT=no-new-privileges:false"
+if not defined DOCKER_BUILDKIT set "DOCKER_BUILDKIT=1"
 set "VULNHUNTER_HOST_DATA=%DATA%"
 
 echo [VulnHunter] Docker Desktop edition

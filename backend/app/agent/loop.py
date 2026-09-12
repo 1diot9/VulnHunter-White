@@ -295,6 +295,8 @@ class AgentLoop:
         self._llm_injected = llm is not None
         self.llm = llm or resolve_llm(llm_role_for_agent(role), project_id=project_id or None)
         self._slot_handle: SlotHandle | None = None
+        self._sticky_endpoint = ""
+        self._sticky_model = ""
         self.state: dict[str, Any] = {}
         self.watchdog = AgentWatchdog(phase=phase, project_id=project_id)
         self._last_prompt_tokens = 0
@@ -359,6 +361,7 @@ class AgentLoop:
             for ep in pool_endpoints_resolved():
                 if ep.id == handle.endpoint_id:
                     self.llm = bind_llm_to_endpoint(self.llm, ep)
+                    self._remember_bound_llm(handle)
                     return
             return
         from ..services.llm_settings import PoolEndpoint
@@ -374,6 +377,20 @@ class AgentLoop:
                 wire_api=wire or self.llm.wire_api,
             ),
         )
+        self._remember_bound_llm(handle)
+
+    def _remember_bound_llm(self, handle: SlotHandle) -> None:
+        """Keep this round's model/endpoint so pause/resume and failover stay cache-friendly."""
+        self._sticky_endpoint = handle.endpoint_id or self._sticky_endpoint
+        model = (self.llm.model or "").strip()
+        if model:
+            self._sticky_model = model
+
+    def _prefer_model(self) -> str | None:
+        if not self._pool_failover_enabled():
+            return None
+        text = (self._sticky_model or "").strip()
+        return text or None
 
     @classmethod
     def from_checkpoint(
@@ -414,6 +431,8 @@ class AgentLoop:
         loop._last_prompt_tokens = cp.last_prompt_tokens
         loop._rate_limit_retries = cp.rate_limit_retries
         loop._transient_retries = cp.transient_retries
+        loop._sticky_endpoint = str(cp.llm_endpoint_id or "").strip()
+        loop._sticky_model = str(cp.llm_model or "").strip()
         return loop
 
     def _cancelled(self) -> bool:
@@ -446,17 +465,16 @@ class AgentLoop:
         return not self._cancelled()
 
     def _acquire_llm_slot(self) -> bool:
-        prefer = (
-            self.llm.endpoint_id
-            if (self.llm.endpoint_id and self._pool_failover_enabled())
-            else None
-        )
+        prefer = None
+        if self._pool_failover_enabled():
+            prefer = self._sticky_endpoint or self.llm.endpoint_id or None
         handle = llm_thread_limiter.acquire(
             self.cancel_event,
             project_id=self.project_id,
             phase=self.phase,
             role=self.role,
             prefer_endpoint=prefer,
+            prefer_model=self._prefer_model(),
         )
         if handle is None:
             return False
@@ -509,6 +527,8 @@ class AgentLoop:
                         timeout_sec=self.timeout_sec,
                         rate_limit_retries=self._rate_limit_retries,
                         transient_retries=self._transient_retries,
+                        llm_endpoint_id=self._sticky_endpoint,
+                        llm_model=self._sticky_model,
                     ),
                     status=status,
                 )
@@ -682,6 +702,7 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                         reason="401 密钥无效",
+                        prefer_model=self._prefer_model(),
                     )
                     if rebound is not None and rebound.endpoint_id != self._slot_handle.endpoint_id:
                         self._bind_slot_endpoint(rebound)
@@ -723,6 +744,7 @@ class AgentLoop:
                         phase=self.phase,
                         role=self.role,
                         reason="额度用尽" if kind == "quota" else "429 限流",
+                        prefer_model=self._prefer_model(),
                     )
                     if rebound is not None:
                         if rebound.endpoint_id != eid:
@@ -1200,6 +1222,7 @@ class AgentLoop:
             phase=self.phase,
             role=self.role,
             reason=reason,
+            prefer_model=self._prefer_model(),
         )
         if rebound is None:
             return False

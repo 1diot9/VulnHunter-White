@@ -57,6 +57,15 @@ def test_to_host_bind_path_desktop_mnt(monkeypatch):
     assert out == "/run/desktop/mnt/host/d/AI/VulnHunter/data/projects/23/src"
 
 
+def test_to_host_bind_path_linux_host_data(monkeypatch):
+    monkeypatch.setenv("VULNHUNTER_RUNTIME", "docker")
+    monkeypatch.setenv("VULNHUNTER_HOST_DATA", "/home/user/VulnHunter/data")
+    runtime.reset_runtime_cache()
+    docker_paths.reset_docker_paths()
+    out = docker_paths.to_host_bind_path("/data/tmp/sandbox/abc")
+    assert out == "/home/user/VulnHunter/data/tmp/sandbox/abc"
+
+
 def test_rewrite_loopback_url_docker(monkeypatch):
     monkeypatch.setenv("VULNHUNTER_RUNTIME", "docker")
     runtime.reset_runtime_cache()

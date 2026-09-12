@@ -32,6 +32,8 @@ class LoopCheckpoint:
     timeout_sec: int = 0
     rate_limit_retries: int = 0
     transient_retries: int = 0
+    llm_endpoint_id: str = ""
+    llm_model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +53,8 @@ class LoopCheckpoint:
             "timeout_sec": self.timeout_sec,
             "rate_limit_retries": self.rate_limit_retries,
             "transient_retries": self.transient_retries,
+            "llm_endpoint_id": self.llm_endpoint_id,
+            "llm_model": self.llm_model,
         }
 
     @classmethod
@@ -72,6 +76,8 @@ class LoopCheckpoint:
             timeout_sec=int(data.get("timeout_sec") or 0),
             rate_limit_retries=int(data.get("rate_limit_retries") or 0),
             transient_retries=int(data.get("transient_retries") or 0),
+            llm_endpoint_id=str(data.get("llm_endpoint_id") or "").strip(),
+            llm_model=str(data.get("llm_model") or "").strip(),
         )
 
 

@@ -7,5 +7,5 @@ if errorlevel 1 (
   echo [VulnHunter] compose down failed.
   exit /b 1
 )
-echo [VulnHunter] Docker Desktop edition stopped.
+echo [VulnHunter] Docker edition stopped.
 endlocal

@@ -553,15 +553,16 @@ def _default_report(
         if bypass
         else ""
     )
-    cause = (
-        f"成因概要（{vtype}）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
-        f"数据流为 {args.get('source_sink')}；说明与历史漏洞文档的关系（原 CVE/补丁与当前变体或仍可利用点）。"
-        if bypass
-        else (
-            f"成因概要（{vtype}）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
-            f"数据流为 {args.get('source_sink')}。"
+    if bypass:
+        cause = (
+            f"成因概要（{vtype}，一两句）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
+            f"数据流为 {args.get('source_sink')}。可一句带过与历史漏洞文档的关系，不要展开原理。"
         )
-    )
+    else:
+        cause = (
+            f"成因概要（{vtype}，一两句）：位于 `{args.get('file_path')}:{args.get('line_no')}`，"
+            f"数据流为 {args.get('source_sink')}。不要展开原理。"
+        )
     return f"""---
 title: {args.get('title')}
 summary: {args.get('source_sink', '')[:200]}
@@ -917,6 +918,7 @@ def register_worker_tools() -> None:
                         "type": "string",
                         "description": (
                             "中文报告。标题须为中文（YAML title 与一级标题）。"
+                            "## 漏洞描述：产品一句话 + 一两句成因概要，不要展开原理。"
                             "历史漏洞绕过须对齐 templates/vuln-report-bypass.md"
                             "（同 vuln-report.md 且 ## 漏洞技术细节 下第一节为 ### 补丁绕过简析）；"
                             "启发式/快速扫描对齐 templates/vuln-report.md。"

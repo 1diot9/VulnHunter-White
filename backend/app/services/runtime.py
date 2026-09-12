@@ -1,4 +1,4 @@
-"""Detect Docker Desktop edition runtime and related feature gates."""
+"""Detect Docker edition runtime (Desktop / Linux Engine) and related feature gates."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 @lru_cache(maxsize=1)
 def is_docker_runtime() -> bool:
-    """True when running the Docker Desktop distribution (not host start.cmd)."""
+    """True when running the Docker edition (not host start.cmd / start.sh)."""
     raw = (os.environ.get("VULNHUNTER_RUNTIME") or "").strip().lower()
     if raw in {"docker", "desktop", "1", "true", "yes"}:
         return True

@@ -1,8 +1,9 @@
-"""Rewrite container-local paths to host paths for Docker Desktop DooD binds.
+"""Rewrite container-local paths to host paths for Docker edition DooD binds.
 
-Sibling sandbox / Semgrep containers run on the Desktop engine. Bind sources must
-be paths the *engine* understands (Windows ``D:\\...\\data\\...`` or Desktop's
-``/run/desktop/mnt/host/...``), not the path inside the app container.
+Sibling sandbox / Semgrep containers run on the host engine. Bind sources must
+be paths the *engine* understands (Windows ``D:\\...\\data\\...``, Desktop's
+``/run/desktop/mnt/host/...``, or a Linux ``/home/.../data``), not the path
+inside the app container.
 """
 
 from __future__ import annotations
@@ -89,7 +90,7 @@ def host_data_root() -> str:
         else:
             logger.warning(
                 "docker host data root unknown; set VULNHUNTER_HOST_DATA "
-                "(start.cmd sets this). Sibling bind mounts may fail."
+                "(start.cmd / start.sh sets this). Sibling bind mounts may fail."
             )
         return _host_data or ""
 
@@ -110,7 +111,7 @@ def _as_posix_under_data(path: Path | str) -> str | None:
 
 
 def ensure_sandbox_bind_readable(path: Path | str) -> None:
-    """Relax modes so sandbox uid 1000 can traverse Docker Desktop bind mounts.
+    """Relax modes so sandbox uid 1000 can traverse Docker edition bind mounts.
 
     ``tempfile.TemporaryDirectory`` defaults to ``0700``. When the app runs as
     root (Docker edition), sibling containers with ``user=1000:1000`` cannot
@@ -180,7 +181,7 @@ def to_host_bind_path(path: Path | str) -> str:
 
 
 def rewrite_loopback_url(url: str, *, host: str = "host.docker.internal") -> str:
-    """Rewrite 127.0.0.1 / localhost in a URL to reach the Windows host from the container.
+    """Rewrite 127.0.0.1 / localhost in a URL to reach the host from the container.
 
     No-op outside Docker runtime, or when the hostname is already non-loopback.
     """
