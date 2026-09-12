@@ -170,6 +170,8 @@ def _classify(
         return FAILURE_TIMEOUT, [], ["timeout"]
     if "禁止只打印" in error or "必须来自运行时" in error:
         return FAILURE_INVALID, [], ["canned_output"]
+    if "逗号运算符" in error and "[en, zh]" in error:
+        return FAILURE_INVALID, [], ["js_comma_msgs"]
     if _looks_like_crlf(blob):
         return FAILURE_EXIT, [], ["crlf_newlines"]
 
@@ -277,6 +279,11 @@ def _hint_for(
     if failure == FAILURE_TIMEOUT:
         return "沙箱超时。缩小 harness、去掉死循环后再跑；不要因此误报。"
     if failure == FAILURE_INVALID:
+        if "js_comma_msgs" in sigs:
+            return (
+                "JavaScript 中英对照表必须用数组 [en, zh]，不要写成 (en, zh) 圆括号。"
+                "圆括号是逗号运算符，--zh 会打成「步 / 骤」这种单字。改成数组后再 RunCode。"
+            )
         return (
             "harness 最终输出必须打印运行时实际数据，禁止写死 SUCCESS / success=true。"
             "改打印 sink 返回值、异常原文或查询结果后再 RunCode。"

@@ -519,6 +519,25 @@ def test_run_code_rejects_canned_harness_output(tmp_env, project):
     assert out["error"] == HARNESS_OUTPUT_ERROR
 
 
+def test_run_code_rejects_js_python_tuple_msgs(tmp_env, project):
+    from app.services.harness_output import HARNESS_JS_MSGS_ERROR
+
+    _set_verify_mode(project, VERIFY_MODE_HARNESS)
+    code = """
+const MSGS = { step: ("Step:", "步骤:") };
+function sink(input) { return input; }
+const output = sink("payload");
+console.log(output);
+"""
+    out = registry.dispatch(
+        _ctx(project, "reviewer", vuln_id=1),
+        "RunCode",
+        {"code": code, "language": "javascript"},
+    )
+    assert out["ok"] is False
+    assert out["error"] == HARNESS_JS_MSGS_ERROR
+
+
 def test_confirm_coerces_dynamic_in_harness_mode(tmp_env, project):
     _set_verify_mode(project, VERIFY_MODE_HARNESS)
     out = registry.dispatch(

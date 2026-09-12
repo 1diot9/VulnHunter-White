@@ -13,6 +13,27 @@ HARNESS_OUTPUT_ERROR = (
     "禁止把预期回显写成字面量。判定标签可以有，但必须同时打印实际数据。"
 )
 
+HARNESS_JS_MSGS_ERROR = (
+    "JavaScript harness 的中英对照表必须用数组 [en, zh]，不要写成 (en, zh)。"
+    "圆括号在 JS 里是逗号运算符，只会留下中文字符串；"
+    "msg() 再按字符解构就会打成「步 / 骤」这种单字。"
+    "正确：const MSGS = { step: [\"Step:\", \"步骤:\"] }; "
+    "function msg(key, zh) { const pair = MSGS[key]; return zh ? pair[1] : pair[0]; }"
+)
+
+_JS_LANGS = frozenset({"javascript", "js", "node"})
+# Object/assignment value `( "en", "zh" )` — comma operator, not a 2-tuple.
+_JS_COMMA_I18N_PAIR_RE = re.compile(
+    r"""
+    [=:]\s*\(\s*
+    (["'`])(?:\\.|(?!\1).)*?\1
+    \s*,\s*
+    (["'`])(?:\\.|(?!\2).)*?\2
+    \s*\)
+    """,
+    re.S | re.X,
+)
+
 _VERDICT_KEYS = frozenset(
     {
         "success",
@@ -120,12 +141,24 @@ _OUTPUT_CALL_RE = re.compile(
 )
 
 
+def _js_msgs_block_reason(text: str, language: str) -> str | None:
+    """Reject JS bilingual tables copied from Python tuples (`(en, zh)` comma operator)."""
+    if language not in _JS_LANGS:
+        return None
+    if _JS_COMMA_I18N_PAIR_RE.search(text):
+        return HARNESS_JS_MSGS_ERROR
+    return None
+
+
 def harness_output_block_reason(code: str | None, *, language: str | None = None) -> str | None:
     """Return an error if the harness prints canned success instead of runtime evidence."""
     text = code or ""
     if not text.strip():
         return None
     lang = (language or "python").strip().lower()
+    js_msgs = _js_msgs_block_reason(text, lang)
+    if js_msgs:
+        return js_msgs
     if lang in {"python", "python3", "py"}:
         try:
             tree = ast.parse(text)

@@ -31,7 +31,7 @@
    - 需登录：`--cookie` / `--token`，或 `-U/--user` `-P/--password`。
    - 其它入口（path、id、filename 等）同样做成 CLI，不要写死本次样本。
 5. **打印结果**：打印 HTTP 状态、关键响应头、响应正文（过长可截断并注明）。RCE 有回显时单独打印命令输出。打出预期冲击退出码 0，否则非 0。靶场动态下 ConfirmVuln 会系统再跑一遍落盘脚本，非 0 则拒绝确认。
-6. **输出中英双语（`--zh`）**：`poc.py` / `harness.py`（及 `harness.*`、攻击链脚本）作者打印的 stdout/stderr 标签、状态、告警、成功/失败判定必须同时准备中英文。**默认英语**；传入 `--zh` 后改打中文。用一份 `(en, zh)` 对照表 + `msg(key, zh)`（或其它语言等价：扫 argv 是否含 `--zh`），禁止只写死中文，也禁止默认输出中英混排。注释、docstring、`argparse` `--help` 仍用英语。目标回显（HTTP 正文、命令输出、文件内容、异常原文）原样打印，不要翻译。
+6. **输出中英双语（`--zh`）**：`poc.py` / `harness.py`（及 `harness.*`、攻击链脚本）作者打印的 stdout/stderr 标签、状态、告警、成功/失败判定必须同时准备中英文。**默认英语**；传入 `--zh` 后改打中文。Python 用 `(en, zh)` **元组**对照表 + `msg(key, zh)`。**JavaScript 必须用数组 `[en, zh]`**：圆括号 `(en, zh)` 是逗号运算符，只会留下中文字符串；`const [en, zh_s] = MSGS[key]` 再按字符解构就会打成「步 / 骤」这种单字。PHP / Ruby 用数组，Go 用 `[2]string{en, zh}`，不要把 Python 元组语法原样粘贴。扫 argv / `process.argv` / `os.Args` 是否含 `--zh`。禁止只写死中文，也禁止默认输出中英混排。注释、docstring、`argparse` `--help` 仍用英语。目标回显（HTTP 正文、命令输出、文件内容、异常原文）原样打印，不要翻译。
 7. 不要写成 notebook 片段、伪代码，或依赖当前工作目录之外的文件。
 
 ## 推荐骨架
@@ -119,6 +119,21 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
+JavaScript harness / `harness.js` 对照表必须用**数组**，不要抄上面的 Python 元组：
+
+```javascript
+const MSGS = {
+  step: ["Step:", "步骤:"],
+  result: ["Result:", "结果:"],
+};
+const zh = process.argv.includes("--zh");
+function msg(key) {
+  const pair = MSGS[key];
+  return zh ? pair[1] : pair[0];
+}
+console.log(msg("step"), actualRuntimeValue);
+```
+
 ## 调用示例
 
 ```text
@@ -131,6 +146,7 @@ python poc.py -u https://110.238.73.241
 python poc.py -u https://real-domain.com --strict-ssl
 python harness.py
 python harness.py --zh
+node harness.js --zh
 ```
 
 ## Reviewer / Verifier
@@ -147,4 +163,4 @@ python harness.py --zh
 - **纯库洞**以 `harness.py`（`RunCode`）为局部验证证据主路径。公开入口本身吃 HTTP/请求对象时，harness 须调用 `src/` 该 API 并在同进程内发攻击请求（payload 来自请求），不要只拷内部函数；YAML/编解码等无请求面 API 不要包 HTTP。`poc.py` **仅当**安装真实包（pip/npm/maven 等）后能 `import` 公开 API 并打出冲击时才写：最小调用脚本，argparse 可用包路径/版本等参数，**不要** `-u/--url`。不要复制 harness 的内联/mock 测试。
 - 无 HTTP 面、也无法对已安装包复现：省略 `poc_code`，不要交空壳或假 HTTP CLI。
 - SubmitVuln 的 `http_request` 可写 **API 调用配方**（类/方法/参数），不必是 HTTP 报文；FOFA/X 指纹可写「不适用」。
-- harness 同样须支持 `--zh`（Python `argparse`；其它语言扫 argv / `process.argv` / `os.Args` 是否含 `--zh`）。默认英语标签，`--zh` 切中文；注释与 `--help` 仍用英语。stdout 的最终证据必须是运行时实际数据，禁止写死 `success=True` / `{"success": true}` 或只打印 `CONFIRMED`。
+- harness 同样须支持 `--zh`（Python `argparse`；其它语言扫 argv / `process.argv` / `os.Args` 是否含 `--zh`）。默认英语标签，`--zh` 切中文；注释与 `--help` 仍用英语。**JS 对照表用 `[en, zh]` 数组，禁止 `(en, zh)`（逗号运算符会丢掉英文、`--zh` 打成单字）。** stdout 的最终证据必须是运行时实际数据，禁止写死 `success=True` / `{"success": true}` 或只打印 `CONFIRMED`。

@@ -343,6 +343,9 @@ def test_poc_prompt_requires_cli_parameters():
     assert "SSRF exfil" in poc
     assert "--zh" in poc
     assert "默认英语" in poc
+    assert "[en, zh]" in poc
+    assert "逗号运算符" in poc
+    assert "harness.js" in poc
     assert "argparse" in poc
     assert "通/不通" in poc
     assert "不要写死" in poc
@@ -478,6 +481,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "完整相对路径" in text
     assert "--zh" in text
     assert "默认英语" in text
+    assert "[en, zh]" in text
+    assert "逗号运算符" in text
     assert "运行时" in text
     assert "success" in text
     assert "JDK 8" in text
@@ -496,6 +501,8 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "### 漏洞代码" in followup
     assert "完整文件路径" in followup
     assert "运行时实际数据" in followup
+    assert "[en, zh]" in followup
+    assert "逗号运算符" in followup
     assert "JDK 8" in followup
     assert "java-release: 17" in followup
     assert "language=c" in followup
@@ -512,6 +519,7 @@ def test_harness_verify_overlay_prompt(tmp_env, project):
     assert "### 漏洞代码" in overlay
     assert "--zh" in overlay
     assert "默认英语" in overlay
+    assert "[en, zh]" in overlay
     assert "运行时实际数据" in overlay
     assert "JDK 8" in overlay
     assert "java-release: 17" in overlay

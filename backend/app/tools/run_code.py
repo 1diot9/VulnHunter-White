@@ -57,6 +57,7 @@ def register_run_code_tool() -> None:
                 "禁止只打印固定 SUCCESS/CONFIRMED，禁止写死 success=True / {\"success\": true}，"
                 "禁止把预期回显写成字面量。判定标签可以有，但必须同时打印实际数据。"
                 "脚本输出须中英双语：默认英语，必须 --zh 切中文标签/步骤/判定；注释与 --help 仍用英语；源码/payload/回显原文不要翻译。"
+                "JavaScript 对照表必须用 [en, zh] 数组，禁止 (en, zh)（逗号运算符会丢掉英文，--zh 打成单字）。"
                 "Java harness 默认按 JDK 8 编写（javac --release 8 -encoding UTF-8）；不要用 var/record/text block 等 9+ 语法；"
                 "不要在注释里写 \\uXXXX（javac 会当 Unicode 转义）。源码可直接 UTF-8。"
                 "仅当目标源码需要更高版本时在文件顶部写 // java-release: 11 或 // java-release: 17。"

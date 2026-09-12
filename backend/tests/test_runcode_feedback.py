@@ -60,6 +60,20 @@ def test_annotate_canned_output():
     assert out["failure_class"] == FAILURE_INVALID
 
 
+def test_annotate_js_comma_msgs():
+    from app.services.harness_output import HARNESS_JS_MSGS_ERROR
+
+    out = annotate_run_code_result(
+        {"ok": False, "error": HARNESS_JS_MSGS_ERROR, "stdout": "", "stderr": "", "exit_code": -1},
+        language="javascript",
+        code='const MSGS = { step: ("Step:", "步骤:") };',
+    )
+    assert out["failure_class"] == FAILURE_INVALID
+    assert "js_comma_msgs" in (out.get("signals") or [])
+    assert "[en, zh]" in (out.get("hint") or "")
+    assert "逗号运算符" in (out.get("hint") or "")
+
+
 def test_note_runcode_result_does_not_park_unsupported_language():
     from app.services.runcode_feedback import FAILURE_UNSUPPORTED
 
