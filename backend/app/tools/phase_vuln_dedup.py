@@ -22,8 +22,18 @@ VERDICT_KNOWN = "known_public"
 VERDICT_UNIQUE = "unique"
 VERDICT_UNCERTAIN = "uncertain"
 VERDICTS = frozenset({VERDICT_KNOWN, VERDICT_UNIQUE, VERDICT_UNCERTAIN})
+SOURCE_PRESENT = "present"
+SOURCE_FIXED = "fixed"
+SOURCE_UNCERTAIN = "uncertain"
+SOURCE_STATUSES = frozenset({SOURCE_PRESENT, SOURCE_FIXED, SOURCE_UNCERTAIN})
+SOURCE_STATUS_LABEL = {
+    SOURCE_PRESENT: "仍存在",
+    SOURCE_FIXED: "已修复",
+    SOURCE_UNCERTAIN: "未核实",
+}
 SKIP_STATUSES = frozenset({"merged"})
 FP_KIND_KNOWN_PUBLIC = "known_public"
+FP_KIND_SOURCE_FIXED = "source_fixed"
 
 _DEDUP_STATUSES = (
     "pending_review",
@@ -142,6 +152,63 @@ def recent_old_vulns(project_id: int, *, limit: int = 20) -> list[dict[str, Any]
     return out
 
 
+def source_snapshot(project_id: int) -> dict[str, Any]:
+    from ..models import Project
+    from ..services.ingest import _git_head_sha
+    from ..services.paths import src_dir
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        source_type = (getattr(proj, "source_type", None) or "").strip() if proj else ""
+        source_url = (getattr(proj, "source_url", None) or "").strip() if proj else ""
+        sync_error = (getattr(proj, "source_sync_error", None) or "").strip() if proj else ""
+        sync_notice = (getattr(proj, "source_sync_notice", None) or "").strip() if proj else ""
+    head = ""
+    src = src_dir(project_id)
+    try:
+        if (src / ".git").is_dir():
+            head = _git_head_sha(src)
+    except Exception:  # noqa: BLE001
+        head = ""
+    return {
+        "source_type": source_type or "zip",
+        "source_url": source_url,
+        "head": head,
+        "head_short": head[:7] if head else "",
+        "sync_error": sync_error,
+        "sync_notice": sync_notice,
+    }
+
+
+def format_source_note(project_id: int, *, attempted_sync: bool = False) -> str:
+    snap = source_snapshot(project_id)
+    kind = snap["source_type"]
+    head = snap["head_short"]
+    head_bit = f"当前 src/ 提交 `{head}`。" if head else "当前 src/ 没有可读的 git HEAD。"
+    if kind == "github":
+        if attempted_sync:
+            err = snap["sync_error"]
+            notice = snap["sync_notice"]
+            if err:
+                sync_bit = f"已尝试同步上游但失败（{err}），仍用当前快照。"
+            elif notice:
+                sync_bit = notice
+            else:
+                sync_bit = "已检查上游，无新提交或无需更新。"
+        else:
+            sync_bit = "项目审计进行中，未拉取上游以免打断挖掘；请对照当前 src/。"
+        return f"GitHub 项目。{head_bit}{sync_bit} 以该快照判断漏洞是否还在。"
+    return f"zip 项目无上游。{head_bit}请对照当前导入的 src/ 判断漏洞是否还在。"
+
+
+def _dedup_fp_kind(verdict: str, source_status: str) -> str | None:
+    if source_status == SOURCE_FIXED:
+        return FP_KIND_SOURCE_FIXED
+    if verdict == VERDICT_KNOWN:
+        return FP_KIND_KNOWN_PUBLIC
+    return None
+
+
 def path_hints_for_catalog(project_id: int, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from ..services.known_public import find_known_public_matches
 
@@ -164,12 +231,18 @@ def write_report(project_id: int, results: list[dict[str, Any]], *, notes: str =
     known = [r for r in results if r.get("verdict") == VERDICT_KNOWN]
     unique = [r for r in results if r.get("verdict") == VERDICT_UNIQUE]
     uncertain = [r for r in results if r.get("verdict") == VERDICT_UNCERTAIN]
+    still = [r for r in results if r.get("source_status") == SOURCE_PRESENT]
+    gone = [r for r in results if r.get("source_status") == SOURCE_FIXED]
+    source_unknown = [r for r in results if r.get("source_status") == SOURCE_UNCERTAIN]
     lines = [
         "# 产出漏洞去重",
         "",
         f"- 已公开同类：{len(known)}",
         f"- 未覆盖新链：{len(unique)}",
-        f"- 证据不足：{len(uncertain)}",
+        f"- 公开对比证据不足：{len(uncertain)}",
+        f"- 最新代码仍存在：{len(still)}",
+        f"- 最新代码已修复：{len(gone)}",
+        f"- 源码未核实：{len(source_unknown)}",
         "",
     ]
     if notes.strip():
@@ -178,16 +251,17 @@ def write_report(project_id: int, results: list[dict[str, Any]], *, notes: str =
         [
             "## 逐条结论",
             "",
-            "| vuln_id | 结论 | 历史漏洞 | 是否误报 | 原因 |",
-            "| --- | --- | --- | --- | --- |",
+            "| vuln_id | 公开结论 | 最新代码 | 历史漏洞 | 是否误报 | 原因 |",
+            "| --- | --- | --- | --- | --- | --- |",
         ]
     )
     for row in results:
         reason = str(row.get("reason") or "").replace("|", "\\|").replace("\n", " ")
         old = str(row.get("old_title") or "").replace("|", "\\|")
         fp = "是" if row.get("marked_false_positive") else "否"
+        src = SOURCE_STATUS_LABEL.get(str(row.get("source_status") or ""), "—")
         lines.append(
-            f"| #{row.get('vuln_id')} | {row.get('verdict')} | {old or '—'} | {fp} | {reason or '—'} |"
+            f"| #{row.get('vuln_id')} | {row.get('verdict')} | {src} | {old or '—'} | {fp} | {reason or '—'} |"
         )
     lines.append("")
     path = report_path(project_id)
@@ -212,20 +286,24 @@ def _record_vuln_dedup(ctx, args: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         return call_fail("vuln_id 必须是整数")
     verdict = str(args.get("verdict") or "").strip()
+    source_status = str(args.get("source_status") or "").strip()
     reason = str(args.get("reason") or "").strip()
     old_title = str(args.get("old_title") or args.get("old_vuln_title") or "").strip()
     if vuln_id <= 0:
         return call_fail("缺少 vuln_id")
     if verdict not in VERDICTS:
         return call_fail(f"verdict 须为 {sorted(VERDICTS)}")
+    if source_status not in SOURCE_STATUSES:
+        return call_fail(f"source_status 须为 {sorted(SOURCE_STATUSES)}（对照最新 src/ 是否还存在）")
     if not reason:
-        return call_fail("必须写明对比原因 reason")
+        return call_fail("必须写明对比原因 reason（含历史对比与源码核对）")
     if verdict == VERDICT_KNOWN and not old_title:
         return call_fail("known_public 必须提供 old_title（历史漏洞标题）")
 
+    fp_kind = _dedup_fp_kind(verdict, source_status)
     mark_fp = args.get("mark_false_positive")
     if mark_fp is None:
-        mark_fp = verdict == VERDICT_KNOWN
+        mark_fp = fp_kind is not None
     else:
         mark_fp = bool(mark_fp)
 
@@ -237,15 +315,19 @@ def _record_vuln_dedup(ctx, args: dict[str, Any]) -> dict[str, Any]:
             return call_fail(f"#{vuln_id} 已合并，不要去重")
         already_fp = vuln.status == "false_positive"
         marked = False
-        if mark_fp and verdict == VERDICT_KNOWN and not already_fp:
+        if mark_fp and fp_kind and not already_fp:
+            if fp_kind == FP_KIND_SOURCE_FIXED:
+                message = "最新源码已修复，标为误报"
+            else:
+                message = "已公开同类洞，标为误报"
             out = _commit_false_positive(
                 ctx,
                 db,
                 vuln,
                 vuln_id,
                 reason,
-                "已公开同类洞，标为误报",
-                fp_kind=FP_KIND_KNOWN_PUBLIC,
+                message,
+                fp_kind=fp_kind,
                 end_review=False,
             )
             if not out.get("ok"):
@@ -256,18 +338,21 @@ def _record_vuln_dedup(ctx, args: dict[str, Any]) -> dict[str, Any]:
     row = {
         "vuln_id": vuln_id,
         "verdict": verdict,
+        "source_status": source_status,
         "old_title": old_title,
         "reason": reason,
-        "marked_false_positive": marked or (verdict == VERDICT_KNOWN and already_fp),
+        "marked_false_positive": marked or (bool(fp_kind) and already_fp),
         "status": status,
+        "fp_kind": fp_kind if (marked or (bool(fp_kind) and already_fp)) else None,
     }
     results = _results(ctx)
     results[:] = [r for r in results if int(r.get("vuln_id") or 0) != vuln_id]
     results.append(row)
     ctx.state["dedup_results"] = results
+    src_label = SOURCE_STATUS_LABEL.get(source_status, source_status)
     live_log.system(
         ctx.project_id,
-        f"去重 #{vuln_id} {verdict}"
+        f"去重 #{vuln_id} {verdict} / 源码{src_label}"
         + (f" ← {old_title}" if old_title else "")
         + ("，已标误报" if marked else ""),
         phase=PHASE,
@@ -285,9 +370,11 @@ def _finish_vuln_dedup(ctx, args: dict[str, Any]) -> dict[str, Any]:
     ctx.state["vuln_dedup_done"] = True
     ctx.state["vuln_dedup_notes"] = notes
     rel = REPORT_REL
+    known_n = sum(1 for r in results if r.get("verdict") == VERDICT_KNOWN)
+    fixed_n = sum(1 for r in results if r.get("source_status") == SOURCE_FIXED)
     live_log.system(
         ctx.project_id,
-        f"产出漏洞去重结束：已公开 {sum(1 for r in results if r.get('verdict') == VERDICT_KNOWN)} / "
+        f"产出漏洞去重结束：已公开 {known_n}、已修复 {fixed_n} / "
         f"共 {len(results)} 条，报告 {rel}",
         phase=PHASE,
         role=ROLE,
@@ -298,7 +385,8 @@ def _finish_vuln_dedup(ctx, args: dict[str, Any]) -> dict[str, Any]:
         "report": rel,
         "path": str(path),
         "count": len(results),
-        "known_public": sum(1 for r in results if r.get("verdict") == VERDICT_KNOWN),
+        "known_public": known_n,
+        "source_fixed": fixed_n,
     }
 
 
@@ -306,9 +394,10 @@ registry.register(
     ToolSpec(
         name="RecordVulnDedup",
         description=(
-            "记录一条产出相对历史漏洞的对比结论。"
-            "verdict=known_public 表示同一入口/sink 的已公开同类洞（含 patched CVE），默认标误报；"
-            "unique 表示公开文未覆盖的新链；uncertain 表示证据不足、不要误报。"
+            "记录一条产出的去重结论：相对历史漏洞是否已公开，以及最新 src/ 是否还存在该漏洞。"
+            "verdict=known_public 表示同一入口/sink 的已公开同类洞；unique 表示公开文未覆盖；"
+            "source_status=fixed 表示最新代码已修复。known_public 或 fixed 默认标误报；"
+            "已公开且已修时状态为已修复。"
         ),
         parameters={
             "type": "object",
@@ -316,19 +405,26 @@ registry.register(
                 "vuln_id": {"type": "integer"},
                 "verdict": {
                     "type": "string",
-                    "description": "known_public | unique | uncertain",
+                    "description": "known_public | unique | uncertain（相对历史漏洞）",
                 },
-                "reason": {"type": "string", "description": "对比依据：入口/sink/公开文覆盖范围"},
+                "source_status": {
+                    "type": "string",
+                    "description": "present | fixed | uncertain（对照当前 src/ 是否还存在）",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "对比依据：入口/sink/公开文覆盖范围，以及源码核对结果",
+                },
                 "old_title": {
                     "type": "string",
                     "description": "命中的历史漏洞标题（known_public 必填）",
                 },
                 "mark_false_positive": {
                     "type": "boolean",
-                    "description": "known_public 时默认 true；unique/uncertain 不要标误报",
+                    "description": "known_public 或 source_status=fixed 时默认 true",
                 },
             },
-            "required": ["vuln_id", "verdict", "reason"],
+            "required": ["vuln_id", "verdict", "source_status", "reason"],
         },
         handler=_record_vuln_dedup,
     )
@@ -336,7 +432,7 @@ registry.register(
 registry.register(
     ToolSpec(
         name="FinishVulnDedup",
-        description="结束产出漏洞去重。全部 vuln_id 都 Record 之后调用；没有命中也要 Finish。",
+        description="结束产出漏洞去重。全部 vuln_id 都 Record 之后调用；没有历史命中或源码仍在也要 Finish。",
         parameters={
             "type": "object",
             "properties": {

@@ -2786,6 +2786,7 @@ def _initial_prompt(name: str, **kwargs: object) -> str:
     kwargs.setdefault("prior_basis", "static_only")
     kwargs.setdefault("prior_conclusion", "静态结论")
     kwargs.setdefault("unconstrained_note", "")
+    kwargs.setdefault("source_note", "")
     return render_prompt(f"initial/{name}", **kwargs)
 
 
@@ -6372,7 +6373,7 @@ def request_vuln_dedup(
     *,
     user_message: str = "",
 ) -> dict[str, Any]:
-    """User-triggered one-shot: compare selected produced vulns against historical (kind=old)."""
+    """User-triggered one-shot: compare selected vulns against historical docs and current src/."""
     from ..tools.phase_vuln_dedup import load_request, resolve_vuln_ids, save_request
     from .conversation_archive import clear_archived
 
@@ -6405,7 +6406,7 @@ def request_vuln_dedup(
     _phase_pause_event(project_id, "vuln_dedup").clear()
     live_log.system(
         project_id,
-        f"开始产出漏洞去重，共 {len(ids)} 条",
+        f"开始产出漏洞去重，共 {len(ids)} 条（对照历史漏洞与最新源码）",
         phase="vuln_dedup",
         role="vuln_dedup",
     )
@@ -6424,6 +6425,7 @@ def _run_vuln_dedup_thread(project_id: int) -> None:
 def _run_vuln_dedup_once(project_id: int) -> None:
     from ..tools.phase_vuln_dedup import (
         catalog_for_ids,
+        format_source_note,
         load_request,
         path_hints_for_catalog,
         recent_old_vulns,
@@ -6467,31 +6469,22 @@ def _run_vuln_dedup_once(project_id: int) -> None:
     req["consumed"] = True
     save_request(project_id, req)
 
+    attempted_sync = False
+    if _should_sync_source_on_restart(project_id):
+        _maybe_sync_github_on_resume(project_id)
+        attempted_sync = True
+
     catalog = catalog_for_ids(project_id, ids)
     recent = recent_old_vulns(project_id)
     hints = path_hints_for_catalog(project_id, catalog)
+    source_note = format_source_note(project_id, attempted_sync=attempted_sync)
     if not recent:
-        write_report(
-            project_id,
-            [
-                {
-                    "vuln_id": item["vuln_id"],
-                    "verdict": "uncertain",
-                    "old_title": "",
-                    "reason": "项目尚无历史漏洞文档，无法对照是否已公开",
-                    "marked_false_positive": False,
-                }
-                for item in catalog
-            ],
-            notes="没有 docs/old-vulns 文档，跳过模型对比。",
-        )
         live_log.system(
             project_id,
-            "没有历史漏洞文档，无法去重；已写入 docs/vuln-dedup.md",
+            "没有历史漏洞文档，本轮仍对照最新源码判断漏洞是否还在",
             phase="vuln_dedup",
             role="vuln_dedup",
         )
-        return
 
     extra = (req.get("user_message") or "").strip()
     system = _phase_system_prompt(project_id, "vuln_dedup.md")
@@ -6501,6 +6494,7 @@ def _run_vuln_dedup_once(project_id: int) -> None:
         catalog=json_dumps(catalog),
         recent_old=json_dumps(recent),
         path_hints=json_dumps(hints),
+        source_note=source_note,
         **_agent_prompt_vars(project_id),
     )
     if extra:

@@ -143,9 +143,10 @@ const VULN_STATUS_LABEL: Record<string, string> = {
 export const FP_KIND_TIMEOUT = 'timeout'
 export const FP_KIND_KNOWN_CVE_PATCHED = 'known_cve_patched'
 export const FP_KIND_KNOWN_PUBLIC = 'known_public'
+export const FP_KIND_SOURCE_FIXED = 'source_fixed'
 
 /** Confirmed vulns fold evidence into one badge: 已确认-仅静态 / 局部验证 / 动态验证.
- * Timeout give-ups show 误报-审核超时; reviewer-judged FPs stay 误报. */
+ * Timeout give-ups show 误报-审核超时; dedup FPs are 误报-已公开 or 误报-已修复. */
 export function formatVulnStatus(
   status: string | null | undefined,
   evidenceLevel?: string | null,
@@ -163,8 +164,12 @@ export function formatVulnStatus(
   if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_KNOWN_PUBLIC) {
     return '误报-已公开'
   }
-  if (s === 'false_positive' && (fpKind || '').trim() === FP_KIND_KNOWN_CVE_PATCHED) {
-    return '误报-已知CVE已修复'
+  if (
+    s === 'false_positive' &&
+    ((fpKind || '').trim() === FP_KIND_SOURCE_FIXED ||
+      (fpKind || '').trim() === FP_KIND_KNOWN_CVE_PATCHED)
+  ) {
+    return '误报-已修复'
   }
   return VULN_STATUS_LABEL[s] || s
 }

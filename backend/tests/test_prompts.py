@@ -46,6 +46,7 @@ INITIAL_DOCS = (
     "unconstrained-worker.md",
     "sink_triage.md",
     "cli_indexer.md",
+    "vuln_dedup.md",
 )
 
 
@@ -970,3 +971,14 @@ def test_discover_target_kind_prompt_exists():
     assert "target_kind" in text
     assert "关键词" in text
     assert "一轮" in text
+
+
+def test_vuln_dedup_prompt_checks_latest_source():
+    text = load_prompt("vuln_dedup.md")
+    assert "source_status" in text
+    assert "最新" in text
+    assert "src/" in text
+    initial = load_prompt("initial/vuln_dedup.md")
+    assert "${source_note}" in initial
+    assert "source_status" in initial
+    assert "Read" in initial
