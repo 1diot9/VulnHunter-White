@@ -349,23 +349,113 @@ def test_old_vuln_websearch_opens_new_log_session(tmp_env, project, monkeypatch,
 
     assert (tmp_path / "live-events" / "recon-old-vuln" / "round-1.jsonl").exists()
     assert (tmp_path / "live-events" / "recon-old-vuln" / "round-2.jsonl").exists()
-    assert (tmp_path / "live-events" / "recon-old-vuln" / "round-3.jsonl").exists()
+    assert not (tmp_path / "live-events" / "recon-old-vuln" / "round-3.jsonl").exists()
     assert not (tmp_path / "live-events" / "recon-old-vuln-ghsa").exists()
 
     latest = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln")
-    assert latest.session == 3
-    assert latest.session_count == 3
+    assert latest.session == 2
+    assert latest.session_count == 2
     assert latest.events[0].get("session_start") is True
     assert "新开对话" in latest.events[0]["text"]
     assert "搜索补漏" in latest.events[0]["text"]
     assert [e["text"] for e in latest.events][-1] == "websearch-agent"
 
-    crawl_agent = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln", session=2)
-    assert "crawl-agent" in [e["text"] for e in crawl_agent.events]
+    crawl_agent = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln", session=1)
+    assert [e["text"] for e in crawl_agent.events] == [
+        "启动 GHSA 爬虫",
+        "侦察开始（历史漏洞/爬虫落盘）",
+        "crawl-agent",
+    ]
     assert "websearch-agent" not in [e["text"] for e in crawl_agent.events]
 
-    crawler = live_log.read_events(project, limit=10, tail=True, phase="recon-old-vuln", session=1)
-    assert [e["text"] for e in crawler.events] == ["启动 GHSA 爬虫"]
+
+def test_kickoff_system_joins_next_agent_session(tmp_env, project, monkeypatch, tmp_path):
+    from app.services import pipeline
+
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+
+    live_log.system(
+        project,
+        "开始产出漏洞去重，共 14 条（对照历史漏洞与最新源码）",
+        phase="vuln_dedup",
+        role="vuln_dedup",
+    )
+    live_log.system(project, "拉起盖章（待标记文件，含新入库反编译类）", phase="recon-mark", role="recon_mark")
+    live_log.system(project, "拉起快速扫描准备（Semgrep + Sink 筛选）", phase="fast-worker")
+    live_log.system(project, "用户启动无约束扫描", phase="unconstrained-worker")
+    live_log.system(project, "用户请求续跑环境搭建", phase="reviewer-lab", role="reviewer_lab")
+    live_log.system(project, "用户对漏洞 #2 再次发起互联网验证", phase="verifier")
+    live_log.system(project, "拉起攻击链串联线程", phase="attack_chain")
+
+    pipeline._start_log_session(project, "vuln_dedup", extra="14 条", role="vuln_dedup")
+    live_log.agent(project, "dedup-work", phase="vuln_dedup", role="vuln_dedup")
+    pipeline._start_log_session(project, "recon-mark", extra="盖章 8 个文件", role="recon_mark")
+    live_log.agent(project, "mark-work", phase="recon-mark", role="recon_mark")
+    pipeline._start_log_session(project, "fast-worker", extra="src/A.java:10")
+    live_log.agent(project, "fast-work", phase="fast-worker", role="fast_worker")
+    pipeline._start_log_session(project, "unconstrained-worker", extra="自主巡航")
+    live_log.agent(project, "uc-work", phase="unconstrained-worker", role="unconstrained_worker")
+    pipeline._start_log_session(project, "reviewer-lab", extra="环境搭建", role="reviewer_lab")
+    live_log.agent(project, "lab-work", phase="reviewer-lab", role="reviewer_lab")
+    pipeline._start_log_session(project, "verifier", extra="漏洞 #2")
+    live_log.agent(project, "ver-work", phase="verifier", role="verifier")
+    pipeline._start_log_session(project, "attack_chain", extra="已确认 3 条")
+    live_log.agent(project, "chain-work", phase="attack_chain", role="attack_chain")
+
+    dedup = live_log.read_events(project, limit=10, tail=True, phase="vuln_dedup")
+    assert dedup.session_count == 1
+    assert [e["text"] for e in dedup.events] == [
+        "开始产出漏洞去重，共 14 条（对照历史漏洞与最新源码）",
+        "产出去重开始（14 条）",
+        "dedup-work",
+    ]
+
+    mark = live_log.read_events(project, limit=10, tail=True, phase="recon-mark")
+    assert mark.session_count == 1
+    assert [e["text"] for e in mark.events][0] == "拉起盖章（待标记文件，含新入库反编译类）"
+    assert [e["text"] for e in mark.events][-1] == "mark-work"
+
+    fast = live_log.read_events(project, limit=10, tail=True, phase="fast-worker")
+    assert fast.session_count == 1
+    assert [e["text"] for e in fast.events][0] == "拉起快速扫描准备（Semgrep + Sink 筛选）"
+
+    uc = live_log.read_events(project, limit=10, tail=True, phase="unconstrained-worker")
+    assert uc.session_count == 1
+    assert [e["text"] for e in uc.events][0] == "用户启动无约束扫描"
+
+    lab = live_log.read_events(project, limit=10, tail=True, phase="reviewer-lab")
+    assert lab.session_count == 1
+    assert [e["text"] for e in lab.events][0] == "用户请求续跑环境搭建"
+
+    ver = live_log.read_events(project, limit=10, tail=True, phase="verifier")
+    assert ver.session_count == 1
+    assert [e["text"] for e in ver.events][0] == "用户对漏洞 #2 再次发起互联网验证"
+
+    chain = live_log.read_events(project, limit=10, tail=True, phase="attack_chain")
+    assert chain.session_count == 1
+    assert [e["text"] for e in chain.events][0] == "拉起攻击链串联线程"
+
+    pipeline._start_log_session(project, "vuln_dedup", extra="8 条", role="vuln_dedup")
+    live_log.agent(project, "dedup-2", phase="vuln_dedup", role="vuln_dedup")
+    second = live_log.read_events(project, limit=10, tail=True, phase="vuln_dedup")
+    assert second.session_count == 2
+    assert second.events[0].get("session_start") is True
+    assert [e["text"] for e in second.events][-1] == "dedup-2"
+
+
+def test_hydrate_preamble_only_round_stays_open(tmp_env, project, monkeypatch, tmp_path):
+    path = tmp_path / "live.events.jsonl"
+    monkeypatch.setattr("app.services.live_log.live_events_path", lambda _pid: path)
+    live_log.reset_runtime_state()
+    live_log.system(project, "开始产出漏洞去重，共 14 条", phase="vuln_dedup", role="vuln_dedup")
+    live_log.reset_runtime_state()
+    assert live_log.begin_session(project, "vuln_dedup", if_used=True) == 1
+    live_log.agent(project, "after-hydrate", phase="vuln_dedup", role="vuln_dedup")
+    page = live_log.read_events(project, limit=10, tail=True, phase="vuln_dedup")
+    assert page.session_count == 1
+    assert [e["text"] for e in page.events] == ["开始产出漏洞去重，共 14 条", "after-hydrate"]
 
 
 def test_legacy_old_vuln_ghsa_dir_still_readable(tmp_env, project, monkeypatch, tmp_path):

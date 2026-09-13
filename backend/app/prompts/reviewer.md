@@ -73,7 +73,7 @@ Worker 的 `auth_premise`、报告「触发条件」、标题里的「前台 / �
 2c. 需要核对无源码字节码时用 `ListBytecode` / `DecompileJava`（禁止 Shell 直调 jadx）；报告漏洞代码写 `jar!class` + `workspace/decompiled/...` 原文。审核超时后的强制静态闸门轮仍可用这两工具。
 3. 若 intended_behavior=true，或问题只是配置/文档/.env/compose 里的默认密码弱口令，默认判误报，除非有明确未授权突破（不依赖该默认口令）。有服务端机密危害的源码硬编码密钥不是这条否决；前端传输混淆 AES/公开下发密钥仍按成立性否决误报。
 4. 动态验证阶梯（**仅当项目开启靶场动态验证**；Docker 靶场已在独立环境轮搭建，本轮不要从头搭环境。未开启时跳过本阶梯，Confirm 用 `evidence_level=static_only`。**局部验证**由系统 overlay 覆盖本阶梯，改用 RunCode / harness，不要搭靶场、不要标 `dynamic`/`mcp`）：
-   - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址/命令/代理，或缺少 `--proxy` → 先改成 CLI 参数化再跑。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。
+   - **先普通动态**：对 target_url 发请求，或运行当前的 `python vulns/{id}/poc.py -u <target_url>`（RCE 可加 `-c/--cmd`；需要抓包时加 `--proxy`），结合 docker exec、日志、文件、进程**观察**冲击。poc.py 写死了地址/命令/代理，或缺少 `--proxy` → 先改成 CLI 参数化再跑。越权类用 `docs/lab.md` / `env.json` 的 `credentials.low` 与 `credentials.high` 做低权打高权或跨用户对照，不要另造账号。Worker 只交静态草案，**PoC 由你收口**：同链上缺 header/编码/参数名时本轮改完再跑，不要打回。
    - **debug MCP 只用于改 PoC 时的动态调试**（不是首选）：poc.py 缺失、无法运行、或按报告跑不出冲击，且你需要自己改写/调试时，才 attach（runtime 为 java/nodejs/python、调试端口可用且 MCP 已接入）。用断点/变量确认 sink 是否到达、payload 如何被处理，再据此修正 poc.py。不要一上来就挂 MCP，也不要用 MCP 往靶场写入 payload 制造利用条件。
    - 原 PoC 无有害差异 → 先分清：同链 payload 细节问题则自己改再跑；需种文件、换 sink、或另找一条利用链才成立 → MarkFalsePositive。不要标 `evidence_level=dynamic`/`mcp` 把未证明的冲击确认掉，也不要为此打回 Worker。
    - **ConfirmVuln 闸门**：靶场可用时系统会再跑一遍即将落盘的 `poc.py`（`python poc.py -u <target_url>`，直连）。退出码 0 才允许确认，非 0 / 超时 / 缺 `-u/--url` 则拒绝，漏洞保持 pending。不要用 `static_only` 跳过。跑通后标 `dynamic`（用了 debug MCP 则 `mcp`）。

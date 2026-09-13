@@ -10,6 +10,7 @@
 - compose 项目名必须是 `${lab_compose_project}`（文件里写 `name:`，或 `docker compose -p`），不要用目录名 `env`
 - 每个容器和自建镜像必须带标签：`${lab_label_args}`（compose 写 `labels: { vulnhunter: "1", vulnhunter.project: "${project_id}" }`）
 - 写出 `env/env.json`（`accepted`、`runtime`、`image`、`container_name`、端口、`target_url`、`lab_state`、`credentials`、`status`）
+- **分权账号**：产品有普通用户与管理员（或可水平越权的两个主体）时，用官方注册/种子/向导**创建并验证能登录**的低权、高权各一号，写入 `credentials.low` 与 `credentials.high`（`username`/`password`/`role`），顶层 `username`/`password` 与 `high`（或唯一账号）一致。只有一种角色则写一套；无登录则不写。已有默认可登录种子账号则记录，不要重复造号。创建 lab 演示账号不是种利用条件。
 - **`accepted=true` 仅当业务应用本身可达**：登录页/门户/健康检查等真实入口能打开，不要只凭 `docker ps` 或 Tomcat/nginx 默认页 200
 - 业务应用可达且 `accepted=true`、`status=running` 后，系统会写 `docs/lab.md`
 - 业务端口与调试端口分离；调试端口绑定 127.0.0.1

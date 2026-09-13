@@ -5,6 +5,7 @@ import subprocess
 
 from app.services.lab import (
     append_lab_repair_record,
+    render_lab_doc,
     clear_lab_retry_flags,
     find_free_port,
     finish_manual_lab,
@@ -84,6 +85,26 @@ def test_lab_resource_names_lookup_project(project):
     names = lab_naming(project)
     assert names["lab_container"] == f"demo-{project}"
     assert names["lab_compose_project"] == f"demo-{project}"
+
+
+def test_render_lab_doc_lists_low_and_high_accounts():
+    doc = render_lab_doc(
+        {
+            "target_url": "http://127.0.0.1:18080",
+            "status": "running",
+            "credentials": {
+                "low": {"username": "vh_user", "password": "u1", "role": "user"},
+                "high": {"username": "vh_admin", "password": "a1", "role": "admin"},
+                "username": "vh_admin",
+                "password": "a1",
+            },
+        }
+    )
+    assert "低权限" in doc
+    assert "高权限" in doc
+    assert "vh_user" in doc
+    assert "vh_admin" in doc
+    assert '"low"' in doc
 
 
 def test_lab_name_prefix_does_not_match_longer_id():

@@ -7,3 +7,4 @@
 - 靶场可用时不要用 `evidence_level=static_only` 跳过；跑通后标 `dynamic`（用了 debug MCP 改写/调试 PoC 后复现则 `mcp`）。
 - 假就绪（容器 running 但业务 URL 不可用：登录页/门户 404、sidecar 退出、应用未起来）时调用 `RequestLabRebuild(reason=...)`，不要自己修 Docker，也不要用 `static_only` 硬过闸门。
 - 靶场未就绪（无 `target_url` / 未 accepted）时才允许 `static_only`。
+- 越权 / 水平越权 / 提权：优先用 `env/env.json` 的 `credentials.low` 与 `credentials.high`（见 `docs/lab.md`）登录对照。缺一套则先确认靶场是否本应只有单角色，不要拿 lab 演示账号当「默认口令漏洞」。PoC 默认带上这两套（CLI 可覆盖），使 `python poc.py -u <target_url>` 能过确认闸门。

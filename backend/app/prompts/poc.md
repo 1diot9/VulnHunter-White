@@ -29,6 +29,7 @@
    - SSRF：`--ssrf-url`（默认内网探测地址）。**有回显则打印目标响应正文**（建议加 `SSRF echo:` 前缀）；**外带内网信息则打印从攻击者信道取回的内容**（建议加 `SSRF exfil:` 前缀，须含目标侧信息，不要只打印「收到回调」）；仅响应差别则打印通/不通对照（开/闭端口或活/死地址的状态码、时延、报错），不要把 URL 反显当成回显。
    - SQLi / SSTI：`--payload`（默认探测句）。
    - 需登录：`--cookie` / `--token`，或 `-U/--user` `-P/--password`。
+   - 越权 / 水平越权 / 提权：再提供受害者或高权账号 CLI（如 `--victim-user` / `--victim-password`，或 `--admin-user` / `--admin-password`）。默认值取靶场 `env.json` 的 `credentials.low`（攻击者）与 `credentials.high`（对照/受害者管理员），以便不传账号时 `python poc.py -u <target_url>` 仍能打靶场；换目标时用 CLI 覆盖，不要写死某台 FOFA 主机的口令。
    - 其它入口（path、id、filename 等）同样做成 CLI，不要写死本次样本。
 5. **打印结果**：打印 HTTP 状态、关键响应头、响应正文（过长可截断并注明）。RCE 有回显时单独打印命令输出。打出预期冲击退出码 0，否则非 0。靶场动态下 ConfirmVuln 会系统再跑一遍落盘脚本，非 0 则拒绝确认。
 6. **输出中英双语（`--zh`）**：`poc.py` / `harness.py`（及 `harness.*`、攻击链脚本）作者打印的 stdout/stderr 标签、状态、告警、成功/失败判定必须同时准备中英文。**默认英语**；传入 `--zh` 后改打中文。Python 用 `(en, zh)` **元组**对照表 + `msg(key, zh)`。**JavaScript 必须用数组 `[en, zh]`**：圆括号 `(en, zh)` 是逗号运算符，只会留下中文字符串；`const [en, zh_s] = MSGS[key]` 再按字符解构就会打成「步 / 骤」这种单字。PHP / Ruby 用数组，Go 用 `[2]string{en, zh}`，不要把 Python 元组语法原样粘贴。扫 argv / `process.argv` / `os.Args` 是否含 `--zh`。禁止只写死中文，也禁止默认输出中英混排。注释、docstring、`argparse` `--help` 仍用英语。目标回显（HTTP 正文、命令输出、文件内容、异常原文）原样打印，不要翻译。

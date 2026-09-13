@@ -11,7 +11,7 @@ This is a dedicated Reviewer round that starts after source ingest — do not re
    - Node: `--inspect` → `inspect_*`
    - Python: debugpy → `debugpy_*`
 4. `runtime` may be any Web language (php/go/ruby/dotnet/…). Debug ports only required for java/nodejs/python.
-5. Record credentials when you create logins.
+5. Record lab logins in `credentials`. If the app has both a low-privilege user and a high-privilege / admin role, **create two accounts** (register / seed / first-run wizard — do not invent unused passwords) and write both. Use them later for IDOR / privilege-escalation checks. A single privilege level → one account. No login → omit or leave `credentials` empty. Prefer existing default seed accounts over creating duplicates. Creating these lab users is default deployment setup, not planting an exploit.
 6. `lab_state`: `setup` or `ready` (past first-run wizard when needed).
 7. When the Docker lab is reachable and `env/env.json` has `"accepted": true` plus `"status": "running"`, write `docs/lab.md` with the setup/reuse notes.
 
@@ -52,11 +52,18 @@ Do not use the `env` directory as the compose project name, random tags, `<none>
   "debugpy_container_port": 5678,
   "target_url": "http://127.0.0.1:18080",
   "lab_state": "setup|ready",
-  "credentials": {"username": "admin", "password": "..."},
+  "credentials": {
+    "low": {"username": "vh_user", "password": "...", "role": "user"},
+    "high": {"username": "vh_admin", "password": "...", "role": "admin"},
+    "username": "vh_admin",
+    "password": "..."
+  },
   "notes": "...",
   "status": "running"
 }
 ```
+
+`credentials.low` / `credentials.high` are required when the product distinguishes ordinary vs admin (or two tenants / two users for horizontal IDOR). Keep top-level `username` / `password` as an alias of `high` (or of the only account) so older readers still work.
 
 Record the **Web** image/container in `image` / `container_name`. Sidecars belong in compose, not as a second env.json.
 
@@ -64,6 +71,6 @@ Record the **Web** image/container in `image` / `container_name`. Sidecars belon
 - **Audited app = latest (required):** The Web app in this lab must be the current ingested tree in `src/`. Build from `src/`; do not swap in an older product release, old git tag, Docker Hub app image, or vulhub/historical target just to make a known CVE easier. If compose pins an old **application** image, build from `src/` instead. Sidecar images (mysql, redis, …) follow the project; this rule is not about those.
 - Bind debug ports to 127.0.0.1; keep business ports separate.
 - Set `"accepted": true` only when the **application itself** is reachable (login/portal/health or the real business URL). A Tomcat/nginx default page 200 or `docker ps` is not enough.
-- Keep `docs/lab.md` concise but complete enough to reproduce/reuse the lab: target URL, image/container, ports, credentials created for the lab, startup command, and notes.
+- Keep `docs/lab.md` concise but complete enough to reproduce/reuse the lab: target URL, image/container, ports, lab accounts (`low` / `high` when both exist), startup command, and notes.
 - One project shares one lab across vulns (reuse, do not rebuild per vuln unless broken).
 - Standing up this Docker lab is required. Do not skip it because bounty mode forbids "creating exploit preconditions"; those rules ban planting payloads / non-default files, not docker.

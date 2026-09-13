@@ -482,6 +482,43 @@ def _json_block(value: Any) -> str:
     return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2, default=str) + "\n```"
 
 
+def _account_line(label: str, account: Any) -> str | None:
+    if not isinstance(account, dict):
+        return None
+    user = str(account.get("username") or account.get("user") or "").strip()
+    password = str(account.get("password") or "").strip()
+    if not user and not password:
+        return None
+    role = str(account.get("role") or "").strip()
+    role_bit = f"（角色 {role}）" if role else ""
+    return (
+        f"- {label}{role_bit}：`{_markdown_value(user or None)}` / "
+        f"`{_markdown_value(password or None)}`"
+    )
+
+
+def _credentials_block(value: Any) -> str:
+    if value is None or value == "":
+        return "未记录"
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for label, key in (("低权限", "low"), ("高权限", "high")):
+            line = _account_line(label, value.get(key))
+            if line:
+                lines.append(line)
+        if not lines:
+            user = str(value.get("username") or value.get("user") or "").strip()
+            password = str(value.get("password") or "").strip()
+            if user or password:
+                lines.append(
+                    f"- 账号：`{_markdown_value(user or None)}` / "
+                    f"`{_markdown_value(password or None)}`"
+                )
+        if lines:
+            return "\n".join(lines) + "\n\n" + _json_block(value)
+    return _json_block(value)
+
+
 def _port_lines(env: dict[str, Any]) -> list[str]:
     pairs = [
         ("业务端口", "container_port", "host_port"),
@@ -533,7 +570,7 @@ def render_lab_doc(env: dict[str, Any], *, via: str | None = None) -> str:
 - 若已记录容器：`{start_hint}`
 
 ## 凭据
-{_json_block(env.get("credentials"))}
+{_credentials_block(env.get("credentials"))}
 
 ## 人工靶场
 {manual}

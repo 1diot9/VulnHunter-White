@@ -2,7 +2,7 @@
 项目 ID=${project_id}。源码在 src/。
 用户请求**续跑**环境搭建（上轮因超时/重试用尽或未能就绪而结束）。
 本轮仍是 Reviewer 的**独立环境搭建轮**，不要审核漏洞。
-请在 env/ 下搭建可复用 Web 靶场（优先 src/ 已有 Dockerfile / compose），写出 env/env.json。
+请在 env/ 下搭建可复用 Web 靶场（优先 src/ 已有 Dockerfile / compose），写出 env/env.json。产品有低权与高权时创建或复用两套账号，写入 credentials.low / credentials.high。
 被测应用必须用 src/ 当前代码（最新版本）构建，禁止换成旧发行版、旧 git tag、旧应用镜像或 vulhub 历史靶场以便打已知洞。mysql/redis 等依赖镜像按项目需要即可。
 自建镜像打成 ${lab_image}，Web 容器名 ${lab_container}，依赖容器 ${lab_container}-<role>；compose 项目名 ${lab_compose_project}。容器和自建镜像必须加标签 ${lab_label_args}。
 从已有 env/ 或容器接着做，不要从零重复长构建（除非镜像/compose 不存在）。
