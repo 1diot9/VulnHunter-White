@@ -1002,6 +1002,82 @@ def test_ensure_bypass_prepare_waits_for_old_vulns(tmp_env, project):
         assert pipeline.recon_old_vulns_ready(project) is True
 
 
+def test_ensure_bypass_prepare_appends_new_old_vulns(tmp_env, project):
+    from app.models import BypassTarget
+    from app.services.bypass_queue import freeze_bypass_queue
+    from app.tools.phase_attack_chain import is_attack_chain_done, mark_attack_chain_done
+
+    Session = tmp_env["Session"]
+    models = tmp_env["models"]
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "cve-old.md").write_text(
+        "---\ntitle: 已扫\nsummary: a\ncve: CVE-2024-1\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    _mark_all_weighted(project)
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = False
+        proj.fast_enabled = False
+        proj.bypass_enabled = True
+        proj.attack_chain_enabled = True
+        db.commit()
+    assert freeze_bypass_queue(project) == 1
+    with Session() as db:
+        for row in db.query(BypassTarget).filter(BypassTarget.project_id == project).all():
+            row.status = "done"
+            row.verdict = "still_patched"
+        db.commit()
+    mark_attack_chain_done(project, reason="测试收工")
+    assert mining_complete(project) is True
+    assert is_attack_chain_done(project) is True
+
+    (old / "cve-new.md").write_text(
+        "---\ntitle: 新收集\nsummary: b\ncve: CVE-2025-2\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    pipeline._ensure_bypass_prepare(project)
+    with Session() as db:
+        rows = db.query(BypassTarget).filter(BypassTarget.project_id == project).all()
+        paths = {row.file_path: row.status for row in rows}
+    assert paths.get("docs/old-vulns/cve-old.md") == "done"
+    assert paths.get("docs/old-vulns/cve-new.md") == "queued"
+    assert mining_complete(project) is False
+    assert is_attack_chain_done(project) is False
+
+
+def test_old_vuln_rerun_restarts_audit_when_completed(tmp_env, project, monkeypatch):
+    from app.tools.phase_recon import mark_old_vuln_search_complete
+
+    Session = tmp_env["Session"]
+    models = tmp_env["models"]
+    old = old_vulns_dir(project)
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "cve-1.md").write_text(
+        "---\ntitle: CVE-1\nsummary: s\nfix_status: patched\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    mark_old_vuln_search_complete(project, note="done")
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.status = "completed"
+        proj.phase = "done"
+        proj.recon_done = True
+        db.commit()
+
+    started: list[int] = []
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: started.append(pid))
+    monkeypatch.setattr(pipeline, "_run_recon_old_vulns", lambda pid, cancel: True)
+    out = pipeline.request_recon_subphase_rerun(project, "old_vulns")
+    assert out["ok"] is True
+    t = pipeline._recon_rerun_threads.get(project)
+    assert t is not None
+    t.join(timeout=5)
+    assert started == [project]
+
+
 def test_local_shell_error_writes_jsonl(tmp_env, project):
     out = registry.dispatch(
         _ctx(project, "worker"),

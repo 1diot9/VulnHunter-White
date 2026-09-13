@@ -100,6 +100,9 @@ type FlowState = {
   bypassDone?: number
   unconstrainedEnabled?: boolean
   unconstrainedDone?: boolean
+  heuristicStopped?: boolean
+  fastStopped?: boolean
+  bypassStopped?: boolean
 }
 
 type BranchItem = {
@@ -115,6 +118,7 @@ function miningPrereqs(s: FlowState): boolean {
 
 function heuristicFinished(s: FlowState): boolean {
   if (s.heuristicEnabled === false) return true
+  if (s.heuristicStopped === true) return true
   if (!miningPrereqs(s)) return false
   if (s.heuristicLite === true) {
     return (s.filesWeight100Audited ?? 0) >= (s.filesWeight100 ?? 0)
@@ -126,12 +130,14 @@ function heuristicFinished(s: FlowState): boolean {
 
 function fastFinished(s: FlowState): boolean {
   if (s.fastEnabled !== true) return true
+  if (s.fastStopped === true) return true
   if (!miningPrereqs(s) || !s.fastQueueFrozen) return false
   return (s.sinksDone ?? 0) >= (s.sinksQueued ?? 0)
 }
 
 function bypassFinished(s: FlowState): boolean {
   if (s.bypassEnabled !== true) return true
+  if (s.bypassStopped === true) return true
   if (!s.bypassQueueFrozen) return false
   return (s.bypassDone ?? 0) >= (s.bypassQueued ?? 0)
 }
@@ -329,6 +335,9 @@ export default function PhaseFlow({
   bypassDone,
   unconstrainedEnabled,
   unconstrainedDone,
+  heuristicStopped,
+  fastStopped,
+  bypassStopped,
   onSelect,
 }: FlowState & { onSelect?: (id: string) => void }) {
   const state: FlowState = {
@@ -366,6 +375,9 @@ export default function PhaseFlow({
     bypassDone,
     unconstrainedEnabled,
     unconstrainedDone,
+    heuristicStopped,
+    fastStopped,
+    bypassStopped,
   }
   const subs = reconSubphases ?? []
 
@@ -395,7 +407,7 @@ export default function PhaseFlow({
             <Badge variant={badgeVariant(heuristicTone(state))}>
               {lite ? '启发式轻量' : '启发式'}
               {` ${rounds} 轮`}
-              {done ? ' ✓' : ''}
+              {state.heuristicStopped ? ' 已暂停' : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -410,7 +422,7 @@ export default function PhaseFlow({
             <Badge variant={badgeVariant(fastTone(state))}>
               快速扫描
               {state.fastQueueFrozen ? ` ${progressed}/${queued}` : ' 准备中'}
-              {done ? ' ✓' : ''}
+              {state.fastStopped ? ' 已暂停' : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -425,7 +437,7 @@ export default function PhaseFlow({
             <Badge variant={badgeVariant(bypassTone(state))}>
               历史漏洞绕过
               {state.bypassQueueFrozen ? ` ${progressed}/${queued}` : ' 等待历史漏洞'}
-              {done ? ' ✓' : ''}
+              {state.bypassStopped ? ' 已暂停' : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -502,10 +514,10 @@ export default function PhaseFlow({
   }
   const workerPaths = branches.worker
   const workerHints: Record<string, string> = {
-    mine: '侦察完成后按文件定权：入口正向挖，更低权按角色回推或控面。若开启了代码库则同时等其构建结束。缺鉴权、IDOR、业务逻辑靠这条。',
-    fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。',
-    bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。',
-    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束，也可在日志输入框手动停止或再启动。',
+    mine: '侦察完成后按文件定权：入口正向挖，更低权按角色回推或控面。若开启了代码库则同时等其构建结束。缺鉴权、IDOR、业务逻辑靠这条。可在日志输入框下暂停或恢复。',
+    fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。可在日志输入框下暂停或恢复。',
+    bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。可在日志输入框下暂停或恢复。',
+    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束，也可在日志输入框下停止或再启动。全部续跑会恢复用户暂停的挖掘路径。',
   }
 
   const codeIntel = PHASES.find((p) => p.id === 'code_intel')

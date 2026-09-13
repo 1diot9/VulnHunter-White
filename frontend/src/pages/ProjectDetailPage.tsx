@@ -508,6 +508,9 @@ export default function ProjectDetailPage() {
               bypassDone={project.bypass_done}
               unconstrainedEnabled={project.unconstrained_enabled}
               unconstrainedDone={project.unconstrained_done}
+              heuristicStopped={project.heuristic_stopped}
+              fastStopped={project.fast_stopped}
+              bypassStopped={project.bypass_stopped}
               onSelect={(pid) => {
                 setTab('logs')
                 if (pid !== 'done') selectPhase(pid)

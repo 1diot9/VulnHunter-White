@@ -293,6 +293,7 @@ class ConversationStateOut(BaseModel):
     can_stop: bool = False
     can_start: bool = False
     unconstrained_done: bool = False
+    path_stopped: bool = False
 
 
 class LabSetupRetryBody(BaseModel):
@@ -442,6 +443,9 @@ class ProjectOut(BaseModel):
     bypass_queue_frozen: bool = False
     unconstrained_enabled: bool = False
     unconstrained_done: bool = False
+    heuristic_stopped: bool = False
+    fast_stopped: bool = False
+    bypass_stopped: bool = False
     llm_model: str = ""
     worker_hint: str = ""
     recon_hint: str = ""
@@ -522,6 +526,9 @@ class ProjectListItemOut(BaseModel):
     bypass_queue_frozen: bool = False
     unconstrained_enabled: bool = False
     unconstrained_done: bool = False
+    heuristic_stopped: bool = False
+    fast_stopped: bool = False
+    bypass_stopped: bool = False
     llm_model: str = ""
     max_token_usage: int = 0
     source_sync_error: str | None = None

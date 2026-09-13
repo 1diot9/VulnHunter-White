@@ -21,6 +21,12 @@ from .conversation_archive import (
 )
 from .conversation_steer import enqueue_steer, is_loop_running
 from .live_log import live_log
+from ..mining_paths import (
+    MINING_PATH_LABELS,
+    mining_path_enabled,
+    mining_path_from_log_phase,
+    mining_path_user_stopped,
+)
 
 
 CONTINUE_EMPTY = "用户请求接续此对话，请从中断处继续。"
@@ -84,8 +90,11 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
     resumable = _find_resumable_checkpoint(project_id, lp) is not None
     archived = has_archived(project_id, lp)
     unconstrained = _is_unconstrained_phase(lp)
+    mining_path = mining_path_from_log_phase(lp)
     unconstrained_done = False
     unconstrained_on = False
+    path_on = False
+    path_stopped = False
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         blocked = proj is None or proj.status in ("cancelled", "ingesting", "error")
@@ -93,13 +102,18 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
             unconstrained_on = bool(getattr(proj, "unconstrained_enabled", False))
             unconstrained_done = bool(getattr(proj, "unconstrained_done", False))
             completed = proj.status == "completed"
+            if mining_path:
+                path_on = mining_path_enabled(proj, mining_path)
+                path_stopped = mining_path_user_stopped(proj, mining_path)
+                if mining_path == "unconstrained":
+                    path_stopped = path_stopped or unconstrained_done
         else:
             completed = False
-    can_continue = (resumable or archived) and not running and not (unconstrained and unconstrained_done)
+    can_continue = (resumable or archived) and not running and not path_stopped
     can_steer = running
-    can_new = (not blocked) and not unconstrained
-    can_stop = unconstrained and unconstrained_on and (not unconstrained_done) and not blocked and not completed
-    can_start = unconstrained and unconstrained_on and unconstrained_done and not blocked
+    can_new = (not blocked) and not unconstrained and not path_stopped
+    can_stop = bool(mining_path) and path_on and (not path_stopped) and not blocked and not completed
+    can_start = bool(mining_path) and path_on and path_stopped and not blocked
     return {
         "log_phase": lp,
         "running": running,
@@ -111,6 +125,7 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
         "can_stop": can_stop,
         "can_start": can_start,
         "unconstrained_done": unconstrained_done if unconstrained else False,
+        "path_stopped": path_stopped if mining_path else False,
     }
 
 
@@ -136,14 +151,15 @@ def request_conversation(
     _project_ok(proj)
 
     unconstrained = _is_unconstrained_phase(lp)
+    mining_path = mining_path_from_log_phase(lp)
     if act == "stop":
-        if not unconstrained:
-            raise ValueError("仅无约束扫描支持停止")
-        return pipeline.request_unconstrained_stop(project_id)
+        if not mining_path:
+            raise ValueError("仅挖掘路径支持暂停")
+        return pipeline.request_mining_path_stop(project_id, mining_path)
     if act == "start":
-        if not unconstrained:
-            raise ValueError("仅无约束扫描支持启动")
-        return pipeline.request_unconstrained_start(project_id)
+        if not mining_path:
+            raise ValueError("仅挖掘路径支持恢复")
+        return pipeline.request_mining_path_start(project_id, mining_path)
     if act == "new" and unconstrained:
         raise ValueError("无约束扫描请使用停止或启动，不再支持新开")
 
@@ -156,6 +172,8 @@ def request_conversation(
                 raise ValueError(
                     "当前小阶段未在运行，请使用接续或启动"
                     if unconstrained
+                    else "当前小阶段未在运行，请使用接续、新开或恢复"
+                    if mining_path
                     else "当前小阶段未在运行，请使用接续或新开"
                 )
         else:
@@ -169,8 +187,9 @@ def request_conversation(
             return {"ok": True, "action": "steer", "log_phase": lp, **pipeline.get_phase_states(project_id)}
 
     if act == "continue":
-        if unconstrained and state.get("unconstrained_done"):
-            raise ValueError("无约束扫描已停止，请先启动")
+        if state.get("path_stopped"):
+            label = MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
+            raise ValueError(f"{label}已暂停，请先恢复")
         if state["running"]:
             if msg:
                 enqueue_steer(project_id, lp, msg)
@@ -178,5 +197,7 @@ def request_conversation(
             raise ValueError("该小阶段正在运行中")
         return pipeline.request_conversation_continue(project_id, lp, msg)
 
-    # new
+    if state.get("path_stopped"):
+        label = MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
+        raise ValueError(f"{label}已暂停，请先恢复")
     return pipeline.request_conversation_new(project_id, lp, msg)

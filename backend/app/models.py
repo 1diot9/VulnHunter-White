@@ -128,6 +128,11 @@ class Project(Base):
     # 无约束扫描：不注入权重，自主挖前台洞；Reviewer 判定达成 RCE 效果后结束
     unconstrained_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     unconstrained_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 用户在日志输入框下暂停某条挖掘路径；全部续跑或单独恢复后继续
+    heuristic_stopped: Mapped[bool] = mapped_column(Boolean, default=False)
+    fast_stopped: Mapped[bool] = mapped_column(Boolean, default=False)
+    bypass_stopped: Mapped[bool] = mapped_column(Boolean, default=False)
+    unconstrained_stopped: Mapped[bool] = mapped_column(Boolean, default=False)
     # 项目级模型；空则使用设置页全局 default_model
     llm_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 挖掘 Worker 额外人工提示：注入启发式 / 快速扫描 / 历史漏洞绕过每轮用户消息
@@ -528,6 +533,10 @@ def _ensure_columns() -> None:
             "bypass_queue_frozen": "BOOLEAN DEFAULT 0",
             "unconstrained_enabled": "BOOLEAN DEFAULT 0",
             "unconstrained_done": "BOOLEAN DEFAULT 0",
+            "heuristic_stopped": "BOOLEAN DEFAULT 0",
+            "fast_stopped": "BOOLEAN DEFAULT 0",
+            "bypass_stopped": "BOOLEAN DEFAULT 0",
+            "unconstrained_stopped": "BOOLEAN DEFAULT 0",
             "llm_model": "VARCHAR(256)",
             "worker_hint": "TEXT",
             "recon_hint": "TEXT",

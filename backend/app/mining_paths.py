@@ -32,6 +32,43 @@ _ROLE_TO_MINING_PATH = {
     "unconstrained_worker": MINING_PATH_UNCONSTRAINED,
 }
 
+MINING_PATH_ENABLED_ATTR = {
+    MINING_PATH_HEURISTIC: "heuristic_enabled",
+    MINING_PATH_FAST: "fast_enabled",
+    MINING_PATH_BYPASS: "bypass_enabled",
+    MINING_PATH_UNCONSTRAINED: "unconstrained_enabled",
+}
+MINING_PATH_STOPPED_ATTR = {
+    MINING_PATH_HEURISTIC: "heuristic_stopped",
+    MINING_PATH_FAST: "fast_stopped",
+    MINING_PATH_BYPASS: "bypass_stopped",
+    MINING_PATH_UNCONSTRAINED: "unconstrained_stopped",
+}
+MINING_PATH_DB_PHASES = {
+    MINING_PATH_HEURISTIC: ("worker",),
+    MINING_PATH_FAST: ("fast-worker", "sink-triage"),
+    MINING_PATH_BYPASS: ("bypass-worker",),
+    MINING_PATH_UNCONSTRAINED: ("unconstrained-worker",),
+}
+_LOG_PHASE_TO_MINING_PATH = {
+    "mine": MINING_PATH_HEURISTIC,
+    "worker": MINING_PATH_HEURISTIC,
+    "fast": MINING_PATH_FAST,
+    "fast-worker": MINING_PATH_FAST,
+    "sink-triage": MINING_PATH_FAST,
+    "bypass": MINING_PATH_BYPASS,
+    "bypass-worker": MINING_PATH_BYPASS,
+    "unconstrained": MINING_PATH_UNCONSTRAINED,
+    "unconstrained-worker": MINING_PATH_UNCONSTRAINED,
+}
+_DB_PHASE_TO_MINING_PATH = {
+    "worker": MINING_PATH_HEURISTIC,
+    "fast-worker": MINING_PATH_FAST,
+    "sink-triage": MINING_PATH_FAST,
+    "bypass-worker": MINING_PATH_BYPASS,
+    "unconstrained-worker": MINING_PATH_UNCONSTRAINED,
+}
+
 # Lite heuristic only injects weight-100 user-controlled entries
 # (HTTP and non-HTTP: WebSocket / RPC / MQ / callbacks).
 HEURISTIC_LITE_WEIGHT = 100
@@ -50,6 +87,30 @@ def normalize_mining_path(raw: Any) -> str | None:
 
 def mining_path_from_role(role: str | None) -> str | None:
     return _ROLE_TO_MINING_PATH.get((role or "").strip().lower())
+
+
+def mining_path_from_log_phase(log_phase: str | None) -> str | None:
+    key = (log_phase or "").strip().replace("_", "-")
+    return _LOG_PHASE_TO_MINING_PATH.get(key)
+
+
+def mining_path_from_db_phase(db_phase: str | None) -> str | None:
+    return _DB_PHASE_TO_MINING_PATH.get((db_phase or "").strip())
+
+
+def mining_path_enabled(proj: Any, path: str) -> bool:
+    key = normalize_mining_path(path)
+    if not key:
+        return False
+    default = key == MINING_PATH_HEURISTIC
+    return bool(getattr(proj, MINING_PATH_ENABLED_ATTR[key], default))
+
+
+def mining_path_user_stopped(proj: Any, path: str) -> bool:
+    key = normalize_mining_path(path)
+    if not key:
+        return False
+    return bool(getattr(proj, MINING_PATH_STOPPED_ATTR[key], False))
 
 
 def mining_path_display(raw: Any) -> str | None:

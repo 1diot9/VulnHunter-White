@@ -38,6 +38,9 @@ export type Project = {
   bypass_queue_frozen: boolean
   unconstrained_enabled: boolean
   unconstrained_done: boolean
+  heuristic_stopped?: boolean
+  fast_stopped?: boolean
+  bypass_stopped?: boolean
   llm_model: string
   worker_hint?: string
   recon_hint?: string
@@ -195,6 +198,7 @@ export type ConversationState = {
   can_stop?: boolean
   can_start?: boolean
   unconstrained_done?: boolean
+  path_stopped?: boolean
 }
 
 export type ConversationAction = 'steer' | 'continue' | 'new' | 'stop' | 'start'

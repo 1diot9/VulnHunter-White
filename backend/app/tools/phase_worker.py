@@ -9,6 +9,7 @@ from ..mining_paths import (
     HEURISTIC_LITE_WEIGHT,
     heuristic_lite_active,
     mining_path_from_role,
+    mining_path_user_stopped,
     normalize_mining_path,
 )
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Vuln
@@ -162,6 +163,8 @@ def heuristic_complete(project_id: int) -> bool:
             return False
         if not bool(getattr(proj, "heuristic_enabled", True)):
             return True
+        if mining_path_user_stopped(proj, "heuristic"):
+            return True
         return _pending_heuristic_entries(db, project_id, lite=_heuristic_lite(proj)) <= 0
 
 
@@ -171,11 +174,11 @@ def mining_complete(project_id: int) -> bool:
         proj = db.get(Project, project_id)
         if not proj or not proj.recon_done:
             return False
-        if bool(getattr(proj, "heuristic_enabled", True)):
+        if bool(getattr(proj, "heuristic_enabled", True)) and not mining_path_user_stopped(proj, "heuristic"):
             left = _pending_heuristic_entries(db, project_id, lite=_heuristic_lite(proj))
             if left > 0:
                 return False
-        if bool(getattr(proj, "fast_enabled", False)):
+        if bool(getattr(proj, "fast_enabled", False)) and not mining_path_user_stopped(proj, "fast"):
             if not bool(getattr(proj, "fast_queue_frozen", False)):
                 return False
             open_n = (
@@ -185,7 +188,7 @@ def mining_complete(project_id: int) -> bool:
             )
             if open_n > 0:
                 return False
-        if bool(getattr(proj, "bypass_enabled", False)):
+        if bool(getattr(proj, "bypass_enabled", False)) and not mining_path_user_stopped(proj, "bypass"):
             if not bool(getattr(proj, "bypass_queue_frozen", False)):
                 return False
             from ..models import BypassTarget
@@ -209,6 +212,12 @@ def mining_complete(project_id: int) -> bool:
             .count()
         )
         return bounced == 0
+
+
+def path_is_user_stopped(project_id: int, path: str) -> bool:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return bool(proj and mining_path_user_stopped(proj, path))
 
 
 def unconstrained_complete(project_id: int) -> bool:

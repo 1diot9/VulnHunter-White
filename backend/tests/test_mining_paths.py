@@ -621,6 +621,37 @@ def test_pick_next_bypass_newest_cve_first(tmp_env, project):
     assert str(third.file_path).endswith("open-issue.md")
 
 
+def test_ingest_old_vulns_appends_after_freeze(tmp_env, project):
+    from app.models import BypassTarget, SessionLocal
+    from app.services.bypass_queue import bypass_counts, freeze_bypass_queue, ingest_old_vulns
+    from app.services.paths import old_vulns_dir
+
+    old_dir = old_vulns_dir(project)
+    old_dir.mkdir(parents=True, exist_ok=True)
+    (old_dir / "index.md").write_text("---\ncomplete: true\n---\n", encoding="utf-8")
+    (old_dir / "cve-2024-1.md").write_text(
+        "---\ntitle: 旧洞\nsummary: a\ncve: CVE-2024-1\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    assert freeze_bypass_queue(project) == 1
+    (old_dir / "cve-2025-2.md").write_text(
+        "---\ntitle: 新洞\nsummary: b\ncve: CVE-2025-2\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    assert ingest_old_vulns(project) == 1
+    assert ingest_old_vulns(project) == 0
+    counts = bypass_counts(project)
+    assert counts["queued"] == 2
+    assert counts["open"] == 2
+    with SessionLocal() as db:
+        paths = {
+            row.file_path
+            for row in db.query(BypassTarget).filter(BypassTarget.project_id == project).all()
+        }
+    assert "docs/old-vulns/cve-2024-1.md" in paths
+    assert "docs/old-vulns/cve-2025-2.md" in paths
+
+
 def test_mining_complete_waits_on_bypass_queue(tmp_env, project):
     from app.models import BypassTarget, Project, SessionLocal
 
@@ -1084,5 +1115,96 @@ def test_unconstrained_start_reopens_completed_project(tmp_env, project, monkeyp
         proj = db.get(Project, project)
         assert proj.unconstrained_done is False
         assert proj.status != "completed"
+    assert mining_complete(project) is False
+
+
+def test_heuristic_stop_and_start_and_resume_clears_flag(tmp_env, project, monkeypatch):
+    from app.models import FileWeight, Project, SessionLocal
+    from app.services import pipeline
+    from app.services.conversation import get_conversation_state, request_conversation
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = True
+        proj.unconstrained_enabled = False
+        proj.status = "auditing"
+        db.add(
+            FileWeight(
+                project_id=project,
+                path="app/Main.java",
+                weight=100,
+                audited=False,
+                skipped=False,
+            )
+        )
+        db.commit()
+
+    state = get_conversation_state(project, "mine")
+    assert state["can_stop"] is True
+    assert state["can_start"] is False
+    assert state["path_stopped"] is False
+    assert mining_complete(project) is False
+
+    out = request_conversation(project, "mine", "stop")
+    assert out["ok"] is True
+    assert out["path_stopped"] is True
+    assert out["project_completed"] is True
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.heuristic_stopped is True
+        assert proj.status == "completed"
+    assert mining_complete(project) is True
+    state = get_conversation_state(project, "mine")
+    assert state["can_start"] is True
+    assert state["can_stop"] is False
+    assert state["path_stopped"] is True
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    started = request_conversation(project, "mine", "start")
+    assert started["path_stopped"] is False
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.heuristic_stopped is False
+        assert proj.status != "completed"
+    assert mining_complete(project) is False
+
+    request_conversation(project, "mine", "stop")
+    pipeline.request_resume(project)
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.heuristic_stopped is False
+    assert mining_complete(project) is False
+
+
+def test_fast_stop_does_not_complete_if_heuristic_left(tmp_env, project):
+    from app.models import FileWeight, Project, SessionLocal
+    from app.services.conversation import request_conversation
+
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        proj.recon_done = True
+        proj.heuristic_enabled = True
+        proj.fast_enabled = True
+        proj.fast_queue_frozen = True
+        proj.status = "auditing"
+        db.add(
+            FileWeight(
+                project_id=project,
+                path="app/Main.java",
+                weight=100,
+                audited=False,
+                skipped=False,
+            )
+        )
+        db.commit()
+
+    out = request_conversation(project, "fast", "stop")
+    assert out["path_stopped"] is True
+    assert out["project_completed"] is False
+    with SessionLocal() as db:
+        proj = db.get(Project, project)
+        assert proj.fast_stopped is True
+        assert proj.status == "auditing"
     assert mining_complete(project) is False
 

@@ -193,7 +193,7 @@ def test_unconstrained_conversation_stop_start_and_rejects_new(tmp_env, project,
     with TestClient(app) as client:
         denied = client.post(
             f"/api/projects/{project}/conversation",
-            json={"log_phase": "mine", "action": "stop"},
+            json={"log_phase": "reviewer-review", "action": "stop"},
         )
         assert denied.status_code == 400
         stopped = client.post(

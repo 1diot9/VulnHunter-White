@@ -56,7 +56,7 @@ def _iter_old_vuln_files(project_id: int) -> list[Path]:
 
 
 def ingest_old_vulns(project_id: int) -> int:
-    """Create queued rows for each historical-vuln document. Existing paths are kept."""
+    """Queue a row per historical-vuln document. Existing paths are kept; new files are appended."""
     files = _iter_old_vuln_files(project_id)
     with SessionLocal() as db:
         existing = {

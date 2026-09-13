@@ -64,7 +64,17 @@ from ..dynamic_verify import (
     static_after_review_timeouts,
     verify_mode_enabled,
 )
-from ..mining_paths import HEURISTIC_LITE_WEIGHT, heuristic_lite_active, mining_path_label
+from ..mining_paths import (
+    HEURISTIC_LITE_WEIGHT,
+    MINING_PATH_DB_PHASES,
+    MINING_PATH_LABELS,
+    MINING_PATH_STOPPED_ATTR,
+    heuristic_lite_active,
+    mining_path_enabled,
+    mining_path_from_db_phase,
+    mining_path_label,
+    mining_path_user_stopped,
+)
 from ..models import FileWeight, PhaseRun, Project, SessionLocal, Sink, Source, Vuln, utcnow
 from ..prompts import load_prompt, render_prompt
 from ..target_kind import (
@@ -132,7 +142,13 @@ from ..tools.phase_recon import (
     recon_old_vulns_ready,
     recon_source_ext_ready,
 )
-from ..tools.phase_worker import heuristic_complete, mining_complete, project_complete_gates, unconstrained_complete
+from ..tools.phase_worker import (
+    heuristic_complete,
+    mining_complete,
+    path_is_user_stopped,
+    project_complete_gates,
+    unconstrained_complete,
+)
 
 register_all_tools()
 
@@ -144,6 +160,7 @@ _pause_flags: dict[int, threading.Event] = {}
 _phase_pause_flags: dict[tuple[int, str], threading.Event] = {}
 _phase_generation: dict[tuple[int, str], int] = {}
 _unconstrained_generation: dict[int, int] = {}
+_mining_path_generation: dict[tuple[int, str], int] = {}
 _force_new_run: set[tuple[int, str]] = set()
 _pending_inject: dict[tuple[int, str], list[dict[str, Any]]] = {}
 _threads: dict[int, list[threading.Thread]] = {}
@@ -319,13 +336,15 @@ def _loop_cancel(project_id: int, phase: str) -> GenerationCancel:
     return GenerationCancel(_cancel_event(project_id), project_id, control_phase(phase), _phase_generation_of(project_id, phase))
 
 
-class UnconstrainedLoopCancel:
-    """Project cancel, worker 新跑, or user stop of unconstrained scanning."""
+class MiningPathLoopCancel:
+    """Project cancel, worker 新跑, or user pause of one mining path."""
 
-    def __init__(self, project_id: int) -> None:
+    def __init__(self, project_id: int, path: str) -> None:
         self._project = _cancel_event(project_id)
         self._project_id = project_id
+        self._path = path
         self._worker_gen = _phase_generation_of(project_id, "worker")
+        self._path_gen = _mining_path_generation.get((project_id, path), 0)
         self._u_gen = _unconstrained_generation.get(project_id, 0)
 
     def is_set(self) -> bool:
@@ -333,7 +352,11 @@ class UnconstrainedLoopCancel:
             return True
         if _phase_generation_of(self._project_id, "worker") != self._worker_gen:
             return True
-        return _unconstrained_generation.get(self._project_id, 0) != self._u_gen
+        if _mining_path_generation.get((self._project_id, self._path), 0) != self._path_gen:
+            return True
+        if self._path == "unconstrained":
+            return _unconstrained_generation.get(self._project_id, 0) != self._u_gen
+        return False
 
     def wait(self, timeout: float | None = None) -> bool:
         deadline = None if timeout is None else time.time() + max(0.0, timeout)
@@ -345,15 +368,33 @@ class UnconstrainedLoopCancel:
         return True
 
 
+class UnconstrainedLoopCancel(MiningPathLoopCancel):
+    """Project cancel, worker 新跑, or user stop of unconstrained scanning."""
+
+    def __init__(self, project_id: int) -> None:
+        super().__init__(project_id, "unconstrained")
+
+
+def _mining_path_loop_cancel(project_id: int, path: str) -> MiningPathLoopCancel:
+    return MiningPathLoopCancel(project_id, path)
+
+
 def _unconstrained_loop_cancel(project_id: int) -> UnconstrainedLoopCancel:
     return UnconstrainedLoopCancel(project_id)
 
 
-def _bump_unconstrained_generation(project_id: int) -> int:
+def _bump_mining_path_generation(project_id: int, path: str) -> int:
+    key = (project_id, path)
     with _lock:
-        nxt = _unconstrained_generation.get(project_id, 0) + 1
-        _unconstrained_generation[project_id] = nxt
+        nxt = _mining_path_generation.get(key, 0) + 1
+        _mining_path_generation[key] = nxt
+        if path == "unconstrained":
+            _unconstrained_generation[project_id] = _unconstrained_generation.get(project_id, 0) + 1
         return nxt
+
+
+def _bump_unconstrained_generation(project_id: int) -> int:
+    return _bump_mining_path_generation(project_id, "unconstrained")
 
 
 def _phase_is_paused(project_id: int, phase: str) -> bool:
@@ -370,6 +411,7 @@ def reset_runtime_state() -> None:
         _phase_pause_flags.clear()
         _phase_generation.clear()
         _unconstrained_generation.clear()
+        _mining_path_generation.clear()
         _force_new_run.clear()
         _pending_inject.clear()
         _threads.clear()
@@ -985,6 +1027,7 @@ def request_resume(project_id: int) -> None:
     cancel = _cancel_event(project_id)
     if cancel.is_set():
         cancel.clear()
+    _clear_user_stopped_mining_paths(project_id)
     _prepare_project_resume(project_id)
     _set_project_running(project_id)
     live_log.system(project_id, "全部阶段续跑（接续原上下文）")
@@ -1037,6 +1080,11 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
     _bump_phase_generation(project_id, "recon")
     _force_new_run.discard((project_id, "recon"))
 
+    was_completed = False
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        was_completed = bool(proj and proj.status == "completed")
+
     was_paused = _pause_event(project_id).is_set()
     if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
@@ -1059,7 +1107,7 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
                 proj.error = None
                 db.commit()
 
-    # 日志并入地图/鉴权或历史漏洞小阶段；由后续 AgentLoop 的 _start_log_session 新开一轮。
+    # 不在这里写系统日志，避免单独占一轮；kickoff 由子阶段写入后并进 _start_log_session。
     rt = threading.Thread(
         target=_run_recon_subphase_rerun,
         args=(project_id, sub, was_paused),
@@ -1070,6 +1118,8 @@ def request_recon_subphase_rerun(project_id: int, subphase: str) -> dict[str, An
         _recon_rerun_threads[project_id] = rt
         _threads.setdefault(project_id, []).append(rt)
     rt.start()
+    if was_completed and not was_paused:
+        start_audit(project_id)
     return {"ok": True, "subphase": sub, "label": label, **get_phase_states(project_id)}
 
 
@@ -1241,7 +1291,11 @@ def _start_log_session(
     *,
     role: str | None = None,
 ) -> int:
-    """调度器新开 AgentLoop 时翻日志页；当前页还没有事件则留在第 1 页。"""
+    """调度器新开 AgentLoop 时翻日志页；当前页还没有对话事件则并入该页。
+
+    拉起线程 / 爬虫 / 用户点去重等 kickoff 系统日志不占用页码，
+    会和随后这一轮 Agent 落在同一页。
+    """
     control = control_phase(phase)
     prev = live_log.current_session(project_id, phase)
     nxt = live_log.begin_session(project_id, phase, if_used=True)
@@ -1255,6 +1309,7 @@ def _start_log_session(
         role=role,
         session_start=started,
     )
+    live_log.mark_session_used(project_id, phase)
     return nxt
 
 
@@ -2589,15 +2644,92 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
     return {"ok": True, "action": "new", "log_phase": lp, **get_phase_states(project_id)}
 
 
-def _abandon_unconstrained_runs(project_id: int) -> None:
-    reason = "用户停止无约束扫描"
-    _abandon_db_phase_runs(project_id, ("unconstrained-worker",), reason=reason)
+def _mining_log_phase(path: str) -> str:
+    return {
+        "heuristic": "mine",
+        "fast": "fast",
+        "bypass": "bypass",
+        "unconstrained": "unconstrained",
+    }.get(path, path)
+
+
+def _mining_live_phase(path: str) -> str:
+    phases = MINING_PATH_DB_PHASES.get(path) or (path,)
+    return phases[0]
+
+
+def _clear_user_stopped_mining_paths(project_id: int) -> None:
+    """Resume-all: reopen paths the user paused from the log composer."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            return
+        changed = False
+        unconstrained_was_stopped = bool(getattr(proj, "unconstrained_stopped", False))
+        for attr in MINING_PATH_STOPPED_ATTR.values():
+            if bool(getattr(proj, attr, False)):
+                setattr(proj, attr, False)
+                changed = True
+        if unconstrained_was_stopped:
+            proj.unconstrained_done = False
+            changed = True
+        if changed:
+            db.commit()
+            live_log.system(project_id, "全部续跑：已恢复用户暂停的挖掘路径")
+
+
+def _release_mining_path_claims(project_id: int, path: str) -> None:
+    if path == "heuristic":
+        _release_claims(project_id)
+        return
+    if path == "fast":
+        from ..models import Sink
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(Sink)
+                .filter(Sink.project_id == project_id, Sink.status == "claimed")
+                .all()
+            )
+            n = 0
+            for row in rows:
+                row.status = "queued"
+                row.claimed_by = None
+                row.claimed_at = None
+                n += 1
+            if n:
+                db.commit()
+        return
+    if path == "bypass":
+        from ..models import BypassTarget
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(BypassTarget)
+                .filter(BypassTarget.project_id == project_id, BypassTarget.status == "claimed")
+                .all()
+            )
+            n = 0
+            for row in rows:
+                row.status = "queued"
+                row.claimed_by = None
+                row.claimed_at = None
+                n += 1
+            if n:
+                db.commit()
+
+
+def _abandon_mining_path_runs(project_id: int, path: str) -> None:
+    label = MINING_PATH_LABELS.get(path, path)
+    reason = f"用户暂停{label}"
+    db_phases = MINING_PATH_DB_PHASES.get(path) or ()
+    _abandon_db_phase_runs(project_id, db_phases, reason=reason)
     with SessionLocal() as db:
         rows = (
             db.query(PhaseRun)
             .filter(
                 PhaseRun.project_id == project_id,
-                PhaseRun.phase == "unconstrained-worker",
+                PhaseRun.phase.in_(db_phases),
                 PhaseRun.status.in_(("running", "paused", "awaiting_user")),
             )
             .all()
@@ -2606,9 +2738,14 @@ def _abandon_unconstrained_runs(project_id: int) -> None:
     for rid in ids:
         _release_adopted(project_id, rid)
         _finish_phase_run(rid, "cancelled", reason)
+    _release_mining_path_claims(project_id, path)
 
 
-def _try_complete_after_unconstrained_stop(project_id: int) -> bool:
+def _abandon_unconstrained_runs(project_id: int) -> None:
+    _abandon_mining_path_runs(project_id, "unconstrained")
+
+
+def _try_complete_after_mining_path_stop(project_id: int) -> bool:
     with _lock:
         fix_busy = bool(_fix_inflight.get(project_id))
         reviewer_busy = bool(_reviewer_inflight.get(project_id))
@@ -2623,67 +2760,98 @@ def _try_complete_after_unconstrained_stop(project_id: int) -> bool:
     )
 
 
-def request_unconstrained_stop(project_id: int) -> dict[str, Any]:
-    """End unconstrained scanning; complete the project if other gates already pass."""
+def request_mining_path_stop(project_id: int, path: str) -> dict[str, Any]:
+    """Pause one mining path; complete the project if other gates already pass."""
+    from ..mining_paths import normalize_mining_path
+
+    key = normalize_mining_path(path)
+    if not key:
+        raise ValueError("仅挖掘路径支持暂停")
+    label = MINING_PATH_LABELS[key]
+    log_phase = _mining_log_phase(key)
+    live_phase = _mining_live_phase(key)
+    stop_attr = MINING_PATH_STOPPED_ATTR[key]
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj:
             raise ValueError("项目不存在")
         if proj.status in ("cancelled", "ingesting", "error"):
-            raise ValueError("当前项目状态不可停止无约束扫描")
-        if not bool(getattr(proj, "unconstrained_enabled", False)):
-            raise ValueError("未开启无约束扫描")
+            raise ValueError(f"当前项目状态不可暂停{label}")
+        if not mining_path_enabled(proj, key):
+            raise ValueError(f"未开启{label}")
         already_complete = proj.status == "completed"
-        already_done = bool(getattr(proj, "unconstrained_done", False))
-        if not already_done:
-            proj.unconstrained_done = True
-            db.commit()
+        already_stopped = mining_path_user_stopped(proj, key)
+        if key == "unconstrained":
+            already_stopped = already_stopped or bool(getattr(proj, "unconstrained_done", False))
+            if not bool(getattr(proj, "unconstrained_done", False)):
+                proj.unconstrained_done = True
+        if not already_stopped:
+            setattr(proj, stop_attr, True)
+        db.commit()
 
     if already_complete:
-        return {
+        out = {
             "ok": True,
             "action": "stop",
-            "log_phase": "unconstrained",
-            "unconstrained_done": True,
+            "log_phase": log_phase,
+            "path_stopped": True,
             "project_completed": True,
             **get_phase_states(project_id),
         }
+        if key == "unconstrained":
+            out["unconstrained_done"] = True
+        return out
 
-    _bump_unconstrained_generation(project_id)
-    _abandon_unconstrained_runs(project_id)
+    _bump_mining_path_generation(project_id, key)
+    _abandon_mining_path_runs(project_id, key)
     live_log.system(
         project_id,
-        "用户停止无约束扫描，不再新开本路径轮次",
-        phase="unconstrained-worker",
+        f"用户暂停{label}，不再新开本路径轮次",
+        phase=live_phase,
     )
-    completed = _try_complete_after_unconstrained_stop(project_id)
+    completed = _try_complete_after_mining_path_stop(project_id)
     if completed:
         live_log.system(
             project_id,
-            "无约束扫描已停止，其他阶段均已结束，项目标为完成",
-            phase="unconstrained-worker",
+            f"{label}已暂停，其他阶段均已结束，项目标为完成",
+            phase=live_phase,
         )
-    return {
+    out = {
         "ok": True,
         "action": "stop",
-        "log_phase": "unconstrained",
-        "unconstrained_done": True,
+        "log_phase": log_phase,
+        "path_stopped": True,
         "project_completed": completed,
         **get_phase_states(project_id),
     }
+    if key == "unconstrained":
+        out["unconstrained_done"] = True
+    return out
 
 
-def request_unconstrained_start(project_id: int) -> dict[str, Any]:
-    """Restart unconstrained scanning after a stop or RCE-effect confirm."""
+def request_mining_path_start(project_id: int, path: str) -> dict[str, Any]:
+    """Resume one mining path after a user pause (or unconstrained RCE stop)."""
+    from ..mining_paths import normalize_mining_path
+
+    key = normalize_mining_path(path)
+    if not key:
+        raise ValueError("仅挖掘路径支持恢复")
+    label = MINING_PATH_LABELS[key]
+    log_phase = _mining_log_phase(key)
+    live_phase = _mining_live_phase(key)
+    stop_attr = MINING_PATH_STOPPED_ATTR[key]
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj:
             raise ValueError("项目不存在")
         if proj.status in ("cancelled", "ingesting", "error"):
-            raise ValueError("当前项目状态不可启动无约束扫描")
-        if not bool(getattr(proj, "unconstrained_enabled", False)):
-            raise ValueError("未开启无约束扫描")
-        proj.unconstrained_done = False
+            raise ValueError(f"当前项目状态不可恢复{label}")
+        if not mining_path_enabled(proj, key):
+            raise ValueError(f"未开启{label}")
+        setattr(proj, stop_attr, False)
+        if key == "unconstrained":
+            proj.unconstrained_done = False
+            proj.unconstrained_stopped = False
         if proj.status == "completed":
             proj.status = "paused"
             proj.phase = "worker"
@@ -2696,15 +2864,28 @@ def request_unconstrained_start(project_id: int) -> dict[str, Any]:
     if cancel.is_set():
         cancel.clear()
     _set_project_running(project_id)
-    live_log.system(project_id, "用户启动无约束扫描", phase="unconstrained-worker")
+    live_log.system(project_id, f"用户恢复{label}", phase=live_phase)
     start_audit(project_id)
-    return {
+    out = {
         "ok": True,
         "action": "start",
-        "log_phase": "unconstrained",
-        "unconstrained_done": False,
+        "log_phase": log_phase,
+        "path_stopped": False,
         **get_phase_states(project_id),
     }
+    if key == "unconstrained":
+        out["unconstrained_done"] = False
+    return out
+
+
+def request_unconstrained_stop(project_id: int) -> dict[str, Any]:
+    """End unconstrained scanning; complete the project if other gates already pass."""
+    return request_mining_path_stop(project_id, "unconstrained")
+
+
+def request_unconstrained_start(project_id: int) -> dict[str, Any]:
+    """Restart unconstrained scanning after a stop or RCE-effect confirm."""
+    return request_mining_path_start(project_id, "unconstrained")
 
 
 def _worker_hint_block(project_id: int) -> str:
@@ -2916,9 +3097,14 @@ def _loop_from_checkpoint(
     resumed: bool = True,
 ) -> AgentLoop:
     unconstrained = (cp.phase or "") in ("unconstrained-worker", "unconstrained")
+    mining = mining_path_from_db_phase(cp.phase)
+    if mining:
+        cancel_event = _mining_path_loop_cancel(cp.project_id, mining)
+    else:
+        cancel_event = _loop_cancel(cp.project_id, cp.phase)
     return AgentLoop.from_checkpoint(
         cp,
-        cancel_event=_unconstrained_loop_cancel(cp.project_id) if unconstrained else _loop_cancel(cp.project_id, cp.phase),
+        cancel_event=cancel_event,
         pause_event=_pause_event(cp.project_id) if unconstrained else _combined_pause(cp.project_id, cp.phase),
         stop_when=stop_when,
         context_window=_context_window(),
@@ -3683,6 +3869,8 @@ def _ensure_workers(
         unaudited_weighted = q.limit(1).first() is not None
     if _phase_is_paused(project_id, "worker"):
         return [t for t in active_workers if t.is_alive()]
+    if path_is_user_stopped(project_id, "heuristic"):
+        return [t for t in active_workers if t.is_alive()]
 
     alive = [t for t in active_workers if t.is_alive()]
     if not heuristic_on:
@@ -3733,6 +3921,8 @@ def _ensure_fast_prepare(project_id: int) -> None:
             return
         if proj.status in ("completed", "cancelled", "error"):
             return
+        if mining_path_user_stopped(proj, "fast"):
+            return
     if _phase_is_paused(project_id, "worker"):
         return
     with _lock:
@@ -3767,6 +3957,8 @@ def _ensure_fast_workers(
         status = proj.status
     if _phase_is_paused(project_id, "worker"):
         return [t for t in active_workers if t.is_alive()]
+    if path_is_user_stopped(project_id, "fast"):
+        return [t for t in active_workers if t.is_alive()]
     alive = [t for t in active_workers if t.is_alive()]
     if not fast_on or not queue_frozen(project_id) or fast_path_complete(project_id):
         return alive
@@ -3798,27 +3990,51 @@ def _ensure_fast_workers(
     return alive
 
 
+def _on_bypass_queue_expanded(project_id: int, added: int) -> None:
+    """New old-vuln docs joined the frozen roster; keep mining/attack-chain gates open."""
+    from ..tools.phase_attack_chain import clear_attack_chain_done, is_attack_chain_done
+
+    live_log.system(
+        project_id,
+        f"历史漏洞绕过队列新增 {added} 条，将继续开轮",
+        phase="bypass-worker",
+    )
+    if is_attack_chain_done(project_id):
+        clear_attack_chain_done(project_id)
+        live_log.system(
+            project_id,
+            "绕过队列扩大，已撤回攻击链结束标记，新轮结束后将重跑串联",
+            phase="attack_chain",
+        )
+
+
 def _ensure_bypass_prepare(project_id: int) -> None:
-    from .bypass_queue import freeze_bypass_queue
+    from .bypass_queue import freeze_bypass_queue, ingest_old_vulns
 
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj or not bool(getattr(proj, "bypass_enabled", False)):
             return
-        if bool(getattr(proj, "bypass_queue_frozen", False)):
-            return
         if proj.status in ("completed", "cancelled", "error"):
             return
+        if mining_path_user_stopped(proj, "bypass"):
+            return
+        frozen = bool(getattr(proj, "bypass_queue_frozen", False))
     if _phase_is_paused(project_id, "worker"):
         return
-    if not recon_old_vulns_ready(project_id):
+    if not frozen:
+        if not recon_old_vulns_ready(project_id):
+            return
+        queued = freeze_bypass_queue(project_id)
+        live_log.system(
+            project_id,
+            f"历史漏洞绕过队列已冻结，待尝试 {queued} 条",
+            phase="bypass-worker",
+        )
         return
-    queued = freeze_bypass_queue(project_id)
-    live_log.system(
-        project_id,
-        f"历史漏洞绕过队列已冻结，待尝试 {queued} 条",
-        phase="bypass-worker",
-    )
+    added = ingest_old_vulns(project_id)
+    if added:
+        _on_bypass_queue_expanded(project_id, added)
 
 
 def _ensure_bypass_workers(
@@ -3836,6 +4052,8 @@ def _ensure_bypass_workers(
         fast_on = bool(getattr(proj, "fast_enabled", False))
         status = proj.status
     if _phase_is_paused(project_id, "worker"):
+        return [t for t in active_workers if t.is_alive()]
+    if path_is_user_stopped(project_id, "bypass"):
         return [t for t in active_workers if t.is_alive()]
     alive = [t for t in active_workers if t.is_alive()]
     if not bypass_on or not queue_frozen(project_id) or bypass_path_complete(project_id):
@@ -4696,6 +4914,8 @@ def _run_worker_loop(project_id: int, worker_id: str) -> None:
             return
         if _project_is_terminal(project_id):
             return
+        if path_is_user_stopped(project_id, "heuristic"):
+            return
         if _phase_is_paused(project_id, "worker"):
             if not _wait_if_paused(project_id, cancel, "worker"):
                 return
@@ -4714,7 +4934,9 @@ def _run_worker_loop_inner(
     current_run_id: int | None = None
     try:
         while not cancel.is_set():
-            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+            if path_is_user_stopped(project_id, "heuristic"):
+                return
+            if not _wait_if_paused(project_id, _mining_path_loop_cancel(project_id, "heuristic"), "worker"):
                 break
             if not _wait_if_code_intel_pending(project_id, cancel):
                 break
@@ -4821,7 +5043,7 @@ def _run_worker_loop_inner(
                 user_prompt=user,
                 phase_run_id=run_id,
                 worker_id=worker_id,
-                cancel_event=_loop_cancel(project_id, "worker"),
+                cancel_event=_mining_path_loop_cancel(project_id, "heuristic"),
                 pause_event=_combined_pause(project_id, "worker"),
                 timeout_sec=settings.timeout_worker_round,
                 context_window=_context_window(),
@@ -5245,7 +5467,9 @@ def _run_fast_worker_loop(project_id: int, worker_id: str) -> None:
     current_run_id: int | None = None
     try:
         while not cancel.is_set():
-            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+            if path_is_user_stopped(project_id, "fast"):
+                return
+            if not _wait_if_paused(project_id, _mining_path_loop_cancel(project_id, "fast"), "worker"):
                 break
             if not _wait_if_code_intel_pending(project_id, cancel):
                 break
@@ -5326,7 +5550,7 @@ def _run_fast_worker_loop(project_id: int, worker_id: str) -> None:
                 user_prompt=user,
                 phase_run_id=run_id,
                 worker_id=worker_id,
-                cancel_event=_loop_cancel(project_id, "worker"),
+                cancel_event=_mining_path_loop_cancel(project_id, "fast"),
                 pause_event=_combined_pause(project_id, "worker"),
                 timeout_sec=settings.timeout_worker_round,
                 context_window=_context_window(),
@@ -5392,7 +5616,9 @@ def _run_bypass_worker_loop(project_id: int, worker_id: str) -> None:
     current_run_id: int | None = None
     try:
         while not cancel.is_set():
-            if not _wait_if_paused(project_id, _loop_cancel(project_id, "worker"), "worker"):
+            if path_is_user_stopped(project_id, "bypass"):
+                return
+            if not _wait_if_paused(project_id, _mining_path_loop_cancel(project_id, "bypass"), "worker"):
                 break
             if not _wait_if_code_intel_pending(project_id, cancel):
                 break
@@ -5472,7 +5698,7 @@ def _run_bypass_worker_loop(project_id: int, worker_id: str) -> None:
                 user_prompt=user,
                 phase_run_id=run_id,
                 worker_id=worker_id,
-                cancel_event=_loop_cancel(project_id, "worker"),
+                cancel_event=_mining_path_loop_cancel(project_id, "bypass"),
                 pause_event=_combined_pause(project_id, "worker"),
                 timeout_sec=settings.timeout_worker_round,
                 context_window=_context_window(),
