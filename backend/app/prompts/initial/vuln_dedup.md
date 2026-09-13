@@ -23,10 +23,11 @@ ${path_hints}
 ```
 
 ## 要求
-1. 每条先 `Read` 报告（`### 漏洞代码` / 入口 / sink），再 `Read`/`Grep` 当前 `src/`（或报告中的反编译路径）核对漏洞代码是否还在。
-2. `SearchOldVuln` 只查 `kind=old`。先浏览近期收录，再按每条产出的入口/sink/类型检索。没有历史漏洞文档时公开结论用 `unique` 或 `uncertain`，仍必须填 `source_status`。
-3. 每条产出都 `RecordVulnDedup`：`verdict` 为 `known_public` / `unique` / `uncertain`；`source_status` 为 `present` / `fixed` / `uncertain`。已公开或最新代码已修复默认标误报；两者同时成立时按已修复。
-4. 全部完成后 `FinishVulnDedup(notes=...)`。没有历史漏洞或全部 unique、或全部源码仍在，也要 Finish。
+1. 待查超过 5 条时按入口/sink/类型相近分成每组约 5 条，一组一组做；不超过 5 条则一组做完。
+2. 本组每条先 `Read` 报告（`### 漏洞代码` / 入口 / sink），再 `Read`/`Grep` 当前 `src/`（或报告中的反编译路径）核对漏洞代码是否还在。
+3. `SearchOldVuln` 只查 `kind=old`。先浏览近期收录，再按本组产出的入口/sink/类型检索。没有历史漏洞文档时公开结论用 `unique` 或 `uncertain`，仍必须填 `source_status`。
+4. **本组分析完立刻对本组每条 `RecordVulnDedup`**（`verdict`：`known_public` / `unique` / `uncertain`；`source_status`：`present` / `fixed` / `uncertain`）。已公开或最新代码已修复默认标误报；两者同时成立时按已修复。不要等全部漏洞分析完再一次性标记。
+5. 全部记录后 `FinishVulnDedup(notes=...)`。没有历史漏洞或全部 unique、或全部源码仍在，也要 Finish。
 
 当前挖掘模式：${audit_mode_label}
 ${audit_mode_hint}

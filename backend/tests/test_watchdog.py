@@ -329,6 +329,26 @@ def test_unconstrained_watchdog_has_no_persist_nudge():
     assert w.idle_turns == 0
 
 
+def test_vuln_dedup_watchdog_nudges():
+    from app.agent.watchdog import VULN_DEDUP_NO_TOOL_NUDGE, VULN_DEDUP_RECORD_NUDGE
+
+    w = AgentWatchdog(phase="vuln_dedup")
+    assert w.note_no_tools() == VULN_DEDUP_NO_TOOL_NUDGE
+    assert "RecordVulnDedup" in VULN_DEDUP_NO_TOOL_NUDGE
+    assert AgentWatchdog(phase="vuln-dedup").note_no_tools() == VULN_DEDUP_NO_TOOL_NUDGE
+    assert w.worker_finish_interval == WORKER_FINISH_INTERVAL == 50
+    for i in range(1, 50):
+        assert w.note_turn(["Read"]) is None
+        assert w.turn_count == i
+    msg = w.note_turn(["Grep"])
+    assert msg == VULN_DEDUP_RECORD_NUDGE.format(n=50)
+    assert "RecordVulnDedup" in msg
+    assert "若有漏洞已经分析完毕" in msg
+    assert "看门狗：产出去重连续 50 轮未 RecordVulnDedup，已提醒先标记已分析完的漏洞" == w.persist_nudge_log()
+    assert w.note_turn(["RecordVulnDedup"]) is None
+    assert w.idle_turns == 0
+
+
 def test_cli_indexer_watchdog_nudges():
     from app.agent.watchdog import CLI_INDEXER_FINISH_NUDGE, CLI_INDEXER_NO_TOOL_NUDGE
 

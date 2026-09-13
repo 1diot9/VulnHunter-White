@@ -853,7 +853,10 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "被测应用必须用最新版本" in text
     assert "vulhub" in text
     assert "业务应用本身可达" in text
+    assert "credentials.low" in text
+    assert "credentials.high" in text
     initial = load_prompt("initial/reviewer-lab.md")
+    assert "credentials.low" in initial
     assert "FinishLab" in initial
     assert "不要审核漏洞" in initial
     assert "${lab_image}" in initial
@@ -868,6 +871,9 @@ def test_reviewer_lab_prompt_is_setup_only(tmp_env, project):
     assert "Audited app = latest" in docker
     assert "vulhub" in docker
     assert "application itself" in docker
+    assert "credentials.low" in docker
+    assert "credentials.high" in docker
+    assert "IDOR" in docker
     rendered = pipeline._lab_system_prompt(project)
     assert f"demo-{project}:lab" in rendered
     assert f"demo-{project}" in rendered
@@ -986,7 +992,13 @@ def test_vuln_dedup_prompt_checks_latest_source():
     assert "source_status" in text
     assert "最新" in text
     assert "src/" in text
+    assert "分组" in text
+    assert "立刻" in text
+    assert "RecordVulnDedup" in text
+    assert "不要等全部漏洞分析完再一次性标记" in text
     initial = load_prompt("initial/vuln_dedup.md")
     assert "${source_note}" in initial
     assert "source_status" in initial
     assert "Read" in initial
+    assert "每组约 5 条" in initial
+    assert "不要等全部漏洞分析完再一次性标记" in initial

@@ -13,7 +13,7 @@
 - `SearchOldVuln`：只搜侦察历史漏洞（`kind=old`）。空 query 列出目录（新收录在前）；`query` 按入口路径、sink、CVE、类型召回；`title` 读全文。
 - `Read` / `Grep` / `Glob`：读产出报告 `vulns/{id}/report.md`，并核对 `src/`（及报告中的反编译路径）里入口 / sink / 漏洞代码是否还在。
 - `TodoWrite`：按待查 `vuln_id` 列清单，查完一条勾一条。
-- `RecordVulnDedup`：写入一条对比结论。`known_public` 或 `source_status=fixed` 时默认标误报。
+- `RecordVulnDedup`：写入一条对比结论。`known_public` 或 `source_status=fixed` 时默认标误报。一条分析完立刻记一条，不要攒着。
 - `FinishVulnDedup`：全部查完后结束（有无命中都必须调用）。
 
 ## 什么算已公开（must `known_public`）
@@ -35,13 +35,16 @@
 仅改注释、格式、无害重命名不算 fixed。不要因为跑不了 PoC（本阶段无 Shell）就标 fixed。
 
 ## 流程
-1. 先 `Read` 产出报告（含 `### 漏洞代码` / Source→Sink），再用 `Read`/`Grep` 核对当前 `src/` 对应路径与代码片段。
-2. `SearchOldVuln` 空 query 看最新历史漏洞目录，再按每条产出的路径/类型/标题检索；命中后 `title` 读全文。
-3. 每条产出都要 `RecordVulnDedup`（必须同时给 `verdict` 与 `source_status`）。不要只做路径启发式匹配就下结论。
-4. 全部记录后 `FinishVulnDedup(notes=...)`。
+1. **分组**：待查超过 5 条时，按入口路径 / sink / 漏洞类型相近分成每组约 5 条（`TodoWrite` 可按组列清单）。不超过 5 条则一组做完即可。
+2. 对当前组：先 `Read` 产出报告（含 `### 漏洞代码` / Source→Sink），再用 `Read`/`Grep` 核对当前 `src/` 对应路径与代码片段。
+3. `SearchOldVuln` 空 query 看最新历史漏洞目录，再按本组产出的路径/类型/标题检索；命中后 `title` 读全文。
+4. **本组分析完立刻对本组每条 `RecordVulnDedup`**（必须同时给 `verdict` 与 `source_status`），再进入下一组。不要等全部漏洞分析完再一次性标记——上下文会被压缩，延迟写入会丢失。
+5. 全部记录后 `FinishVulnDedup(notes=...)`。
 
 ## 纪律
-- 必须逐条覆盖用户给出的 `vuln_id`，不要跳号。
+- 必须覆盖用户给出的全部 `vuln_id`，不要跳号。
+- 一组结论已齐就立刻 `RecordVulnDedup`；单条已齐也可先记，不要攒到收工。
+- 不要只做路径启发式匹配就下结论。
 - 不要编造历史漏洞标题或 CVE；不要编造「已修复」——必须 Read/Grep 到证据。
 - 不要把 `kind=found` 的本项目产出互相合并当成「已公开」。
 - 没有历史漏洞文档时仍要核对源码并 Finish。

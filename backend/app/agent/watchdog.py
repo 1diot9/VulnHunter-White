@@ -13,10 +13,11 @@ five times in one round aborts the session.
 
 Historical-vuln recon sessions get a persist reminder after N consecutive
 turns without WriteOldVuln. Heuristic worker mining gets a FinishFile
-reminder after M consecutive turns without FinishFile. Calling the
-corresponding tool resets the idle counter. Unrelated tools (Read/Grep/…)
-do not. Unconstrained mining has no persist-to-finish reminder. Code-map
-and auth recon sessions are not nudged to persist.
+reminder after M consecutive turns without FinishFile. Vuln-dedup sessions
+get a RecordVulnDedup reminder after M consecutive turns without marking.
+Calling the corresponding tool resets the idle counter. Unrelated tools
+(Read/Grep/…) do not. Unconstrained mining has no persist-to-finish
+reminder. Code-map and auth recon sessions are not nudged to persist.
 """
 
 from __future__ import annotations
@@ -195,6 +196,19 @@ CLI_INDEXER_FINISH_NUDGE = (
     "无法判断入口也要选最像的文件并写明不确定性。超时将 conclude 落盘失败原因。"
 )
 
+VULN_DEDUP_NO_TOOL_NUDGE = (
+    "你这一轮没有调用任何工具。请立刻按组对照历史漏洞与当前 src/ 判断产出是否已公开、是否还在。"
+    "一组（或单条）分析完立刻 RecordVulnDedup，不要等全部分析完再一次性标记；"
+    "全部记录后 FinishVulnDedup。不要挖新洞，不要 ConfirmVuln。"
+)
+
+VULN_DEDUP_RECORD_NUDGE = (
+    "看门狗提醒：产出去重已连续 {n} 轮未调用 RecordVulnDedup。"
+    "若有漏洞已经分析完毕，先调用 RecordVulnDedup 标记，不要继续扩读或攒到收工——"
+    "标记不会结束本会话。待查过多须分组（约 5 条一组），一组结论齐了就先记。"
+    "全部记录后再 FinishVulnDedup。上下文会被压缩，延迟标记会丢失进展。"
+)
+
 # Consecutive idle turns reset when any of these tools is called this turn.
 PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "recon": frozenset({"MarkBusinessJar"}),
@@ -206,6 +220,8 @@ PERSIST_TOOLS: dict[str, frozenset[str]] = {
     "bypass-worker": frozenset({"FinishBypass"}),
     "sink-triage": frozenset({"FinishSinkTriage"}),
     "cli-indexer": frozenset({"FinishIndex"}),
+    "vuln_dedup": frozenset({"RecordVulnDedup"}),
+    "vuln-dedup": frozenset({"RecordVulnDedup"}),
 }
 
 
@@ -228,7 +244,14 @@ class AgentWatchdog:
     def _persist_interval(self) -> int:
         if self.phase == "cli-indexer":
             return 8
-        if self.phase in ("worker", "fast-worker", "bypass-worker", "sink-triage"):
+        if self.phase in (
+            "worker",
+            "fast-worker",
+            "bypass-worker",
+            "sink-triage",
+            "vuln_dedup",
+            "vuln-dedup",
+        ):
             return self.worker_finish_interval
         if self.phase in RECON_PERSIST_PHASES:
             return self.persist_nudge_interval
@@ -269,6 +292,8 @@ class AgentWatchdog:
                 return TRIAGE_FINISH_NUDGE.format(n=self.idle_turns)
             if self.phase == "cli-indexer":
                 return CLI_INDEXER_FINISH_NUDGE.format(n=self.idle_turns)
+            if self.phase in ("vuln_dedup", "vuln-dedup"):
+                return VULN_DEDUP_RECORD_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon" and self._recon_needs_business_jar_nudge():
                 return RECON_BUSINESS_JAR_PERSIST_NUDGE.format(n=self.idle_turns)
             if self.phase == "recon-old-vuln":
@@ -291,6 +316,8 @@ class AgentWatchdog:
             return f"看门狗：Sink 筛选连续 {n} 轮未 FinishSinkTriage，已提醒立刻提交决策"
         if self.phase == "cli-indexer":
             return f"看门狗：CLI 索引连续 {n} 轮未 FinishIndex，已提醒立刻落盘描述"
+        if self.phase in ("vuln_dedup", "vuln-dedup"):
+            return f"看门狗：产出去重连续 {n} 轮未 RecordVulnDedup，已提醒先标记已分析完的漏洞"
         if self.phase == "recon":
             return f"看门狗：侦察（地图）连续 {n} 轮未 MarkBusinessJar，已提醒立即点名业务 jar"
         if self.phase == "recon-old-vuln":
@@ -320,6 +347,8 @@ class AgentWatchdog:
             return TRIAGE_NO_TOOL_NUDGE
         if self.phase in ("cli-indexer", "cli_indexer"):
             return CLI_INDEXER_NO_TOOL_NUDGE
+        if self.phase in ("vuln_dedup", "vuln-dedup"):
+            return VULN_DEDUP_NO_TOOL_NUDGE
         if self.phase in ("recon-mark", "recon_mark"):
             return RECON_MARK_NO_TOOL_NUDGE
         return NO_TOOL_NUDGE
