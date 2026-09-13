@@ -128,6 +128,7 @@ def test_demo_vuln_report_readable(tmp_env):
 
 def test_bundled_showcase_has_current_advisory_and_cve():
     from app.services.cve_record import list_fillable_fields
+    from app.services.poc_script import poc_cli_block_reason
     from app.services.report import harness_vuln_code_gap
 
     root = Path(__file__).resolve().parents[2] / "data" / "projects" / "11" / "vulns"
@@ -148,17 +149,72 @@ def test_bundled_showcase_has_current_advisory_and_cve():
         "**CVSS 3.1:**",
         "**CVSS 4.0:**",
         "```http",
+        "--zh",
+    )
+    report_need = (
+        "## 漏洞描述",
+        "- 已证明危害：",
+        "### Source → Sink",
+        "### 漏洞代码",
+        "### 完整 PoC 描述",
+        "### 触发条件",
+        "### 基础环境搭建",
+        "#### 局部验证（harness）",
+        "- CVSS 4.0：",
+        "```http",
     )
     for vid, file_path in files.items():
         d = root / str(vid)
         report = (d / "report.md").read_text(encoding="utf-8")
         advisory = (d / "advisory.md").read_text(encoding="utf-8")
+        poc = (d / "poc.py").read_text(encoding="utf-8")
         record = json.loads((d / "cve.json").read_text(encoding="utf-8"))
         assert harness_vuln_code_gap(report, file_path=file_path) is None
+        missing_report = [h for h in report_need if h not in report]
+        assert not missing_report, f"vuln {vid} report missing {missing_report}"
         missing = [h for h in advisory_need if h not in advisory]
         assert not missing, f"vuln {vid} advisory missing {missing}"
+        assert poc_cli_block_reason(poc) is None, f"vuln {vid} poc.py fails CLI contract"
         pending = [f["path"] for f in list_fillable_fields(record) if f["required"] and f["needs_fill"]]
         assert not pending, f"vuln {vid} cve.json pending {pending}"
+
+
+def test_seed_refreshes_demo_vuln_badges(tmp_env):
+    manifest = _stage_demo_workspace(tmp_env["projects"])
+    seed_bundled_demo_project(manifest_path=manifest)
+
+    Session = tmp_env["Session"]
+    models = tmp_env["models"]
+    with Session() as db:
+        vuln = db.get(models.Vuln, 183)
+        assert vuln is not None
+        vuln.harness_depth = None
+        vuln.severity_score = 3
+        vuln.cvss_score = None
+        vuln.cvss_vector = None
+        db.commit()
+
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    row = data["tables"]["vulns"][0]
+    row["harness_depth"] = "sink"
+    row["severity_score"] = None
+    row["cvss_score"] = 7.5
+    row["cvss_vector"] = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    row["rce_effect"] = 0
+    manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    out = seed_bundled_demo_project(manifest_path=manifest)
+    assert out["seeded"] is False
+    assert out["reason"] == "already_present"
+    assert out.get("refreshed", {}).get("vulns") == 1
+
+    with Session() as db:
+        vuln = db.get(models.Vuln, 183)
+        assert vuln.harness_depth == "sink"
+        assert vuln.cvss_score == 7.5
+        assert vuln.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        assert vuln.severity_score is None
+        assert vuln.rce_effect is False
 
 
 def test_seed_respects_demo_seed_setting(tmp_env, monkeypatch):

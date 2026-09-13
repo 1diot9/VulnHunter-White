@@ -153,6 +153,54 @@ def _bump_sqlite_sequence(db: Session, table: str, at_least: int) -> None:
         )
 
 
+_VULN_REFRESH_SKIP = {
+    "id",
+    "created_at",
+    "tracking_status",
+    "verifier_status",
+    "verifier_verified_url",
+    "verifier_poc",
+    "verifier_response",
+    "verifier_targets",
+    "verifier_fofa_query",
+    "verifier_ask_reason",
+    "verifier_user_instruction",
+    "verifier_consent",
+}
+
+
+def _refresh_existing_rows(
+    db: Session,
+    table: str,
+    rows: list[dict[str, Any]],
+) -> int:
+    """Overwrite bundled demo rows that already exist (except user tracking fields)."""
+    model = MODEL_BY_TABLE.get(table)
+    if model is None or not rows:
+        return 0
+    refreshed = 0
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        kwargs = _row_kwargs(model, raw)
+        row_id = kwargs.get("id")
+        if row_id is None:
+            continue
+        obj = db.get(model, int(row_id))
+        if obj is None:
+            continue
+        changed = False
+        for key, value in kwargs.items():
+            if key in _VULN_REFRESH_SKIP:
+                continue
+            if getattr(obj, key) != value:
+                setattr(obj, key, value)
+                changed = True
+        if changed:
+            refreshed += 1
+    return refreshed
+
+
 def _insert_missing_rows(
     db: Session,
     table: str,
@@ -247,6 +295,10 @@ def seed_bundled_demo_project(
                 result["skipped"] = True
                 result["reason"] = "id_conflict"
                 return result
+            # Keep badge / report fields aligned with the bundled showcase.
+            n_refreshed = _refresh_existing_rows(session, "vulns", tables.get("vulns") or [])
+            if n_refreshed:
+                result["refreshed"] = {"vulns": n_refreshed}
         else:
             # Insert project row first.
             proj_kwargs = _row_kwargs(Project, project_rows[0])

@@ -73,6 +73,7 @@ Expected JSON includes every seeded user and plaintext passwords (including `adm
 
 ```text
 python poc.py -u http://TARGET:5000
+python poc.py -u http://TARGET:5000 --zh
 python poc.py -u http://TARGET:5000 --proxy http://127.0.0.1:8080
 ```
 
