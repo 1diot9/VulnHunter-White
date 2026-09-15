@@ -1,5 +1,6 @@
 import type { WeightExt } from '../api'
 import { Badge } from '@/components/ui/badge'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 export function WeightExtBadges({
@@ -9,18 +10,19 @@ export function WeightExtBadges({
   exts?: WeightExt[] | null
   className?: string
 }) {
+  const { t } = useI18n()
   if (!exts?.length) return null
   return (
     <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
-      <span className="text-xs text-muted-foreground">定权扩展名</span>
+      <span className="text-xs text-muted-foreground">{t('comp.weight.label')}</span>
       {exts.map((item) => (
         <Badge
           key={item.ext}
           variant={item.agent_added ? 'info' : 'outline'}
           title={
             item.agent_added
-              ? `Agent 追加 · ${item.files} 个文件`
-              : `默认源码扩展名 · ${item.files} 个文件`
+              ? t('comp.weight.agent', { n: item.files })
+              : t('comp.weight.default', { n: item.files })
           }
         >
           {item.ext}

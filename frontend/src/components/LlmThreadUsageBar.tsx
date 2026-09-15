@@ -4,26 +4,29 @@ import { api, type LlmEndpointUsage, type LlmThreadUsage } from '../api'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+import { useI18n } from '@/i18n'
+import { t } from '@/i18n/t'
 
 const EMPTY: LlmThreadUsage = { used: 0, limit: 6, waiting: 0, endpoints: [] }
 
-const ERROR_KIND_LABEL: Record<string, string> = {
-  rate_limit: '限流',
-  quota: '额度用尽',
-  auth: '密钥无效',
-  transient: '服务端错误',
+const ERROR_KIND_KEY: Record<string, string> = {
+  rate_limit: 'llm.error.rate_limit',
+  quota: 'llm.error.quota',
+  auth: 'llm.error.auth',
+  transient: 'llm.error.transient',
 }
 
 export function errorKindLabel(kind?: string): string {
   const key = (kind || '').trim()
-  return key ? ERROR_KIND_LABEL[key] || '' : ''
+  const msgKey = key ? ERROR_KIND_KEY[key] : ''
+  return msgKey ? t(msgKey) : ''
 }
 
 export function endpointSkipLabel(
   ep: Pick<LlmEndpointUsage, 'disabled' | 'cooldown_sec' | 'error_kind'>,
 ): string {
-  if (ep.disabled) return '已禁用'
-  if (ep.cooldown_sec > 0) return `冷却 ${formatCooldownSec(ep.cooldown_sec)}`
+  if (ep.disabled) return t('llm.disabled')
+  if (ep.cooldown_sec > 0) return t('llm.cooldown', { time: formatCooldownSec(ep.cooldown_sec) })
   return ''
 }
 
@@ -46,7 +49,7 @@ export function formatCooldownSec(sec: number): string {
 export function endpointCooldownReason(ep: Pick<LlmEndpointUsage, 'error_kind' | 'last_error'>): string {
   const kind = errorKindLabel(ep.error_kind)
   const detail = (ep.last_error || '').trim()
-  if (kind && detail && detail !== ep.error_kind) return `${kind}：${detail}`
+  if (kind && detail && detail !== ep.error_kind) return t('llm.reasonWithDetail', { kind, detail })
   return detail || kind
 }
 
@@ -56,11 +59,12 @@ function clampPct(used: number, limit: number): number {
 }
 
 function shortUrl(url: string): string {
-  const t = (url || '').replace(/^https?:\/\//, '')
-  return t.length > 36 ? `${t.slice(0, 34)}…` : t || '(未配置)'
+  const raw = (url || '').replace(/^https?:\/\//, '')
+  return raw.length > 36 ? `${raw.slice(0, 34)}…` : raw || t('llm.unconfigured')
 }
 
 export default function LlmThreadUsageBar({ className }: { className?: string }) {
+  const { t: tt } = useI18n()
   const [usage, setUsage] = useState<LlmThreadUsage>(EMPTY)
 
   useEffect(
@@ -99,17 +103,19 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
               <CpuIcon className="size-3.5 text-muted-foreground" />
-              LLM 线程
+              {tt('llm.thread')}
             </span>
             <span className={cn('tabular-nums', full ? 'text-amber-200' : 'text-muted-foreground')}>
               {used} / {limit}
-              {waiting > 0 ? <span className="ml-1.5 text-amber-200">排队 {waiting}</span> : null}
+              {waiting > 0 ? (
+                <span className="ml-1.5 text-amber-200">{tt('llm.waiting', { n: waiting })}</span>
+              ) : null}
             </span>
           </div>
           <div
             className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="LLM 线程占用"
+            aria-label={tt('llm.threadAria')}
             aria-valuemin={0}
             aria-valuemax={limit}
             aria-valuenow={used}
@@ -121,10 +127,7 @@ export default function LlmThreadUsageBar({ className }: { className?: string })
           </div>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-md text-left leading-relaxed whitespace-normal">
-          <p>
-            所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL
-            并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。同一端点发请求会按设置的最小间隔排队，排队不计超时。429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。可在设置页管理模型商池。
-          </p>
+          <p>{tt('llm.tooltip')}</p>
           {endpoints.length > 0 ? (
             <ul className="mt-2 space-y-1.5 border-t border-background/20 pt-2 text-[11px]">
               {endpoints.map((ep) => {

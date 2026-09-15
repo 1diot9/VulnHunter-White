@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { t } from '@/i18n/t'
 import { cn, exposureModeTooltip, formatExposureMode } from '@/lib/utils'
 
 type ExposureModeBadgeProps = {
@@ -24,7 +25,7 @@ export default function ExposureModeBadge({
       variant="outline"
     >
       {label}
-      {showChainProven ? ' · 链已证' : ''}
+      {showChainProven ? t('exposure.badgeProven') : ''}
     </Badge>
   )
 

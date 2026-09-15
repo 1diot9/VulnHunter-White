@@ -1,5 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { useI18n } from '@/i18n'
 
 type MiningPathValue = {
   heuristicEnabled: boolean
@@ -28,6 +29,7 @@ export function MiningPathSelect({
   onChange,
   disabled = false,
 }: Props) {
+  const { t } = useI18n()
   const emit = (next: Partial<MiningPathValue>) =>
     onChange({
       heuristicEnabled,
@@ -69,7 +71,7 @@ export function MiningPathSelect({
 
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium">挖掘路径</p>
+      <p className="text-sm font-medium">{t('comp.mine.title')}</p>
       <Label className="items-start font-normal">
         <Checkbox
           className="mt-0.5"
@@ -78,9 +80,9 @@ export function MiningPathSelect({
           onCheckedChange={(checked) => setHeuristic(checked === true)}
         />
         <span className="min-w-0">
-          <span className="font-medium">启发式挖掘</span>
+          <span className="font-medium">{t('comp.mine.heuristic')}</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-            历史漏洞收集完毕后按文件定权，Worker 从高权未审计文件沿 source→sink 挖洞。缺鉴权、IDOR、业务逻辑仍靠这条。
+            {t('comp.mine.heuristicHint')}
           </span>
         </span>
       </Label>
@@ -92,9 +94,9 @@ export function MiningPathSelect({
           onCheckedChange={(checked) => setLite(checked === true)}
         />
         <span className="min-w-0">
-          <span className="font-medium">轻量版</span>
+          <span className="font-medium">{t('comp.mine.lite')}</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-            只把权重 100 的文件作为入口；更低权重不阻塞完成。默认关闭，挖完全部定权文件。
+            {t('comp.mine.liteHint')}
           </span>
         </span>
       </Label>
@@ -106,9 +108,9 @@ export function MiningPathSelect({
           onCheckedChange={(checked) => setFast(checked === true)}
         />
         <span className="min-w-0">
-          <span className="font-medium">快速扫描</span>
+          <span className="font-medium">{t('mining.fast')}</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-            Recon 后 Semgrep 匹配 Sink，代码硬过滤后再由 Agent 冻结约 60 条，Fast Worker 按条从 Sink 回推。覆盖 SAST Sink，不替代启发式。
+            {t('comp.mine.fastHint')}
           </span>
         </span>
       </Label>
@@ -120,9 +122,9 @@ export function MiningPathSelect({
           onCheckedChange={(checked) => setBypass(checked === true)}
         />
         <span className="min-w-0">
-          <span className="font-medium">历史漏洞绕过</span>
+          <span className="font-medium">{t('mining.bypass')}</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-            历史漏洞收集完毕后，每轮注入一条历史漏洞文档，尝试绕过补丁、打出变体，或确认未修复洞仍可利用。
+            {t('comp.mine.bypassHint')}
           </span>
         </span>
       </Label>
@@ -134,9 +136,9 @@ export function MiningPathSelect({
           onCheckedChange={(checked) => setUnconstrained(checked === true)}
         />
         <span className="min-w-0">
-          <span className="font-medium">无约束扫描</span>
+          <span className="font-medium">{t('mining.unconstrained')}</span>
           <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-            历史漏洞收集完毕后启动，固定 1 个 Worker。只注入代码地图与鉴权文档，不派发定权文件。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束本路径。
+            {t('comp.mine.unconstHint')}
           </span>
         </span>
       </Label>

@@ -3,23 +3,25 @@ import { Link, NavLink, Outlet } from 'react-router-dom'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
+import LanguageSwitcher from '@/i18n/LanguageSwitcher'
 import { api } from '../api'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { useAuth } from './AuthGate'
 import BrandLogo from './BrandLogo'
 
-const links = [
-  { to: '/', label: '审计项目' },
-  { to: '/discover', label: '发现仓库' },
-  { to: '/vulns', label: '漏洞产出' },
-  { to: '/verifier-consent', label: '验证确认' },
-  { to: '/containers', label: '容器管理' },
-  { to: '/settings', label: '设置' },
-]
-
 export default function AppLayout() {
   const [consentCount, setConsentCount] = useState(0)
   const { required, lock } = useAuth()
+  const { t } = useI18n()
+  const links = [
+    { to: '/', label: t('nav.projects') },
+    { to: '/discover', label: t('nav.discover') },
+    { to: '/vulns', label: t('nav.vulns') },
+    { to: '/verifier-consent', label: t('nav.consent') },
+    { to: '/containers', label: t('nav.containers') },
+    { to: '/settings', label: t('nav.settings') },
+  ]
 
   useEffect(
     () =>
@@ -63,11 +65,14 @@ export default function AppLayout() {
               </NavLink>
             ))}
           </nav>
-          {required ? (
-            <Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={lock}>
-              退出
-            </Button>
-          ) : null}
+          <div className="ml-auto flex items-center gap-2">
+            <LanguageSwitcher />
+            {required ? (
+              <Button type="button" variant="ghost" size="sm" onClick={lock}>
+                {t('nav.logout')}
+              </Button>
+            ) : null}
+          </div>
         </div>
         <Separator />
       </header>

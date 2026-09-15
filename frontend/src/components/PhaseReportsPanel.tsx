@@ -5,51 +5,59 @@ import { api, formatApiError, type PhaseReport, type PhaseReportDetail, type Pha
 import { formatDateTime } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
+import { useI18n } from '@/i18n'
+import type { MessageVars } from '@/i18n/t'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
-const PHASES = [
-  ['recon', '侦察'],
-  ['worker', '挖掘'],
-  ['reviewer', '审核'],
-  ['verifier', '验证'],
-  ['attack_chain', '攻击链'],
-  ['vuln_dedup', '产出去重'],
-] as const
+type Translate = (key: string, vars?: MessageVars) => string
 
-const SUB_TABS: Record<string, readonly [string, string][]> = {
-  recon: [
-    ['all', '全部'],
-    ['map', '地图/鉴权'],
-    ['source_ext', '扩展名'],
-    ['old_vulns', '历史漏洞'],
-    ['mark', '盖章'],
-  ],
-  worker: [
-    ['all', '全部'],
-    ['mine', '启发式'],
-    ['fast', '快速扫描'],
-    ['bypass', '历史漏洞绕过'],
-    ['unconstrained', '无约束扫描'],
-    ['fix', '修复'],
-  ],
-  reviewer: [
-    ['all', '全部'],
-    ['lab', '环境搭建'],
-    ['reviewer', '审核'],
-  ],
-  verifier: [
-    ['all', '全部'],
-    ['verify', '互联网验证'],
-  ],
-  attack_chain: [
-    ['all', '全部'],
-    ['chain', '攻击链串联'],
-  ],
-  vuln_dedup: [
-    ['all', '全部'],
-    ['dedup', '产出漏洞去重'],
-  ],
+function reportPhases(t: Translate) {
+  return [
+    ['recon', t('flow.reports.recon')],
+    ['worker', t('flow.reports.worker')],
+    ['reviewer', t('flow.reports.reviewer')],
+    ['verifier', t('flow.reports.verifier')],
+    ['attack_chain', t('flow.reports.attackChain')],
+    ['vuln_dedup', t('flow.reports.dedup')],
+  ] as const
+}
+
+function reportSubTabs(t: Translate): Record<string, readonly [string, string][]> {
+  return {
+    recon: [
+      ['all', t('flow.reports.all')],
+      ['map', t('flow.reports.map')],
+      ['source_ext', t('flow.reports.ext')],
+      ['old_vulns', t('flow.reports.oldVulns')],
+      ['mark', t('flow.reports.mark')],
+    ],
+    worker: [
+      ['all', t('flow.reports.all')],
+      ['mine', t('flow.reports.mine')],
+      ['fast', t('mining.fast')],
+      ['bypass', t('mining.bypass')],
+      ['unconstrained', t('mining.unconstrained')],
+      ['fix', t('flow.reports.fix')],
+    ],
+    reviewer: [
+      ['all', t('flow.reports.all')],
+      ['lab', t('flow.reports.lab')],
+      ['reviewer', t('flow.reports.reviewer')],
+    ],
+    verifier: [
+      ['all', t('flow.reports.all')],
+      ['verify', t('flow.reports.internet')],
+    ],
+    attack_chain: [
+      ['all', t('flow.reports.all')],
+      ['chain', t('flow.reports.chain')],
+    ],
+    vuln_dedup: [
+      ['all', t('flow.reports.all')],
+      ['dedup', t('flow.reports.dedupVulns')],
+    ],
+  }
 }
 
 const KIND_VARIANT: Record<string, 'info' | 'success' | 'warning' | 'outline'> = {
@@ -70,10 +78,10 @@ const EMPTY_REPORT_LIST: PhaseReportList = {
   subphase: '',
 }
 
-function roundHint(r: { kind: string; round: number | null }): string {
+function roundHint(r: { kind: string; round: number | null }, t: Translate): string {
   if (r.round == null) return ''
-  if (r.kind === 'round') return ` · 第 ${r.round} 轮`
-  return ` · 第 ${r.round} 次`
+  if (r.kind === 'round') return t('flow.reports.round', { n: r.round })
+  return t('flow.reports.times', { n: r.round })
 }
 
 function reportsOf(groups: { phase: string; reports: PhaseReport[] }[], phase: string): PhaseReport[] {
@@ -87,6 +95,9 @@ export default function PhaseReportsPanel({
   projectId: number
   initialPhase?: string
 }) {
+  const { t } = useI18n()
+  const PHASES = reportPhases(t)
+  const SUB_TABS = reportSubTabs(t)
   const [phase, setPhase] = useState(
     initialPhase === 'reviewer'
       ? 'reviewer'
@@ -172,12 +183,12 @@ export default function PhaseReportsPanel({
       .catch((e) => {
         if (!alive) return
         setDetail(null)
-        setError(formatApiError(e, '读取阶段报告超时，请稍后重试。'))
+        setError(formatApiError(e, t('flow.reports.loadTimeout')))
       })
     return () => {
       alive = false
     }
-  }, [projectId, selectedId])
+  }, [projectId, selectedId, t])
 
   const counts = Object.fromEntries(groups.map((g) => [g.phase, g.count]))
   const subTabs = SUB_TABS[phase]
@@ -224,18 +235,18 @@ export default function PhaseReportsPanel({
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {r.subphase_label}
-                  {roundHint(r)}
+                  {roundHint(r, t)}
                   {` · ${formatDateTime(r.mtime)}`}
                 </div>
                 {r.preview ? <div className="mt-1 line-clamp-2 text-xs text-muted-foreground/70">{r.preview}</div> : null}
               </div>
             </Button>
           ))}
-          {filtered.length === 0 ? <div className="p-4 text-sm text-muted-foreground">暂无该筛选报告</div> : null}
+          {filtered.length === 0 ? <div className="p-4 text-sm text-muted-foreground">{t('flow.reports.emptyFilter')}</div> : null}
           {selectedTotal > 0 ? (
             <div className="space-y-2 p-3 text-center text-xs text-muted-foreground">
               <div>
-                已显示最近 {filtered.length} / 共 {selectedTotal} 份报告
+                {t('flow.reports.shown', { shown: filtered.length, total: selectedTotal })}
               </div>
               {canLoadMore ? (
                 <Button
@@ -245,7 +256,7 @@ export default function PhaseReportsPanel({
                   className="w-full"
                   onClick={() => setVisibleLimit((n) => n + PAGE_SIZE)}
                 >
-                  加载更早 10 份
+                  {t('flow.reports.loadMoreShort')}
                 </Button>
               ) : null}
             </div>
@@ -260,16 +271,16 @@ export default function PhaseReportsPanel({
                 <h2 className="text-lg font-semibold">{detail.title}</h2>
                 <div className="mt-1 text-xs text-slate-400">
                   {detail.phase_label} · {detail.subphase_label} · {detail.kind_label}
-                  {roundHint(detail)}
+                  {roundHint(detail, t)}
                   {` · ${formatDateTime(detail.mtime)}`}
                 </div>
               </div>
               <div className="vh-md">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content || '_空报告_'}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content || t('flow.reports.emptyMdGfm')}</ReactMarkdown>
               </div>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">{error ? '' : '选择左侧报告查看正文'}</div>
+            <div className="text-sm text-muted-foreground">{error ? '' : t('flow.reports.pickHint')}</div>
           )}
           </CardContent>
         </Card>

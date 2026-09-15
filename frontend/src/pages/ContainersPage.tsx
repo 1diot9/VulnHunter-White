@@ -19,28 +19,19 @@ import {
   formatBytes,
   formatDateTime,
 } from '../lib/utils'
+import { useI18n } from '@/i18n'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
-
-const KIND_LABEL: Record<string, string> = {
-  lab: '靶场',
-  sidecar: '依赖容器',
-  sandbox: '沙箱',
-  other: '其他',
-  dependency: '拉取依赖',
-}
-
-function kindLabel(kind: string | null | undefined): string {
-  if (!kind) return '—'
-  return KIND_LABEL[kind] || kind
-}
 
 function summarizeBatchErrors(
   results: Array<{ id: string; error: string | null }>,
+  t: (key: string, vars?: Record<string, string | number>) => string,
   slice = 12,
 ): string | null {
   const failed = results.filter((r) => r.error)
   if (failed.length === 0) return null
-  return `部分失败：${failed.map((r) => `${r.id.slice(0, slice)} (${r.error})`).join('；')}`
+  return t('containers.batchFail', {
+    detail: failed.map((r) => `${r.id.slice(0, slice)} (${r.error})`).join('；'),
+  })
 }
 
 function usageFromImages(images: DockerImage[]): DockerImageUsage {
@@ -71,6 +62,7 @@ function TableLoading({ label }: { label: string }) {
 }
 
 export default function ContainersPage() {
+  const { t } = useI18n()
   const [containers, setContainers] = useState<DockerContainer[]>([])
   const [images, setImages] = useState<DockerImage[]>([])
   const [usage, setUsage] = useState<DockerImageUsage | null>(null)
@@ -83,6 +75,15 @@ export default function ContainersPage() {
   const [containersReady, setContainersReady] = useState(false)
   const [imagesReady, setImagesReady] = useState(false)
   const refreshGen = useRef(0)
+
+  const kindLabel = (kind: string | null | undefined): string => {
+    if (!kind) return t('common.dash')
+    const key = `containers.kind.${kind}`
+    const label = t(key)
+    return label === key ? kind : label
+  }
+
+  const dockerTimeout = () => t('containers.timeout')
 
   const refresh = useCallback(async () => {
     const gen = ++refreshGen.current
@@ -101,7 +102,7 @@ export default function ContainersPage() {
       if (gen !== refreshGen.current) return
       setContainersReady(true)
       setImagesReady(true)
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
       return
     }
     try {
@@ -118,7 +119,7 @@ export default function ContainersPage() {
     } catch (err) {
       if (gen !== refreshGen.current) return
       setImagesReady(true)
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     }
   }, [runningOnly])
 
@@ -179,7 +180,7 @@ export default function ContainersPage() {
         return next
       })
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -192,7 +193,7 @@ export default function ContainersPage() {
       await api.startContainer(id)
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -205,12 +206,12 @@ export default function ContainersPage() {
     setError(null)
     try {
       const { results } = await api.stopContainers(ids)
-      const message = summarizeBatchErrors(results)
+      const message = summarizeBatchErrors(results, t)
       if (message) setError(message)
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -223,12 +224,12 @@ export default function ContainersPage() {
     setError(null)
     try {
       const { results } = await api.startContainers(ids)
-      const message = summarizeBatchErrors(results)
+      const message = summarizeBatchErrors(results, t)
       if (message) setError(message)
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -244,7 +245,7 @@ export default function ContainersPage() {
       setSelectedContainers(new Set())
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -256,12 +257,12 @@ export default function ContainersPage() {
     setError(null)
     try {
       const { results } = await api.removeDockerImages(ids)
-      const message = summarizeBatchErrors(results)
+      const message = summarizeBatchErrors(results, t)
       if (message) setError(message)
       setSelectedImages(new Set())
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -270,20 +271,18 @@ export default function ContainersPage() {
   const removeSelectedImages = async () => {
     const ids = images.filter((img) => selectedImages.has(img.id) && img.deletable).map((img) => img.id)
     if (ids.length === 0) return
-    if (!window.confirm(`删除所选 ${ids.length} 个未使用的靶场/沙箱镜像？官方依赖镜像不会删除。`)) return
+    if (!window.confirm(t('containers.confirmDeleteSelected', { n: ids.length }))) return
     await removeImagesByIds(ids)
   }
 
   const removeOneImage = async (id: string) => {
-    if (!window.confirm('删除该未使用的靶场/沙箱镜像？')) return
+    if (!window.confirm(t('containers.confirmDeleteOne'))) return
     await removeImagesByIds([id])
   }
 
   const pruneImages = async () => {
     if (
-      !window.confirm(
-        '清理未使用的自建靶场镜像，并删除已停止的本平台容器？\n运行中的容器及其镜像不受影响；沙箱镜像和官方 mysql/redis 等依赖需手动处理。',
-      )
+      !window.confirm(t('containers.confirmPrune'))
     ) {
       return
     }
@@ -295,7 +294,7 @@ export default function ContainersPage() {
       setPruneResult(result)
       await refresh()
     } catch (err) {
-      setError(formatApiError(err, 'Docker 操作超时，请稍后重试。'))
+      setError(formatApiError(err, dockerTimeout()))
     } finally {
       setBusy(false)
     }
@@ -305,25 +304,29 @@ export default function ContainersPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">容器与镜像</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('containers.title')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            本平台搭建的靶场容器、局部验证沙箱，以及对应镜像（含拉取的官方依赖）
+            {t('containers.lead')}
             {containersReady
               ? runningOnly
-                ? ` · 运行中 ${runningCount}`
-                : ` · 共 ${containers.length}，运行中 ${runningCount}`
-              : ' · 加载中…'}
+                ? t('containers.stat.running', { n: runningCount })
+                : t('containers.stat.all', { total: containers.length, running: runningCount })
+              : t('containers.stat.loading')}
             {imagesReady && usage
-              ? ` · 镜像 ${usage.image_count} 个 / ${usage.total_gb} GB（悬空 ${usage.dangling_count}）`
+              ? t('containers.stat.images', {
+                  count: usage.image_count,
+                  gb: usage.total_gb,
+                  dangling: usage.dangling_count,
+                })
               : ''}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant={runningOnly ? 'default' : 'outline'} size="sm" onClick={() => setRunningOnly(true)}>
-            仅运行中
+            {t('containers.runningOnly')}
           </Button>
           <Button variant={!runningOnly ? 'default' : 'outline'} size="sm" onClick={() => setRunningOnly(false)}>
-            全部
+            {t('filter.all')}
           </Button>
           <Button
             variant="outline"
@@ -334,20 +337,25 @@ export default function ContainersPage() {
             }}
           >
             <RefreshCw className={`size-3.5 ${containersReady ? '' : 'animate-spin'}`} />
-            刷新
+            {t('containers.refresh')}
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void pruneImages()}>
             <Trash2 className="size-3.5" />
-            清理未使用镜像
+            {t('containers.prune')}
           </Button>
         </div>
       </div>
 
       {pruneResult && !pruneResult.skipped && (
         <p className="text-sm text-emerald-400">
-          清理完成：删除 {pruneResult.images_deleted} 个镜像 · 已停容器 {pruneResult.containers_removed} · 释放{' '}
-          {pruneResult.freed_mb} MB
-          {pruneResult.errors.length > 0 ? `（部分错误：${pruneResult.errors.join('；')}）` : ''}
+          {t('containers.pruneDone', {
+            images: pruneResult.images_deleted,
+            containers: pruneResult.containers_removed,
+            mb: pruneResult.freed_mb,
+          })}
+          {pruneResult.errors.length > 0
+            ? t('containers.prunePartial', { errors: pruneResult.errors.join('；') })
+            : ''}
         </p>
       )}
 
@@ -359,12 +367,12 @@ export default function ContainersPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">容器列表</CardTitle>
-          <CardDescription>可单停、启动或勾选后批量操作；只展示 VulnHunter 靶场与沙箱</CardDescription>
+          <CardTitle className="text-base">{t('containers.listTitle')}</CardTitle>
+          <CardDescription>{t('containers.listDesc')}</CardDescription>
           <CardAction>
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="outline" disabled={busy || selectedContainers.size === 0} onClick={() => void startSelected()}>
-                启动所选 ({selectedContainers.size})
+                {t('containers.startSelected', { n: selectedContainers.size })}
               </Button>
               <Button
                 size="sm"
@@ -373,10 +381,10 @@ export default function ContainersPage() {
                 onClick={() => void stopSelected()}
               >
                 <Square className="size-3.5" />
-                停止所选 ({selectedContainers.size})
+                {t('containers.stopSelected', { n: selectedContainers.size })}
               </Button>
               <Button size="sm" variant="outline" disabled={busy || runningCount === 0} onClick={() => void stopAllRunning()}>
-                停止全部运行中
+                {t('containers.stopAllRunning')}
               </Button>
             </div>
           </CardAction>
@@ -390,30 +398,30 @@ export default function ContainersPage() {
                     checked={allContainersSelected}
                     onCheckedChange={(v) => toggleAllContainers(v === true)}
                     disabled={containers.length === 0}
-                    aria-label="全选容器"
+                    aria-label={t('containers.selectAll')}
                   />
                 </TableHead>
-                <TableHead className="w-28">ID</TableHead>
-                <TableHead>名称</TableHead>
-                <TableHead className="w-24">状态</TableHead>
-                <TableHead className="w-24">类型</TableHead>
-                <TableHead className="w-36">项目</TableHead>
-                <TableHead>镜像</TableHead>
-                <TableHead className="w-40">端口</TableHead>
-                <TableHead className="w-28 text-right pr-4">操作</TableHead>
+                <TableHead className="w-28">{t('containers.col.id')}</TableHead>
+                <TableHead>{t('containers.col.name')}</TableHead>
+                <TableHead className="w-24">{t('containers.col.status')}</TableHead>
+                <TableHead className="w-24">{t('containers.col.kind')}</TableHead>
+                <TableHead className="w-36">{t('containers.col.project')}</TableHead>
+                <TableHead>{t('containers.col.image')}</TableHead>
+                <TableHead className="w-40">{t('containers.col.ports')}</TableHead>
+                <TableHead className="w-28 text-right pr-4">{t('containers.col.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {!containersReady ? (
                 <TableRow>
                   <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
-                    <TableLoading label="加载容器…" />
+                    <TableLoading label={t('containers.load')} />
                   </TableCell>
                 </TableRow>
               ) : containers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
-                    {runningOnly ? '当前没有运行中的 VulnHunter 容器' : '未发现本平台容器'}
+                    {runningOnly ? t('containers.emptyRunning') : t('containers.emptyAll')}
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -426,7 +434,7 @@ export default function ContainersPage() {
                       <Checkbox
                         checked={selectedContainers.has(c.id)}
                         onCheckedChange={(v) => toggleOneContainer(c.id, v === true)}
-                        aria-label={`选择 ${c.name}`}
+                        aria-label={t('containers.select', { name: c.name })}
                       />
                     </TableCell>
                     <TableCell className="font-mono text-xs">{c.short_id}</TableCell>
@@ -443,23 +451,23 @@ export default function ContainersPage() {
                           {c.project_name || `#${c.project_id}`}
                         </Link>
                       ) : (
-                        <span className="text-sm text-muted-foreground">—</span>
+                        <span className="text-sm text-muted-foreground">{t('common.dash')}</span>
                       )}
                     </TableCell>
                     <TableCell className="max-w-0 truncate text-xs text-muted-foreground" title={c.image}>
                       {c.image}
                     </TableCell>
                     <TableCell className="max-w-0 truncate font-mono text-xs" title={portsText || undefined}>
-                      {c.ports.length > 0 ? portsText : <span className="text-muted-foreground">—</span>}
+                      {c.ports.length > 0 ? portsText : <span className="text-muted-foreground">{t('common.dash')}</span>}
                     </TableCell>
                     <TableCell className="pr-4 text-right whitespace-nowrap">
                       {c.status === 'running' ? (
                         <Button size="sm" variant="outline" disabled={busy} onClick={() => void stopOne(c.id)}>
-                          停止
+                          {t('containers.stop')}
                         </Button>
                       ) : (
                         <Button size="sm" variant="outline" disabled={busy} onClick={() => void startOne(c.id)}>
-                          启动
+                          {t('containers.start')}
                         </Button>
                       )}
                     </TableCell>
@@ -473,10 +481,8 @@ export default function ContainersPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">镜像列表</CardTitle>
-          <CardDescription>
-            自建靶场镜像、沙箱镜像，以及仍被本平台容器使用的拉取依赖；官方依赖不可在此删除
-          </CardDescription>
+          <CardTitle className="text-base">{t('containers.imagesTitle')}</CardTitle>
+          <CardDescription>{t('containers.imagesDesc')}</CardDescription>
           <CardAction>
             <Button
               size="sm"
@@ -485,7 +491,7 @@ export default function ContainersPage() {
               onClick={() => void removeSelectedImages()}
             >
               <Trash2 className="size-3.5" />
-              删除所选 ({selectedImages.size})
+              {t('containers.deleteSelected', { n: selectedImages.size })}
             </Button>
           </CardAction>
         </CardHeader>
@@ -498,29 +504,29 @@ export default function ContainersPage() {
                     checked={allImagesSelected}
                     onCheckedChange={(v) => toggleAllImages(v === true)}
                     disabled={deletableImages.length === 0}
-                    aria-label="全选可删除镜像"
+                    aria-label={t('containers.selectAllImages')}
                   />
                 </TableHead>
-                <TableHead>镜像</TableHead>
-                <TableHead className="w-24">类型</TableHead>
-                <TableHead className="w-24">状态</TableHead>
-                <TableHead className="w-36">项目</TableHead>
-                <TableHead className="w-24">体积</TableHead>
-                <TableHead className="w-44">创建时间</TableHead>
-                <TableHead className="w-20 text-right pr-4">操作</TableHead>
+                <TableHead>{t('containers.col.image')}</TableHead>
+                <TableHead className="w-24">{t('containers.col.kind')}</TableHead>
+                <TableHead className="w-24">{t('containers.col.status')}</TableHead>
+                <TableHead className="w-36">{t('containers.col.project')}</TableHead>
+                <TableHead className="w-24">{t('containers.col.size')}</TableHead>
+                <TableHead className="w-44">{t('containers.col.created')}</TableHead>
+                <TableHead className="w-20 text-right pr-4">{t('containers.col.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {!imagesReady ? (
                 <TableRow>
                   <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
-                    <TableLoading label="加载镜像…" />
+                    <TableLoading label={t('containers.loadImages')} />
                   </TableCell>
                 </TableRow>
               ) : images.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
-                    未发现本平台相关镜像
+                    {t('containers.emptyImages')}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -531,7 +537,7 @@ export default function ContainersPage() {
                       checked={selectedImages.has(img.id)}
                       onCheckedChange={(v) => toggleOneImage(img.id, v === true)}
                       disabled={!img.deletable}
-                      aria-label={`选择 ${img.label}`}
+                      aria-label={t('containers.select', { name: img.label })}
                     />
                   </TableCell>
                   <TableCell className="max-w-0 truncate font-mono text-xs" title={img.tags.join(', ') || img.label}>
@@ -540,7 +546,7 @@ export default function ContainersPage() {
                   <TableCell className="text-xs text-muted-foreground">{kindLabel(img.kind)}</TableCell>
                   <TableCell>
                     <Badge variant={img.in_use ? 'info' : img.dangling ? 'warning' : 'secondary'}>
-                      {img.in_use ? '使用中' : img.dangling ? '悬空' : '未使用'}
+                      {img.in_use ? t('containers.inUse') : img.dangling ? t('containers.dangling') : t('containers.unused')}
                     </Badge>
                   </TableCell>
                   <TableCell className="max-w-0 truncate">
@@ -549,7 +555,7 @@ export default function ContainersPage() {
                         {img.project_name || `#${img.project_id}`}
                       </Link>
                     ) : (
-                      <span className="text-sm text-muted-foreground">—</span>
+                      <span className="text-sm text-muted-foreground">{t('common.dash')}</span>
                     )}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatBytes(img.size_bytes)}</TableCell>
@@ -561,7 +567,7 @@ export default function ContainersPage() {
                       disabled={busy || !img.deletable}
                       onClick={() => void removeOneImage(img.id)}
                     >
-                      删除
+                      {t('common.delete')}
                     </Button>
                   </TableCell>
                 </TableRow>

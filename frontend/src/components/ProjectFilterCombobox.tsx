@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react'
 import { Combobox } from '@base-ui/react/combobox'
 import { CheckIcon, ChevronDownIcon, SearchIcon } from 'lucide-react'
 import type { ProjectName } from '../api'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-const ALL_PROJECTS: ProjectOption = { id: null, name: '全部项目' }
 /** 与选项行高对齐：text-sm 1.25rem + py-1 0.5rem = 1.75rem；含列表 p-1，默认露出 10 条后滚动 */
 const LIST_MAX_HEIGHT_CLASS = 'max-h-[calc(10*1.75rem+0.5rem)]'
 
@@ -17,7 +17,12 @@ function optionMatches(item: ProjectOption, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
   if (item.name.toLowerCase().includes(q)) return true
-  if (item.id != null && String(item.id).includes(q)) return true
+  if (item.id != null) {
+    const id = item.id
+    if (String(id).includes(q)) return true
+    const hay = [`项目 ${id}`, `项目 #${id}`, `project ${id}`, `project #${id}`].join('\n').toLowerCase()
+    if (hay.includes(q)) return true
+  }
   return false
 }
 
@@ -32,18 +37,24 @@ export default function ProjectFilterCombobox({
   onProjectIdChange: (id: number | undefined) => void
   className?: string
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
 
+  const allProjects: ProjectOption = { id: null, name: t('comp.filter.all') }
+
   const items = useMemo<ProjectOption[]>(
-    () => [ALL_PROJECTS, ...projects.map((p) => ({ id: p.id, name: p.name || `项目 ${p.id}` }))],
-    [projects],
+    () => [
+      allProjects,
+      ...projects.map((p) => ({ id: p.id, name: p.name || t('comp.filter.fallback', { id: p.id }) })),
+    ],
+    [projects, allProjects.name, t],
   )
 
   const selected = useMemo(() => {
-    if (projectId == null) return ALL_PROJECTS
-    return items.find((item) => item.id === projectId) ?? { id: projectId, name: `项目 ${projectId}` }
-  }, [items, projectId])
+    if (projectId == null) return allProjects
+    return items.find((item) => item.id === projectId) ?? { id: projectId, name: t('comp.filter.fallback', { id: projectId }) }
+  }, [items, projectId, allProjects, t])
 
   return (
     <Combobox.Root
@@ -83,13 +94,13 @@ export default function ProjectFilterCombobox({
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Combobox.Input
                   className="h-8 w-full rounded-md border border-input bg-transparent py-1 pr-2 pl-7 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  placeholder="搜索项目名称或编号…"
-                  aria-label="搜索项目"
+                  placeholder={t('comp.filter.searchPh')}
+                  aria-label={t('comp.filter.searchAria')}
                 />
               </div>
             </div>
             <Combobox.Empty className="text-center text-sm text-muted-foreground">
-              <span className="block px-2 py-6">无匹配项目</span>
+              <span className="block px-2 py-6">{t('comp.filter.empty')}</span>
             </Combobox.Empty>
             <Combobox.List className={cn('overflow-x-hidden overflow-y-auto overscroll-contain p-1 outline-none', LIST_MAX_HEIGHT_CLASS)}>
               {(item: ProjectOption) => (

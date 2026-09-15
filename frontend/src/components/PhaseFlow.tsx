@@ -2,53 +2,36 @@ import { Fragment, type ReactElement, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useI18n } from '@/i18n'
+import type { MessageVars } from '@/i18n/t'
 
-const PHASES = [
-  {
-    id: 'recon',
-    label: '侦察',
-    hint: '摸清项目结构与鉴权，补齐源码扩展名、收录历史漏洞，并为文件定权，供后续挖掘使用。',
-  },
-  {
-    id: 'code_intel',
-    label: '代码库',
-    hint: '可选。用 CodeGraph 给 src/ 建代码数据库，供 Worker / Reviewer 查调用关系。默认关闭以免占磁盘；开启后与侦察并列，都完成后才挖掘。失败则降级继续用 Read/Grep。',
-  },
-  {
-    id: 'worker',
-    label: '挖掘',
-    hint: '侦察完成后按文件挖洞；若开启了代码库则同时等其构建结束。轻量版只注入权重 100 的入口。快速扫描按 Semgrep Sink 回推。历史漏洞绕过按文档逐条尝试绕过。无约束扫描只注入地图与鉴权、固定 1 个 Worker，Reviewer 判定前台 RCE 效果后结束。开启的路径都结束后才算挖掘完成。',
-  },
-  {
-    id: 'reviewer',
-    label: '审核',
-    hint: '独立验证 Worker 提交的漏洞。默认仅静态复核；靶场动态先跑 HTTP PoC，局部验证用沙箱 harness。',
-  },
-  {
-    id: 'verifier',
-    label: '验证',
-    hint: '可选。Reviewer 确认前台漏洞后，用 FOFA 搜同款目标；先理解报告和 PoC 的利用本质，优先跑原 PoC，没有可用 PoC 时按报告构造 payload。失效时同链调整再利用。默认每轮 10 个，成功 3 个即结束；不足则再搜下一轮，最多 5 轮 / 50 个目标。',
-  },
-  {
-    id: 'attack_chain',
-    label: '攻击链',
-    hint: '可选。挖掘与审核结束后，根据已确认漏洞尝试多步串联利用以扩大危害；已确认洞少于 2 条时跳过。',
-  },
-  {
-    id: 'done',
-    label: '完成',
-    hint: '侦察、挖掘、审核与（若开启）互联网验证 / 攻击链串联均已结束。',
-  },
-] as const
+type Translate = (key: string, vars?: MessageVars) => string
 
-const BRANCH_HINTS: Record<string, string> = {
-  map: '梳理模块、HTTP 与非 HTTP 入口和技术栈，并写出登录 / 角色 / 权限文档。',
-  source_ext: '把默认未入库的执行面文件（模板、ORM 映射等）补进索引。',
-  old_vulns: '先跑 GHSA 与 GitHub Issues 爬虫，由 Agent 按爬虫结果落盘；完成后再用 WebSearch 补漏。',
-  mark: '按批次给源码定权或跳过，决定后续挖掘优先级。',
-  lab: '用 Docker 搭建默认可复用靶场，供动态复现；不是制造利用条件。',
-  manualLab: '使用用户提供的漏洞环境地址做动态验证，跳过 Docker 搭建。',
-  harness: '抽出函数并 mock 依赖，在沙箱跑 harness；不搭整项目靶场。',
+const PHASE_IDS = ['recon', 'code_intel', 'worker', 'reviewer', 'verifier', 'attack_chain', 'done'] as const
+type PhaseId = (typeof PHASE_IDS)[number]
+
+function flowPhases(t: Translate) {
+  return [
+    { id: 'recon' as const, label: t('flow.phase.recon'), hint: t('flow.phase.reconHint') },
+    { id: 'code_intel' as const, label: t('flow.phase.codeIntel'), hint: t('flow.phase.codeIntelHint') },
+    { id: 'worker' as const, label: t('flow.phase.worker'), hint: t('flow.phase.workerHint') },
+    { id: 'reviewer' as const, label: t('flow.phase.reviewer'), hint: t('flow.phase.reviewerHint') },
+    { id: 'verifier' as const, label: t('flow.phase.verifier'), hint: t('flow.phase.verifierHint') },
+    { id: 'attack_chain' as const, label: t('flow.phase.attackChain'), hint: t('flow.phase.attackChainHint') },
+    { id: 'done' as const, label: t('flow.phase.done'), hint: t('flow.phase.doneHint') },
+  ]
+}
+
+function branchHints(t: Translate): Record<string, string> {
+  return {
+    map: t('flow.branch.map'),
+    source_ext: t('flow.branch.sourceExt'),
+    old_vulns: t('flow.branch.oldVulns'),
+    mark: t('flow.branch.mark'),
+    lab: t('flow.branch.lab'),
+    manualLab: t('flow.branch.manualLab'),
+    harness: t('flow.branch.harness'),
+  }
 }
 
 type Tone = 'neutral' | 'success' | 'info'
@@ -88,6 +71,7 @@ type FlowState = {
   verifierPending?: number
   attackChainEnabled?: boolean
   attackChainDone?: boolean
+  attackChainStopped?: boolean
   heuristicEnabled?: boolean
   heuristicLite?: boolean
   fastEnabled?: boolean
@@ -239,6 +223,7 @@ function phaseTone(id: string, s: FlowState): Tone {
   if (id === 'attack_chain') {
     if (!s.attackChainEnabled) return 'neutral'
     if (s.attackChainDone || s.status === 'completed' || s.phase === 'done') return 'success'
+    if (s.attackChainStopped) return 'neutral'
     if (s.phase === 'attack_chain' || s.phase === 'attack-chain') return 'info'
     return 'neutral'
   }
@@ -323,6 +308,7 @@ export default function PhaseFlow({
   verifierPending,
   attackChainEnabled,
   attackChainDone,
+  attackChainStopped,
   heuristicEnabled,
   heuristicLite,
   fastEnabled,
@@ -363,6 +349,7 @@ export default function PhaseFlow({
     verifierPending,
     attackChainEnabled,
     attackChainDone,
+    attackChainStopped,
     heuristicEnabled,
     heuristicLite,
     fastEnabled,
@@ -379,6 +366,9 @@ export default function PhaseFlow({
     fastStopped,
     bypassStopped,
   }
+  const { t } = useI18n()
+  const PHASES = flowPhases(t)
+  const BRANCH_HINTS = branchHints(t)
   const subs = reconSubphases ?? []
 
   function branchOf(id: string): BranchItem[] {
@@ -386,7 +376,7 @@ export default function PhaseFlow({
       return subs.map((item) => ({
         id: item.id,
         node: (
-          <FlowTip hint={BRANCH_HINTS[item.id] || `${item.label}子阶段`} side="right">
+          <FlowTip hint={BRANCH_HINTS[item.id] || t('flow.branch.subphase', { label: item.label })} side="right">
             <Badge variant={badgeVariant(subphaseTone(item, subs, state))}>
               {item.label}
               {item.done ? ' ✓' : ''}
@@ -405,9 +395,9 @@ export default function PhaseFlow({
           id: 'mine',
           node: (
             <Badge variant={badgeVariant(heuristicTone(state))}>
-              {lite ? '启发式轻量' : '启发式'}
-              {` ${rounds} 轮`}
-              {state.heuristicStopped ? ' 已暂停' : done ? ' ✓' : ''}
+              {lite ? t('mining.heuristicLite') : t('flow.reports.mine')}
+              {t('flow.badge.rounds', { rounds })}
+              {state.heuristicStopped ? t('flow.badge.paused') : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -420,9 +410,9 @@ export default function PhaseFlow({
           id: 'fast',
           node: (
             <Badge variant={badgeVariant(fastTone(state))}>
-              快速扫描
-              {state.fastQueueFrozen ? ` ${progressed}/${queued}` : ' 准备中'}
-              {state.fastStopped ? ' 已暂停' : done ? ' ✓' : ''}
+              {t('mining.fast')}
+              {state.fastQueueFrozen ? ` ${progressed}/${queued}` : t('flow.badge.preparing')}
+              {state.fastStopped ? t('flow.badge.paused') : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -435,9 +425,9 @@ export default function PhaseFlow({
           id: 'bypass',
           node: (
             <Badge variant={badgeVariant(bypassTone(state))}>
-              历史漏洞绕过
-              {state.bypassQueueFrozen ? ` ${progressed}/${queued}` : ' 等待历史漏洞'}
-              {state.bypassStopped ? ' 已暂停' : done ? ' ✓' : ''}
+              {t('mining.bypass')}
+              {state.bypassQueueFrozen ? ` ${progressed}/${queued}` : t('flow.badge.waitOldVulns')}
+              {state.bypassStopped ? t('flow.badge.paused') : done ? ' ✓' : ''}
             </Badge>
           ),
         })
@@ -448,7 +438,7 @@ export default function PhaseFlow({
           id: 'unconstrained',
           node: (
             <Badge variant={badgeVariant(unconstrainedTone(state))}>
-              无约束扫描
+              {t('mining.unconstrained')}
               {done ? ' ✓' : ''}
             </Badge>
           ),
@@ -464,7 +454,7 @@ export default function PhaseFlow({
             id: 'harness',
             node: (
               <FlowTip hint={BRANCH_HINTS.harness} side="right">
-                <Badge variant="info">局部验证</Badge>
+                <Badge variant="info">{t('verify.harness')}</Badge>
               </FlowTip>
             ),
           },
@@ -481,7 +471,7 @@ export default function PhaseFlow({
                   state.labSetupDone ? 'success' : phaseTone('reviewer', state) === 'info' ? 'info' : 'neutral',
                 )}
               >
-                环境搭建{state.labSetupDone ? ' ✓' : ''}
+                {t('flow.badge.labSetup')}{state.labSetupDone ? ' ✓' : ''}
               </Badge>
             </FlowTip>
           ),
@@ -492,7 +482,7 @@ export default function PhaseFlow({
                 id: 'manual-lab',
                 node: (
                   <FlowTip hint={BRANCH_HINTS.manualLab} side="right">
-                    <Badge variant="info">人工靶场</Badge>
+                    <Badge variant="info">{t('verify.manual')}</Badge>
                   </FlowTip>
                 ),
               },
@@ -503,7 +493,7 @@ export default function PhaseFlow({
     return []
   }
 
-  const branches: Record<(typeof PHASES)[number]['id'], BranchItem[]> = {
+  const branches: Record<PhaseId, BranchItem[]> = {
     recon: branchOf('recon'),
     code_intel: [],
     worker: branchOf('worker'),
@@ -514,10 +504,10 @@ export default function PhaseFlow({
   }
   const workerPaths = branches.worker
   const workerHints: Record<string, string> = {
-    mine: '侦察完成后按文件定权：入口正向挖，更低权按角色回推或控面。若开启了代码库则同时等其构建结束。缺鉴权、IDOR、业务逻辑靠这条。可在日志输入框下暂停或恢复。',
-    fast: 'Semgrep 找 Sink 后按条回推。与启发式并行，覆盖 SAST Sink。可在日志输入框下暂停或恢复。',
-    bypass: '历史漏洞收集完毕后按文档逐条尝试绕过补丁或确认未修复洞仍可打。可在日志输入框下暂停或恢复。',
-    unconstrained: '侦察完成后启动，只注入代码地图与鉴权。若开启了代码库则同时等其构建结束。始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束，也可在日志输入框下停止或再启动。全部续跑会恢复用户暂停的挖掘路径。',
+    mine: t('flow.hint.mine'),
+    fast: t('flow.hint.fast'),
+    bypass: t('flow.hint.bypass'),
+    unconstrained: t('flow.hint.unconstrained'),
   }
 
   const codeIntel = PHASES.find((p) => p.id === 'code_intel')
@@ -525,12 +515,12 @@ export default function PhaseFlow({
   const ciStatus = state.codeIntelStatus || 'pending'
   const ciLabel =
     !ciOn || ciStatus === 'skipped'
-      ? '代码库 未开'
+      ? t('flow.ci.off')
       : ciStatus === 'stale'
-        ? '代码库 需重建'
+        ? t('flow.ci.stale')
         : ciStatus === 'degraded'
-          ? '代码库 已降级'
-          : '代码库'
+          ? t('flow.ci.degraded')
+          : t('flow.ci.on')
   const ciDoneMark =
     ciOn && (ciStatus === 'ready' || ciStatus === 'stale' || ciStatus === 'degraded' || state.codeIntelDone)
 
@@ -559,7 +549,7 @@ export default function PhaseFlow({
                       }
                     >
                       <Badge variant={badgeVariant(phaseTone('recon', state))}>
-                        侦察{state.reconDone ? ' ✓' : ''}
+                        {t('flow.phase.recon')}{state.reconDone ? ' ✓' : ''}
                       </Badge>
                     </FlowTip>
                   </div>
@@ -622,10 +612,11 @@ export default function PhaseFlow({
                   >
                     <Badge variant={badgeVariant(phaseTone(p.id, state))}>
                       {p.label}
-                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'off' ? ' 静态' : ''}
-                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'harness' ? ' 局部' : ''}
-                      {p.id === 'verifier' && !state.verifierEnabled ? ' 未开' : ''}
-                      {p.id === 'attack_chain' && !state.attackChainEnabled ? ' 未开' : ''}
+                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'off' ? t('flow.badge.static') : ''}
+                      {p.id === 'reviewer' && (state.dynamicVerifyMode || (state.dynamicVerifyEnabled ? 'lab' : 'off')) === 'harness' ? t('flow.badge.partial') : ''}
+                      {p.id === 'verifier' && !state.verifierEnabled ? t('flow.badge.off') : ''}
+                      {p.id === 'attack_chain' && !state.attackChainEnabled ? t('flow.badge.off') : ''}
+                      {p.id === 'attack_chain' && state.attackChainEnabled && state.attackChainStopped ? t('flow.badge.pausedShort') : ''}
                     </Badge>
                   </FlowTip>
                 </div>

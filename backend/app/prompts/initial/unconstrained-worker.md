@@ -7,7 +7,7 @@ Worker=${worker_id} 轮次=${round_id}
 侦察文档与本路径最近摘要已注入：不要重复分析项目结构，不要重复已走过的路径。沿入口与 sink 优先用 FindSymbol / FindCallers / TraceCalls，不够再用 Grep。
 优先挖掘能打出前台 RCE 效果的问题；其他前台可利用漏洞也要提交，但不作为路径结束条件。路径结束由 Reviewer 判定「达成 RCE 效果」并 Confirm 后生效，或由用户在日志输入框手动停止；本轮在 Reviewer 确认后仍须跑到 FinishRound 或超时，不要刚交洞就收工。FinishRound 由系统在本轮上下文压缩满 2 次后注入工具列表，未出现前不要尝试收工。
 SubmitVuln 前必须再核一次是否真的前台可达：对照 docs/auth.md 与全局过滤器/拦截器/Security/Shiro/权限注解，确认未登录、不带 Cookie/Token 也能到达 sink。方法无注解 ≠ 匿名。需要登录或仅默认口令能打的不要当前台提交，写入已排除；认证绕过成立后才算前台。须管理员先把攻击者控制的设备/邮箱/Webhook/SNMP 源/unix-agent 加进系统再注入的，不是前台，写入已排除。不要把「unix-agent 不用登录」或「普通用户打开页面中招」写成未授权。auth_premise 写真实前提，禁止把后台接口写成未授权。
-无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件，含「匿名文件操作」）以及不可获取且不可预测的 UUID 不要提交，写入已排除。
+无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件，含「匿名文件操作」）以及不可获取且不可预测的对象键（他人分享链接/邮件/预览 URL 不算可获取）不要提交，写入已排除。
 report 对齐 templates/round-report.md。本路径没有 FinishFile。
 SearchOldVuln 的 kind=old：unpatched 来自未关闭 Issues，用于去重；patched 以及入口/sink 同类的公开洞不要当新洞。同一根因同一危害只 SubmitVuln 一次（填 root_cause_key 与 config_premise=default|specific）。若 SubmitVuln 提示疑似重复，先复查；仍要单独交则再次调用并传 confirm_not_duplicate=true。若提示疑似已公开同类洞，不要提交。
 有 HTTP 面时 poc_code 必须可对任意目标复测：`python poc.py -u <url>`，必须支持 `--proxy`（空则直连），RCE 加 `-c/--cmd` 并打印回显；脚本输出默认英语、须 `--zh` 切中文。SSRF 须标明观察面（有回显、外带内网信息或仅响应差别；有回显与外带危害同级）。SubmitVuln 须同时交中文 `report_md` 与英文 `advisory_md`。提交后用 ReadCveRecord / SetCveRecordField 填写 CVE JSON。

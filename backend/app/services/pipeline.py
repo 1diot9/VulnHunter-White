@@ -555,6 +555,11 @@ def note_attack_chain_enabled(project_id: int) -> None:
     from ..tools.phase_attack_chain import clear_attack_chain_done
 
     clear_attack_chain_done(project_id)
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if proj and bool(getattr(proj, "attack_chain_stopped", False)):
+            proj.attack_chain_stopped = False
+            db.commit()
     if not _pause_event(project_id).is_set():
         _phase_pause_event(project_id, "attack_chain").clear()
     _force_new_run.add((project_id, "attack_chain"))
@@ -1234,6 +1239,7 @@ def request_worker_progress_reset(project_id: int) -> dict[str, Any]:
         # Re-mining may add vulns; allow attack-chain to re-run after the next review drain.
         if bool(getattr(proj, "attack_chain_enabled", False)):
             proj.attack_chain_done = False
+            proj.attack_chain_stopped = False
         db.commit()
 
     n_fix = _reset_fixing_to_returned(project_id, except_ids=set())
@@ -2533,6 +2539,9 @@ def request_conversation_continue(project_id: int, log_phase: str, message: str 
 
     control = _log_phase_control(lp)
     was_paused = _pause_event(project_id).is_set()
+    with SessionLocal() as db:
+        _proj = db.get(Project, project_id)
+        was_completed = bool(_proj and _proj.status == "completed")
     if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
@@ -2540,18 +2549,12 @@ def request_conversation_continue(project_id: int, log_phase: str, message: str 
     cancel = _cancel_event(project_id)
     if cancel.is_set():
         cancel.clear()
-    if not was_paused:
-        _set_project_running(project_id)
-    elif control != "recon":
+    # Only resume the target phase; keep all others paused.
+    if was_paused or was_completed:
         for p in CONTROL_PHASES:
             if p != control:
                 _phase_pause_event(project_id, p).set()
-        with SessionLocal() as db:
-            proj = db.get(Project, project_id)
-            if proj and proj.status == "paused":
-                proj.status = "recon" if not proj.recon_done else "auditing"
-                proj.error = None
-                db.commit()
+    _set_project_running(project_id)
 
     live_log.system(project_id, f"用户接续对话（{lp}）", phase=cp.phase, role=cp.role)
     start_audit(project_id)
@@ -2594,12 +2597,20 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
             reset_lab_setup_for_retry(project_id, message)
             _force_new_run.add((project_id, "reviewer"))
         was_paused = _pause_event(project_id).is_set()
+        with SessionLocal() as _db:
+            _proj = _db.get(Project, project_id)
+            _was_completed = bool(_proj and _proj.status == "completed")
+        _pause_event(project_id).clear()
         _phase_pause_event(project_id, "reviewer").clear()
         cancel = _cancel_event(project_id)
         if cancel.is_set():
             cancel.clear()
-        if not was_paused:
-            _set_project_running(project_id)
+        # Only resume the reviewer phase; keep all others paused.
+        if was_paused or _was_completed:
+            for p in CONTROL_PHASES:
+                if p != "reviewer":
+                    _phase_pause_event(project_id, p).set()
+        _set_project_running(project_id)
         live_log.system(project_id, "用户新开环境搭建对话", phase="reviewer-lab", role="reviewer_lab")
         _ensure_reviewer(project_id, cancel)
         return {"ok": True, "action": "new", "log_phase": lp, **get_phase_states(project_id)}
@@ -2617,6 +2628,9 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
         _abandon_db_phase_runs(project_id, (db_phase,), reason="用户新开对话")
 
     was_paused = _pause_event(project_id).is_set()
+    with SessionLocal() as db:
+        _proj = db.get(Project, project_id)
+        was_completed = bool(_proj and _proj.status == "completed")
     if _should_sync_source_on_restart(project_id):
         _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
@@ -2624,20 +2638,12 @@ def request_conversation_new(project_id: int, log_phase: str, message: str = "")
     cancel = _cancel_event(project_id)
     if cancel.is_set():
         cancel.clear()
-    if not was_paused:
-        _set_project_running(project_id)
-    else:
+    # Only resume the target phase; keep all others paused.
+    if was_paused or was_completed:
         for p in CONTROL_PHASES:
             if p != control:
                 _phase_pause_event(project_id, p).set()
-        with SessionLocal() as db:
-            proj = db.get(Project, project_id)
-            if proj and proj.status == "paused":
-                proj.status = "recon" if control == "recon" and not proj.recon_done else "auditing"
-                if control == "recon" and not proj.recon_done:
-                    proj.status = "recon"
-                proj.error = None
-                db.commit()
+    _set_project_running(project_id)
 
     live_log.system(project_id, f"用户新开对话（{lp}）", phase=db_phases[0] if db_phases else lp)
     start_audit(project_id)
@@ -2673,9 +2679,12 @@ def _clear_user_stopped_mining_paths(project_id: int) -> None:
         if unconstrained_was_stopped:
             proj.unconstrained_done = False
             changed = True
+        if bool(getattr(proj, "attack_chain_stopped", False)):
+            proj.attack_chain_stopped = False
+            changed = True
         if changed:
             db.commit()
-            live_log.system(project_id, "全部续跑：已恢复用户暂停的挖掘路径")
+            live_log.system(project_id, "全部续跑：已恢复用户暂停的挖掘路径与攻击链")
 
 
 def _release_mining_path_claims(project_id: int, path: str) -> None:
@@ -2860,6 +2869,11 @@ def request_mining_path_start(project_id: int, path: str) -> dict[str, Any]:
 
     _sync_github_before_unpause(project_id)
     _pause_event(project_id).clear()
+    # Only resume the worker control phase; keep all others paused.
+    for p in CONTROL_PHASES:
+        if p != "worker":
+            _phase_pause_event(project_id, p).set()
+    _phase_pause_event(project_id, "worker").clear()
     cancel = _cancel_event(project_id)
     if cancel.is_set():
         cancel.clear()
@@ -2886,6 +2900,114 @@ def request_unconstrained_stop(project_id: int) -> dict[str, Any]:
 def request_unconstrained_start(project_id: int) -> dict[str, Any]:
     """Restart unconstrained scanning after a stop or RCE-effect confirm."""
     return request_mining_path_start(project_id, "unconstrained")
+
+
+def _abandon_attack_chain_runs(project_id: int) -> None:
+    reason = "用户暂停攻击链串联"
+    _abandon_db_phase_runs(project_id, ("attack_chain",), reason=reason)
+    with SessionLocal() as db:
+        rows = (
+            db.query(PhaseRun)
+            .filter(
+                PhaseRun.project_id == project_id,
+                PhaseRun.phase == "attack_chain",
+                PhaseRun.status.in_(("running", "paused", "awaiting_user")),
+            )
+            .all()
+        )
+        ids = [int(r.id) for r in rows]
+    for rid in ids:
+        _release_adopted(project_id, rid)
+        _finish_phase_run(rid, "cancelled", reason)
+
+
+def request_attack_chain_stop(project_id: int) -> dict[str, Any]:
+    """Pause attack-chain; complete the project if other gates already pass."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可暂停攻击链串联")
+        if not bool(getattr(proj, "attack_chain_enabled", False)):
+            raise ValueError("未开启攻击链串联")
+        already_complete = proj.status == "completed"
+        already_stopped = bool(getattr(proj, "attack_chain_stopped", False))
+        if not already_stopped:
+            proj.attack_chain_stopped = True
+        db.commit()
+
+    if already_complete:
+        return {
+            "ok": True,
+            "action": "stop",
+            "log_phase": "attack_chain",
+            "path_stopped": True,
+            "project_completed": True,
+            **get_phase_states(project_id),
+        }
+
+    _bump_phase_generation(project_id, "attack_chain")
+    _abandon_attack_chain_runs(project_id)
+    live_log.system(
+        project_id,
+        "用户暂停攻击链串联，不再新开本阶段轮次",
+        phase="attack_chain",
+    )
+    completed = _try_complete_after_mining_path_stop(project_id)
+    if completed:
+        live_log.system(
+            project_id,
+            "攻击链串联已暂停，其他阶段均已结束，项目标为完成",
+            phase="attack_chain",
+        )
+    return {
+        "ok": True,
+        "action": "stop",
+        "log_phase": "attack_chain",
+        "path_stopped": True,
+        "project_completed": completed,
+        **get_phase_states(project_id),
+    }
+
+
+def request_attack_chain_start(project_id: int) -> dict[str, Any]:
+    """Resume attack-chain after a user pause."""
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        if not proj:
+            raise ValueError("项目不存在")
+        if proj.status in ("cancelled", "ingesting", "error"):
+            raise ValueError("当前项目状态不可恢复攻击链串联")
+        if not bool(getattr(proj, "attack_chain_enabled", False)):
+            raise ValueError("未开启攻击链串联")
+        proj.attack_chain_stopped = False
+        if proj.status == "completed":
+            proj.status = "paused"
+            proj.phase = "attack_chain"
+            proj.error = None
+        db.commit()
+
+    _sync_github_before_unpause(project_id)
+    _pause_event(project_id).clear()
+    # Only resume the attack_chain control phase; keep all others paused.
+    for p in CONTROL_PHASES:
+        if p != "attack_chain":
+            _phase_pause_event(project_id, p).set()
+    _phase_pause_event(project_id, "attack_chain").clear()
+    cancel = _cancel_event(project_id)
+    if cancel.is_set():
+        cancel.clear()
+    _set_project_running(project_id)
+    live_log.system(project_id, "用户恢复攻击链串联", phase="attack_chain")
+    start_audit(project_id)
+    return {
+        "ok": True,
+        "action": "start",
+        "log_phase": "attack_chain",
+        "path_stopped": False,
+        **get_phase_states(project_id),
+    }
 
 
 def _worker_hint_block(project_id: int) -> str:
@@ -3359,7 +3481,10 @@ def _maybe_complete_project(
     ):
         return False
     if list_resumable_runs(project_id, "attack_chain"):
-        return False
+        from ..tools.phase_attack_chain import is_attack_chain_user_stopped
+
+        if not is_attack_chain_user_stopped(project_id):
+            return False
     if not project_complete_gates(project_id):
         return False
     with SessionLocal() as db:
@@ -3753,11 +3878,14 @@ def _ensure_attack_chain(project_id: int, cancel: threading.Event) -> None:
         confirmed_vuln_count,
         is_attack_chain_done,
         is_attack_chain_enabled,
+        is_attack_chain_user_stopped,
         mark_attack_chain_done,
         reclaim_premature_attack_chain_done,
     )
 
     if not is_attack_chain_enabled(project_id):
+        return
+    if is_attack_chain_user_stopped(project_id):
         return
     reclaim_premature_attack_chain_done(project_id)
     if is_attack_chain_done(project_id):
@@ -3798,6 +3926,7 @@ def _run_attack_chain_loop(project_id: int) -> None:
         confirmed_vuln_count,
         is_attack_chain_done,
         is_attack_chain_enabled,
+        is_attack_chain_user_stopped,
         mark_attack_chain_done,
         reclaim_premature_attack_chain_done,
     )
@@ -3808,6 +3937,9 @@ def _run_attack_chain_loop(project_id: int) -> None:
             if not _wait_if_paused(project_id, _loop_cancel(project_id, "attack_chain"), "attack_chain"):
                 break
             if not is_attack_chain_enabled(project_id):
+                break
+            if is_attack_chain_user_stopped(project_id):
+                _try_complete_after_mining_path_stop(project_id)
                 break
             reclaim_premature_attack_chain_done(project_id)
             if is_attack_chain_done(project_id):
@@ -3836,6 +3968,9 @@ def _run_attack_chain_loop(project_id: int) -> None:
             finally:
                 with _lock:
                     _attack_chain_inflight[project_id] = False
+            if is_attack_chain_user_stopped(project_id):
+                _try_complete_after_mining_path_stop(project_id)
+                break
             if is_attack_chain_done(project_id):
                 break
     except Exception as e:  # noqa: BLE001
@@ -6440,12 +6575,15 @@ def _run_attack_chain_once(project_id: int) -> None:
         attack_chain_prereqs,
         confirmed_vuln_count,
         is_attack_chain_done,
+        is_attack_chain_user_stopped,
         mark_attack_chain_done,
     )
 
     cancel = _cancel_event(project_id)
     try:
         if not attack_chain_prereqs(project_id):
+            return
+        if is_attack_chain_user_stopped(project_id):
             return
         cp = _adopt_resumable(project_id, "attack_chain")
         if cp:
@@ -6469,7 +6607,10 @@ def _run_attack_chain_once(project_id: int) -> None:
                 _pause_for_auth(project_id, result.error or "auth_error")
                 return
             _finish_phase_run(cp.phase_run_id, "completed" if result.ok else "failed", result.error)
-            if result.state.get("attack_chain_done") or is_attack_chain_done(project_id):
+            cancelled = result.stop_reason == "cancelled" or is_attack_chain_user_stopped(project_id)
+            if not cancelled and (
+                result.state.get("attack_chain_done") or is_attack_chain_done(project_id)
+            ):
                 if not is_attack_chain_done(project_id):
                     mark_attack_chain_done(project_id, reason="检查点会话结束")
             live_log.system(
@@ -6550,7 +6691,8 @@ def _run_attack_chain_once(project_id: int) -> None:
             _pause_for_auth(project_id, result.error or "auth_error")
             return
         _finish_phase_run(run_id, "completed" if result.ok else "failed", result.error)
-        if not is_attack_chain_done(project_id):
+        cancelled = result.stop_reason == "cancelled" or is_attack_chain_user_stopped(project_id)
+        if not cancelled and not is_attack_chain_done(project_id):
             # Agent exited without FinishAttackChain — still close the gate.
             mark_attack_chain_done(
                 project_id,

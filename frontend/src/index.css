@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Latin-only Geist — UI is zh-CN; CJK falls back to system fonts. */
+/* Latin-only Geist — CJK falls back to system fonts. */
 @font-face {
   font-family: 'Geist Variable';
   font-style: normal;

@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import AuthGate from './components/AuthGate'
 import HomePage from './pages/HomePage'
+import { LocaleProvider, useI18n } from './i18n'
 import { RuntimeProvider } from './lib/runtime'
 
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'))
@@ -13,9 +14,10 @@ const ContainersPage = lazy(() => import('./pages/ContainersPage'))
 const DiscoverPage = lazy(() => import('./pages/DiscoverPage'))
 
 function RouteFallback() {
+  const { t } = useI18n()
   return (
     <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
-      加载中…
+      {t('common.loading')}
     </div>
   )
 }
@@ -23,6 +25,7 @@ function RouteFallback() {
 export default function App() {
   return (
     <BrowserRouter>
+      <LocaleProvider>
       <RuntimeProvider>
         <AuthGate>
           <Suspense fallback={<RouteFallback />}>
@@ -42,6 +45,7 @@ export default function App() {
           </Suspense>
         </AuthGate>
       </RuntimeProvider>
+      </LocaleProvider>
     </BrowserRouter>
   )
 }

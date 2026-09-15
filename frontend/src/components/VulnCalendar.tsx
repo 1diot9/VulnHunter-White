@@ -12,9 +12,9 @@ import {
 } from '@/components/ui/dialog'
 import VulnGroupList from './VulnGroupList'
 import { cn } from '../lib/utils'
+import { useI18n } from '@/i18n'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
-const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'] as const
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n)
@@ -63,6 +63,8 @@ export default function VulnCalendar({
   projectKindById?: Map<number, string>
   onOpenVuln?: (id: number) => void
 }) {
+  const { t } = useI18n()
+  const WEEKDAYS = [t('comp.cal.wd0'), t('comp.cal.wd1'), t('comp.cal.wd2'), t('comp.cal.wd3'), t('comp.cal.wd4'), t('comp.cal.wd5'), t('comp.cal.wd6')]
   const today = useMemo(() => shanghaiYmd(), [])
   const [year, setYear] = useState(today.year)
   const [month, setMonth] = useState(today.month)
@@ -133,7 +135,7 @@ export default function VulnCalendar({
 
   const selectedCounts = selectedDate ? byDate.get(selectedDate) : undefined
   const selectedLabel = selectedDate
-    ? `${selectedDate} · 确认 ${selectedCounts?.confirmed ?? 0} · 误报 ${selectedCounts?.false_positive ?? 0}`
+    ? t('comp.cal.selected', { date: selectedDate, confirmed: selectedCounts?.confirmed ?? 0, fp: selectedCounts?.false_positive ?? 0 })
     : ''
 
   function goMonth(delta: number) {
@@ -147,21 +149,20 @@ export default function VulnCalendar({
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardTitle>产出日历</CardTitle>
+            <CardTitle>{t('comp.cal.title')}</CardTitle>
             <CardDescription>
-              按产出日统计已确认与误报；点击某天查看当日漏洞。本月确认 {monthTotal.confirmed} / 误报{' '}
-              {monthTotal.falsePositive}
-              {projectId != null ? '（当前项目筛选）' : ''}
+              {t('comp.cal.desc', { confirmed: monthTotal.confirmed, fp: monthTotal.falsePositive })}
+              {projectId != null ? t('comp.cal.filtered') : ''}
             </CardDescription>
           </div>
           <div className="flex items-center gap-1">
-            <Button type="button" variant="outline" size="icon-sm" aria-label="上个月" onClick={() => goMonth(-1)}>
+            <Button type="button" variant="outline" size="icon-sm" aria-label={t('comp.cal.prev')} onClick={() => goMonth(-1)}>
               <ChevronLeftIcon className="size-4" />
             </Button>
             <div className="min-w-28 text-center text-sm font-medium tabular-nums">
-              {year} 年 {month} 月
+              {t('comp.cal.month', { year, month })}
             </div>
-            <Button type="button" variant="outline" size="icon-sm" aria-label="下个月" onClick={() => goMonth(1)}>
+            <Button type="button" variant="outline" size="icon-sm" aria-label={t('comp.cal.next')} onClick={() => goMonth(1)}>
               <ChevronRightIcon className="size-4" />
             </Button>
             <Button
@@ -174,7 +175,7 @@ export default function VulnCalendar({
                 setMonth(today.month)
               }}
             >
-              本月
+              {t('comp.cal.thisMonth')}
             </Button>
           </div>
         </CardHeader>
@@ -214,10 +215,10 @@ export default function VulnCalendar({
                   {hasData ? (
                     <div className="mt-auto space-y-0.5 pt-1 text-[10px] leading-tight">
                       {confirmed > 0 ? (
-                        <div className="text-emerald-400/90">确认 {confirmed}</div>
+                        <div className="text-emerald-400/90">{t('comp.cal.confirmed', { n: confirmed })}</div>
                       ) : null}
                       {falsePositive > 0 ? (
-                        <div className="text-red-300/90">误报 {falsePositive}</div>
+                        <div className="text-red-300/90">{t('comp.cal.fp', { n: falsePositive })}</div>
                       ) : null}
                     </div>
                   ) : (
@@ -233,17 +234,17 @@ export default function VulnCalendar({
       <Dialog open={selectedDate != null} onOpenChange={(open) => !open && setSelectedDate(null)}>
         <DialogContent className="flex max-h-[min(90vh,40rem)] w-full flex-col gap-3 sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>当日漏洞产出</DialogTitle>
+            <DialogTitle>{t('comp.cal.dialogTitle')}</DialogTitle>
             <DialogDescription>{selectedLabel}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-auto rounded-lg ring-1 ring-foreground/10">
             {dayLoading ? (
-              <div className="px-3 py-6 text-sm text-muted-foreground">加载中…</div>
+              <div className="px-3 py-6 text-sm text-muted-foreground">{t('comp.cal.loading')}</div>
             ) : (
               <VulnGroupList
                 vulns={dayVulns}
                 tierFilter="all"
-                emptyText="该日无已确认或误报产出"
+                emptyText={t('comp.cal.empty')}
                 projectNameById={projectNameById}
                 projectKindById={projectKindById}
                 onSelectVuln={(id) => {

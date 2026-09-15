@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefO
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { LogEvent } from '../api'
+import { useI18n } from '@/i18n'
+import { t as translate } from '@/i18n/t'
 
 type Props = {
   events: LogEvent[]
@@ -21,39 +23,42 @@ type Props = {
   phaseRunning?: boolean | null
 }
 
-const PHASE_LABEL: Record<string, string> = {
-  recon: '侦察/地图',
-  'recon-map': '侦察/地图',
-  'recon-source-ext': '侦察/扩展名',
-  recon_source_ext: '侦察/扩展名',
-  'recon-old-vuln': '侦察/历史漏洞',
-  recon_old_vuln: '侦察/历史漏洞',
-  'recon-old-vuln-ghsa': '侦察/历史漏洞补漏',
-  recon_old_vuln_ghsa: '侦察/历史漏洞补漏',
-  'recon-mark': '侦察/盖章',
-  recon_mark: '侦察/盖章',
-  'code-intel': '代码库',
-  code_intel: '代码库',
-  worker: '挖掘',
-  'fast-worker': '快速扫描',
-  fast_worker: '快速扫描',
-  'bypass-worker': '历史漏洞绕过',
-  bypass_worker: '历史漏洞绕过',
-  'unconstrained-worker': '无约束扫描',
-  unconstrained_worker: '无约束扫描',
-  'sink-triage': 'Sink 筛选',
-  sink_triage: 'Sink 筛选',
-  reviewer: '审核',
-  'reviewer-lab': '审核/环境搭建',
-  reviewer_lab: '审核/环境搭建',
-  'reviewer-review': '审核',
-  verifier: '验证',
-  attack_chain: '攻击链',
-  'attack-chain': '攻击链',
-  vuln_dedup: '产出去重',
-  'vuln-dedup': '产出去重',
-  fix: '修复',
-  mine: '挖掘',
+function phaseLabelMap(): Record<string, string> {
+  const t = translate
+  return {
+    recon: t('flow.log.reconMap'),
+    'recon-map': t('flow.log.reconMap'),
+    'recon-source-ext': t('flow.log.reconExt'),
+    recon_source_ext: t('flow.log.reconExt'),
+    'recon-old-vuln': t('flow.log.reconOld'),
+    recon_old_vuln: t('flow.log.reconOld'),
+    'recon-old-vuln-ghsa': t('flow.log.reconOldFill'),
+    recon_old_vuln_ghsa: t('flow.log.reconOldFill'),
+    'recon-mark': t('flow.log.reconMark'),
+    recon_mark: t('flow.log.reconMark'),
+    'code-intel': t('flow.phase.codeIntel'),
+    code_intel: t('flow.phase.codeIntel'),
+    worker: t('flow.phase.worker'),
+    'fast-worker': t('mining.fast'),
+    fast_worker: t('mining.fast'),
+    'bypass-worker': t('mining.bypass'),
+    bypass_worker: t('mining.bypass'),
+    'unconstrained-worker': t('mining.unconstrained'),
+    unconstrained_worker: t('mining.unconstrained'),
+    'sink-triage': t('flow.log.sinkTriage'),
+    sink_triage: t('flow.log.sinkTriage'),
+    reviewer: t('flow.phase.reviewer'),
+    'reviewer-lab': t('flow.log.reviewerLab'),
+    reviewer_lab: t('flow.log.reviewerLab'),
+    'reviewer-review': t('flow.phase.reviewer'),
+    verifier: t('flow.phase.verifier'),
+    attack_chain: t('flow.phase.attackChain'),
+    'attack-chain': t('flow.phase.attackChain'),
+    vuln_dedup: t('flow.log.dedup'),
+    'vuln-dedup': t('flow.log.dedup'),
+    fix: t('flow.log.fix'),
+    mine: t('flow.phase.worker'),
+  }
 }
 
 export function eventMatchesPhase(ev: LogEvent, phaseFilter?: string): boolean {
@@ -142,7 +147,7 @@ export function eventVisibleInPhase(ev: LogEvent, phaseFilter?: string): boolean
 
 function phaseLabel(ev: LogEvent): string {
   const p = ev.role || ev.phase || ''
-  return PHASE_LABEL[p] || p
+  return phaseLabelMap()[p] || p
 }
 
 function LogLine({ ev }: { ev: LogEvent }) {
@@ -169,7 +174,7 @@ function LogLine({ ev }: { ev: LogEvent }) {
     tag = ev.tool || 'tool_exec_error'
     body =
       (ev.command ? `$ ${ev.command}\n` : '') +
-      (ev.text || ev.output || '本机工具执行失败') +
+      (ev.text || ev.output || translate('flow.log.toolFail')) +
       (ev.traceback ? `\n${ev.traceback}` : '')
   } else if (k === 'tokens') {
     const cached = Number(ev.cached) || 0
@@ -223,7 +228,7 @@ function LogLine({ ev }: { ev: LogEvent }) {
       </span>
       {collapsible ? (
         <>
-          {!expanded && hidden > 0 ? <span className="vh-line-hint">+{hidden}行</span> : null}
+          {!expanded && hidden > 0 ? <span className="vh-line-hint">{translate('flow.log.hiddenLines', { hidden })}</span> : null}
           <span className="vh-caret" onClick={() => setExpanded((x) => !x)}>
             {expanded ? '▾' : '▸'}
           </span>
@@ -256,6 +261,7 @@ export default function LiveLogPanel({
   onSessionChange,
   phaseRunning = null,
 }: Props) {
+  const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
   const prevFirstSeq = useRef<number | undefined>(undefined)
@@ -381,7 +387,7 @@ export default function LiveLogPanel({
 
   const isLatest = session >= sessionCount
   const isLive = isLatest && phaseRunning !== false
-  const sessionStatus = isLive ? '运行中' : isLatest ? '已结束' : '历史'
+  const sessionStatus = isLive ? t('flow.log.live') : isLatest ? t('flow.log.ended') : t('flow.log.history')
   const goSession = (n: number) => {
     if (n < 1 || n > sessionCount) return
     onSessionChange?.(n >= sessionCount ? null : n)
@@ -402,7 +408,7 @@ export default function LiveLogPanel({
   return (
     <div className="vh-task-log" data-log-window="100">
       <div className="vh-log-bar">
-        <span className="vh-log-bar-label">阶段日志</span>
+        <span className="vh-log-bar-label">{t('flow.log.title')}</span>
         <span className="vh-log-pager">
           <Button
             type="button"
@@ -410,19 +416,19 @@ export default function LiveLogPanel({
             size="icon-xs"
             className="vh-log-pager-btn"
             disabled={session <= 1}
-            aria-label="上一轮"
+            aria-label={t('flow.log.prevRound')}
             onClick={() => goSession(session - 1)}
           >
             ‹
           </Button>
           <span className={'vh-log-pager-status' + (isLive ? ' live' : '')}>
-            第
+            {t('flow.log.roundPrefix')}
             <Input
               className="vh-log-pager-input"
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"
-              aria-label="跳转到第几轮"
+              aria-label={t('flow.log.jumpRound')}
               value={draft}
               size={Math.max(2, String(sessionCount).length)}
               onFocus={(e) => {
@@ -452,7 +458,7 @@ export default function LiveLogPanel({
                 }
               }}
             />
-            / {sessionCount} 轮 · {sessionStatus}
+            {t('flow.log.roundStatus', { count: sessionCount, status: sessionStatus })}
           </span>
           <Button
             type="button"
@@ -460,16 +466,16 @@ export default function LiveLogPanel({
             size="icon-xs"
             className="vh-log-pager-btn"
             disabled={session >= sessionCount}
-            aria-label="下一轮"
+            aria-label={t('flow.log.nextRound')}
             onClick={() => goSession(session + 1)}
           >
             ›
           </Button>
         </span>
         <span className="vh-log-count">
-          最近 {visible.length} 条
-          {moreHidden ? ' · 上滚加载更早' : ''}
-          {loadingOlder ? ' · 加载中' : ''}
+          {t('flow.log.recent', { n: visible.length })}
+          {moreHidden ? t('flow.log.loadOlder') : ''}
+          {loadingOlder ? t('flow.log.loading') : ''}
         </span>
       </div>
       <div className="vh-log-wrap">
@@ -481,7 +487,7 @@ export default function LiveLogPanel({
           style={{ minHeight, maxHeight: Math.max(minHeight, 560) }}
         >
           {visible.length === 0 ? (
-            <div className="vh-log-empty">等待 Agent 输出…</div>
+            <div className="vh-log-empty">{t('flow.log.empty')}</div>
           ) : (
             visible.map((ev, i) => (
               <LogLine key={ev.seq != null ? `s${ev.seq}` : `${ev.ts || i}-${ev.kind}-${i}`} ev={ev} />
@@ -490,7 +496,7 @@ export default function LiveLogPanel({
         </div>
         {showJump ? (
           <Button type="button" variant="outline" size="sm" className="vh-jump-btn" onClick={jumpToBottom}>
-            ↓ 跳到最新
+            {t('flow.log.jumpLatest')}
           </Button>
         ) : null}
       </div>

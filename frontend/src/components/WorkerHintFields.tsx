@@ -1,12 +1,19 @@
 import { HINT_TEXT_MAX, HintTextFields } from './HintTextFields'
+import { useI18n } from '@/i18n'
+import { t } from '@/i18n/t'
 
 export const WORKER_HINT_MAX = HINT_TEXT_MAX
 
-export const WORKER_HINT_HINT =
-  '可选。粘贴文本或上传 .txt / .md，作为额外人工提示注入启发式、快速扫描、历史漏洞绕过和无约束扫描的每轮挖掘。不要用它改焦点；运行中可改，下一轮生效。'
+export function workerHintHint(): string {
+  return t('comp.workerHint.hint')
+}
 
-export const WORKER_HINT_PLACEHOLDER =
-  '例如：重点看后台导出与文件下载；忽略演示账号；鉴权以 JWT 过滤器为准。'
+export function workerHintPlaceholder(): string {
+  return t('comp.workerHint.placeholder')
+}
+
+export const WORKER_HINT_HINT = workerHintHint
+export const WORKER_HINT_PLACEHOLDER = workerHintPlaceholder
 
 export function WorkerHintFields({
   value,
@@ -17,16 +24,17 @@ export function WorkerHintFields({
   onChange: (value: string) => void
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   return (
     <HintTextFields
       id="worker-hint"
-      label="挖掘 Worker 提示"
-      hint={WORKER_HINT_HINT}
-      placeholder={WORKER_HINT_PLACEHOLDER}
+      label={t('comp.workerHint.label')}
+      hint={workerHintHint()}
+      placeholder={workerHintPlaceholder()}
       value={value}
       onChange={onChange}
       disabled={disabled}
-      tooLongMessage={`挖掘提示过长，最多 ${WORKER_HINT_MAX} 字`}
+      tooLongMessage={t('comp.workerHint.tooLong', { max: WORKER_HINT_MAX })}
     />
   )
 }

@@ -433,6 +433,7 @@ class ProjectOut(BaseModel):
     verifier_enabled: bool = False
     attack_chain_enabled: bool = False
     attack_chain_done: bool = False
+    attack_chain_stopped: bool = False
     dynamic_verify_enabled: bool = False
     dynamic_verify_mode: str = "off"
     heuristic_enabled: bool = True
@@ -516,6 +517,7 @@ class ProjectListItemOut(BaseModel):
     verifier_enabled: bool = False
     attack_chain_enabled: bool = False
     attack_chain_done: bool = False
+    attack_chain_stopped: bool = False
     dynamic_verify_enabled: bool = False
     dynamic_verify_mode: str = "off"
     heuristic_enabled: bool = True

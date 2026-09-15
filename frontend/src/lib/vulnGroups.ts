@@ -297,6 +297,8 @@ export function vulnMatchesQuery(
     `#${v.project_id}`,
     `项目 ${v.project_id}`,
     `项目 #${v.project_id}`,
+    `Project ${v.project_id}`,
+    `Project #${v.project_id}`,
     String(v.id),
     `#${v.id}`,
   ]

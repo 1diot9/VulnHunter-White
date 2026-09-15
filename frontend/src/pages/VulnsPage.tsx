@@ -11,27 +11,28 @@ import VulnCalendar from '../components/VulnCalendar'
 import VulnDetailDialog from '../components/VulnDetailDialog'
 import VulnGroupList from '../components/VulnGroupList'
 import { filterVulnGroups, groupVulnsByRootCause, vulnMatchesQuery, type VulnTierFilter } from '../lib/vulnGroups'
-import { formatVulnType, saveBlob, VULN_TYPE_OPTIONS } from '../lib/utils'
+import { useI18n } from '@/i18n'
+import { formatVulnType, getVulnTypeOptions, saveBlob } from '../lib/utils'
 import { readJsonCache, writeJsonCache } from '../lib/listCache'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 
 const PAGE_SIZE = 50
 
-const TIER_FILTER_LABEL: Record<VulnTierFilter, string> = {
-  all: '全部分层',
-  cve_candidate: '有 CVE 价值',
-  low_impact: '低危害难利用',
-}
-
-const TRACKING_FILTER_LABEL: Record<'all' | VulnTrackingStatus, string> = {
-  all: '全部标记',
-  none: '未标记',
-  submitted: '已提交',
-  ignored: '已忽略',
-}
-
 export default function VulnsPage() {
+  const { t } = useI18n()
   const { id } = useParams()
+  const vulnTypeOptions = getVulnTypeOptions()
+  const tierFilterLabel: Record<VulnTierFilter, string> = {
+    all: t('vulns.tier.all'),
+    cve_candidate: t('tier.cve'),
+    low_impact: t('tier.low'),
+  }
+  const trackingFilterLabel: Record<'all' | VulnTrackingStatus, string> = {
+    all: t('vulns.track.all'),
+    none: t('track.none'),
+    submitted: t('track.submitted'),
+    ignored: t('track.ignored'),
+  }
   const navigate = useNavigate()
   const detailId = id ? Number(id) : null
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'false_positive' | 'pending_review'>('all')
@@ -142,7 +143,11 @@ export default function VulnsPage() {
     : undefined
 
   const surfaceFilterLabel =
-    surfaceFilter === 'frontend' ? '前台漏洞' : surfaceFilter === 'backend' ? '后台漏洞' : '全部前后台'
+    surfaceFilter === 'frontend'
+      ? t('vulns.surface.frontend')
+      : surfaceFilter === 'backend'
+        ? t('vulns.surface.backend')
+        : t('vulns.surface.all')
 
   async function downloadIds(ids: number[], filename: string) {
     if (!ids.length) return
@@ -223,10 +228,8 @@ export default function VulnsPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">漏洞产出</h1>
-          <p className="text-sm text-slate-400">
-            按项目、状态、价值分层与提交标记筛选；同根因报告折叠在危害最大的条目下。上方日历按产出日汇总确认与误报。
-          </p>
+          <h1 className="text-2xl font-semibold">{t('nav.vulns')}</h1>
+          <p className="text-sm text-slate-400">{t('vulns.subtitle')}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -234,26 +237,26 @@ export default function VulnsPage() {
             disabled={!selected.length || marking}
             onClick={() => markSelected('submitted')}
           >
-            标记已提交
+            {t('vulns.markSubmitted')}
           </Button>
           <Button
             variant="outline"
             disabled={!selected.length || marking}
             onClick={() => markSelected('ignored')}
           >
-            标记已忽略
+            {t('vulns.markIgnored')}
           </Button>
           <Button
             variant="outline"
             disabled={!selected.length || marking}
             onClick={() => markSelected('none')}
           >
-            取消标记
+            {t('vulns.clearMark')}
           </Button>
           <Button variant="outline" onClick={downloadCveCandidates} disabled={!selected.length && total === 0}>
-            仅下载有 CVE 价值
+            {t('vulns.downloadCve')}
           </Button>
-          <Button onClick={download}>批量下载</Button>
+          <Button onClick={download}>{t('vulns.batchDownload')}</Button>
         </div>
       </div>
 
@@ -270,14 +273,14 @@ export default function VulnsPage() {
           className="pr-8 pl-8"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="搜索标题、路径、类型、编号、项目…"
-          aria-label="搜索漏洞"
+          placeholder={t('vulns.searchPlaceholder')}
+          aria-label={t('vulns.searchAria')}
         />
         {searchInput ? (
           <button
             type="button"
             className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            aria-label="清除搜索"
+            aria-label={t('common.clearSearch')}
             onClick={() => setSearchInput('')}
           >
             <XIcon className="size-4" />
@@ -292,9 +295,9 @@ export default function VulnsPage() {
             <SelectValue>{surfaceFilterLabel}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            <SelectItem value="all">全部前后台</SelectItem>
-            <SelectItem value="frontend">前台漏洞</SelectItem>
-            <SelectItem value="backend">后台漏洞</SelectItem>
+            <SelectItem value="all">{t('vulns.surface.all')}</SelectItem>
+            <SelectItem value="frontend">{t('vulns.surface.frontend')}</SelectItem>
+            <SelectItem value="backend">{t('vulns.surface.backend')}</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -305,11 +308,11 @@ export default function VulnsPage() {
           }}
         >
           <SelectTrigger className="w-auto min-w-36">
-            <SelectValue>{typeFilter === 'all' ? '全部类型' : formatVulnType(typeFilter)}</SelectValue>
+            <SelectValue>{typeFilter === 'all' ? t('vulns.type.all') : formatVulnType(typeFilter)}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            <SelectItem value="all">全部类型</SelectItem>
-            {VULN_TYPE_OPTIONS.map(([id, label]) => (
+            <SelectItem value="all">{t('vulns.type.all')}</SelectItem>
+            {vulnTypeOptions.map(([id, label]) => (
               <SelectItem key={id} value={id}>
                 {label}
               </SelectItem>
@@ -318,12 +321,12 @@ export default function VulnsPage() {
         </Select>
         <Select value={tierFilter} onValueChange={(value) => setTierFilter(value as VulnTierFilter)}>
           <SelectTrigger className="w-auto min-w-36">
-            <SelectValue>{TIER_FILTER_LABEL[tierFilter]}</SelectValue>
+            <SelectValue>{tierFilterLabel[tierFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            {(Object.keys(TIER_FILTER_LABEL) as VulnTierFilter[]).map((k) => (
+            {(Object.keys(tierFilterLabel) as VulnTierFilter[]).map((k) => (
               <SelectItem key={k} value={k}>
-                {TIER_FILTER_LABEL[k]}
+                {tierFilterLabel[k]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -336,22 +339,22 @@ export default function VulnsPage() {
           }}
         >
           <SelectTrigger className="w-auto min-w-32">
-            <SelectValue>{TRACKING_FILTER_LABEL[trackingFilter]}</SelectValue>
+            <SelectValue>{trackingFilterLabel[trackingFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-(--anchor-width)">
-            {(Object.keys(TRACKING_FILTER_LABEL) as Array<keyof typeof TRACKING_FILTER_LABEL>).map((k) => (
+            {(Object.keys(trackingFilterLabel) as Array<keyof typeof trackingFilterLabel>).map((k) => (
               <SelectItem key={k} value={k}>
-                {TRACKING_FILTER_LABEL[k]}
+                {trackingFilterLabel[k]}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {(
           [
-            ['all', '全部'],
-            ['confirmed', '已确认'],
-            ['false_positive', '误报'],
-            ['pending_review', '待审'],
+            ['all', t('filter.all')],
+            ['confirmed', t('vulns.status.confirmed')],
+            ['false_positive', t('vulnStatus.false_positive')],
+            ['pending_review', t('vulnStatus.pending_review')],
           ] as const
         ).map(([k, label]) => (
           <Button key={k} variant={filter === k ? 'default' : 'outline'} onClick={() => setFilter(k)}>
@@ -367,7 +370,7 @@ export default function VulnsPage() {
           activeId={detailId}
           selectedIds={selected}
           expandAll={Boolean(search.trim())}
-          emptyText={search.trim() ? '无匹配漏洞' : '暂无数据'}
+          emptyText={search.trim() ? t('vulns.emptySearch') : t('vulns.empty')}
           onToggleSelect={(vid, checked) =>
             setSelected((prev) => (checked ? [...prev, vid] : prev.filter((x) => x !== vid)))
           }
@@ -379,7 +382,7 @@ export default function VulnsPage() {
       {total > PAGE_SIZE ? (
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
           <span>
-            第 {page + 1} / {pageCount} 页，共 {total} 条
+            {t('page.infoItems', { page: page + 1, pageCount, total })}
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -387,19 +390,19 @@ export default function VulnsPage() {
               size="sm"
               disabled={page <= 0}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
-              aria-label="上一页"
+              aria-label={t('common.prevPage')}
             >
               <ChevronLeftIcon className="size-4" />
-              上一页
+              {t('common.prevPage')}
             </Button>
             <Button
               variant="outline"
               size="sm"
               disabled={page + 1 >= pageCount}
               onClick={() => setPage((p) => p + 1)}
-              aria-label="下一页"
+              aria-label={t('common.nextPage')}
             >
-              下一页
+              {t('common.nextPage')}
               <ChevronRightIcon className="size-4" />
             </Button>
           </div>

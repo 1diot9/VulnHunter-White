@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, formatApiError, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
 import { endpointCooldownReason, endpointSkipLabel } from '../components/LlmThreadUsageBar'
+import { useI18n } from '@/i18n'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,138 +20,149 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-const domesticEndpointHints = [
+type EndpointHint = {
+  name: string
+  nameKey?: string
+  endpoint: string
+  models: string
+  noteKey: string
+}
+
+const domesticEndpointHints: EndpointHint[] = [
   {
     name: '智谱 BigModel',
     endpoint: 'https://open.bigmodel.cn/api/paas/v4',
     models: 'glm-5.3, glm-4-plus, glm-4-air',
-    note: 'GLM Coding Plan 使用 https://open.bigmodel.cn/api/coding/paas/v4。glm-4.5 / glm-5 思考链会回传给后续轮次。',
+    noteKey: 'settings.note.zhipu',
   },
   {
     name: 'DeepSeek',
     endpoint: 'https://api.deepseek.com',
     models: 'deepseek-chat, deepseek-reasoner',
-    note: '官方 OpenAI 兼容接口。deepseek-reasoner / R1 会自动省略 temperature，并保留思考链。',
+    noteKey: 'settings.note.deepseek',
   },
   {
     name: '阿里云百炼 DashScope',
     endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     models: 'qwen-plus, qwen-max, qwen-turbo',
-    note: '使用 OpenAI 兼容模式。qwen3 / qwq 思考链会回传给后续轮次。',
+    noteKey: 'settings.note.dashscope',
   },
   {
     name: '月之暗面 Kimi',
     endpoint: 'https://api.moonshot.cn/v1',
     models: 'kimi-k3, kimi-k2.5, moonshot-v1-32k',
-    note: '官方 OpenAI 兼容接口。kimi-k3 / k2.5+ 锁定 temperature，本项目会自动省略该参数。',
+    noteKey: 'settings.note.kimi',
   },
   {
     name: '火山方舟 Doubao',
     endpoint: 'https://ark.cn-beijing.volces.com/api/v3',
     models: 'doubao-seed-1-6, doubao-1-5-pro-32k',
-    note: '模型名通常填方舟模型或推理接入点 ID',
+    noteKey: 'settings.note.doubao',
   },
   {
     name: '腾讯混元',
     endpoint: 'https://api.hunyuan.cloud.tencent.com/v1',
     models: 'hunyuan-turbos-latest, hunyuan-lite',
-    note: '官方 OpenAI 兼容接口',
+    noteKey: 'settings.note.openaiCompat',
   },
   {
     name: 'MiniMax',
     endpoint: 'https://api.minimax.chat/v1',
     models: 'abab6.5s-chat, MiniMax-Text-01',
-    note: '官方 OpenAI 兼容接口',
+    noteKey: 'settings.note.openaiCompat',
   },
   {
     name: '百川智能',
     endpoint: 'https://api.baichuan-ai.com/v1',
     models: 'Baichuan4, Baichuan3-Turbo',
-    note: '官方 OpenAI 兼容接口',
+    noteKey: 'settings.note.openaiCompat',
   },
   {
     name: '零一万物',
     endpoint: 'https://api.lingyiwanwu.com/v1',
     models: 'yi-lightning, yi-large',
-    note: '官方 OpenAI 兼容接口',
+    noteKey: 'settings.note.openaiCompat',
   },
   {
     name: '阶跃星辰 StepFun',
     endpoint: 'https://api.stepfun.com/v1',
     models: 'step-2-16k, step-1-8k',
-    note: '官方 OpenAI 兼容接口',
+    noteKey: 'settings.note.openaiCompat',
   },
   {
     name: '讯飞星火',
     endpoint: 'https://spark-api-open.xf-yun.com/v1',
     models: 'generalv3.5, 4.0Ultra',
-    note: 'OpenAI 兼容入口，具体模型名以控制台为准',
+    noteKey: 'settings.note.spark',
   },
   {
     name: '硅基流动 SiliconFlow',
     endpoint: 'https://api.siliconflow.cn/v1',
     models: 'Qwen/Qwen2.5-72B-Instruct, deepseek-ai/DeepSeek-V3',
-    note: '聚合平台，模型名通常带组织前缀',
+    noteKey: 'settings.note.siliconflow',
   },
   {
     name: '魔搭 ModelScope',
     endpoint: 'https://api-inference.modelscope.cn/v1',
     models: 'Qwen/Qwen2.5-72B-Instruct',
-    note: '模型名以 ModelScope 控制台/API 文档为准',
+    noteKey: 'settings.note.modelscope',
   },
 ]
 
-const anthropicEndpointHints = [
+const anthropicEndpointHints: EndpointHint[] = [
   {
     name: 'Anthropic 官方 Claude',
+    nameKey: 'settings.vendor.anthropicOfficial',
     endpoint: 'https://api.anthropic.com/v1',
     models: 'claude-sonnet-4-5, claude-opus-4-1',
-    note: '官方 Anthropic Messages 接口',
+    noteKey: 'settings.note.anthropicOfficial',
   },
   {
     name: '智谱 BigModel Anthropic',
     endpoint: 'https://open.bigmodel.cn/api/anthropic/v1',
     models: 'glm-5.1, glm-4.5, glm-4.5-air',
-    note: '本项目会追加 /messages；如官方文档写 /api/anthropic，这里保留 /v1。',
+    noteKey: 'settings.note.zhipuAnthropic',
   },
   {
     name: 'Kimi Anthropic',
     endpoint: 'https://api.moonshot.cn/anthropic/v1',
     models: 'kimi-k3, kimi-k2-0711-preview, kimi-latest',
-    note: '本项目会追加 /messages；Claude Code 文档中的 /anthropic 在这里写成 /anthropic/v1。kimi-k3 会自动省略 temperature。',
+    noteKey: 'settings.note.kimiAnthropic',
   },
   {
     name: 'Kimi Coding Plan',
     endpoint: 'https://api.kimi.com/coding/v1',
     models: 'kimi-k3, kimi-k2.5, kimi-k2-0711-preview',
-    note: '订阅制 Coding Key 与通用平台 Key 可能不通用，请按 Kimi 控制台说明选择。kimi-k3 / k2.5+ 会自动省略 temperature。',
+    noteKey: 'settings.note.kimiCoding',
   },
   {
     name: '阿里云百炼 DashScope',
     endpoint: 'https://dashscope.aliyuncs.com/apps/anthropic/v1',
     models: 'qwen-max, qwen-plus, qwen-coder-plus',
-    note: '本项目会追加 /messages；如使用业务空间专属域名，将主机替换为 {WorkspaceId}.cn-beijing.maas.aliyuncs.com。',
+    noteKey: 'settings.note.dashscopeAnthropic',
   },
   {
     name: 'OpenModel 聚合',
+    nameKey: 'settings.vendor.openmodel',
     endpoint: 'https://api.openmodel.ai/v1',
     models: 'kimi-k2.5, qwen3-max, deepseek-v4-flash, MiniMax-M2.5',
-    note: '聚合平台，模型名以平台文档和账号权限为准。',
+    noteKey: 'settings.note.openmodel',
   },
 ]
 
-const responsesEndpointHints = [
+const responsesEndpointHints: EndpointHint[] = [
   {
     name: 'OpenAI 官方',
+    nameKey: 'settings.vendor.openaiOfficial',
     endpoint: 'https://api.openai.com/v1',
     models: 'gpt-5, gpt-4.1, o4-mini',
-    note: '本项目会追加 /responses。gpt-5 / o 系列会自动省略 temperature。',
+    noteKey: 'settings.note.openaiOfficial',
   },
   {
     name: 'OpenRouter',
     endpoint: 'https://openrouter.ai/api/v1',
     models: 'openai/gpt-5, openai/gpt-4.1',
-    note: '需该模型支持 Responses；本项目会追加 /responses。',
+    noteKey: 'settings.note.openrouter',
   },
 ]
 
@@ -222,6 +234,7 @@ function draftFromApi(
 }
 
 export default function SettingsPage() {
+  const { t } = useI18n()
   const [s, setS] = useState<Settings | null>(null)
   const [defaultModel, setDefaultModel] = useState('')
   const [endpoints, setEndpoints] = useState<EndpointDraft[]>([emptyEndpoint('ep-1')])
@@ -409,7 +422,7 @@ export default function SettingsPage() {
       if (!out.ok) {
         setModels([])
         setProbeOk(false)
-        setProbeMsg(out.error || '拉取失败')
+        setProbeMsg(out.error || t('settings.fetch.fail'))
         return
       }
       setModels(out.models)
@@ -423,11 +436,11 @@ export default function SettingsPage() {
       }
       const latency = out.latency_ms != null ? ` · ${out.latency_ms}ms` : ''
       setProbeOk(true)
-      setProbeMsg(`已拉取 ${out.count} 个模型${latency}。请点「保存」才会写入配置。`)
+      setProbeMsg(t('settings.fetch.ok', { count: out.count, latency }))
     } catch (e) {
       setModels([])
       setProbeOk(false)
-      setProbeMsg(formatApiError(e, '拉取模型列表超时，请稍后重试。'))
+      setProbeMsg(formatApiError(e, t('settings.fetch.timeout')))
     } finally {
       setListing(false)
     }
@@ -442,16 +455,18 @@ export default function SettingsPage() {
       const out = await api.testLlm(probeBody(endpointId))
       if (!out.ok) {
         setProbeOk(false)
-        setProbeMsg(out.error || '连通失败')
+        setProbeMsg(out.error || t('settings.conn.fail'))
         return
       }
-      const latency = out.latency_ms != null ? `${out.latency_ms}ms` : ''
-      const reply = out.reply ? ` · 回复 ${out.reply}` : ''
+      const extraParts: string[] = []
+      if (out.latency_ms != null) extraParts.push(`${out.latency_ms}ms`)
+      if (out.reply) extraParts.push(t('settings.conn.reply', { reply: out.reply }))
+      const extra = extraParts.length ? ` · ${extraParts.join(' · ')}` : ''
       setProbeOk(true)
-      setProbeMsg(`连通正常 · ${out.model}${latency ? ` · ${latency}` : ''}${reply}`)
+      setProbeMsg(t('settings.conn.ok', { model: out.model, extra }))
     } catch (e) {
       setProbeOk(false)
-      setProbeMsg(formatApiError(e, '连通测试超时，请稍后重试。'))
+      setProbeMsg(formatApiError(e, t('settings.conn.timeout')))
     } finally {
       setTesting(false)
     }
@@ -468,19 +483,19 @@ export default function SettingsPage() {
       const out = await api.testFofa(body)
       if (!out.ok) {
         setFofaOk(false)
-        setFofaMsg(out.error || '连通失败')
+        setFofaMsg(out.error || t('settings.conn.fail'))
         return
       }
-      const parts = ['连通正常']
-      if (out.username) parts.push(`账号 ${out.username}`)
-      if (out.fcoin != null) parts.push(`F点 ${out.fcoin}`)
+      const parts = [t('settings.status.ok')]
+      if (out.username) parts.push(t('settings.status.account', { name: out.username }))
+      if (out.fcoin != null) parts.push(t('settings.status.fcoin', { n: out.fcoin }))
       if (out.isvip) parts.push('VIP')
       if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
       setFofaOk(true)
       setFofaMsg(parts.join(' · '))
     } catch (e) {
       setFofaOk(false)
-      setFofaMsg(formatApiError(e, 'FOFA 连通测试超时，请稍后重试。'))
+      setFofaMsg(formatApiError(e, t('settings.fofa.timeout')))
     } finally {
       setFofaTesting(false)
     }
@@ -498,21 +513,21 @@ export default function SettingsPage() {
       const out = await api.testGithub(body)
       if (!out.ok) {
         setGithubOk(false)
-        setGithubMsg(out.error || '连通失败')
+        setGithubMsg(out.error || t('settings.conn.fail'))
         return
       }
-      const parts = ['连通正常']
-      if (out.authenticated && out.login) parts.push(`账号 ${out.login}`)
-      else parts.push('匿名')
+      const parts = [t('settings.status.ok')]
+      if (out.authenticated && out.login) parts.push(t('settings.status.account', { name: out.login }))
+      else parts.push(t('settings.status.anonymous'))
       if (out.rate_remaining != null && out.rate_limit != null) {
-        parts.push(`限额 ${out.rate_remaining}/${out.rate_limit}`)
+        parts.push(t('settings.status.rate', { remaining: out.rate_remaining, limit: out.rate_limit }))
       }
       if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
       setGithubOk(true)
       setGithubMsg(parts.join(' · '))
     } catch (e) {
       setGithubOk(false)
-      setGithubMsg(formatApiError(e, 'GitHub 连通测试超时，请稍后重试。'))
+      setGithubMsg(formatApiError(e, t('settings.github.timeout')))
     } finally {
       setGithubTesting(false)
     }
@@ -528,17 +543,17 @@ export default function SettingsPage() {
       const out = await api.testJadx(body)
       if (!out.ok) {
         setJadxOk(false)
-        setJadxMsg(out.error || '检测失败')
+        setJadxMsg(out.error || t('settings.jadx.fail'))
         return
       }
-      const parts = [out.version || '可用']
+      const parts = [out.version || t('settings.jadx.available')]
       if (out.path) parts.push(out.path)
       if (out.latency_ms != null) parts.push(`${out.latency_ms}ms`)
       setJadxOk(true)
       setJadxMsg(parts.join(' · '))
     } catch (e) {
       setJadxOk(false)
-      setJadxMsg(formatApiError(e, 'jadx 检测超时，请稍后重试。'))
+      setJadxMsg(formatApiError(e, t('settings.jadx.timeout')))
     } finally {
       setJadxTesting(false)
     }
@@ -554,7 +569,7 @@ export default function SettingsPage() {
       const out = await api.testCodegraph(body)
       if (!out.ok) {
         setCodegraphOk(false)
-        setCodegraphMsg(out.error || '未找到 codegraph')
+        setCodegraphMsg(out.error || t('settings.codegraph.missing'))
         return
       }
       setCodegraphOk(true)
@@ -563,7 +578,7 @@ export default function SettingsPage() {
         .join(' · '))
     } catch (e) {
       setCodegraphOk(false)
-      setCodegraphMsg(formatApiError(e, 'CodeGraph 检测超时，请稍后重试。'))
+      setCodegraphMsg(formatApiError(e, t('settings.codegraph.timeout')))
     } finally {
       setCodegraphTesting(false)
     }
@@ -650,7 +665,7 @@ export default function SettingsPage() {
       }
       setGithubPat('')
       setFofaKey('')
-      setMsg('已保存')
+      setMsg(t('common.saved'))
     } catch (e) {
       setMsg(formatApiError(e))
     }
@@ -663,12 +678,12 @@ export default function SettingsPage() {
     setTokenOk(null)
     if (newToken.trim() && newToken.trim() !== confirmToken.trim()) {
       setTokenOk(false)
-      setTokenMsg('两次输入的新令牌不一致')
+      setTokenMsg(t('settings.token.mismatch'))
       return
     }
     if (s?.access_token_set && !currentToken.trim()) {
       setTokenOk(false)
-      setTokenMsg('修改令牌需要填写当前令牌')
+      setTokenMsg(t('settings.token.needCurrent'))
       return
     }
     setTokenSaving(true)
@@ -686,7 +701,7 @@ export default function SettingsPage() {
       setNewToken('')
       setConfirmToken('')
       setTokenOk(true)
-      setTokenMsg(next.access_token_set ? '访问令牌已更新' : '已清除设置中的令牌覆盖')
+      setTokenMsg(next.access_token_set ? t('settings.token.updated') : t('settings.token.cleared'))
     } catch (e) {
       setTokenOk(false)
       setTokenMsg(formatApiError(e))
@@ -704,23 +719,29 @@ export default function SettingsPage() {
       setLogOk(true)
       if (out.files === 0) {
         setLogMsg(
-          logDaysSafe === 0 ? '没有可清理的实时日志。' : `没有 ${logDaysSafe} 天前的实时日志。`,
+          logDaysSafe === 0
+            ? t('settings.log.emptyAll')
+            : t('settings.log.emptyDays', { days: logDaysSafe }),
         )
       } else {
         setLogMsg(
-          `已删除 ${out.files} 个文件，涉及 ${out.projects} 个项目，共 ${formatBytes(out.bytes)}。`,
+          t('settings.log.deleted', {
+            files: out.files,
+            projects: out.projects,
+            size: formatBytes(out.bytes),
+          }),
         )
       }
       setLogConfirmOpen(false)
     } catch (e) {
       setLogOk(false)
-      setLogMsg(formatApiError(e, '日志清理超时，文件较多时请稍后重试。'))
+      setLogMsg(formatApiError(e, t('settings.log.timeout')))
     } finally {
       setLogPurging(false)
     }
   }
 
-  if (!s) return <div className="text-slate-400">加载中…</div>
+  if (!s) return <div className="text-slate-400">{t('common.loading')}</div>
 
   const endpointHints =
     wireApi === 'anthropic'
@@ -730,69 +751,65 @@ export default function SettingsPage() {
         : domesticEndpointHints
   const endpointHelpTitle =
     wireApi === 'anthropic'
-      ? '常见 Anthropic Messages 端点'
+      ? t('settings.help.title.anthropic')
       : wireApi === 'responses'
-        ? '常见 OpenAI Responses 端点'
-        : '常见国产模型通用端点'
+        ? t('settings.help.title.responses')
+        : t('settings.help.title.chat')
   const endpointHelpDescription =
     wireApi === 'anthropic'
-      ? '这些地址填在 API Base URL；本项目会在地址后追加 /messages。默认模型填写对应模型名或平台接入点 ID。'
+      ? t('settings.help.desc.anthropic')
       : wireApi === 'responses'
-        ? '这些地址填在 API Base URL；本项目会在地址后追加 /responses。检查点仍按 Chat Completions 形状保存。'
-        : '这些地址填在 API Base URL；默认模型填写对应模型名或控制台里的接入点 ID。各厂商可能调整模型名，最终以官方控制台为准。'
+        ? t('settings.help.desc.responses')
+        : t('settings.help.desc.chat')
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <h1 className="text-2xl font-semibold">设置</h1>
+      <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
       <Card>
         <CardContent className="space-y-3 p-4">
           <div className="space-y-1.5">
             <Label>
-              访问令牌 {s.access_token_set ? '（已配置）' : '（未配置）'}
+              {s.access_token_set ? t('settings.token.configured') : t('settings.token.unset')}
             </Label>
-            <div className="text-xs text-slate-500">
-              配置后打开前端需先输入令牌才能查看数据或调用功能。可在 .env 写入
-              VULNHUNTER_ACCESS_TOKEN；设置页修改后以设置为准。已配置时必须填写当前令牌。新令牌留空则清除本页覆盖，改回使用
-              .env。
-            </div>
+            <div className="text-xs text-slate-500">{t('settings.token.hint')}</div>
             {s.access_token_set ? (
               <div className="space-y-1.5">
-                <Label htmlFor="current-access-token">当前令牌</Label>
+                <Label htmlFor="current-access-token">{t('settings.token.current')}</Label>
                 <Input
                   id="current-access-token"
                   type="password"
                   autoComplete="current-password"
                   value={currentToken}
                   onChange={(e) => setCurrentToken(e.target.value)}
-                  placeholder="原令牌"
+                  placeholder={t('settings.token.currentPlaceholder')}
                 />
               </div>
             ) : null}
             <div className="space-y-1.5">
-              <Label htmlFor="new-access-token">新令牌</Label>
+              <Label htmlFor="new-access-token">{t('settings.token.new')}</Label>
               <Input
                 id="new-access-token"
                 type="password"
                 autoComplete="new-password"
                 value={newToken}
                 onChange={(e) => setNewToken(e.target.value)}
-                placeholder={s.access_token_set ? '至少 4 个字符，留空则清除覆盖' : '至少 4 个字符'}
+                placeholder={s.access_token_set ? t('settings.token.placeholderClear') : t('settings.token.placeholderMin')}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirm-access-token">确认新令牌</Label>
+              <Label htmlFor="confirm-access-token">{t('settings.token.confirm')}</Label>
               <Input
                 id="confirm-access-token"
                 type="password"
                 autoComplete="new-password"
                 value={confirmToken}
                 onChange={(e) => setConfirmToken(e.target.value)}
-                placeholder="再输入一次新令牌"
+                placeholder={t('settings.token.confirmPlaceholder')}
               />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" disabled={tokenSaving} onClick={() => void saveAccessToken()}>
-                {tokenSaving ? '保存中…' : '更新令牌'}
+                {tokenSaving ? t('settings.token.saving') : t('settings.token.update')}
               </Button>
               {tokenMsg ? (
                 <span className={tokenOk === false ? 'text-sm text-red-300' : 'text-sm text-slate-300'}>
@@ -806,7 +823,7 @@ export default function SettingsPage() {
       <Card>
         <CardContent className="space-y-3 p-4">
         <div className="space-y-1.5">
-          <Label>全局接口协议</Label>
+          <Label>{t('settings.wire.label')}</Label>
           <Select
             value={wireApi}
             onValueChange={(value) => {
@@ -826,29 +843,28 @@ export default function SettingsPage() {
           </Select>
           <div className="text-xs text-slate-500">
             {wireApi === 'anthropic'
-              ? '默认走 POST /messages：system 独立字段，工具为 tool_use / tool_result。各模型商未单独指定协议时使用此项。'
+              ? t('settings.wire.hint.anthropic')
               : wireApi === 'responses'
-                ? '默认走 POST /responses：system 进 instructions，工具为 function / function_call_output。各模型商未单独指定协议时使用此项。检查点仍按 Chat Completions 形状保存。'
-                : '默认走 POST /chat/completions。各模型商未单独指定协议时使用此项。'}
+                ? t('settings.wire.hint.responses')
+                : t('settings.wire.hint.chat')}
           </div>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <Label>模型商池（Base URL）</Label>
+            <Label>{t('settings.pool.label')}</Label>
             <Button type="button" variant="ghost" size="sm" onClick={() => setEndpointHelpOpen(true)}>
               {wireApi === 'anthropic'
-                ? 'Anthropic 端点'
+                ? t('settings.pool.btn.anthropic')
                 : wireApi === 'responses'
-                  ? 'Responses 端点'
-                  : '国产模型端点'}
+                  ? t('settings.pool.btn.responses')
+                  : t('settings.pool.btn.chat')}
             </Button>
           </div>
           <div className="text-xs text-slate-500">
-            可添加多个 Base URL 扩展并行线程；每个端点可单独指定接口协议与模型，协议留空则用上方全局协议。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配；同一轮对话优先沿用相同模型（提高缓存命中），同模型端点间仍均摊并尽量粘滞原
-            URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {totalThreadLimit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。
+            {t('settings.pool.hint', { limit: totalThreadLimit })}
           </div>
           <div className="flex max-w-xs items-center gap-2">
-            <Label className="shrink-0 whitespace-nowrap">请求间隔（秒）</Label>
+            <Label className="shrink-0 whitespace-nowrap">{t('settings.pool.interval')}</Label>
             <Input
               type="number"
               min={0}
@@ -859,7 +875,7 @@ export default function SettingsPage() {
                 const n = Number(e.target.value)
                 setMinRequestInterval(Number.isFinite(n) ? n : 0)
               }}
-              title="同一 Base URL 两次请求开始时间的最小间隔；0 表示不限制"
+              title={t('settings.pool.intervalTitle')}
             />
           </div>
           <div className="space-y-3">
@@ -870,9 +886,9 @@ export default function SettingsPage() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">
-                    端点 {index + 1}
+                    {t('settings.pool.endpoint', { n: index + 1 })}
                     <span className="ml-1.5 tabular-nums opacity-70">{ep.id}</span>
-                    {ep.disabled ? <span className="ml-1.5 text-red-300">已禁用</span> : null}
+                    {ep.disabled ? <span className="ml-1.5 text-red-300">{t('llm.disabled')}</span> : null}
                   </span>
                   <div className="flex items-center gap-2">
                     <Label className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
@@ -881,25 +897,25 @@ export default function SettingsPage() {
                         disabled={!ep.disabled && enabledCount <= 1}
                         title={
                           !ep.disabled && enabledCount <= 1
-                            ? '至少保留一个未禁用的端点'
-                            : '禁用后不参与分配，配置仍保留'
+                            ? t('settings.pool.disableKeepOne')
+                            : t('settings.pool.disableHint')
                         }
                         onCheckedChange={(checked) =>
                           updateEndpoint(ep.id, { disabled: checked === true })
                         }
                       />
-                      禁用
+                      {t('settings.pool.disable')}
                     </Label>
                     {endpoints.length > 1 ? (
                       <Button type="button" variant="ghost" size="sm" onClick={() => removeEndpoint(ep.id)}>
-                        删除
+                        {t('common.delete')}
                       </Button>
                     ) : null}
                   </div>
                 </div>
                 <EndpointHealthLine health={usageById.get(ep.id)} />
                 <div className="space-y-1">
-                  <Label className="text-xs font-normal text-muted-foreground">接口协议</Label>
+                  <Label className="text-xs font-normal text-muted-foreground">{t('settings.pool.wire')}</Label>
                   <Select
                     value={ep.wire_api || '__inherit__'}
                     onValueChange={(value) => {
@@ -916,11 +932,11 @@ export default function SettingsPage() {
                       <SelectValue>
                         {ep.wire_api
                           ? wireApiLabel(ep.wire_api)
-                          : `跟随全局（${wireApiLabel(wireApi)}）`}
+                          : t('settings.wire.inherit', { label: wireApiLabel(wireApi) })}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__inherit__">跟随全局（{wireApiLabel(wireApi)}）</SelectItem>
+                      <SelectItem value="__inherit__">{t('settings.wire.inherit', { label: wireApiLabel(wireApi) })}</SelectItem>
                       <SelectItem value="chat">OpenAI Chat Completions</SelectItem>
                       <SelectItem value="responses">OpenAI Responses</SelectItem>
                       <SelectItem value="anthropic">Anthropic Messages</SelectItem>
@@ -941,13 +957,13 @@ export default function SettingsPage() {
                     type="password"
                     value={ep.api_key}
                     onChange={(e) => updateEndpoint(ep.id, { api_key: e.target.value })}
-                    placeholder={ep.api_key_set ? '已配置，留空不改' : 'sk-...'}
+                    placeholder={ep.api_key_set ? t('settings.pool.keySet') : 'sk-...'}
                   />
                   <Input
                     value={ep.model}
                     onChange={(e) => updateEndpoint(ep.id, { model: e.target.value })}
-                    placeholder={defaultModel.trim() || '模型名'}
-                    title="该端点使用的模型；留空则用下方回退模型"
+                    placeholder={defaultModel.trim() || t('settings.pool.modelName')}
+                    title={t('settings.pool.modelTitle')}
                   />
                   <Input
                     type="number"
@@ -958,8 +974,8 @@ export default function SettingsPage() {
                         max_inflight: Math.max(1, Number(e.target.value) || 1),
                       })
                     }
-                    title="该端点最大并发"
-                    placeholder="并发"
+                    title={t('settings.pool.inflightTitle')}
+                    placeholder={t('settings.pool.inflightPlaceholder')}
                   />
                 </div>
                 {models.length > 0 && probeEndpointId === ep.id ? (
@@ -968,7 +984,7 @@ export default function SettingsPage() {
                       <Input
                         value={modelFilter}
                         onChange={(e) => setModelFilter(e.target.value)}
-                        placeholder={`筛选 ${models.length} 个模型…`}
+                        placeholder={t('settings.pool.filterModels', { n: models.length })}
                       />
                     ) : null}
                     <Select
@@ -982,12 +998,18 @@ export default function SettingsPage() {
                         <SelectValue>
                           {models.includes(ep.model)
                             ? ep.model
-                            : `从清单选择（${filteredModels.length}/${models.length}）…`}
+                            : t('settings.pool.selectFromList', {
+                                filtered: filteredModels.length,
+                                total: models.length,
+                              })}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent alignItemWithTrigger={false} align="start" className="max-h-72 w-(--anchor-width)">
                         <SelectItem value="__none__">
-                          从清单选择（{filteredModels.length}/{models.length}）…
+                          {t('settings.pool.selectFromList', {
+                            filtered: filteredModels.length,
+                            total: models.length,
+                          })}
                         </SelectItem>
                         {filteredModels.map((m) => (
                           <SelectItem key={m} value={m}>
@@ -1006,7 +1028,7 @@ export default function SettingsPage() {
                     disabled={listing || testing}
                     onClick={() => void fetchModels(ep.id)}
                   >
-                    {listing && probeEndpointId === ep.id ? '拉取中…' : '拉取模型'}
+                    {listing && probeEndpointId === ep.id ? t('settings.pool.listing') : t('settings.pool.fetchModels')}
                   </Button>
                   <Button
                     type="button"
@@ -1015,11 +1037,12 @@ export default function SettingsPage() {
                     disabled={listing || testing}
                     onClick={() => void testConn(ep.id)}
                   >
-                    {testing && probeEndpointId === ep.id ? '测试中…' : '连通测试'}
+                    {testing && probeEndpointId === ep.id ? t('settings.pool.testing') : t('settings.pool.testConn')}
                   </Button>
                   <span className="text-xs text-slate-500">
-                    {ep.model.trim() || defaultModel.trim() || '未指定模型'} · 并发 {ep.max_inflight}
-                    {ep.disabled ? ' · 不参与分配' : ''}
+                    {ep.model.trim() || defaultModel.trim() || t('settings.pool.noModel')} ·{' '}
+                    {t('settings.pool.concurrency', { n: ep.max_inflight })}
+                    {ep.disabled ? t('settings.pool.notAllocated') : ''}
                   </span>
                 </div>
               </div>
@@ -1027,31 +1050,30 @@ export default function SettingsPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" onClick={addEndpoint}>
-              添加 Base URL
+              {t('settings.pool.addUrl')}
             </Button>
-            <span className="text-xs text-slate-400">合计线程上限 {totalThreadLimit}</span>
+            <span className="text-xs text-slate-400">{t('settings.pool.totalLimit', { n: totalThreadLimit })}</span>
           </div>
           {wireApi === 'chat' ? (
-            <div className="text-xs text-slate-500">
-              智谱 BigModel 通用端点填 https://open.bigmodel.cn/api/paas/v4；GLM Coding Plan 填
-              https://open.bigmodel.cn/api/coding/paas/v4，不要填 /api/v1。
-            </div>
+            <div className="text-xs text-slate-500">{t('settings.pool.zhipuHint')}</div>
           ) : null}
         </div>
         <div className="space-y-1.5">
-          <Label>回退模型</Label>
+          <Label>{t('settings.fallbackModel')}</Label>
           <div className="space-y-2">
             <Input
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
               placeholder="gpt-4o"
             />
-            <div className="text-xs text-slate-500">
-              端点未填模型时使用；项目级模型仍优先于端点与回退模型。
-            </div>
+            <div className="text-xs text-slate-500">{t('settings.fallbackHint')}</div>
             {probeMsg ? (
               <div className="flex items-start gap-2 text-sm">
-                {probeOk != null ? <Badge variant={probeOk ? 'success' : 'destructive'}>{probeOk ? '成功' : '失败'}</Badge> : null}
+                {probeOk != null ? (
+                  <Badge variant={probeOk ? 'success' : 'destructive'}>
+                    {probeOk ? t('common.success') : t('common.fail')}
+                  </Badge>
+                ) : null}
                 <span className={probeOk === false ? 'text-red-300' : 'text-slate-300'}>
                   {probeEndpointId ? `[${probeEndpointId}] ` : ''}
                   {probeMsg}
@@ -1060,16 +1082,16 @@ export default function SettingsPage() {
             ) : (
               <div className="text-xs text-slate-500">
                 {wireApi === 'anthropic'
-                  ? '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /messages。'
+                  ? t('settings.probe.hint.anthropic')
                   : wireApi === 'responses'
-                    ? '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /responses。'
-                    : '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 chat/completions。'}
+                    ? t('settings.probe.hint.responses')
+                    : t('settings.probe.hint.chat')}
               </div>
             )}
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label>上下文窗口（token 估算上限）</Label>
+          <Label>{t('settings.contextWindow')}</Label>
           <Input
             type="number"
             value={contextWindow}
@@ -1078,7 +1100,7 @@ export default function SettingsPage() {
         </div>
         <div className="space-y-1.5">
           <Label>
-            GitHub PAT {s.github_pat_set ? '（已配置，留空不改）' : '（私有仓）'}
+            {s.github_pat_set ? t('settings.github.configured') : t('settings.github.private')}
           </Label>
           <Input
             type="password"
@@ -1088,18 +1110,20 @@ export default function SettingsPage() {
           />
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" disabled={githubTesting} onClick={testGithub}>
-              {githubTesting ? '测试中…' : '连通测试'}
+              {githubTesting ? t('settings.pool.testing') : t('settings.pool.testConn')}
             </Button>
           </div>
           {githubMsg ? (
             <div className="flex items-start gap-2 text-sm">
-              {githubOk != null ? <Badge variant={githubOk ? 'success' : 'destructive'}>{githubOk ? '成功' : '失败'}</Badge> : null}
+              {githubOk != null ? (
+                <Badge variant={githubOk ? 'success' : 'destructive'}>
+                  {githubOk ? t('common.success') : t('common.fail')}
+                </Badge>
+              ) : null}
               <span className={githubOk === false ? 'text-red-300' : 'text-slate-300'}>{githubMsg}</span>
             </div>
           ) : (
-            <div className="text-xs text-slate-500">
-              连通测试访问 api.github.com。有 PAT 则校验令牌与额度，无 PAT 则测匿名访问（GHSA / Issues）。使用当前表单的 PAT 与出站代理，不会自动保存。
-            </div>
+            <div className="text-xs text-slate-500">{t('settings.github.hint')}</div>
           )}
         </div>
         <div className="space-y-1.5">
@@ -1112,7 +1136,7 @@ export default function SettingsPage() {
         </div>
         <div className="space-y-1.5">
           <Label>
-            FOFA Key {s.fofa_key_set ? '（已配置，留空不改）' : '（Verifier 互联网验证）'}
+            {s.fofa_key_set ? t('settings.fofa.configured') : t('settings.fofa.verifier')}
           </Label>
           <Input
             type="password"
@@ -1122,105 +1146,101 @@ export default function SettingsPage() {
           />
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" disabled={fofaTesting} onClick={testFofa}>
-              {fofaTesting ? '测试中…' : '连通测试'}
+              {fofaTesting ? t('settings.pool.testing') : t('settings.pool.testConn')}
             </Button>
           </div>
           {fofaMsg ? (
             <div className="flex items-start gap-2 text-sm">
-              {fofaOk != null ? <Badge variant={fofaOk ? 'success' : 'destructive'}>{fofaOk ? '成功' : '失败'}</Badge> : null}
+              {fofaOk != null ? (
+                <Badge variant={fofaOk ? 'success' : 'destructive'}>
+                  {fofaOk ? t('common.success') : t('common.fail')}
+                </Badge>
+              ) : null}
               <span className={fofaOk === false ? 'text-red-300' : 'text-slate-300'}>{fofaMsg}</span>
             </div>
           ) : (
-            <div className="text-xs text-slate-500">
-              连通测试走 FOFA info/my，校验 Key 与剩余 F 点。使用当前表单值，空 Key 则用已保存配置，不会自动保存。
-            </div>
+            <div className="text-xs text-slate-500">{t('settings.fofa.hint')}</div>
           )}
         </div>
         <div className="space-y-1.5">
-          <Label>出站代理（WebSearch / GHSA / GitHub Issues / FOFA）</Label>
+          <Label>{t('settings.httpProxy')}</Label>
           <Input
             value={httpProxy}
             onChange={(e) => setHttpProxy(e.target.value)}
-            placeholder="留空则直连，例如 http://127.0.0.1:10808"
+            placeholder={t('settings.httpProxy.placeholder')}
           />
-          <div className="text-xs text-slate-500">
-            仅工具出站 HTTP 使用。保存空值表示直连。代理连不上时自动改走直连。
-          </div>
+          <div className="text-xs text-slate-500">{t('settings.httpProxy.hint')}</div>
         </div>
         <div className="space-y-1.5">
-          <Label>Chat 代理</Label>
+          <Label>{t('settings.chatProxy')}</Label>
           <Input
             value={chatProxy}
             onChange={(e) => setChatProxy(e.target.value)}
-            placeholder="留空则模型请求直连"
+            placeholder={t('settings.chatProxy.placeholder')}
           />
-          <div className="text-xs text-slate-500">代理不可用时自动直连，不必先清空。</div>
+          <div className="text-xs text-slate-500">{t('settings.chatProxy.hint')}</div>
         </div>
         <div className="space-y-1.5">
-          <Label>CLI 工具目录</Label>
+          <Label>{t('settings.cliDir')}</Label>
           <Input
             value={cliToolsDir}
             onChange={(e) => setCliToolsDir(e.target.value)}
             placeholder="tools/cli"
           />
-          <div className="text-xs text-slate-500">
-            Reviewer 用 SearchTools 搜索这里已索引的 CLI。每个子目录是一个工具。相对路径相对仓库根目录。后台轮询扫描，静默 Agent（最多 30 轮）生成描述；日志写在该子目录的 agent.log.jsonl。
-          </div>
+          <div className="text-xs text-slate-500">{t('settings.cliDir.hint')}</div>
         </div>
         <div className="space-y-1.5">
-          <Label>jadx 路径</Label>
+          <Label>{t('settings.jadx')}</Label>
           <div className="flex flex-wrap gap-2">
             <Input
               className="min-w-[16rem] flex-1"
               value={jadxPath}
               onChange={(e) => setJadxPath(e.target.value)}
-              placeholder="留空则使用 PATH 上的 jadx / jadx.bat"
+              placeholder={t('settings.jadx.placeholder')}
             />
             <Button type="button" variant="outline" disabled={jadxTesting} onClick={testJadx}>
-              {jadxTesting ? '检测中…' : '检测'}
+              {jadxTesting ? t('settings.jadx.detecting') : t('settings.jadx.detect')}
             </Button>
           </div>
           {jadxMsg ? (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               {jadxOk != null ? (
-                <Badge variant={jadxOk ? 'success' : 'destructive'}>{jadxOk ? '成功' : '失败'}</Badge>
+                <Badge variant={jadxOk ? 'success' : 'destructive'}>
+                  {jadxOk ? t('common.success') : t('common.fail')}
+                </Badge>
               ) : null}
               <span className={jadxOk === false ? 'text-red-300' : 'text-slate-300'}>{jadxMsg}</span>
             </div>
           ) : null}
-          <div className="text-xs text-slate-500">
-            Recon / Worker / Reviewer 的 DecompileJava 调用此二进制。检测跑 jadx --version，使用当前表单路径（空则已保存配置或 PATH），不会自动保存。也可设环境变量
-            VULNHUNTER_JADX_PATH。
-          </div>
+          <div className="text-xs text-slate-500">{t('settings.jadx.hint')}</div>
         </div>
         <div className="space-y-1.5">
-          <Label>CodeGraph 路径</Label>
+          <Label>{t('settings.codegraph')}</Label>
           <div className="flex flex-wrap gap-2">
             <Input
               className="min-w-[16rem] flex-1"
               value={codegraphPath}
               onChange={(e) => setCodegraphPath(e.target.value)}
-              placeholder="留空则自动检测或在构建时安装"
+              placeholder={t('settings.codegraph.placeholder')}
             />
             <Button type="button" variant="outline" disabled={codegraphTesting} onClick={testCodegraph}>
-              {codegraphTesting ? '检测中…' : '检测'}
+              {codegraphTesting ? t('settings.jadx.detecting') : t('settings.jadx.detect')}
             </Button>
           </div>
           {codegraphMsg ? (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               {codegraphOk != null ? (
-                <Badge variant={codegraphOk ? 'success' : 'destructive'}>{codegraphOk ? '成功' : '失败'}</Badge>
+                <Badge variant={codegraphOk ? 'success' : 'destructive'}>
+                  {codegraphOk ? t('common.success') : t('common.fail')}
+                </Badge>
               ) : null}
               <span className={codegraphOk === false ? 'text-red-300' : 'text-slate-300'}>{codegraphMsg}</span>
             </div>
           ) : null}
-          <div className="text-xs text-slate-500">
-            代码库阶段用此 CLI 给 src/ 建图。仅当项目勾选「代码库」时才会构建；未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量
-            VULNHUNTER_CODEGRAPH_PATH。
-          </div>
+          <div className="text-xs text-slate-500">{t('settings.codegraph.hint')}</div>
         </div>
         <div className="flex items-center gap-3">
-          <Button onClick={save}>保存</Button>
+          <Button onClick={save}>{t('common.save')}</Button>
           {msg ? <span className="text-sm text-slate-300">{msg}</span> : null}
         </div>
         </CardContent>
@@ -1229,13 +1249,11 @@ export default function SettingsPage() {
       <Card>
         <CardContent className="space-y-3 p-4">
           <div className="space-y-1.5">
-            <Label>实时日志清理</Label>
-            <div className="text-xs text-slate-500">
-              清理各审计项目的 SSE 实时日志（live-events）。按文件最后写入时间判断，近期仍在更新的日志不会被删。填 0 表示清除全部实时日志。阶段报告、漏洞与源码不受影响。
-            </div>
+            <Label>{t('settings.log.title')}</Label>
+            <div className="text-xs text-slate-500">{t('settings.log.hint')}</div>
             <div className="flex flex-wrap items-end gap-2">
               <div className="space-y-1.5">
-                <Label htmlFor="log-days">清除多少天前</Label>
+                <Label htmlFor="log-days">{t('settings.log.days')}</Label>
                 <Input
                   id="log-days"
                   type="number"
@@ -1253,13 +1271,15 @@ export default function SettingsPage() {
                   setLogConfirmOpen(true)
                 }}
               >
-                清理日志
+                {t('settings.log.purge')}
               </Button>
             </div>
             {logMsg ? (
               <div className="flex items-start gap-2 text-sm">
                 {logOk != null ? (
-                  <Badge variant={logOk ? 'success' : 'destructive'}>{logOk ? '完成' : '失败'}</Badge>
+                  <Badge variant={logOk ? 'success' : 'destructive'}>
+                    {logOk ? t('common.done') : t('common.fail')}
+                  </Badge>
                 ) : null}
                 <span className={logOk === false ? 'text-red-300' : 'text-slate-300'}>{logMsg}</span>
               </div>
@@ -1276,19 +1296,19 @@ export default function SettingsPage() {
       >
         <DialogContent showCloseButton={!logPurging}>
           <DialogHeader>
-            <DialogTitle>清理实时日志</DialogTitle>
+            <DialogTitle>{t('settings.log.confirmTitle')}</DialogTitle>
             <DialogDescription>
               {logDaysSafe === 0
-                ? '将删除所有审计项目的全部实时日志（SSE）。此操作不可恢复。'
-                : `将删除所有审计项目中 ${logDaysSafe} 天前的实时日志（SSE），近期日志不受影响。此操作不可恢复。`}
+                ? t('settings.log.confirmAll')
+                : t('settings.log.confirmDays', { days: logDaysSafe })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" disabled={logPurging} onClick={() => setLogConfirmOpen(false)}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button variant="destructive" disabled={logPurging} onClick={() => void confirmPurgeLogs()}>
-              {logPurging ? '清理中…' : '确认清理'}
+              {logPurging ? t('settings.log.purging') : t('settings.log.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1304,7 +1324,9 @@ export default function SettingsPage() {
               <div key={item.name} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <div className="font-medium text-slate-100">{item.name}</div>
+                    <div className="font-medium text-slate-100">
+                      {item.nameKey ? t(item.nameKey) : item.name}
+                    </div>
                     <div className="mt-1 break-all font-mono text-xs text-sky-300">{item.endpoint}</div>
                   </div>
                   <Button
@@ -1325,11 +1347,11 @@ export default function SettingsPage() {
                       setEndpointHelpOpen(false)
                     }}
                   >
-                    填入
+                    {t('settings.help.fill')}
                   </Button>
                 </div>
-                <div className="mt-2 text-xs text-slate-400">模型示例：{item.models}</div>
-                <div className="mt-1 text-xs text-slate-500">{item.note}</div>
+                <div className="mt-2 text-xs text-slate-400">{t('settings.help.models', { models: item.models })}</div>
+                <div className="mt-1 text-xs text-slate-500">{t(item.noteKey)}</div>
               </div>
             ))}
           </div>

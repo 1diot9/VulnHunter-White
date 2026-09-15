@@ -14,15 +14,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-
-const EMPTY_TEMPLATE =
-  '## 当前挖掘模式：自定义模式（覆盖上文冲突条款）\n\n' +
-  '本项目为**自定义模式**。若与上文基座提示冲突，**以本节为准**。\n' +
-  '本节仅约束漏洞收录与确认标准，不改变工具权限。\n\n' +
-  '### 接收类型\n（在此填写要收录的漏洞类型与判定标准）\n\n' +
-  '### 明确丢弃\n（在此填写不要提交/确认的类型）\n'
+import { useI18n } from '@/i18n'
 
 export function CustomAuditModesCard() {
+  const { t } = useI18n()
   const [builtin, setBuiltin] = useState<BuiltinAuditMode[]>([])
   const [rows, setRows] = useState<CustomAuditMode[]>([])
   const [msg, setMsg] = useState('')
@@ -51,8 +46,8 @@ export function CustomAuditModesCard() {
 
   function openCreate(from?: BuiltinAuditMode | null) {
     setEditingId(null)
-    setName(from ? `基于${from.label}` : '')
-    setBody(from ? from.body : EMPTY_TEMPLATE)
+    setName(from ? t('settings.custom.basedOn', { label: from.label }) : '')
+    setBody(from ? from.body : t('settings.custom.template'))
     setEditorOpen(true)
   }
 
@@ -82,7 +77,7 @@ export function CustomAuditModesCard() {
       setEditorOpen(false)
       await refresh()
       setOk(true)
-      setMsg(editingId == null ? '已创建自定义审计模式' : '已保存自定义审计模式')
+      setMsg(editingId == null ? t('settings.custom.created') : t('settings.custom.updated'))
     } catch (e) {
       setOk(false)
       setMsg(formatApiError(e))
@@ -92,7 +87,7 @@ export function CustomAuditModesCard() {
   }
 
   async function remove(row: CustomAuditMode) {
-    if (!window.confirm(`删除自定义模式「${row.name}」？仍被项目引用时会失败。`)) return
+    if (!window.confirm(t('settings.custom.deleteConfirm', { name: row.name }))) return
     setBusy(true)
     setMsg('')
     setOk(null)
@@ -100,7 +95,7 @@ export function CustomAuditModesCard() {
       await api.deleteCustomAuditMode(row.id)
       await refresh()
       setOk(true)
-      setMsg(`已删除「${row.name}」`)
+      setMsg(t('settings.custom.deleted', { name: row.name }))
     } catch (e) {
       setOk(false)
       setMsg(formatApiError(e))
@@ -114,14 +109,12 @@ export function CustomAuditModesCard() {
       <Card>
         <CardContent className="space-y-4 p-4">
           <div className="space-y-1.5">
-            <Label>挖掘模式提示词</Label>
-            <div className="text-xs text-slate-500">
-              内置赏金/全量提示词只读，可复制为自定义。自定义模式在创建项目时选用；写入项目的是快照，之后改库不影响已绑定项目。
-            </div>
+            <Label>{t('settings.custom.label')}</Label>
+            <div className="text-xs text-slate-500">{t('settings.custom.hint')}</div>
           </div>
 
           <div className="space-y-2">
-            <div className="text-sm font-medium text-slate-200">内置模式（只读）</div>
+            <div className="text-sm font-medium text-slate-200">{t('settings.custom.builtin')}</div>
             <div className="space-y-2">
               {builtin.map((b) => (
                 <div
@@ -134,10 +127,10 @@ export function CustomAuditModesCard() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button type="button" variant="outline" size="sm" onClick={() => openView(b.label, b.body)}>
-                      查看
+                      {t('settings.custom.view')}
                     </Button>
                     <Button type="button" variant="secondary" size="sm" onClick={() => openCreate(b)}>
-                      复制为自定义
+                      {t('settings.custom.copy')}
                     </Button>
                   </div>
                 </div>
@@ -147,13 +140,13 @@ export function CustomAuditModesCard() {
 
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium text-slate-200">自定义模式</div>
+              <div className="text-sm font-medium text-slate-200">{t('settings.custom.list')}</div>
               <Button type="button" size="sm" onClick={() => openCreate(null)}>
-                新建
+                {t('common.create')}
               </Button>
             </div>
             {rows.length === 0 ? (
-              <div className="text-xs text-muted-foreground">暂无自定义模式。可从赏金/全量复制，或新建空白模板。</div>
+              <div className="text-xs text-muted-foreground">{t('settings.custom.empty')}</div>
             ) : (
               <div className="space-y-2">
                 {rows.map((row) => (
@@ -170,13 +163,13 @@ export function CustomAuditModesCard() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="outline" size="sm" onClick={() => openView(row.name, row.body)}>
-                        查看
+                        {t('settings.custom.view')}
                       </Button>
                       <Button type="button" variant="secondary" size="sm" onClick={() => openEdit(row)}>
-                        编辑
+                        {t('common.edit')}
                       </Button>
                       <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => void remove(row)}>
-                        删除
+                        {t('common.delete')}
                       </Button>
                     </div>
                   </div>
@@ -187,7 +180,9 @@ export function CustomAuditModesCard() {
 
           {msg ? (
             <div className="flex items-start gap-2 text-sm">
-              {ok != null ? <Badge variant={ok ? 'success' : 'destructive'}>{ok ? '成功' : '失败'}</Badge> : null}
+              {ok != null ? (
+                <Badge variant={ok ? 'success' : 'destructive'}>{ok ? t('common.success') : t('common.fail')}</Badge>
+              ) : null}
               <span className={ok === false ? 'text-red-300' : 'text-slate-300'}>{msg}</span>
             </div>
           ) : null}
@@ -197,22 +192,24 @@ export function CustomAuditModesCard() {
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent className="flex max-h-[min(90vh,44rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
-            <DialogTitle>{editingId == null ? '新建自定义审计模式' : '编辑自定义审计模式'}</DialogTitle>
-            <DialogDescription>名称与正文均不能为空。项目选用后会快照正文，改库不影响已创建项目。</DialogDescription>
+            <DialogTitle>
+              {editingId == null ? t('settings.custom.createTitle') : t('settings.custom.editTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('settings.custom.editorHint')}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-auto px-5 py-4">
             <div className="space-y-1.5">
-              <Label htmlFor="custom-mode-name">名称</Label>
+              <Label htmlFor="custom-mode-name">{t('settings.custom.name')}</Label>
               <Input
                 id="custom-mode-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="例如：只挖注入与文件"
+                placeholder={t('settings.custom.namePlaceholder')}
                 maxLength={128}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="custom-mode-body">提示词正文</Label>
+              <Label htmlFor="custom-mode-body">{t('settings.custom.body')}</Label>
               <Textarea
                 id="custom-mode-body"
                 value={body}
@@ -225,10 +222,10 @@ export function CustomAuditModesCard() {
           </div>
           <DialogFooter className="shrink-0 border-t border-border px-5 py-3">
             <Button type="button" variant="outline" onClick={() => setEditorOpen(false)} disabled={busy}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button type="button" onClick={() => void saveEditor()} disabled={busy || !name.trim() || !body.trim()}>
-              {busy ? '保存中…' : '保存'}
+              {busy ? t('settings.token.saving') : t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -238,7 +235,7 @@ export function CustomAuditModesCard() {
         <DialogContent className="flex max-h-[min(90vh,44rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
             <DialogTitle>{viewTitle}</DialogTitle>
-            <DialogDescription>只读预览</DialogDescription>
+            <DialogDescription>{t('settings.custom.readonlyPreview')}</DialogDescription>
           </DialogHeader>
           <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-5 py-4 font-mono text-xs leading-relaxed text-slate-300">
             {viewBody}

@@ -32,10 +32,15 @@ from ..mining_paths import (
 CONTINUE_EMPTY = "用户请求接续此对话，请从中断处继续。"
 CONTINUE_WITH_MSG = "## 用户接续指示\n{message}\n\n请从中断处继续。"
 _UNCONSTRAINED_LOG_PHASES = frozenset({"unconstrained", "unconstrained-worker"})
+_ATTACK_CHAIN_LOG_PHASES = frozenset({"attack_chain", "attack-chain"})
 
 
 def _is_unconstrained_phase(log_phase: str) -> bool:
     return normalize_log_phase(log_phase) in _UNCONSTRAINED_LOG_PHASES
+
+
+def _is_attack_chain_phase(log_phase: str) -> bool:
+    return normalize_log_phase(log_phase) in _ATTACK_CHAIN_LOG_PHASES
 
 
 def _project_ok(proj: Project | None) -> None:
@@ -95,6 +100,7 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
     unconstrained_on = False
     path_on = False
     path_stopped = False
+    attack_chain = _is_attack_chain_phase(lp)
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         blocked = proj is None or proj.status in ("cancelled", "ingesting", "error")
@@ -107,13 +113,17 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
                 path_stopped = mining_path_user_stopped(proj, mining_path)
                 if mining_path == "unconstrained":
                     path_stopped = path_stopped or unconstrained_done
+            elif attack_chain:
+                path_on = bool(getattr(proj, "attack_chain_enabled", False))
+                path_stopped = bool(getattr(proj, "attack_chain_stopped", False))
         else:
             completed = False
     can_continue = (resumable or archived) and not running and not path_stopped
     can_steer = running
     can_new = (not blocked) and not unconstrained and not path_stopped
-    can_stop = bool(mining_path) and path_on and (not path_stopped) and not blocked and not completed
-    can_start = bool(mining_path) and path_on and path_stopped and not blocked
+    stoppable = bool(mining_path) or attack_chain
+    can_stop = stoppable and path_on and (not path_stopped) and not blocked and not completed
+    can_start = stoppable and path_on and path_stopped and not blocked
     return {
         "log_phase": lp,
         "running": running,
@@ -125,7 +135,7 @@ def get_conversation_state(project_id: int, log_phase: str) -> dict[str, Any]:
         "can_stop": can_stop,
         "can_start": can_start,
         "unconstrained_done": unconstrained_done if unconstrained else False,
-        "path_stopped": path_stopped if mining_path else False,
+        "path_stopped": path_stopped if stoppable else False,
     }
 
 
@@ -152,14 +162,19 @@ def request_conversation(
 
     unconstrained = _is_unconstrained_phase(lp)
     mining_path = mining_path_from_log_phase(lp)
+    attack_chain = _is_attack_chain_phase(lp)
     if act == "stop":
-        if not mining_path:
-            raise ValueError("仅挖掘路径支持暂停")
-        return pipeline.request_mining_path_stop(project_id, mining_path)
+        if mining_path:
+            return pipeline.request_mining_path_stop(project_id, mining_path)
+        if attack_chain:
+            return pipeline.request_attack_chain_stop(project_id)
+        raise ValueError("仅挖掘路径或攻击链支持暂停")
     if act == "start":
-        if not mining_path:
-            raise ValueError("仅挖掘路径支持恢复")
-        return pipeline.request_mining_path_start(project_id, mining_path)
+        if mining_path:
+            return pipeline.request_mining_path_start(project_id, mining_path)
+        if attack_chain:
+            return pipeline.request_attack_chain_start(project_id)
+        raise ValueError("仅挖掘路径或攻击链支持恢复")
     if act == "new" and unconstrained:
         raise ValueError("无约束扫描请使用停止或启动，不再支持新开")
 
@@ -173,7 +188,7 @@ def request_conversation(
                     "当前小阶段未在运行，请使用接续或启动"
                     if unconstrained
                     else "当前小阶段未在运行，请使用接续、新开或恢复"
-                    if mining_path
+                    if mining_path or attack_chain
                     else "当前小阶段未在运行，请使用接续或新开"
                 )
         else:
@@ -188,7 +203,7 @@ def request_conversation(
 
     if act == "continue":
         if state.get("path_stopped"):
-            label = MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
+            label = "攻击链串联" if attack_chain else MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
             raise ValueError(f"{label}已暂停，请先恢复")
         if state["running"]:
             if msg:
@@ -198,6 +213,6 @@ def request_conversation(
         return pipeline.request_conversation_continue(project_id, lp, msg)
 
     if state.get("path_stopped"):
-        label = MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
+        label = "攻击链串联" if attack_chain else MINING_PATH_LABELS.get(mining_path or "", "该挖掘路径")
         raise ValueError(f"{label}已暂停，请先恢复")
     return pipeline.request_conversation_new(project_id, lp, msg)

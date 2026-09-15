@@ -13,6 +13,7 @@ import {
   formatVulnProjectName,
   saveBlob,
 } from '../lib/utils'
+import { useI18n } from '@/i18n'
 
 async function downloadReport(id: number) {
   try {
@@ -42,6 +43,7 @@ function VulnRow({
   onToggleSelect?: (id: number, checked: boolean) => void
   onSelectVuln?: (id: number) => void
 }) {
+  const { t } = useI18n()
   const titleBlock = (
     <>
       <div
@@ -60,7 +62,7 @@ function VulnRow({
             nested && 'mt-0.5 text-[10px] text-emerald-400/70',
           )}
         >
-          复现目标 {v.verifier_verified_url}
+          {t('comp.group.repro', { url: v.verifier_verified_url })}
         </div>
       ) : null}
       <div className={cn('mt-1 text-xs text-slate-400', nested && 'mt-0.5 text-[10px] text-slate-600')}>
@@ -113,7 +115,7 @@ function VulnRow({
         variant="ghost"
         size={nested ? 'icon-xs' : 'icon-sm'}
         className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-100"
-        aria-label={`下载 #${v.id} 报告与 PoC`}
+        aria-label={t('comp.group.dlAria', { id: v.id })}
         onClick={() => {
           void downloadReport(v.id)
         }}
@@ -133,7 +135,7 @@ export default function VulnGroupList({
   projectNameById,
   projectKindById,
   tierFilter = 'all',
-  emptyText = '暂无数据',
+  emptyText,
   expandAll = false,
 }: {
   vulns: Vuln[]
@@ -147,6 +149,8 @@ export default function VulnGroupList({
   emptyText?: string
   expandAll?: boolean
 }) {
+  const { t } = useI18n()
+  const empty = emptyText ?? t('comp.group.empty')
   const groups = useMemo(
     () => filterVulnGroups(groupVulnsByRootCause(vulns), tierFilter),
     [vulns, tierFilter],
@@ -173,7 +177,7 @@ export default function VulnGroupList({
   const selectedSet = useMemo(() => new Set(selectedIds ?? []), [selectedIds])
 
   if (groups.length === 0) {
-    return <div className="p-4 text-sm text-muted-foreground">{emptyText}</div>
+    return <div className="p-4 text-sm text-muted-foreground">{empty}</div>
   }
 
   return (
@@ -183,7 +187,7 @@ export default function VulnGroupList({
         const projectName =
           group.primary.project_name ||
           projectNameById?.get(group.primary.project_id) ||
-          `项目 ${group.primary.project_id}`
+          t('comp.filter.fallback', { id: group.primary.project_id })
         const hasOthers = group.others.length > 0
         return (
           <div key={group.id}>
@@ -199,7 +203,7 @@ export default function VulnGroupList({
                     type="button"
                     className="rounded p-0.5 text-slate-400 hover:bg-muted hover:text-slate-200"
                     aria-expanded={open}
-                    aria-label={open ? '收起同根因报告' : `展开 ${group.others.length} 条同根因报告`}
+                    aria-label={open ? t('comp.group.collapse') : t('comp.group.expand', { n: group.others.length })}
                     onClick={() =>
                       setExpanded((prev) => {
                         const next = new Set(prev)
@@ -236,7 +240,7 @@ export default function VulnGroupList({
                       })
                     }
                   >
-                    {open ? '收起同根因子项' : `还有 ${group.others.length} 条同根因`}
+                    {open ? t('comp.group.collapseItems') : t('comp.group.more', { n: group.others.length })}
                     {group.rootCauseKey ? ` · ${group.rootCauseKey}` : ''}
                   </button>
                 ) : null}

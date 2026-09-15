@@ -4,13 +4,18 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useI18n } from '@/i18n'
+import { t } from '@/i18n/t'
 import { cn } from '@/lib/utils'
 
 const GLOBAL = '__global__'
 const NONE = '__none__'
 
-export const PROJECT_MODEL_HINT =
-  '不选则使用设置里的全局模型。保存后对下一轮 Agent（侦察 / 挖掘 / 审核 / 验证）生效。'
+export function projectModelHint(): string {
+  return t('comp.model.hint')
+}
+
+export const PROJECT_MODEL_HINT = projectModelHint
 
 export function ProjectModelSelect({
   value,
@@ -21,6 +26,7 @@ export function ProjectModelSelect({
   onValueChange: (value: string) => void
   className?: string
 }) {
+  const { t } = useI18n()
   const [defaultModel, setDefaultModel] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -41,7 +47,7 @@ export function ProjectModelSelect({
   }, [models, modelFilter])
 
   const trimmed = value.trim()
-  const globalLabel = defaultModel ? `使用全局默认（${defaultModel}）` : '使用全局默认'
+  const globalLabel = defaultModel ? t('comp.model.globalNamed', { model: defaultModel }) : t('comp.model.global')
   const selectValue = !trimmed ? GLOBAL : models.includes(trimmed) ? trimmed : NONE
 
   async function fetchModels() {
@@ -51,14 +57,14 @@ export function ProjectModelSelect({
       const out = await api.listLlmModels({})
       if (out.ok) {
         setModels(out.models)
-        if (!out.models.length) setListError('清单为空')
+        if (!out.models.length) setListError(t('comp.model.emptyList'))
       } else {
         setModels([])
-        setListError(out.error || '拉取失败')
+        setListError(out.error || t('comp.model.fetchFail'))
       }
     } catch (e) {
       setModels([])
-      setListError(formatApiError(e, '拉取模型列表超时，请稍后重试。'))
+      setListError(formatApiError(e, t('comp.model.fetchTimeout')))
     } finally {
       setListing(false)
     }
@@ -66,12 +72,12 @@ export function ProjectModelSelect({
 
   return (
     <div className={cn('space-y-2', className)}>
-      <Label className="font-medium">项目模型</Label>
-      <p className="text-xs leading-relaxed text-muted-foreground">{PROJECT_MODEL_HINT}</p>
+      <Label className="font-medium">{t('comp.model.label')}</Label>
+      <p className="text-xs leading-relaxed text-muted-foreground">{projectModelHint()}</p>
       <Input
         value={value}
         onChange={(e) => onValueChange(e.target.value)}
-        placeholder={defaultModel ? `留空则用 ${defaultModel}` : '留空则使用全局模型'}
+        placeholder={defaultModel ? t('comp.model.phNamed', { model: defaultModel }) : t('comp.model.phGlobal')}
       />
       {models.length > 0 ? (
         <>
@@ -79,7 +85,7 @@ export function ProjectModelSelect({
             <Input
               value={modelFilter}
               onChange={(e) => setModelFilter(e.target.value)}
-              placeholder={`筛选 ${models.length} 个模型…`}
+              placeholder={t('comp.model.filter', { n: models.length })}
             />
           ) : null}
           <Select
@@ -94,7 +100,9 @@ export function ProjectModelSelect({
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} align="start" className="max-h-72 w-(--anchor-width)">
               <SelectItem value={GLOBAL}>{globalLabel}</SelectItem>
-              <SelectItem value={NONE}>从清单选择（{filteredModels.length}/{models.length}）…</SelectItem>
+              <SelectItem value={NONE}>
+                {t('comp.model.fromList', { shown: filteredModels.length, total: models.length })}
+              </SelectItem>
               {filteredModels.map((m) => (
                 <SelectItem key={m} value={m}>
                   {m}
@@ -106,7 +114,7 @@ export function ProjectModelSelect({
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" disabled={listing} onClick={() => void fetchModels()}>
-          {listing ? '拉取中…' : '拉取模型清单'}
+          {listing ? t('comp.model.fetching') : t('comp.model.fetch')}
         </Button>
         {listError ? <span className="text-xs text-red-300">{listError}</span> : null}
       </div>

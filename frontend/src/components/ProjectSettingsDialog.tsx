@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, formatApiError, type Project } from '../api'
 import { DynamicVerifyToggle, normalizeDynamicVerifyMode, type DynamicVerifyMode } from './DynamicVerifyToggle'
-import { MANUAL_LAB_HINT, MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
-import { DOCKER_MANUAL_LAB_HINT } from './dockerLabCopy'
+import { manualLabHint, manualLabPlaceholder } from './ManualLabFields'
+import { dockerManualLabHint } from './dockerLabCopy'
 import { MiningPathSelect } from './MiningPathSelect'
 import { ProjectModelSelect } from './ProjectModelSelect'
 import { MaxTokenUsageField, formatMaxTokenUsageInput, parseMaxTokenUsageInput } from './MaxTokenUsageField'
@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { normalizeTargetKind, type TargetKind } from '@/lib/utils'
 import { useRuntime } from '@/lib/runtime'
+import { useI18n } from '@/i18n'
 
 export function ProjectSettingsButton({
   project,
@@ -36,6 +37,7 @@ export function ProjectSettingsButton({
   disabled?: boolean
 }) {
   const { dockerLabBuildEnabled } = useRuntime()
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState(project.manual_lab_prompt || '')
   const [targetKind, setTargetKind] = useState<TargetKind>(normalizeTargetKind(project.target_kind))
@@ -106,7 +108,7 @@ export function ProjectSettingsButton({
     setError('')
     try {
       if (dynamicVerifyMode === 'lab' && !dockerLabBuildEnabled && !prompt.trim()) {
-        throw new Error('人工靶场须填写环境说明（地址/账号等）')
+        throw new Error(t('comp.settings.needManual'))
       }
       const text = dynamicVerifyMode === 'lab' ? prompt.trim() : ''
       const canEditPaths = project.status === 'paused' || project.status === 'completed'
@@ -151,10 +153,10 @@ export function ProjectSettingsButton({
       <Button
         variant="outline"
         disabled={disabled}
-        title={disabled ? '项目详情加载中' : undefined}
+        title={disabled ? t('comp.settings.loading') : undefined}
         onClick={() => setOpen(true)}
       >
-        项目配置
+        {t('comp.settings.btn')}
       </Button>
       <Dialog
         open={open}
@@ -165,11 +167,11 @@ export function ProjectSettingsButton({
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg" showCloseButton={!saving}>
           <DialogHeader>
-            <DialogTitle>项目配置</DialogTitle>
+            <DialogTitle>{t('comp.settings.title')}</DialogTitle>
             <DialogDescription>
-              审计运行中也可修改模型、Token 上限、Recon 提示、挖掘提示、验证方式与互联网验证。审计对象、代码库与挖掘路径仅在项目暂停或完成后可改
-              {dockerLabBuildEnabled ? '；人工靶场说明仅靶场动态下生效' : '；人工靶场须填写环境说明'}
-              。模型与阶段提示对下一轮 Agent 生效。到达 Token 上限后会自动暂停，提高上限后再续跑。
+              {t('comp.settings.bodyHead')}
+              {dockerLabBuildEnabled ? t('comp.settings.bodyDocker') : t('comp.settings.bodyManual')}
+              {t('comp.settings.bodyTail')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -216,16 +218,16 @@ export function ProjectSettingsButton({
             {dynamicVerifyMode === 'lab' ? (
               <div className="space-y-2">
                 <Label htmlFor="manual-lab-prompt" className="font-medium">
-                  人工靶场描述
+                  {t('comp.settings.manualDesc')}
                 </Label>
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                  {dockerLabBuildEnabled ? MANUAL_LAB_HINT : DOCKER_MANUAL_LAB_HINT}
+                  {dockerLabBuildEnabled ? manualLabHint() : dockerManualLabHint()}
                 </p>
                 <Textarea
                   id="manual-lab-prompt"
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  placeholder={MANUAL_LAB_PLACEHOLDER}
+                  placeholder={manualLabPlaceholder()}
                   rows={5}
                 />
               </div>
@@ -236,10 +238,10 @@ export function ProjectSettingsButton({
           </div>
           <DialogFooter>
             <Button variant="outline" disabled={saving} onClick={close}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button disabled={saving} onClick={() => void save()}>
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('comp.settings.saving') : t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>

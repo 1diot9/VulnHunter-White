@@ -33,6 +33,7 @@ import {
   severityScoreBadgeClass,
 } from '../lib/utils'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
+import { useI18n } from '@/i18n'
 
 const MarkdownView = lazy(() => import('./MarkdownView'))
 
@@ -55,6 +56,7 @@ export default function VulnDetailDialog({
   onUpdated?: (detail: VulnDetail) => void
   showProjectLink?: boolean
 }) {
+    const { t } = useI18n()
   const [detail, setDetail] = useState<VulnDetail | null>(null)
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -105,7 +107,7 @@ export default function VulnDetailDialog({
         if (activeVulnIdRef.current !== id) return
         if (initial) {
           const text = err instanceof Error ? err.message : String(err || '')
-          setLoadError(text || '加载漏洞详情失败')
+          setLoadError(text || t('comp.detail.loadFail'))
           setDetail(null)
         }
       } finally {
@@ -126,7 +128,7 @@ export default function VulnDetailDialog({
   const detailProject =
     projectName ||
     detail?.project_name ||
-    (detail ? `项目 ${detail.project_id}` : '')
+    (detail ? t('comp.filter.fallback', { id: detail.project_id }) : '')
   const detailVerifyMode = normalizeDynamicVerifyMode(dynamicVerifyMode, dynamicVerifyEnabled)
   const priorIsHarness = detail?.evidence_level === 'harness'
   const canIntegrationFollowup =
@@ -134,38 +136,38 @@ export default function VulnDetailDialog({
   const dynamicVerifyKind =
     detailVerifyMode === 'harness'
       ? canIntegrationFollowup
-        ? '集成验证'
-        : '局部验证'
+        ? t('comp.detail.integration')
+        : t('comp.detail.harness')
       : detailVerifyMode === 'lab'
-        ? '靶场动态验证'
-        : '靶场动态或局部验证'
-  const priorConclusion = priorIsHarness ? '局部验证' : '静态'
+        ? t('comp.detail.lab')
+        : t('comp.detail.labOrHarness')
+  const priorConclusion = priorIsHarness ? t('comp.detail.harness') : t('comp.detail.static')
   const dynamicVerifyHint =
     detail?.dynamic_verify_queued || dynamicBusy
-      ? `已接续原审核轮次，正在${priorConclusion}结论上追加${dynamicVerifyKind}，不是互联网验证。`
+      ? t('comp.detail.continueNote', { prior: priorConclusion, kind: dynamicVerifyKind })
       : canIntegrationFollowup
-        ? `对已局部验证确认的漏洞追加 L3 集成验证（integration 沙箱起服务并跑 poc.py），不是互联网验证。通过后证据升为动态验证。`
+        ? t('comp.detail.l3Note')
         : priorIsHarness
-          ? `对已局部验证确认的漏洞追加靶场动态验证，不是互联网验证。完成后证据等级会从局部验证更新为动态验证。项目须为靶场动态模式（可在项目设置中切换）。`
-          : `对已仅静态确认的漏洞追加${dynamicVerifyKind}，不是互联网验证。完成后证据等级会从 static_only 更新。`
+          ? t('comp.detail.labOnHarness')
+          : t('comp.detail.staticAppend', { kind: dynamicVerifyKind })
   const internetQueued = Boolean(detail?.internet_verify_queued) || internetBusy
   const internetAwaiting = detail?.verifier_status === 'awaiting_user'
   const internetLabel =
     internetQueued
-      ? '互联网验证中…'
+      ? t('comp.detail.internetBusy')
       : internetAwaiting
-        ? '待用户确认'
+        ? t('comp.detail.awaitUser')
         : detail?.verifier_status === 'skipped' ||
             detail?.verifier_status === 'failed' ||
             detail?.verifier_status === 'verified'
-          ? '再次互联网验证'
-          : '互联网验证'
+          ? t('comp.detail.internetAgain')
+          : t('comp.detail.internet')
   const internetHint =
     internetQueued
-      ? '已排队，Verifier 正在或即将用 FOFA 搜同款目标复测本条。'
+      ? t('comp.detail.queued')
       : internetAwaiting
-        ? '请先到「验证确认」页跳过或同意后再发起。'
-        : '项目未开启 Verifier、或此前跳过/失败后，可从这里手动排队：用 FOFA 搜索同款目标并复测本条。未开启时会打开本项目 Verifier，只排队这一条。'
+        ? t('comp.detail.needConsent')
+        : t('comp.detail.manualQueue')
 
   async function downloadReport(id: number, kind: 'report' | 'advisory' | 'cve' = 'report') {
     try {
@@ -225,7 +227,7 @@ export default function VulnDetailDialog({
       setDetail(next)
       onUpdated?.(next)
     } catch (err) {
-      setDynamicError(formatApiError(err, '启动动态验证超时，请稍后重试。'))
+      setDynamicError(formatApiError(err, t('comp.detail.dynTimeout')))
     } finally {
       setDynamicBusy(false)
     }
@@ -243,7 +245,7 @@ export default function VulnDetailDialog({
       setDetail(next)
       onUpdated?.(next)
     } catch (err) {
-      setInternetError(formatApiError(err, '启动互联网验证失败，请稍后重试。'))
+      setInternetError(formatApiError(err, t('comp.detail.netFail')))
     } finally {
       setInternetBusy(false)
     }
@@ -274,7 +276,7 @@ export default function VulnDetailDialog({
       <DialogContent className="flex max-h-[min(90vh,52rem)] w-full max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle className="text-lg leading-snug font-semibold">
-            {detail?.title || '漏洞详情'}
+            {detail?.title || t('comp.detail.title')}
           </DialogTitle>
           <DialogDescription>
             {detail ? (
@@ -286,12 +288,12 @@ export default function VulnDetailDialog({
                 ) : (
                   formatProjectRef(detail.project_id, detailProject)
                 )}
-                {' · '}产出时间 {formatDateTime(detail.created_at)}
+                {' · '}{t('comp.detail.produced', { time: formatDateTime(detail.created_at) })}
               </>
             ) : loadError ? (
-              '加载失败'
+              t('comp.detail.loadErr')
             ) : (
-              '加载报告…'
+              t('comp.detail.loadReport')
             )}
           </DialogDescription>
         </DialogHeader>
@@ -300,7 +302,7 @@ export default function VulnDetailDialog({
             <div className="space-y-3">
               <TooltipProvider delay={200}>
               <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant="outline">项目 #{detail.project_id}</Badge>
+                <Badge variant="outline">{t('comp.detail.projectBadge', { id: detail.project_id })}</Badge>
                 <Badge variant="outline">{detail.vuln_type}</Badge>
                 {detailScore ? (
                   <Badge
@@ -367,24 +369,26 @@ export default function VulnDetailDialog({
               </TooltipProvider>
               {detail.verifier_status === 'awaiting_user' ? (
                 <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/90">
-                  互联网复测可能产生危害，正在等待你在「验证确认」页跳过或给出指示后继续。
+                  {t('comp.detail.consentWait')}
                   <Link className="ml-2 underline" to="/verifier-consent">
-                    去确认
+                    {t('comp.detail.goConsent')}
                   </Link>
                 </div>
               ) : null}
               {detail.verifier_status === 'skipped' ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  未做互联网复测。可能因用户选择跳过、FOFA 无样本或网络不可用等；详见下方报告「互联网验证」。可点击「再次互联网验证」重新排队。
+                  {t('comp.detail.noInternet')}
                 </div>
               ) : null}
               {detail.verifier_targets && detail.verifier_targets.length > 0 ? (
                 <div className="space-y-2 rounded border border-border/60 bg-muted/30 px-3 py-2">
                   <div className="text-xs font-medium text-slate-300">
-                    FOFA 目标 · 共 {detail.verifier_targets.length}
-                    （成功 {detail.verifier_targets.filter((t) => t.status === 'success').length} · 失败{' '}
-                    {detail.verifier_targets.filter((t) => t.status === 'fail').length} · 未测{' '}
-                    {detail.verifier_targets.filter((t) => t.status === 'untested').length}）
+                    {t('comp.detail.targets', { n: detail.verifier_targets.length })}
+                    {t('comp.detail.targetsStats', {
+                      ok: detail.verifier_targets.filter((row) => row.status === 'success').length,
+                      fail: detail.verifier_targets.filter((row) => row.status === 'fail').length,
+                      untested: detail.verifier_targets.filter((row) => row.status === 'untested').length,
+                    })}
                   </div>
                   {detail.verifier_fofa_query ? (
                     <div className="break-all font-mono text-xs text-slate-400">{detail.verifier_fofa_query}</div>
@@ -393,31 +397,31 @@ export default function VulnDetailDialog({
                     <table className="w-full min-w-[28rem] text-left text-xs">
                       <thead className="text-slate-500">
                         <tr>
-                          <th className="py-1 pr-2 font-medium">状态</th>
-                          <th className="py-1 pr-2 font-medium">目标</th>
-                          <th className="py-1 pr-2 font-medium">标题</th>
-                          <th className="py-1 font-medium">说明</th>
+                          <th className="py-1 pr-2 font-medium">{t('comp.detail.colStatus')}</th>
+                          <th className="py-1 pr-2 font-medium">{t('comp.detail.colTarget')}</th>
+                          <th className="py-1 pr-2 font-medium">{t('comp.detail.colTitle')}</th>
+                          <th className="py-1 font-medium">{t('comp.detail.colNote')}</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {detail.verifier_targets.map((t, i) => (
-                          <tr key={`${t.host}-${i}`} className="border-t border-border/40 align-top">
+                        {detail.verifier_targets.map((tgt, i) => (
+                          <tr key={`${tgt.host}-${i}`} className="border-t border-border/40 align-top">
                             <td className="py-1.5 pr-2">
                               <Badge
                                 variant={
-                                  t.status === 'success'
+                                  tgt.status === 'success'
                                     ? 'success'
-                                    : t.status === 'fail'
+                                    : tgt.status === 'fail'
                                       ? 'destructive'
                                       : 'outline'
                                 }
                               >
-                                {formatVerifierTargetStatus(t.status)}
+                                {formatVerifierTargetStatus(tgt.status)}
                               </Badge>
                             </td>
-                            <td className="py-1.5 pr-2 break-all text-slate-200">{t.host || '—'}</td>
-                            <td className="py-1.5 pr-2 text-slate-400">{t.title || '—'}</td>
-                            <td className="py-1.5 text-slate-400">{t.note || '—'}</td>
+                            <td className="py-1.5 pr-2 break-all text-slate-200">{tgt.host || t('common.dash')}</td>
+                            <td className="py-1.5 pr-2 text-slate-400">{tgt.title || t('common.dash')}</td>
+                            <td className="py-1.5 text-slate-400">{tgt.note || t('common.dash')}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -427,29 +431,29 @@ export default function VulnDetailDialog({
               ) : null}
               {detail.verifier_status === 'verified' ? (
                 <div className="space-y-2 rounded border border-emerald-900/50 bg-emerald-950/20 px-3 py-2">
-                  <div className="text-xs font-medium text-emerald-300/90">互联网复现证据</div>
+                  <div className="text-xs font-medium text-emerald-300/90">{t('comp.detail.evidence')}</div>
                   <div className="space-y-1 text-sm">
-                    <div className="text-xs text-slate-400">FOFA 搜索语法</div>
+                    <div className="text-xs text-slate-400">{t('comp.detail.fofaQuery')}</div>
                     <pre className="overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
-                      {detail.verifier_fofa_query || '（未记录）'}
+                      {detail.verifier_fofa_query || t('comp.detail.unlogged')}
                     </pre>
                   </div>
                   <div className="space-y-1 text-sm">
-                    <div className="text-xs text-slate-400">打通目标</div>
+                    <div className="text-xs text-slate-400">{t('comp.detail.hitTarget')}</div>
                     <div className="break-all text-slate-200">
-                      {detail.verifier_verified_url || '（未记录 URL）'}
+                      {detail.verifier_verified_url || t('comp.detail.unloggedUrl')}
                     </div>
                   </div>
                   <div className="space-y-1">
-                    <div className="text-xs text-slate-400">使用的 PoC</div>
+                    <div className="text-xs text-slate-400">{t('comp.detail.usedPoc')}</div>
                     <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
-                      {detail.verifier_poc || '（未记录对该目标发出的请求）'}
+                      {detail.verifier_poc || t('comp.detail.unloggedReq')}
                     </pre>
                   </div>
                   <div className="space-y-1">
-                    <div className="text-xs text-slate-400">实际响应</div>
+                    <div className="text-xs text-slate-400">{t('comp.detail.resp')}</div>
                     <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs text-slate-200">
-                      {detail.verifier_response || '（未记录该目标的响应）'}
+                      {detail.verifier_response || t('comp.detail.unloggedResp')}
                     </pre>
                   </div>
                 </div>
@@ -461,7 +465,7 @@ export default function VulnDetailDialog({
                   disabled={marking}
                   onClick={() => markDetail(detail.tracking_status === 'submitted' ? 'none' : 'submitted')}
                 >
-                  {detail.tracking_status === 'submitted' ? '取消已提交' : '标记已提交'}
+                  {detail.tracking_status === 'submitted' ? t('comp.detail.unsubmit') : t('comp.detail.markSubmit')}
                 </Button>
                 <Button
                   size="sm"
@@ -469,7 +473,7 @@ export default function VulnDetailDialog({
                   disabled={marking}
                   onClick={() => markDetail(detail.tracking_status === 'ignored' ? 'none' : 'ignored')}
                 >
-                  {detail.tracking_status === 'ignored' ? '取消已忽略' : '标记已忽略'}
+                  {detail.tracking_status === 'ignored' ? t('comp.detail.unignore') : t('comp.detail.markIgnore')}
                 </Button>
                 <Button
                   size="sm"
@@ -485,10 +489,10 @@ export default function VulnDetailDialog({
                 >
                   <DownloadIcon data-icon="inline-start" />
                   {reportKind === 'advisory'
-                    ? '下载 Advisory'
+                    ? t('comp.detail.dlAdvisory')
                     : reportKind === 'cve'
-                      ? '下载 CVE JSON'
-                      : '下载报告'}
+                      ? t('comp.detail.dlCve')
+                      : t('comp.detail.dlReport')}
                 </Button>
                 {detail.can_dynamic_verify || detail.dynamic_verify_queued ? (
                   <TooltipProvider delay={200}>
@@ -503,7 +507,7 @@ export default function VulnDetailDialog({
                           {dynamicBusy || detail.dynamic_verify_queued ? (
                             <Loader2Icon className="animate-spin" data-icon="inline-start" />
                           ) : null}
-                          {detail.dynamic_verify_queued || dynamicBusy ? '追加验证中…' : '追加验证'}
+                          {detail.dynamic_verify_queued || dynamicBusy ? t('comp.detail.appendBusy') : t('comp.detail.append')}
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="max-w-xs text-left leading-relaxed whitespace-normal">
@@ -547,29 +551,29 @@ export default function VulnDetailDialog({
               ) : null}
               {detail.dynamic_verify_queued ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  已接续原审核轮次，正在
-                  {detail.evidence_level === 'harness' ? '局部验证' : '静态'}
-                  结论上追加验证。完成后证据等级会更新为动态验证或局部验证。
+                  {t('comp.detail.continueHead')}
+                  {detail.evidence_level === 'harness' ? t('comp.detail.harness') : t('comp.detail.static')}
+                  {t('comp.detail.continueTail')}
                 </div>
               ) : null}
               {detail.submission_reason ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  <div className="text-xs text-slate-400">分层理由</div>
+                  <div className="text-xs text-slate-400">{t('attr.reason')}</div>
                   <div>{detail.submission_reason}</div>
                   {detail.root_cause_key ? (
-                    <div className="mt-1 text-xs text-slate-400">根因键：{detail.root_cause_key}</div>
+                    <div className="mt-1 text-xs text-slate-400">{t('comp.detail.rootKey', { key: detail.root_cause_key })}</div>
                   ) : null}
                 </div>
               ) : null}
               {detail.merged_into_id ? (
                 <div className="rounded border border-cyan-900/50 bg-cyan-950/30 px-3 py-2 text-sm text-cyan-200/90">
-                  已并入主报告{' '}
+                  {t('comp.detail.merged')}{' '}
                   <RelatedVulnLink id={detail.merged_into_id}>#{detail.merged_into_id}</RelatedVulnLink>
                 </div>
               ) : null}
               {detail.merged_from_ids && detail.merged_from_ids.length > 0 ? (
                 <div className="rounded border border-border/60 bg-muted/40 px-3 py-2 text-sm text-slate-300">
-                  <div className="text-xs text-slate-400">已并入本报告的条目</div>
+                  <div className="text-xs text-slate-400">{t('comp.detail.mergedItems')}</div>
                   <div className="mt-1 flex flex-wrap gap-2">
                     {detail.merged_from_ids.map((mid) => (
                       <RelatedVulnLink key={mid} id={mid}>
@@ -585,7 +589,7 @@ export default function VulnDetailDialog({
                   variant={reportKind === 'report' ? 'default' : 'outline'}
                   onClick={() => setReportKind('report')}
                 >
-                  中文报告
+                  {t('comp.detail.zhReport')}
                 </Button>
                 <Button
                   size="sm"
@@ -608,7 +612,7 @@ export default function VulnDetailDialog({
                     ) : (
                       <CopyIcon data-icon="inline-start" />
                     )}
-                    {advisoryCopied ? '已复制' : '复制到 GitHub'}
+                    {advisoryCopied ? t('comp.detail.copied') : t('comp.detail.copyGh')}
                   </Button>
                 ) : null}
                 {reportKind === 'cve' ? (
@@ -618,22 +622,22 @@ export default function VulnDetailDialog({
                     ) : (
                       <CopyIcon data-icon="inline-start" />
                     )}
-                    {cveCopied ? '已复制' : '复制 CVE JSON'}
+                    {cveCopied ? t('comp.detail.copied') : t('comp.detail.copyCve')}
                   </Button>
                 ) : null}
               </div>
               {reportKind === 'advisory' ? (
                 <pre className="max-h-[min(70vh,48rem)] overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs leading-relaxed text-slate-200">
-                  {detail.advisory_md || '暂无 Advisory。Worker / Reviewer 会写入 vulns/{id}/advisory.md。'}
+                  {detail.advisory_md || t('comp.detail.noAdvisory')}
                 </pre>
               ) : reportKind === 'cve' ? (
                 <pre className="max-h-[min(70vh,48rem)] overflow-auto whitespace-pre-wrap rounded bg-black/40 p-3 text-xs leading-relaxed text-slate-200">
                   {detail.cve_json ||
-                    '暂无 CVE JSON。Worker / Reviewer 通过 ReadCveRecord / SetCveRecordField 写入 vulns/{id}/cve.json。'}
+                    t('comp.detail.noCve')}
                 </pre>
               ) : (
-                <Suspense fallback={<div className="text-sm text-muted-foreground">加载报告…</div>}>
-                  <MarkdownView content={detail.report_md || detail.source_sink || '_无报告_'} />
+                <Suspense fallback={<div className="text-sm text-muted-foreground">{t('comp.detail.loadReport')}</div>}>
+                  <MarkdownView content={detail.report_md || detail.source_sink || t('comp.detail.noReportMd')} />
                 </Suspense>
               )}
               {detail.http_request ? (
@@ -668,18 +672,18 @@ export default function VulnDetailDialog({
                     .catch((err) => {
                       if (activeVulnIdRef.current !== vulnId) return
                       const text = err instanceof Error ? err.message : String(err || '')
-                      setLoadError(text || '加载漏洞详情失败')
+                      setLoadError(text || t('comp.detail.loadFail'))
                     })
                     .finally(() => {
                       if (activeVulnIdRef.current === vulnId) setLoading(false)
                     })
                 }}
               >
-                重试
+                {t('common.retry')}
               </Button>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">{loading ? '加载报告…' : '暂无数据'}</div>
+            <div className="text-sm text-muted-foreground">{loading ? t('comp.detail.loadReport') : t('comp.detail.noData')}</div>
           )}
         </div>
       </DialogContent>

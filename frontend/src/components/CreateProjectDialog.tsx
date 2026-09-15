@@ -25,11 +25,12 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { type AuditMode, type TargetKind } from '@/lib/utils'
 import { useRuntime } from '@/lib/runtime'
-import { DOCKER_MANUAL_LAB_HINT } from './dockerLabCopy'
-import { MANUAL_LAB_PLACEHOLDER } from './ManualLabFields'
+import { useI18n } from '@/i18n'
+import { dockerManualLabHint } from './dockerLabCopy'
+import { manualLabPlaceholder } from './ManualLabFields'
 
-function formatUploadError(e: unknown): string {
-  return formatApiError(e, '源码 zip 上传超时，请检查体积后重试，或改用 GitHub 导入')
+function formatUploadError(e: unknown, fallback: string): string {
+  return formatApiError(e, fallback)
 }
 
 type Props = {
@@ -77,6 +78,7 @@ export function CreateProjectDialog({
   const [uploadingFile, setUploadingFile] = useState<File | null>(null)
   const [error, setError] = useState('')
   const dynamicVerifyEnabled = dynamicVerifyMode !== 'off'
+  const { t } = useI18n()
   const labMode = dynamicVerifyMode === 'lab'
   const selectedCustomName = customModes.find((m) => m.id === customModeId)?.name
 
@@ -138,7 +140,7 @@ export function CreateProjectDialog({
 
   function createOpts() {
     if (labMode && !dockerLabBuildEnabled && !manualLabPrompt.trim()) {
-      throw new Error('人工靶场须填写环境说明（地址/账号等）')
+      throw new Error(t('comp.create.needManual'))
     }
     const useManual = labMode && (dockerLabBuildEnabled ? manualLab : true)
     return {
@@ -166,7 +168,7 @@ export function CreateProjectDialog({
   async function createGithub() {
     if (!url.trim()) return
     if (auditMode === 'custom' && customModeId == null) {
-      setError('请先选择自定义审计模式（可在设置页创建）')
+      setError(t('comp.create.needCustom'))
       return
     }
     let opts
@@ -193,7 +195,7 @@ export function CreateProjectDialog({
   async function onZip(file: File | null) {
     if (!file) return
     if (auditMode === 'custom' && customModeId == null) {
-      setError('请先选择自定义审计模式（可在设置页创建）')
+      setError(t('comp.create.needCustom'))
       return
     }
     let opts
@@ -211,7 +213,7 @@ export function CreateProjectDialog({
       onOpenChange(false)
       await onCreated()
     } catch (e) {
-      setError(formatUploadError(e))
+      setError(formatUploadError(e, t('comp.create.zipTimeout')))
     } finally {
       setBusy(false)
       setUploadingFile(null)
@@ -233,9 +235,9 @@ export function CreateProjectDialog({
         showCloseButton={!busy}
       >
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
-          <DialogTitle>创建项目</DialogTitle>
+          <DialogTitle>{t('comp.create.title')}</DialogTitle>
           <DialogDescription>
-            导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、代码库阶段、挖掘路径与验证方式；项目模型、Token 上限与阶段提示在高级选项中。
+            {t('comp.create.body')}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -301,14 +303,14 @@ export function CreateProjectDialog({
               {labMode && !dockerLabBuildEnabled ? (
                 <div className="space-y-2">
                   <Label htmlFor="create-manual-lab" className="font-medium">
-                    人工靶场说明
+                    {t('comp.create.manualLabel')}
                   </Label>
-                  <p className="text-xs leading-relaxed text-muted-foreground">{DOCKER_MANUAL_LAB_HINT}</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{dockerManualLabHint()}</p>
                   <Textarea
                     id="create-manual-lab"
                     value={manualLabPrompt}
                     onChange={(e) => setManualLabPrompt(e.target.value)}
-                    placeholder={MANUAL_LAB_PLACEHOLDER}
+                    placeholder={manualLabPlaceholder()}
                     rows={4}
                     disabled={busy}
                   />
@@ -356,10 +358,10 @@ export function CreateProjectDialog({
               }}
             />
             <Button disabled={busy} onClick={() => void createGithub()}>
-              从 GitHub 创建
+              {t('comp.create.github')}
             </Button>
             <Label className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg border border-input px-3 text-sm font-medium hover:bg-muted">
-              上传 Zip
+              {t('comp.create.zip')}
               <Input
                 type="file"
                 accept=".zip"

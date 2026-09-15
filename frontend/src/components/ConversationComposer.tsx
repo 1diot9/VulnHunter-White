@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, formatApiError, type ConversationState } from '../api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { useI18n } from '@/i18n'
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,10 @@ function isUnconstrainedPhase(logPhase: string) {
   return logPhase === 'unconstrained' || logPhase === 'unconstrained-worker'
 }
 
+function isAttackChainPhase(logPhase: string) {
+  return logPhase === 'attack_chain' || logPhase === 'attack-chain'
+}
+
 function isMiningPhase(logPhase: string) {
   return (
     logPhase === 'mine' ||
@@ -37,11 +42,12 @@ function isMiningPhase(logPhase: string) {
   )
 }
 
-function miningPathLabel(logPhase: string) {
-  if (logPhase === 'fast' || logPhase === 'fast-worker') return '快速扫描'
-  if (logPhase === 'bypass' || logPhase === 'bypass-worker') return '历史漏洞绕过'
-  if (isUnconstrainedPhase(logPhase)) return '无约束扫描'
-  return '启发式挖掘'
+function miningPathLabel(logPhase: string, t: (k: string) => string) {
+  if (isAttackChainPhase(logPhase)) return t('flow.composer.path.chain')
+  if (logPhase === 'fast' || logPhase === 'fast-worker') return t('mining.fast')
+  if (logPhase === 'bypass' || logPhase === 'bypass-worker') return t('mining.bypass')
+  if (isUnconstrainedPhase(logPhase)) return t('mining.unconstrained')
+  return t('mining.heuristic')
 }
 
 export function ConversationComposer({
@@ -53,6 +59,7 @@ export function ConversationComposer({
   onSent,
   onRunningChange,
 }: ConversationComposerProps) {
+  const { t } = useI18n()
   const [state, setState] = useState<ConversationState | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -63,8 +70,10 @@ export function ConversationComposer({
   const blocked = ['cancelled', 'ingesting', 'error'].includes(projectStatus)
   const viewingHistory = session < sessionCount
   const unconstrained = isUnconstrainedPhase(logPhase)
+  const attackChain = isAttackChainPhase(logPhase)
   const mining = isMiningPhase(logPhase)
-  const pathLabel = miningPathLabel(logPhase)
+  const pathControls = mining || attackChain
+  const pathLabel = miningPathLabel(logPhase, t)
 
   const refresh = useCallback(async () => {
     try {
@@ -93,7 +102,7 @@ export function ConversationComposer({
   async function submit(action: 'steer' | 'continue' | 'new' | 'stop' | 'start') {
     if (busy || blocked) return
     if (action === 'steer' && !message.trim()) {
-      setError('请输入引导内容')
+      setError(t('flow.composer.needSteer'))
       return
     }
     setBusy(true)
@@ -125,36 +134,36 @@ export function ConversationComposer({
   const unconstrainedDone = Boolean(state?.unconstrained_done)
   const pathStopped = Boolean(state?.path_stopped) || (unconstrained && unconstrainedDone)
 
-  let placeholder = '可选：接续或新开时附带说明…'
-  if (mining && pathStopped) {
-    placeholder = unconstrained ? '路径已停止。点启动后继续挖掘。' : `路径已暂停。点恢复或全部续跑后继续${pathLabel}。`
+  let placeholder = t('flow.composer.ph.optional')
+  if (pathControls && pathStopped) {
+    placeholder = unconstrained ? t('flow.composer.ph.stopped') : t('flow.composer.ph.paused', { path: pathLabel })
   } else if (running) {
-    placeholder = '输入引导，将在下一轮模型调用前注入（类似 Cursor 跟进）…'
+    placeholder = t('flow.composer.ph.steer')
   } else if (unconstrained) {
-    placeholder = '可选：接续时附带说明…'
+    placeholder = t('flow.composer.ph.continue')
   }
 
-  let hint = running ? '进行中 · Ctrl+Enter 发送引导' : '空闲 · 接续保留上下文，新开放弃检查点'
+  let hint = running ? t('flow.composer.hint.run') : t('flow.composer.hint.idle')
   if (unconstrained) {
-    if (pathStopped) hint = '已停止 · 启动或全部续跑后继续无约束扫描'
-    else if (running) hint = '进行中 · Ctrl+Enter 发送引导；停止后不再新开本路径'
-    else hint = '空闲 · 接续保留上下文；停止后若其他阶段已结束则项目完成'
-  } else if (mining) {
-    if (pathStopped) hint = `已暂停 · 恢复或全部续跑后继续${pathLabel}`
-    else if (running) hint = '进行中 · Ctrl+Enter 发送引导；暂停后不再新开本路径'
-    else hint = '空闲 · 接续保留上下文；暂停后若其他阶段已结束则项目完成'
+    if (pathStopped) hint = t('flow.composer.hint.uStopped')
+    else if (running) hint = t('flow.composer.hint.uRun')
+    else hint = t('flow.composer.hint.uIdle')
+  } else if (pathControls) {
+    if (pathStopped) hint = t('flow.composer.hint.pStopped', { path: pathLabel })
+    else if (running) hint = attackChain ? t('flow.composer.hint.pRunPhase') : t('flow.composer.hint.pRunPath')
+    else hint = t('flow.composer.hint.pIdle')
   }
 
-  const stopLabel = unconstrained ? '停止' : '暂停'
-  const startLabel = unconstrained ? '启动' : '恢复'
+  const stopLabel = unconstrained ? t('flow.composer.stop') : t('flow.composer.pause')
+  const startLabel = unconstrained ? t('flow.composer.start') : t('flow.composer.resume')
 
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">
       {viewingHistory ? (
-        <p className="text-xs text-muted-foreground">正在查看历史轮次；输入将作用于该小阶段最新一轮。</p>
+        <p className="text-xs text-muted-foreground">{t('flow.composer.historyNote')}</p>
       ) : null}
       {blocked ? (
-        <p className="text-xs text-muted-foreground">当前项目状态不可操作对话。</p>
+        <p className="text-xs text-muted-foreground">{t('flow.composer.blocked')}</p>
       ) : null}
       <Textarea
         value={message}
@@ -179,7 +188,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canSteer || !message.trim()}
               onClick={() => void submit('steer')}
             >
-              {busy ? '发送中…' : '发送引导'}
+              {busy ? t('flow.composer.sending') : t('flow.composer.sendSteer')}
             </Button>
           ) : (
             <Button
@@ -188,7 +197,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canContinue}
               onClick={() => void submit('continue')}
             >
-              {busy ? '处理中…' : '接续'}
+              {busy ? t('flow.composer.processing') : t('flow.composer.continue')}
             </Button>
           )
         ) : running ? (
@@ -199,7 +208,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canSteer || !message.trim()}
               onClick={() => void submit('steer')}
             >
-              {busy ? '发送中…' : '发送引导'}
+              {busy ? t('flow.composer.sending') : t('flow.composer.sendSteer')}
             </Button>
             <Button
               type="button"
@@ -208,7 +217,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canNew}
               onClick={() => setConfirmNew(true)}
             >
-              新开
+              {t('flow.composer.new')}
             </Button>
           </>
         ) : (
@@ -219,7 +228,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canContinue}
               onClick={() => void submit('continue')}
             >
-              {busy ? '处理中…' : '接续'}
+              {busy ? t('flow.composer.processing') : t('flow.composer.continue')}
             </Button>
             <Button
               type="button"
@@ -228,13 +237,13 @@ export function ConversationComposer({
               disabled={busy || blocked || !canNew}
               onClick={() => void submit('new')}
             >
-              新开
+              {t('flow.composer.new')}
             </Button>
           </>
         )}
         <span className="text-[11px] text-muted-foreground">{hint}</span>
       </div>
-      {mining ? (
+      {pathControls ? (
         <div className="flex flex-wrap items-center gap-2">
           {canStart ? (
             <Button
@@ -243,7 +252,7 @@ export function ConversationComposer({
               disabled={busy || blocked || !canStart}
               onClick={() => void submit('start')}
             >
-              {busy ? `${startLabel}中…` : startLabel}
+              {busy ? t('flow.composer.startingNamed', { label: startLabel }) : startLabel}
             </Button>
           ) : (
             <Button
@@ -262,17 +271,17 @@ export function ConversationComposer({
       <Dialog open={confirmNew} onOpenChange={(o) => !busy && setConfirmNew(o)}>
         <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
           <DialogHeader>
-            <DialogTitle>新开一轮对话？</DialogTitle>
+            <DialogTitle>{t('flow.composer.newTitle')}</DialogTitle>
             <DialogDescription>
-              将打断当前进行中的对话、放弃可恢复检查点，并按你填写的说明新开一轮。此操作不可撤销。
+              {t('flow.composer.newBody')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirmNew(false)}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button type="button" disabled={busy} onClick={() => void submit('new')}>
-              {busy ? '启动中…' : '确认新开'}
+              {busy ? t('flow.composer.launching') : t('flow.composer.confirmNew')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -281,19 +290,21 @@ export function ConversationComposer({
       <Dialog open={confirmStop} onOpenChange={(o) => !busy && setConfirmStop(o)}>
         <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
           <DialogHeader>
-            <DialogTitle>{unconstrained ? '停止无约束扫描？' : `暂停${pathLabel}？`}</DialogTitle>
+            <DialogTitle>{unconstrained ? t('flow.composer.stopUnconst') : t('flow.composer.pausePath', { path: pathLabel })}</DialogTitle>
             <DialogDescription>
               {unconstrained
-                ? '将结束当前挖掘轮并停止本路径。若其他挖掘与审核均已结束，项目将标记为完成。之后可再点启动或全部续跑继续挖。'
-                : `将结束当前挖掘轮并暂停${pathLabel}。若其他挖掘与审核均已结束，项目将标记为完成。之后可再点恢复或全部续跑继续挖。`}
+                ? t('flow.composer.stopUnconstBody')
+                : attackChain
+                  ? t('flow.composer.pauseChainBody')
+                  : t('flow.composer.pausePathBody', { path: pathLabel })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirmStop(false)}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button type="button" variant="warning" disabled={busy} onClick={() => void submit('stop')}>
-              {busy ? (unconstrained ? '停止中…' : '暂停中…') : unconstrained ? '确认停止' : '确认暂停'}
+              {busy ? (unconstrained ? t('flow.composer.stopping') : t('flow.composer.pausing')) : unconstrained ? t('flow.composer.confirmStop') : t('flow.composer.confirmPause')}
             </Button>
           </DialogFooter>
         </DialogContent>

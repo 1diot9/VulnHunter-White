@@ -241,6 +241,8 @@ def test_harmless_file_ops_and_unguessable_uuid_are_discarded():
     ):
         assert "无害/受限文件操作" in text
         assert "不可获取且不可预测" in text
+    assert "分享链接" in worker
+    assert "分享链接" in reviewer
     assert "匿名文件操作" in worker
     assert "匿名文件操作" in reviewer
     assert "MarkFalsePositive" in reviewer

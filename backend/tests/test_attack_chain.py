@@ -343,10 +343,73 @@ def test_project_complete_gates_waits_for_attack_chain(tmp_env, project):
 
     with _db() as db:
         proj = db.get(Project, project)
+        proj.attack_chain_enabled = True
+        proj.attack_chain_done = False
+        proj.attack_chain_stopped = True
+        db.commit()
+    assert attack_chain_ready(project) is False
+    assert project_complete_gates(project) is True
+
+    with _db() as db:
+        proj = db.get(Project, project)
         proj.attack_chain_enabled = False
         proj.attack_chain_done = False
+        proj.attack_chain_stopped = False
         db.commit()
     assert project_complete_gates(project) is True
+    _ = (a, b)
+
+
+def test_attack_chain_stop_and_start_and_resume_clears_flag(tmp_env, project, monkeypatch):
+    from app.services import pipeline
+    from app.services.conversation import get_conversation_state, request_conversation
+
+    a = _submit_and_confirm(project, title="洞 A")
+    b = _submit_and_confirm(project, title="洞 B", file_path="b.java")
+    _make_mining_done(project)
+    with _db() as db:
+        proj = db.get(Project, project)
+        proj.attack_chain_enabled = True
+        proj.attack_chain_done = False
+        proj.attack_chain_stopped = False
+        proj.status = "auditing"
+        db.commit()
+
+    state = get_conversation_state(project, "attack_chain")
+    assert state["can_stop"] is True
+    assert state["can_start"] is False
+    assert state["path_stopped"] is False
+    assert attack_chain_ready(project) is True
+
+    out = request_conversation(project, "attack_chain", "stop")
+    assert out["ok"] is True
+    assert out["path_stopped"] is True
+    assert out["project_completed"] is True
+    with _db() as db:
+        proj = db.get(Project, project)
+        assert proj.attack_chain_stopped is True
+        assert proj.attack_chain_done is False
+        assert proj.status == "completed"
+    assert attack_chain_ready(project) is False
+    state = get_conversation_state(project, "attack_chain")
+    assert state["can_start"] is True
+    assert state["can_stop"] is False
+    assert state["path_stopped"] is True
+
+    monkeypatch.setattr(pipeline, "start_audit", lambda pid: None)
+    started = request_conversation(project, "attack_chain", "start")
+    assert started["path_stopped"] is False
+    with _db() as db:
+        proj = db.get(Project, project)
+        assert proj.attack_chain_stopped is False
+        assert proj.status != "completed"
+    assert attack_chain_ready(project) is True
+
+    request_conversation(project, "attack_chain", "stop")
+    pipeline.request_resume(project)
+    with _db() as db:
+        proj = db.get(Project, project)
+        assert proj.attack_chain_stopped is False
     _ = (a, b)
 
 

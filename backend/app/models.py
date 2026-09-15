@@ -112,6 +112,8 @@ class Project(Base):
     attack_chain_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # 攻击链阶段是否已跑完（含 <2 条已确认时跳过）
     attack_chain_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 用户在攻击链日志输入框下暂停；全部续跑或单独恢复后继续
+    attack_chain_stopped: Mapped[bool] = mapped_column(Boolean, default=False)
     # Reviewer 动态验证（Docker 靶场 / 先 HTTP PoC，PoC 不可用再 debug MCP）；默认关闭，仅静态复核
     dynamic_verify_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # off | lab | harness — 与 dynamic_verify_enabled 同步；旧库仅有布尔时 enabled=true 视为 lab
@@ -523,6 +525,7 @@ def _ensure_columns() -> None:
             "verifier_enabled": "BOOLEAN DEFAULT 0",
             "attack_chain_enabled": "BOOLEAN DEFAULT 0",
             "attack_chain_done": "BOOLEAN DEFAULT 0",
+            "attack_chain_stopped": "BOOLEAN DEFAULT 0",
             "dynamic_verify_enabled": "BOOLEAN DEFAULT 0",
             "dynamic_verify_mode": "VARCHAR(32) DEFAULT 'off'",
             "heuristic_enabled": "BOOLEAN DEFAULT 1",

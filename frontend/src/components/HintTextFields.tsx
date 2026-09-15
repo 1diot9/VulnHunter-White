@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { useI18n } from '@/i18n'
 
 export const HINT_TEXT_MAX = 20000
 
@@ -33,6 +34,7 @@ export function HintTextFields({
   maxLength?: number
   tooLongMessage?: string
 }) {
+  const { t } = useI18n()
   const [fileError, setFileError] = useState('')
   const count = value.length
 
@@ -40,17 +42,17 @@ export function HintTextFields({
     setFileError('')
     if (!file) return
     if (!isHintFile(file)) {
-      setFileError('请上传 .txt 或 .md 文本文件')
+      setFileError(t('comp.hint.needText'))
       return
     }
     const raw = await file.text()
     if (raw.includes('\0')) {
-      setFileError('文件不是文本')
+      setFileError(t('comp.hint.notText'))
       return
     }
     const text = raw.replace(/^\uFEFF/, '').trim()
     if (text.length > maxLength) {
-      setFileError(tooLongMessage || `${label}过长，最多 ${maxLength} 字`)
+      setFileError(tooLongMessage || t('comp.hint.tooLong', { label, max: maxLength }))
       return
     }
     onChange(text)
@@ -64,7 +66,7 @@ export function HintTextFields({
         </Label>
         <div className="flex items-center gap-2">
           <Label className="inline-flex h-7 cursor-pointer items-center justify-center rounded-lg border border-input px-2.5 text-[0.8rem] font-medium hover:bg-muted has-[:disabled]:pointer-events-none has-[:disabled]:opacity-50">
-            上传文本
+            {t('comp.hint.upload')}
             <input
               type="file"
               accept=".txt,.md,.markdown,.text,text/plain,text/markdown"
@@ -78,7 +80,7 @@ export function HintTextFields({
           </Label>
           {value.trim() ? (
             <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => onChange('')}>
-              清空
+              {t('comp.hint.clear')}
             </Button>
           ) : null}
         </div>

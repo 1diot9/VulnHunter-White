@@ -1,0 +1,436 @@
+export const settingsPack = {
+  zh: {
+    'llm.thread': 'LLM 线程',
+    'llm.threadAria': 'LLM 线程占用',
+    'llm.waiting': '排队 {n}',
+    'llm.tooltip':
+      '所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL 并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。同一端点发请求会按设置的最小间隔排队，排队不计超时。429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。可在设置页管理模型商池。',
+    'llm.unconfigured': '(未配置)',
+    'llm.disabled': '已禁用',
+    'llm.cooldown': '冷却 {time}',
+    'llm.error.rate_limit': '限流',
+    'llm.error.quota': '额度用尽',
+    'llm.error.auth': '密钥无效',
+    'llm.error.transient': '服务端错误',
+    'llm.reasonWithDetail': '{kind}：{detail}',
+
+    'settings.title': '设置',
+    'settings.token.configured': '访问令牌（已配置）',
+    'settings.token.unset': '访问令牌（未配置）',
+    'settings.token.hint':
+      '配置后打开前端需先输入令牌才能查看数据或调用功能。可在 .env 写入 VULNHUNTER_ACCESS_TOKEN；设置页修改后以设置为准。已配置时必须填写当前令牌。新令牌留空则清除本页覆盖，改回使用 .env。',
+    'settings.token.current': '当前令牌',
+    'settings.token.currentPlaceholder': '原令牌',
+    'settings.token.new': '新令牌',
+    'settings.token.placeholderClear': '至少 4 个字符，留空则清除覆盖',
+    'settings.token.placeholderMin': '至少 4 个字符',
+    'settings.token.confirm': '确认新令牌',
+    'settings.token.confirmPlaceholder': '再输入一次新令牌',
+    'settings.token.update': '更新令牌',
+    'settings.token.saving': '保存中…',
+    'settings.token.mismatch': '两次输入的新令牌不一致',
+    'settings.token.needCurrent': '修改令牌需要填写当前令牌',
+    'settings.token.updated': '访问令牌已更新',
+    'settings.token.cleared': '已清除设置中的令牌覆盖',
+
+    'settings.wire.label': '全局接口协议',
+    'settings.wire.hint.anthropic':
+      '默认走 POST /messages：system 独立字段，工具为 tool_use / tool_result。各模型商未单独指定协议时使用此项。',
+    'settings.wire.hint.responses':
+      '默认走 POST /responses：system 进 instructions，工具为 function / function_call_output。各模型商未单独指定协议时使用此项。检查点仍按 Chat Completions 形状保存。',
+    'settings.wire.hint.chat': '默认走 POST /chat/completions。各模型商未单独指定协议时使用此项。',
+    'settings.wire.inherit': '跟随全局（{label}）',
+
+    'settings.pool.label': '模型商池（Base URL）',
+    'settings.pool.btn.anthropic': 'Anthropic 端点',
+    'settings.pool.btn.responses': 'Responses 端点',
+    'settings.pool.btn.chat': '国产模型端点',
+    'settings.pool.hint':
+      '可添加多个 Base URL 扩展并行线程；每个端点可单独指定接口协议与模型，协议留空则用上方全局协议。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配；同一轮对话优先沿用相同模型（提高缓存命中），同模型端点间仍均摊并尽量粘滞原 URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {limit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。',
+    'settings.pool.interval': '请求间隔（秒）',
+    'settings.pool.intervalTitle': '同一 Base URL 两次请求开始时间的最小间隔；0 表示不限制',
+    'settings.pool.endpoint': '端点 {n}',
+    'settings.pool.disableKeepOne': '至少保留一个未禁用的端点',
+    'settings.pool.disableHint': '禁用后不参与分配，配置仍保留',
+    'settings.pool.disable': '禁用',
+    'settings.pool.wire': '接口协议',
+    'settings.pool.keySet': '已配置，留空不改',
+    'settings.pool.modelName': '模型名',
+    'settings.pool.modelTitle': '该端点使用的模型；留空则用下方回退模型',
+    'settings.pool.inflightTitle': '该端点最大并发',
+    'settings.pool.inflightPlaceholder': '并发',
+    'settings.pool.filterModels': '筛选 {n} 个模型…',
+    'settings.pool.selectFromList': '从清单选择（{filtered}/{total}）…',
+    'settings.pool.listing': '拉取中…',
+    'settings.pool.fetchModels': '拉取模型',
+    'settings.pool.testing': '测试中…',
+    'settings.pool.testConn': '连通测试',
+    'settings.pool.noModel': '未指定模型',
+    'settings.pool.concurrency': '并发 {n}',
+    'settings.pool.notAllocated': ' · 不参与分配',
+    'settings.pool.addUrl': '添加 Base URL',
+    'settings.pool.totalLimit': '合计线程上限 {n}',
+    'settings.pool.zhipuHint':
+      '智谱 BigModel 通用端点填 https://open.bigmodel.cn/api/paas/v4；GLM Coding Plan 填 https://open.bigmodel.cn/api/coding/paas/v4，不要填 /api/v1。',
+    'settings.fallbackModel': '回退模型',
+    'settings.fallbackHint': '端点未填模型时使用；项目级模型仍优先于端点与回退模型。',
+    'settings.probe.hint.anthropic':
+      '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /messages。',
+    'settings.probe.hint.responses':
+      '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 POST /responses。',
+    'settings.probe.hint.chat':
+      '各端点可单独拉取 / 连通测试并选模型。拉取走 GET /models，连通测试发一条极短 chat/completions。',
+    'settings.contextWindow': '上下文窗口（token 估算上限）',
+    'settings.github.configured': 'GitHub PAT（已配置，留空不改）',
+    'settings.github.private': 'GitHub PAT（私有仓）',
+    'settings.github.hint':
+      '连通测试访问 api.github.com。有 PAT 则校验令牌与额度，无 PAT 则测匿名访问（GHSA / Issues）。使用当前表单的 PAT 与出站代理，不会自动保存。',
+    'settings.fofa.configured': 'FOFA Key（已配置，留空不改）',
+    'settings.fofa.verifier': 'FOFA Key（Verifier 互联网验证）',
+    'settings.fofa.hint':
+      '连通测试走 FOFA info/my，校验 Key 与剩余 F 点。使用当前表单值，空 Key 则用已保存配置，不会自动保存。',
+    'settings.httpProxy': '出站代理（WebSearch / GHSA / GitHub Issues / FOFA）',
+    'settings.httpProxy.placeholder': '留空则直连，例如 http://127.0.0.1:10808',
+    'settings.httpProxy.hint': '仅工具出站 HTTP 使用。保存空值表示直连。代理连不上时自动改走直连。',
+    'settings.chatProxy': 'Chat 代理',
+    'settings.chatProxy.placeholder': '留空则模型请求直连',
+    'settings.chatProxy.hint': '代理不可用时自动直连，不必先清空。',
+    'settings.cliDir': 'CLI 工具目录',
+    'settings.cliDir.hint':
+      'Reviewer 用 SearchTools 搜索这里已索引的 CLI。每个子目录是一个工具。相对路径相对仓库根目录。后台轮询扫描，静默 Agent（最多 30 轮）生成描述；日志写在该子目录的 agent.log.jsonl。',
+    'settings.jadx': 'jadx 路径',
+    'settings.jadx.placeholder': '留空则使用 PATH 上的 jadx / jadx.bat',
+    'settings.jadx.detecting': '检测中…',
+    'settings.jadx.detect': '检测',
+    'settings.jadx.hint':
+      'Recon / Worker / Reviewer 的 DecompileJava 调用此二进制。检测跑 jadx --version，使用当前表单路径（空则已保存配置或 PATH），不会自动保存。也可设环境变量 VULNHUNTER_JADX_PATH。',
+    'settings.codegraph': 'CodeGraph 路径',
+    'settings.codegraph.placeholder': '留空则自动检测或在构建时安装',
+    'settings.codegraph.hint':
+      '代码库阶段用此 CLI 给 src/ 建图。仅当项目勾选「代码库」时才会构建；未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量 VULNHUNTER_CODEGRAPH_PATH。',
+
+    'settings.log.title': '实时日志清理',
+    'settings.log.hint':
+      '清理各审计项目的 SSE 实时日志（live-events）。按文件最后写入时间判断，近期仍在更新的日志不会被删。填 0 表示清除全部实时日志。阶段报告、漏洞与源码不受影响。',
+    'settings.log.days': '清除多少天前',
+    'settings.log.purge': '清理日志',
+    'settings.log.confirmTitle': '清理实时日志',
+    'settings.log.confirmAll': '将删除所有审计项目的全部实时日志（SSE）。此操作不可恢复。',
+    'settings.log.confirmDays':
+      '将删除所有审计项目中 {days} 天前的实时日志（SSE），近期日志不受影响。此操作不可恢复。',
+    'settings.log.purging': '清理中…',
+    'settings.log.confirm': '确认清理',
+    'settings.log.emptyAll': '没有可清理的实时日志。',
+    'settings.log.emptyDays': '没有 {days} 天前的实时日志。',
+    'settings.log.deleted': '已删除 {files} 个文件，涉及 {projects} 个项目，共 {size}。',
+
+    'settings.help.title.anthropic': '常见 Anthropic Messages 端点',
+    'settings.help.title.responses': '常见 OpenAI Responses 端点',
+    'settings.help.title.chat': '常见国产模型通用端点',
+    'settings.help.desc.anthropic':
+      '这些地址填在 API Base URL；本项目会在地址后追加 /messages。默认模型填写对应模型名或平台接入点 ID。',
+    'settings.help.desc.responses':
+      '这些地址填在 API Base URL；本项目会在地址后追加 /responses。检查点仍按 Chat Completions 形状保存。',
+    'settings.help.desc.chat':
+      '这些地址填在 API Base URL；默认模型填写对应模型名或控制台里的接入点 ID。各厂商可能调整模型名，最终以官方控制台为准。',
+    'settings.help.fill': '填入',
+    'settings.help.models': '模型示例：{models}',
+
+    'settings.fetch.fail': '拉取失败',
+    'settings.fetch.ok': '已拉取 {count} 个模型{latency}。请点「保存」才会写入配置。',
+    'settings.fetch.timeout': '拉取模型列表超时，请稍后重试。',
+    'settings.conn.fail': '连通失败',
+    'settings.conn.ok': '连通正常 · {model}{extra}',
+    'settings.conn.reply': '回复 {reply}',
+    'settings.conn.timeout': '连通测试超时，请稍后重试。',
+    'settings.fofa.timeout': 'FOFA 连通测试超时，请稍后重试。',
+    'settings.github.timeout': 'GitHub 连通测试超时，请稍后重试。',
+    'settings.jadx.fail': '检测失败',
+    'settings.jadx.available': '可用',
+    'settings.jadx.timeout': 'jadx 检测超时，请稍后重试。',
+    'settings.codegraph.missing': '未找到 codegraph',
+    'settings.codegraph.timeout': 'CodeGraph 检测超时，请稍后重试。',
+    'settings.log.timeout': '日志清理超时，文件较多时请稍后重试。',
+    'settings.status.ok': '连通正常',
+    'settings.status.account': '账号 {name}',
+    'settings.status.fcoin': 'F点 {n}',
+    'settings.status.anonymous': '匿名',
+    'settings.status.rate': '限额 {remaining}/{limit}',
+
+    'settings.vendor.anthropicOfficial': 'Anthropic 官方 Claude',
+    'settings.vendor.openmodel': 'OpenModel 聚合',
+    'settings.vendor.openaiOfficial': 'OpenAI 官方',
+    'settings.note.zhipu':
+      'GLM Coding Plan 使用 https://open.bigmodel.cn/api/coding/paas/v4。glm-4.5 / glm-5 思考链会回传给后续轮次。',
+    'settings.note.deepseek':
+      '官方 OpenAI 兼容接口。deepseek-reasoner / R1 会自动省略 temperature，并保留思考链。',
+    'settings.note.dashscope': '使用 OpenAI 兼容模式。qwen3 / qwq 思考链会回传给后续轮次。',
+    'settings.note.kimi':
+      '官方 OpenAI 兼容接口。kimi-k3 / k2.5+ 锁定 temperature，本项目会自动省略该参数。',
+    'settings.note.doubao': '模型名通常填方舟模型或推理接入点 ID',
+    'settings.note.openaiCompat': '官方 OpenAI 兼容接口',
+    'settings.note.spark': 'OpenAI 兼容入口，具体模型名以控制台为准',
+    'settings.note.siliconflow': '聚合平台，模型名通常带组织前缀',
+    'settings.note.modelscope': '模型名以 ModelScope 控制台/API 文档为准',
+    'settings.note.anthropicOfficial': '官方 Anthropic Messages 接口',
+    'settings.note.zhipuAnthropic':
+      '本项目会追加 /messages；如官方文档写 /api/anthropic，这里保留 /v1。',
+    'settings.note.kimiAnthropic':
+      '本项目会追加 /messages；Claude Code 文档中的 /anthropic 在这里写成 /anthropic/v1。kimi-k3 会自动省略 temperature。',
+    'settings.note.kimiCoding':
+      '订阅制 Coding Key 与通用平台 Key 可能不通用，请按 Kimi 控制台说明选择。kimi-k3 / k2.5+ 会自动省略 temperature。',
+    'settings.note.dashscopeAnthropic':
+      '本项目会追加 /messages；如使用业务空间专属域名，将主机替换为 {WorkspaceId}.cn-beijing.maas.aliyuncs.com。',
+    'settings.note.openmodel': '聚合平台，模型名以平台文档和账号权限为准。',
+    'settings.note.openaiOfficial': '本项目会追加 /responses。gpt-5 / o 系列会自动省略 temperature。',
+    'settings.note.openrouter': '需该模型支持 Responses；本项目会追加 /responses。',
+
+    'settings.custom.label': '挖掘模式提示词',
+    'settings.custom.hint':
+      '内置赏金/全量提示词只读，可复制为自定义。自定义模式在创建项目时选用；写入项目的是快照，之后改库不影响已绑定项目。',
+    'settings.custom.builtin': '内置模式（只读）',
+    'settings.custom.list': '自定义模式',
+    'settings.custom.empty': '暂无自定义模式。可从赏金/全量复制，或新建空白模板。',
+    'settings.custom.view': '查看',
+    'settings.custom.copy': '复制为自定义',
+    'settings.custom.created': '已创建自定义审计模式',
+    'settings.custom.updated': '已保存自定义审计模式',
+    'settings.custom.deleteConfirm': '删除自定义模式「{name}」？仍被项目引用时会失败。',
+    'settings.custom.deleted': '已删除「{name}」',
+    'settings.custom.createTitle': '新建自定义审计模式',
+    'settings.custom.editTitle': '编辑自定义审计模式',
+    'settings.custom.editorHint': '名称与正文均不能为空。项目选用后会快照正文，改库不影响已创建项目。',
+    'settings.custom.name': '名称',
+    'settings.custom.namePlaceholder': '例如：只挖注入与文件',
+    'settings.custom.body': '提示词正文',
+    'settings.custom.readonlyPreview': '只读预览',
+    'settings.custom.basedOn': '基于{label}',
+    'settings.custom.template':
+      '## 当前挖掘模式：自定义模式（覆盖上文冲突条款）\n\n' +
+      '本项目为**自定义模式**。若与上文基座提示冲突，**以本节为准**。\n' +
+      '本节仅约束漏洞收录与确认标准，不改变工具权限。\n\n' +
+      '### 接收类型\n（在此填写要收录的漏洞类型与判定标准）\n\n' +
+      '### 明确丢弃\n（在此填写不要提交/确认的类型）\n',
+  },
+  en: {
+    'llm.thread': 'LLM threads',
+    'llm.threadAria': 'LLM thread usage',
+    'llm.waiting': 'queued {n}',
+    'llm.tooltip':
+      'Total LLM sessions across running projects (recon, mining, review, and more). The cap is the sum of each Base URL’s concurrency. New sessions are spread across endpoints; extras queue in arrival order. Requests to the same endpoint also queue by the configured minimum interval (queue time is not counted toward timeouts). 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Manage the provider pool on the Settings page.',
+    'llm.unconfigured': '(not set)',
+    'llm.disabled': 'Disabled',
+    'llm.cooldown': 'cooldown {time}',
+    'llm.error.rate_limit': 'Rate limited',
+    'llm.error.quota': 'Quota exhausted',
+    'llm.error.auth': 'Invalid key',
+    'llm.error.transient': 'Server error',
+    'llm.reasonWithDetail': '{kind}: {detail}',
+
+    'settings.title': 'Settings',
+    'settings.token.configured': 'Access token (configured)',
+    'settings.token.unset': 'Access token (not set)',
+    'settings.token.hint':
+      'When set, the UI requires this token before viewing data or calling APIs. You can set VULNHUNTER_ACCESS_TOKEN in .env; a change on this page takes precedence. If a token is already configured you must enter the current one. Leave the new token blank to clear this page’s override and fall back to .env.',
+    'settings.token.current': 'Current token',
+    'settings.token.currentPlaceholder': 'Current token',
+    'settings.token.new': 'New token',
+    'settings.token.placeholderClear': 'At least 4 characters; leave blank to clear the override',
+    'settings.token.placeholderMin': 'At least 4 characters',
+    'settings.token.confirm': 'Confirm new token',
+    'settings.token.confirmPlaceholder': 'Re-enter the new token',
+    'settings.token.update': 'Update token',
+    'settings.token.saving': 'Saving…',
+    'settings.token.mismatch': 'The two new tokens do not match',
+    'settings.token.needCurrent': 'Enter the current token to change it',
+    'settings.token.updated': 'Access token updated',
+    'settings.token.cleared': 'Cleared the Settings-page token override',
+
+    'settings.wire.label': 'Default API protocol',
+    'settings.wire.hint.anthropic':
+      'Defaults to POST /messages: system is a separate field; tools are tool_use / tool_result. Used when an endpoint does not set its own protocol.',
+    'settings.wire.hint.responses':
+      'Defaults to POST /responses: system goes in instructions; tools are function / function_call_output. Used when an endpoint does not set its own protocol. Checkpoints are still stored in Chat Completions shape.',
+    'settings.wire.hint.chat':
+      'Defaults to POST /chat/completions. Used when an endpoint does not set its own protocol.',
+    'settings.wire.inherit': 'Follow global ({label})',
+
+    'settings.pool.label': 'Provider pool (Base URL)',
+    'settings.pool.btn.anthropic': 'Anthropic endpoints',
+    'settings.pool.btn.responses': 'Responses endpoints',
+    'settings.pool.btn.chat': 'Domestic model endpoints',
+    'settings.pool.hint':
+      'Add multiple Base URLs to increase parallel threads. Each endpoint can set its own protocol and model; empty protocol follows the global setting above. Checking Disable keeps the config but excludes it from allocation. New sessions are load-balanced; a conversation prefers the same model (better cache hits) and still spreads across same-model URLs while sticking when possible. 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Total cap = sum of concurrency on enabled endpoints (currently {limit}). Consecutive requests to the same endpoint wait at least the interval below; later requests queue in arrival order. Queue time is not counted toward phase or HTTP read timeouts.',
+    'settings.pool.interval': 'Request interval (sec)',
+    'settings.pool.intervalTitle':
+      'Minimum gap between the start of two requests to the same Base URL; 0 means no limit',
+    'settings.pool.endpoint': 'Endpoint {n}',
+    'settings.pool.disableKeepOne': 'Keep at least one enabled endpoint',
+    'settings.pool.disableHint': 'Disabled endpoints stay saved but are not allocated',
+    'settings.pool.disable': 'Disable',
+    'settings.pool.wire': 'API protocol',
+    'settings.pool.keySet': 'Configured; leave blank to keep',
+    'settings.pool.modelName': 'Model name',
+    'settings.pool.modelTitle': 'Model for this endpoint; empty uses the fallback model below',
+    'settings.pool.inflightTitle': 'Max concurrency for this endpoint',
+    'settings.pool.inflightPlaceholder': 'Concurrency',
+    'settings.pool.filterModels': 'Filter {n} models…',
+    'settings.pool.selectFromList': 'Choose from list ({filtered}/{total})…',
+    'settings.pool.listing': 'Fetching…',
+    'settings.pool.fetchModels': 'Fetch models',
+    'settings.pool.testing': 'Testing…',
+    'settings.pool.testConn': 'Test connection',
+    'settings.pool.noModel': 'No model set',
+    'settings.pool.concurrency': 'concurrency {n}',
+    'settings.pool.notAllocated': ' · not in pool',
+    'settings.pool.addUrl': 'Add Base URL',
+    'settings.pool.totalLimit': 'Total thread cap {n}',
+    'settings.pool.zhipuHint':
+      'For 智谱 BigModel use https://open.bigmodel.cn/api/paas/v4; for GLM Coding Plan use https://open.bigmodel.cn/api/coding/paas/v4. Do not use /api/v1.',
+    'settings.fallbackModel': 'Fallback model',
+    'settings.fallbackHint':
+      'Used when an endpoint has no model. Project-level model still wins over endpoint and fallback.',
+    'settings.probe.hint.anthropic':
+      'Each endpoint can fetch models / test connectivity and pick a model. Fetch uses GET /models; the test sends a tiny POST /messages.',
+    'settings.probe.hint.responses':
+      'Each endpoint can fetch models / test connectivity and pick a model. Fetch uses GET /models; the test sends a tiny POST /responses.',
+    'settings.probe.hint.chat':
+      'Each endpoint can fetch models / test connectivity and pick a model. Fetch uses GET /models; the test sends a tiny chat/completions request.',
+    'settings.contextWindow': 'Context window (token estimate cap)',
+    'settings.github.configured': 'GitHub PAT (configured; leave blank to keep)',
+    'settings.github.private': 'GitHub PAT (private repos)',
+    'settings.github.hint':
+      'The test hits api.github.com. With a PAT it checks the token and quota; without one it tests anonymous access (GHSA / Issues). Uses the PAT and outbound proxy on this form and does not auto-save.',
+    'settings.fofa.configured': 'FOFA Key (configured; leave blank to keep)',
+    'settings.fofa.verifier': 'FOFA Key (Verifier internet checks)',
+    'settings.fofa.hint':
+      'The test calls FOFA info/my to check the key and remaining F-coins. Uses the current form values; an empty key uses saved settings. Does not auto-save.',
+    'settings.httpProxy': 'Outbound proxy (WebSearch / GHSA / GitHub Issues / FOFA)',
+    'settings.httpProxy.placeholder': 'Empty = direct, e.g. http://127.0.0.1:10808',
+    'settings.httpProxy.hint':
+      'Used only for tool outbound HTTP. Saving empty means direct. If the proxy is unreachable, traffic falls back to direct.',
+    'settings.chatProxy': 'Chat proxy',
+    'settings.chatProxy.placeholder': 'Empty = model requests go direct',
+    'settings.chatProxy.hint': 'Falls back to direct if the proxy is unavailable; no need to clear it first.',
+    'settings.cliDir': 'CLI tools directory',
+    'settings.cliDir.hint':
+      'Reviewer SearchTools looks up CLIs indexed here. Each subdirectory is one tool. Relative paths are from the repo root. A background scan runs a silent Agent (up to 30 rounds) to write descriptions; logs go to agent.log.jsonl in that subdirectory.',
+    'settings.jadx': 'jadx path',
+    'settings.jadx.placeholder': 'Empty uses jadx / jadx.bat on PATH',
+    'settings.jadx.detecting': 'Checking…',
+    'settings.jadx.detect': 'Check',
+    'settings.jadx.hint':
+      'DecompileJava for Recon / Worker / Reviewer calls this binary. The check runs jadx --version with the path on this form (empty uses saved settings or PATH) and does not auto-save. You can also set VULNHUNTER_JADX_PATH.',
+    'settings.codegraph': 'CodeGraph path',
+    'settings.codegraph.placeholder': 'Empty = auto-detect or install at build time',
+    'settings.codegraph.hint':
+      'The code-intelligence phase uses this CLI to graph src/. It only builds when the project enables Code Intelligence; if missing it auto-installs to data/tools/codegraph in that phase. You can also set VULNHUNTER_CODEGRAPH_PATH.',
+
+    'settings.log.title': 'Live log cleanup',
+    'settings.log.hint':
+      'Purge per-project SSE live logs (live-events). Age is based on last write time, so recently updated logs are kept. 0 deletes all live logs. Phase reports, findings, and source are untouched.',
+    'settings.log.days': 'Older than (days)',
+    'settings.log.purge': 'Purge logs',
+    'settings.log.confirmTitle': 'Purge live logs',
+    'settings.log.confirmAll': 'This permanently deletes all live SSE logs for every project.',
+    'settings.log.confirmDays':
+      'This permanently deletes live SSE logs older than {days} days across all projects. Recent logs are kept.',
+    'settings.log.purging': 'Purging…',
+    'settings.log.confirm': 'Confirm purge',
+    'settings.log.emptyAll': 'No live logs to purge.',
+    'settings.log.emptyDays': 'No live logs older than {days} days.',
+    'settings.log.deleted': 'Deleted {files} files across {projects} projects, {size} total.',
+
+    'settings.help.title.anthropic': 'Common Anthropic Messages endpoints',
+    'settings.help.title.responses': 'Common OpenAI Responses endpoints',
+    'settings.help.title.chat': 'Common domestic model endpoints',
+    'settings.help.desc.anthropic':
+      'Put these URLs in API Base URL; this app appends /messages. Default model is the model name or platform endpoint ID.',
+    'settings.help.desc.responses':
+      'Put these URLs in API Base URL; this app appends /responses. Checkpoints are still stored in Chat Completions shape.',
+    'settings.help.desc.chat':
+      'Put these URLs in API Base URL. Default model is the model name or console endpoint ID. Vendors may rename models; the official console is authoritative.',
+    'settings.help.fill': 'Fill in',
+    'settings.help.models': 'Example models: {models}',
+
+    'settings.fetch.fail': 'Fetch failed',
+    'settings.fetch.ok': 'Fetched {count} models{latency}. Click Save to write the config.',
+    'settings.fetch.timeout': 'Timed out listing models. Try again later.',
+    'settings.conn.fail': 'Connection failed',
+    'settings.conn.ok': 'Connected · {model}{extra}',
+    'settings.conn.reply': 'reply {reply}',
+    'settings.conn.timeout': 'Connection test timed out. Try again later.',
+    'settings.fofa.timeout': 'FOFA connection test timed out. Try again later.',
+    'settings.github.timeout': 'GitHub connection test timed out. Try again later.',
+    'settings.jadx.fail': 'Check failed',
+    'settings.jadx.available': 'Available',
+    'settings.jadx.timeout': 'jadx check timed out. Try again later.',
+    'settings.codegraph.missing': 'codegraph not found',
+    'settings.codegraph.timeout': 'CodeGraph check timed out. Try again later.',
+    'settings.log.timeout': 'Log purge timed out. Retry if there are many files.',
+    'settings.status.ok': 'Connected',
+    'settings.status.account': 'account {name}',
+    'settings.status.fcoin': 'F-coins {n}',
+    'settings.status.anonymous': 'anonymous',
+    'settings.status.rate': 'quota {remaining}/{limit}',
+
+    'settings.vendor.anthropicOfficial': 'Anthropic official Claude',
+    'settings.vendor.openmodel': 'OpenModel aggregator',
+    'settings.vendor.openaiOfficial': 'OpenAI official',
+    'settings.note.zhipu':
+      'GLM Coding Plan uses https://open.bigmodel.cn/api/coding/paas/v4. glm-4.5 / glm-5 reasoning traces are passed to later rounds.',
+    'settings.note.deepseek':
+      'Official OpenAI-compatible API. temperature is omitted for deepseek-reasoner / R1, and reasoning traces are kept.',
+    'settings.note.dashscope':
+      'Use OpenAI-compatible mode. qwen3 / qwq reasoning traces are passed to later rounds.',
+    'settings.note.kimi':
+      'Official OpenAI-compatible API. kimi-k3 / k2.5+ lock temperature; this app omits that parameter.',
+    'settings.note.doubao': 'Model name is usually the Ark model or an inference endpoint ID',
+    'settings.note.openaiCompat': 'Official OpenAI-compatible API',
+    'settings.note.spark': 'OpenAI-compatible entry; use the console for exact model names',
+    'settings.note.siliconflow': 'Aggregator; model names usually include an org prefix',
+    'settings.note.modelscope': 'Use model names from the ModelScope console / API docs',
+    'settings.note.anthropicOfficial': 'Official Anthropic Messages API',
+    'settings.note.zhipuAnthropic':
+      'This app appends /messages; if docs say /api/anthropic, keep /v1 here.',
+    'settings.note.kimiAnthropic':
+      'This app appends /messages; Claude Code’s /anthropic is written as /anthropic/v1 here. temperature is omitted for kimi-k3.',
+    'settings.note.kimiCoding':
+      'Subscription Coding keys may not work as general platform keys; follow the Kimi console. temperature is omitted for kimi-k3 / k2.5+.',
+    'settings.note.dashscopeAnthropic':
+      'This app appends /messages; for a workspace-specific host, replace the hostname with {WorkspaceId}.cn-beijing.maas.aliyuncs.com.',
+    'settings.note.openmodel': 'Aggregator; model names depend on platform docs and account access.',
+    'settings.note.openaiOfficial':
+      'This app appends /responses. temperature is omitted for gpt-5 / o-series.',
+    'settings.note.openrouter': 'The model must support Responses; this app appends /responses.',
+
+    'settings.custom.label': 'Mining-mode prompts',
+    'settings.custom.hint':
+      'Built-in bounty/full prompts are read-only and can be copied as custom. Custom modes are chosen when creating a project; the project stores a snapshot, so later library edits do not affect bound projects.',
+    'settings.custom.builtin': 'Built-in modes (read-only)',
+    'settings.custom.list': 'Custom modes',
+    'settings.custom.empty': 'No custom modes yet. Copy from bounty/full, or create a blank template.',
+    'settings.custom.view': 'View',
+    'settings.custom.copy': 'Copy as custom',
+    'settings.custom.created': 'Created custom audit mode',
+    'settings.custom.updated': 'Saved custom audit mode',
+    'settings.custom.deleteConfirm':
+      'Delete custom mode “{name}”? This fails if a project still references it.',
+    'settings.custom.deleted': 'Deleted “{name}”',
+    'settings.custom.createTitle': 'New custom audit mode',
+    'settings.custom.editTitle': 'Edit custom audit mode',
+    'settings.custom.editorHint':
+      'Name and body cannot be empty. Choosing a mode snapshots the body; library edits do not affect existing projects.',
+    'settings.custom.name': 'Name',
+    'settings.custom.namePlaceholder': 'e.g. injection and files only',
+    'settings.custom.body': 'Prompt body',
+    'settings.custom.readonlyPreview': 'Read-only preview',
+    'settings.custom.basedOn': 'Based on {label}',
+    'settings.custom.template':
+      '## Current mining mode: custom (overrides conflicting clauses above)\n\n' +
+      'This project uses **custom mode**. If this section conflicts with the base prompt, **this section wins**.\n' +
+      'It only constrains what findings to ingest and confirm; it does not change tool permissions.\n\n' +
+      '### Accept\n(Fill in vulnerability types and criteria to ingest)\n\n' +
+      '### Explicitly drop\n(Fill in types that must not be submitted/confirmed)\n',
+  },
+} as { zh: Record<string, string>; en: Record<string, string> }

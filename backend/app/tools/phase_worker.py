@@ -311,7 +311,9 @@ def project_complete_gates(project_id: int) -> bool:
             if vpending > 0:
                 return False
         if proj and bool(getattr(proj, "attack_chain_enabled", False)):
-            if not bool(getattr(proj, "attack_chain_done", False)):
+            if not bool(getattr(proj, "attack_chain_done", False)) and not bool(
+                getattr(proj, "attack_chain_stopped", False)
+            ):
                 return False
         return True
 
@@ -832,12 +834,14 @@ def register_worker_tools() -> None:
                 "（HTTP / WebSocket / RPC / MQ / 回调等）就能打出可观察有害冲击时才提交；"
                 "source→sink 可达但默认环境无冲击、需要额外写文件/独立漏洞/非默认目录布局、"
                 "无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）、"
-                "不可获取且不可预测的 UUID、"
+                "不可获取且不可预测的对象键（UUID/文件名等；他人分享链接/邮件/预览 URL 不算可获取）、"
                 "或只是配置/文档/compose/.env 里用户可改的默认密码弱口令的不要提交。"
                 "须管理员先把攻击者控制的设备/邮箱/Webhook/SNMP/unix-agent 源加进系统才有注入面时，"
                 "可以提交，但 auth_premise 必须写清该前提，禁止写成无需登录/前台/未授权。"
                 "有服务端机密危害的源码硬编码密钥（JWT/HMAC 签名密钥、接口签名 secret、"
                 "私钥、第三方 API Key 等）可以提交；"
+                "但密钥若只用于给已知对象键伪造下载 token、且该键不可独立获取"
+                "（他人分享链接/邮件/预览 URL 不算可获取），不要提交；"
                 "前端传输混淆 AES/公开下发密钥不要提交。"
                 "同一根因同一危害只交一份：先 Grep 同类其余方法写入报告「同根因受影响点」；"
                 "已有 pending 同根因条目请用 AppendAffectedLocations，不要再 SubmitVuln。"

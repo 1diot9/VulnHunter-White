@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatDateTime, formatTargetKind, type TargetKind } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import { readJsonCache, writeJsonCache } from '../lib/listCache'
 
 const DEFAULT_LIMIT = 5
@@ -39,6 +40,7 @@ function CandidateCard({
   onCreate: (c: GithubCandidate) => void
   onDismiss: (c: GithubCandidate) => void
 }) {
+  const { t } = useI18n()
   return (
     <Card>
       <CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -48,7 +50,7 @@ function CandidateCard({
               {c.full_name}
             </a>
           </CardTitle>
-          <CardDescription className="line-clamp-2">{c.description || '无描述'}</CardDescription>
+          <CardDescription className="line-clamp-2">{c.description || t('discover.noDesc')}</CardDescription>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Badge variant="outline" className={kindBadgeClass(c.target_kind)}>
@@ -63,12 +65,12 @@ function CandidateCard({
               to={`/projects/${c.project_id}`}
               className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-[0.8rem] font-medium hover:bg-muted"
             >
-              查看项目
+              {t('discover.viewProject')}
             </Link>
           ) : (
             <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onCreate(c)}>
               <PlusIcon className="size-4" />
-              创建项目
+              {t('home.create')}
             </Button>
           )}
           <Button
@@ -76,11 +78,11 @@ function CandidateCard({
             variant="outline"
             className="gap-1.5 text-muted-foreground hover:text-destructive"
             disabled={busy || searching}
-            title="从候选列表移除，后续搜索不再加入"
+            title={t('discover.dismissTip')}
             onClick={() => onDismiss(c)}
           >
             {busy ? <Loader2Icon className="size-4 animate-spin" /> : <Trash2Icon className="size-4" />}
-            移除
+            {t('discover.dismiss')}
           </Button>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -89,8 +91,8 @@ function CandidateCard({
             {c.stars}
           </span>
           {c.language ? <span>{c.language}</span> : null}
-          <span>最近推送 {formatDateTime(c.pushed_at)}</span>
-          <span>发现于 {formatDateTime(c.discovered_at)}</span>
+          <span>{t('discover.pushed', { time: formatDateTime(c.pushed_at) })}</span>
+          <span>{t('discover.found', { time: formatDateTime(c.discovered_at) })}</span>
           {c.latest_ghsa_url ? (
             <a
               href={c.latest_ghsa_url}
@@ -115,6 +117,7 @@ function CandidateCard({
 }
 
 export default function DiscoverPage() {
+  const { t } = useI18n()
   const cached = readJsonCache<{ items: GithubCandidate[]; total: number }>(DISCOVER_CACHE_KEY)
   const [items, setItems] = useState<GithubCandidate[]>(cached?.items ?? [])
   const [total, setTotal] = useState(cached?.total ?? 0)
@@ -220,15 +223,13 @@ export default function DiscoverPage() {
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold">发现仓库</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            从公开 GitHub Advisory 中筛选近一年仍有提交、Star ≥ 1000 的仓库；先按关键词粗分 Web 应用 / 组件库 / 混合，再由模型复核。搜索结果会累积保留，再次搜索只追加新仓库；移除后不会再进入候选。
-          </p>
+          <h1 className="text-2xl font-semibold">{t('nav.discover')}</h1>
+          <p className="mt-1 text-sm text-slate-400">{t('discover.subtitle')}</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <Label htmlFor="discover-limit" className="text-xs text-muted-foreground">
-              每次搜索数量
+              {t('discover.limit')}
             </Label>
             <Input
               id="discover-limit"
@@ -243,7 +244,7 @@ export default function DiscoverPage() {
           </div>
           <Button disabled={searching} onClick={() => void onSearch()} className="gap-2">
             {searching ? <Loader2Icon className="size-4 animate-spin" /> : <RefreshCwIcon className="size-4" />}
-            {searching ? '搜索中…' : '搜索'}
+            {searching ? t('discover.searching') : t('discover.search')}
           </Button>
         </div>
       </div>
@@ -252,9 +253,15 @@ export default function DiscoverPage() {
       {warning ? <p className="text-sm text-amber-200">{warning}</p> : null}
       {lastAdded != null ? (
         <p className="text-sm text-muted-foreground">
-          本次新增 <span className="font-medium text-foreground">{lastAdded}</span> 个仓库
+          {t('discover.addedPrefix')}{' '}
+          <span className="font-medium text-foreground">{lastAdded}</span>{' '}
+          {t('discover.addedSuffix')}
           {total > 0
-            ? `，累计 ${total} 个（可创建 ${pending.length}，已创建 ${created.length}）`
+            ? t('discover.addedSummary', {
+                total,
+                pending: pending.length,
+                created: created.length,
+              })
             : null}
         </p>
       ) : null}
@@ -272,15 +279,13 @@ export default function DiscoverPage() {
       {loading ? (
         <div className="flex min-h-[30vh] items-center justify-center text-sm text-muted-foreground">
           <Loader2Icon className="mr-2 size-4 animate-spin" />
-          加载中…
+          {t('common.loading')}
         </div>
       ) : items.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">还没有发现结果</CardTitle>
-            <CardDescription>
-              点击「搜索」从最新公开 Advisory 中挑出默认 5 个 Star ≥ 1000 的活跃仓库。建议先在设置页配置 GitHub PAT。
-            </CardDescription>
+            <CardTitle className="text-base">{t('discover.emptyTitle')}</CardTitle>
+            <CardDescription>{t('discover.emptyDesc')}</CardDescription>
           </CardHeader>
         </Card>
       ) : (
@@ -288,15 +293,15 @@ export default function DiscoverPage() {
           <section className="space-y-3" aria-labelledby="discover-pending-heading">
             <div className="flex items-baseline gap-2">
               <h2 id="discover-pending-heading" className="text-sm font-medium text-slate-200">
-                可创建
+                {t('discover.pending')}
               </h2>
               <span className="text-xs text-muted-foreground">{pending.length}</span>
             </div>
             {pending.length === 0 ? (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">暂无可创建的仓库</CardTitle>
-                  <CardDescription>已发现的仓库都创建过项目。可点「搜索」继续找新仓库。</CardDescription>
+                  <CardTitle className="text-base">{t('discover.pendingEmptyTitle')}</CardTitle>
+                  <CardDescription>{t('discover.pendingEmptyDesc')}</CardDescription>
                 </CardHeader>
               </Card>
             ) : (
@@ -307,12 +312,12 @@ export default function DiscoverPage() {
           <section className="space-y-3" aria-labelledby="discover-created-heading">
             <div className="flex items-baseline gap-2">
               <h2 id="discover-created-heading" className="text-sm font-medium text-slate-200">
-                已创建
+                {t('discover.created')}
               </h2>
               <span className="text-xs text-muted-foreground">{created.length}</span>
             </div>
             {created.length === 0 ? (
-              <p className="text-sm text-muted-foreground">还没有从发现结果创建过项目。</p>
+              <p className="text-sm text-muted-foreground">{t('discover.createdEmpty')}</p>
             ) : (
               renderList(created, true)
             )}

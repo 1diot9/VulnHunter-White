@@ -1,8 +1,13 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { useI18n } from '@/i18n'
+import { t } from '@/i18n/t'
 
-export const ATTACK_CHAIN_HINT =
-  '挖掘与审核都结束后，根据本项目已确认漏洞尝试多步串联利用，扩大危害。已确认洞少于 2 条时自动跳过。有本地 Docker 靶场时，对无需用户交互的链编写串联脚本并动态验证；含 XSS 等需交互的链跳过验证。默认关闭。'
+export function attackChainHint(): string {
+  return t('comp.attackChain.hint')
+}
+
+export const ATTACK_CHAIN_HINT = attackChainHint
 
 export function AttackChainToggle({
   enabled,
@@ -11,6 +16,7 @@ export function AttackChainToggle({
   enabled: boolean
   onEnabledChange: (enabled: boolean) => void
 }) {
+  const { t } = useI18n()
   return (
     <Label className="items-start font-normal">
       <Checkbox
@@ -19,9 +25,9 @@ export function AttackChainToggle({
         onCheckedChange={(checked) => onEnabledChange(checked === true)}
       />
       <span className="min-w-0">
-        <span className="font-medium">攻击链串联</span>
+        <span className="font-medium">{t('comp.attackChain.title')}</span>
         <span className="mt-0.5 block text-xs font-normal leading-relaxed text-muted-foreground">
-          {ATTACK_CHAIN_HINT}
+          {attackChainHint()}
         </span>
       </span>
     </Label>

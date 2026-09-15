@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useI18n } from '@/i18n'
+import LanguageSwitcher from '@/i18n/LanguageSwitcher'
 import BrandLogo from './BrandLogo'
 
 type AuthState = {
@@ -24,6 +26,7 @@ export function useAuth() {
 }
 
 export default function AuthGate({ children }: { children: ReactNode }) {
+  const { t } = useI18n()
   const [ready, setReady] = useState(false)
   const [required, setRequired] = useState(false)
   const [unlocked, setUnlocked] = useState(false)
@@ -61,11 +64,11 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       const timedOut =
         err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')
       setBackendError(
-        timedOut ? '连接后端超时，请确认服务已启动且未卡住。' : '无法连接后端，请确认服务已启动。',
+        timedOut ? t('auth.backendTimeout') : t('auth.backendDown'),
       )
       setReady(true)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void checkAuth()
@@ -86,7 +89,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     e.preventDefault()
     const value = token.trim()
     if (!value) {
-      setError('请输入访问令牌')
+      setError(t('auth.needToken'))
       return
     }
     setBusy(true)
@@ -108,7 +111,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-        加载中…
+        {t('common.loading')}
       </div>
     )
   }
@@ -118,22 +121,25 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
         <Card className="w-full max-w-md">
           <CardContent className="space-y-4 p-6">
-            <BrandLogo className="text-lg font-semibold tracking-tight" />
+            <div className="flex items-start justify-between gap-3">
+              <BrandLogo className="text-lg font-semibold tracking-tight" />
+              <LanguageSwitcher />
+            </div>
             <div className="flex items-center gap-2">
               <LockIcon className="size-5 text-muted-foreground" />
-              <h1 className="text-lg font-semibold">访问令牌</h1>
+              <h1 className="text-lg font-semibold">{t('auth.title')}</h1>
             </div>
             <p className="text-sm text-muted-foreground">
-              {backendError || '输入访问令牌后才能查看数据或调用功能。令牌可在 .env 的 VULNHUNTER_ACCESS_TOKEN 中配置，也可在设置页修改。'}
+              {backendError || t('auth.body')}
             </p>
             {backendError ? (
               <Button type="button" onClick={() => void checkAuth()}>
-                重试
+                {t('common.retry')}
               </Button>
             ) : (
               <form className="space-y-3" onSubmit={(e) => void onSubmit(e)}>
                 <div className="space-y-1.5">
-                  <Label htmlFor="access-token">令牌</Label>
+                  <Label htmlFor="access-token">{t('auth.token')}</Label>
                   <Input
                     id="access-token"
                     type="password"
@@ -141,12 +147,12 @@ export default function AuthGate({ children }: { children: ReactNode }) {
                     autoComplete="current-password"
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
-                    placeholder="访问令牌"
+                    placeholder={t('auth.placeholder')}
                   />
                 </div>
                 {error ? <div className="text-sm text-red-300">{error}</div> : null}
                 <Button type="submit" disabled={busy} className="w-full">
-                  {busy ? '校验中…' : '进入'}
+                  {busy ? t('auth.checking') : t('auth.enter')}
                 </Button>
               </form>
             )}

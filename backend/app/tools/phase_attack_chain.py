@@ -49,6 +49,12 @@ def is_attack_chain_done(project_id: int) -> bool:
         return bool(proj and getattr(proj, "attack_chain_done", False))
 
 
+def is_attack_chain_user_stopped(project_id: int) -> bool:
+    with SessionLocal() as db:
+        proj = db.get(Project, project_id)
+        return bool(proj and getattr(proj, "attack_chain_stopped", False))
+
+
 def mark_attack_chain_done(project_id: int, *, reason: str = "") -> None:
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -127,8 +133,8 @@ def review_queue_empty(project_id: int) -> bool:
 
 
 def attack_chain_ready(project_id: int) -> bool:
-    """Mining done + review queue empty + enabled + not yet done."""
-    if is_attack_chain_done(project_id):
+    """Mining done + review queue empty + enabled + not yet done + not user-paused."""
+    if is_attack_chain_done(project_id) or is_attack_chain_user_stopped(project_id):
         return False
     return attack_chain_prereqs(project_id)
 

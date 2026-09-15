@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { t } from '@/i18n/t'
 import { cn, formatAttackSurface } from '@/lib/utils'
 
 type AttackSurfaceBadgeProps = {
@@ -13,16 +14,16 @@ function attackSurfaceTooltip(
   requiredAccount: string | null | undefined,
 ): string | null {
   if (attackSurface === 'frontend') {
-    return '前台漏洞：公开或未登录即可打到。'
+    return t('surface.tip.frontend')
   }
   if (attackSurface === 'backend') {
     if (requiredAccount === 'admin') {
-      return '后台漏洞：须具备管理员权限才能利用。'
+      return t('surface.tip.backendAdmin')
     }
     if (requiredAccount === 'user') {
-      return '后台漏洞：须具备普通应用内账号（低权限用户）才能利用。'
+      return t('surface.tip.backendUser')
     }
-    return '后台漏洞：须具备相应应用内账号才能利用。'
+    return t('surface.tip.backend')
   }
   return null
 }
