@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, formatApiError, setAccessToken, type LlmEndpointUsage, type Settings } from '../api'
 import { CustomAuditModesCard } from '../components/CustomAuditModesCard'
+import { AppUpdateCard } from '../components/AppUpdatePanel'
 import { endpointCooldownReason, endpointSkipLabel } from '../components/LlmThreadUsageBar'
 import { useI18n } from '@/i18n'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
@@ -765,6 +766,7 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
+      <AppUpdateCard />
       <Card>
         <CardContent className="space-y-3 p-4">
           <div className="space-y-1.5">

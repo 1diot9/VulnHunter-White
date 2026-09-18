@@ -8,10 +8,14 @@ import LanguageSwitcher from '@/i18n/LanguageSwitcher'
 import { api } from '../api'
 import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { useAuth } from './AuthGate'
+import { AppUpdateBanner } from './AppUpdatePanel'
 import BrandLogo from './BrandLogo'
 
 export default function AppLayout() {
   const [consentCount, setConsentCount] = useState(0)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  const [updateVersion, setUpdateVersion] = useState('')
+  const [updateSha, setUpdateSha] = useState('')
   const { required, lock } = useAuth()
   const { t } = useI18n()
   const links = [
@@ -31,6 +35,21 @@ export default function AppLayout() {
           .then((r) => setConsentCount(Number(r.count) || 0))
           .catch(() => {})
       }, 10000),
+    [],
+  )
+
+  useEffect(
+    () =>
+      startVisibilityPoll(() => {
+        return api
+          .getAppUpdate()
+          .then((s) => {
+            setUpdateAvailable(!!s.update_available)
+            setUpdateVersion(s.remote_version || '')
+            setUpdateSha(s.remote_sha_short || '')
+          })
+          .catch(() => {})
+      }, 20000),
     [],
   )
 
@@ -61,6 +80,11 @@ export default function AppLayout() {
                       {consentCount > 99 ? '99+' : consentCount}
                     </span>
                   ) : null}
+                  {l.to === '/settings' && updateAvailable ? (
+                    <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">
+                      {t('nav.updateBadge')}
+                    </span>
+                  ) : null}
                 </span>
               </NavLink>
             ))}
@@ -74,6 +98,7 @@ export default function AppLayout() {
             ) : null}
           </div>
         </div>
+        <AppUpdateBanner available={updateAvailable} version={updateVersion} sha={updateSha} />
         <Separator />
       </header>
       <main className="mx-auto w-full max-w-7xl px-4 py-6">

@@ -48,6 +48,9 @@ def on_startup() -> None:
     from .services.cli_tool_index import start_cli_tool_scanner
 
     start_cli_tool_scanner()
+    from .services.app_update import start_app_update_checker
+
+    start_app_update_checker()
 
 
 @app.get("/api/health")

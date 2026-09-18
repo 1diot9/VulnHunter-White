@@ -228,6 +228,39 @@ class LiveLogPurgeOut(BaseModel):
     bytes: int = 0
 
 
+class AppUpdateStatusOut(BaseModel):
+    git_available: bool = False
+    docker_runtime: bool = False
+    current_version: str = ""
+    current_sha: str = ""
+    current_sha_short: str = ""
+    remote_name: str = ""
+    remote_url: str = ""
+    remote_ref: str = ""
+    remote_sha: str = ""
+    remote_sha_short: str = ""
+    remote_version: str = ""
+    update_available: bool = False
+    can_apply: bool = False
+    apply_blocked_reason: str = ""
+    dirty: bool = False
+    applying: bool = False
+    restarting: bool = False
+    last_checked_at: str | None = None
+    last_error: str = ""
+    check_interval_sec: int = 3600
+
+
+class AppUpdateApplyOut(BaseModel):
+    ok: bool = False
+    restarting: bool = False
+    reason: str = ""
+    error: str = ""
+    old_sha: str = ""
+    new_sha: str = ""
+    pulled: bool = False
+
+
 MANUAL_LAB_PROMPT_MAX = 20000
 HINT_TEXT_MAX = 20000
 WORKER_HINT_MAX = HINT_TEXT_MAX

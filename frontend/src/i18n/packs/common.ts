@@ -26,6 +26,7 @@ export const commonPack = {
     'nav.consent': '验证确认',
     'nav.containers': '容器管理',
     'nav.settings': '设置',
+    'nav.updateBadge': '新',
     'nav.logout': '退出',
     'auth.title': '访问令牌',
     'auth.body':
@@ -69,6 +70,7 @@ export const commonPack = {
     'nav.consent': 'Verifier consent',
     'nav.containers': 'Containers',
     'nav.settings': 'Settings',
+    'nav.updateBadge': 'New',
     'nav.logout': 'Sign out',
     'auth.title': 'Access token',
     'auth.body':

@@ -570,6 +570,39 @@ export type LiveLogPurge = {
   bytes: number
 }
 
+export type AppUpdateStatus = {
+  git_available: boolean
+  docker_runtime: boolean
+  current_version: string
+  current_sha: string
+  current_sha_short: string
+  remote_name: string
+  remote_url: string
+  remote_ref: string
+  remote_sha: string
+  remote_sha_short: string
+  remote_version: string
+  update_available: boolean
+  can_apply: boolean
+  apply_blocked_reason: string
+  dirty: boolean
+  applying: boolean
+  restarting: boolean
+  last_checked_at: string | null
+  last_error: string
+  check_interval_sec: number
+}
+
+export type AppUpdateApply = {
+  ok: boolean
+  restarting: boolean
+  reason: string
+  error: string
+  old_sha: string
+  new_sha: string
+  pulled: boolean
+}
+
 export type DockerContainer = {
   id: string
   short_id: string
@@ -812,8 +845,11 @@ const IO_TIMEOUT_MS = 180_000
 const DOCKER_TIMEOUT_MS = 180_000
 /** Lab start/stop waits on `docker compose up` (backend up to 600s). */
 const LAB_TIMEOUT_MS = 660_000
-/** GHSA discovery crawl (up to 10 pages). */
-const DISCOVER_TIMEOUT_MS = 180_000
+/** Discover search: 600s base, +60s per repo over 5, plus client buffer. */
+export const DISCOVER_TIMEOUT_BASE_SEC = 600
+export const DISCOVER_TIMEOUT_EXTRA_SEC = 60
+export const DISCOVER_TIMEOUT_BASE_LIMIT = 5
+const DISCOVER_TIMEOUT_CLIENT_BUFFER_MS = 30_000
 /** Ask/revise a vuln report: backend LLM read is 3–10 min plus pool wait. */
 const FOLLOWUP_LLM_TIMEOUT_MS = 900_000
 const UPLOAD_TIMEOUT_MIN_MS = 120_000
@@ -825,6 +861,26 @@ export function uploadTimeoutMs(sizeBytes: number): number {
   const size = Math.max(0, Number(sizeBytes) || 0)
   const bySize = UPLOAD_TIMEOUT_BASE_MS + Math.floor(size / 1024)
   return Math.min(UPLOAD_TIMEOUT_MAX_MS, Math.max(UPLOAD_TIMEOUT_MIN_MS, bySize))
+}
+
+export function clampDiscoverLimit(limit = 5): number {
+  const n = Math.trunc(Number(limit) || 5)
+  if (!Number.isFinite(n)) return 5
+  return Math.max(1, Math.min(20, n))
+}
+
+/** Backend wall-clock budget for one discovery search. */
+export function discoverSearchTimeoutSec(limit = 5): number {
+  const n = clampDiscoverLimit(limit)
+  return (
+    DISCOVER_TIMEOUT_BASE_SEC +
+    Math.max(0, n - DISCOVER_TIMEOUT_BASE_LIMIT) * DISCOVER_TIMEOUT_EXTRA_SEC
+  )
+}
+
+/** Fetch timeout: backend budget plus a short buffer so the API can return a timeout body. */
+export function discoverSearchTimeoutMs(limit = 5): number {
+  return discoverSearchTimeoutSec(limit) * 1000 + DISCOVER_TIMEOUT_CLIENT_BUFFER_MS
 }
 
 type ApiFetchInit = RequestInit & {
@@ -933,7 +989,7 @@ export const api = {
   searchDiscoveries: (limit = 5, prompt = '') =>
     request<GithubDiscoverSearch>('/api/discoveries/search', {
       method: 'POST',
-      timeoutMs: DISCOVER_TIMEOUT_MS,
+      timeoutMs: discoverSearchTimeoutMs(limit),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ limit, prompt: prompt.trim() || undefined }),
     }),
@@ -1422,6 +1478,18 @@ export const api = {
       timeoutMs: IO_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ older_than_days: olderThanDays }),
+    }),
+  getAppUpdate: (refresh = false) =>
+    request<AppUpdateStatus>(`/api/settings/app-update${refresh ? '?refresh=true' : ''}`),
+  checkAppUpdate: () =>
+    request<AppUpdateStatus>('/api/settings/app-update/check', {
+      method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
+    }),
+    applyAppUpdate: () =>
+    request<AppUpdateApply>('/api/settings/app-update/apply', {
+      method: 'POST',
+      timeoutMs: 360_000,
     }),
   listContainers: (runningOnly = false) =>
     request<DockerContainer[]>(`/api/docker/containers${runningOnly ? '?running_only=true' : ''}`, {

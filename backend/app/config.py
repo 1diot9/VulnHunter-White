@@ -175,6 +175,11 @@ class Settings(BaseSettings):
     # Set VULNHUNTER_DEMO_SEED=0 to disable.
     demo_seed: bool = True
 
+    # Self-update: check git upstream on startup and every interval. Set
+    # VULNHUNTER_APP_UPDATE_CHECK=0 to disable the background poll (API still works).
+    app_update_check: bool = True
+    app_update_interval_sec: int = 3600
+
     # Debug MCP directories (relative to repo root; env can override)
     mcp_java: str = "tools/mcp/java-debug"
     mcp_node: str = "tools/mcp/node-debug"

@@ -124,6 +124,10 @@ def tmp_env(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
     monkeypatch.setattr("app.config.settings.access_token", "")
+    monkeypatch.setattr("app.config.settings.app_update_check", False)
+    from app.services.app_update import reset_app_update_state
+
+    reset_app_update_state()
     access_token.clear_access_token_cache()
     ingest.reset_indexed_weight_exts_cache()
 

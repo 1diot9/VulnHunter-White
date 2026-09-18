@@ -19,6 +19,8 @@ from ..schemas import (
     CodegraphTestOut,
     JadxProbeIn,
     JadxTestOut,
+    AppUpdateApplyOut,
+    AppUpdateStatusOut,
     LiveLogPurgeIn,
     LiveLogPurgeOut,
     LlmEndpointUsageOut,
@@ -282,3 +284,25 @@ def purge_live_logs(body: LiveLogPurgeIn) -> LiveLogPurgeOut:
 
     stats = live_log.purge_older_than(body.older_than_days)
     return LiveLogPurgeOut(ok=True, **stats)
+
+
+@router.get("/app-update", response_model=AppUpdateStatusOut)
+def get_app_update(refresh: bool = False) -> AppUpdateStatusOut:
+    from ..services.app_update import check_for_update, current_status, status_to_out
+
+    status = check_for_update() if refresh else current_status()
+    return AppUpdateStatusOut(**status_to_out(status))
+
+
+@router.post("/app-update/check", response_model=AppUpdateStatusOut)
+def check_app_update() -> AppUpdateStatusOut:
+    from ..services.app_update import check_for_update, status_to_out
+
+    return AppUpdateStatusOut(**status_to_out(check_for_update()))
+
+
+@router.post("/app-update/apply", response_model=AppUpdateApplyOut)
+def apply_app_update() -> AppUpdateApplyOut:
+    from ..services.app_update import apply_update
+
+    return AppUpdateApplyOut(**apply_update())
