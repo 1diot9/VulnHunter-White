@@ -567,13 +567,19 @@ def note_attack_chain_enabled(project_id: int) -> None:
 
 
 def note_code_intel_enabled(project_id: int) -> None:
-    """User turned Code Intelligence on; start a build even if mining is paused."""
+    """User turned Code Intelligence on; wait for Recon MarkCodeIntel before building."""
     _phase_pause_event(project_id, "code_intel").clear()
     live_log.system(
         project_id,
-        "已开启代码库，开始构建调用图；挖掘会等构建结束后再继续",
+        "已开启代码库；等待侦察地图 Agent 调用 MarkCodeIntel 点名 CodeGraph / Jar Analyzer 后再构建。"
+        "挖掘会等构建结束后再继续",
         phase="code_intel",
     )
+
+
+def request_code_intel_after_choice(project_id: int) -> None:
+    """Start build after Recon Agent named backends via MarkCodeIntel."""
+    _phase_pause_event(project_id, "code_intel").clear()
     _start_code_intel_thread(project_id, force=False)
 
 
@@ -3589,7 +3595,7 @@ def _ensure_recon(project_id: int, cancel: threading.Event) -> None:
 
 
 def _ensure_code_intel(project_id: int, cancel: threading.Event) -> None:
-    from ..code_intelligence.service import is_code_intel_enabled, mark_skipped
+    from ..code_intelligence.service import is_code_intel_enabled, mark_skipped, requested_backends
 
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
@@ -3607,6 +3613,9 @@ def _ensure_code_intel(project_id: int, cancel: threading.Event) -> None:
     if done and status != "building":
         return
     if cancel.is_set():
+        return
+    # Do not auto-build until Recon Agent calls MarkCodeIntel.
+    if not requested_backends(project_id):
         return
     _start_code_intel_thread(project_id, force=False)
 
@@ -3647,6 +3656,8 @@ def _run_code_intel(project_id: int, force: bool = False) -> None:
 
 
 def request_code_intel_rebuild(project_id: int) -> dict[str, Any]:
+    from ..code_intelligence.service import requested_backends, status_payload
+
     with SessionLocal() as db:
         proj = db.get(Project, project_id)
         if not proj:
@@ -3655,6 +3666,8 @@ def request_code_intel_rebuild(project_id: int) -> dict[str, Any]:
             raise ValueError("当前项目状态不可重建代码库")
         if not bool(getattr(proj, "code_intel_enabled", False)):
             raise ValueError("未开启代码库。请先在项目配置中开启（需暂停或完成）")
+    if not requested_backends(project_id):
+        raise ValueError("尚未点名后端。请先在侦察地图用 MarkCodeIntel 选择 CodeGraph / Jar Analyzer")
     _bump_phase_generation(project_id, "code_intel")
     _phase_pause_event(project_id, "code_intel").clear()
     live_log.system(project_id, "用户请求重建代码库", phase="code_intel")
@@ -3667,8 +3680,6 @@ def request_code_intel_rebuild(project_id: int) -> dict[str, Any]:
         if still is not None and still.is_alive():
             raise ValueError("上一轮构建尚未退出，请稍后重试")
     _start_code_intel_thread(project_id, force=True)
-    from ..code_intelligence.service import status_payload
-
     return {"ok": True, **status_payload(project_id)}
 
 

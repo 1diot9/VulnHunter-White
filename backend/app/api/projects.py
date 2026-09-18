@@ -359,6 +359,8 @@ def _project_out(
         phase_fields = _phase_state_fields(p.id)
     else:
         phase_fields = {"phase_states": {}, "project_paused": is_project_paused(p.id)}
+    from ..code_intelligence.service import requested_backends as _ci_backends
+
     return ProjectOut(
         id=p.id,
         name=p.name,
@@ -373,6 +375,7 @@ def _project_out(
         code_intel_done=bool(getattr(p, "code_intel_done", False)),
         code_intel_error=(getattr(p, "code_intel_error", None) or "").strip(),
         code_intel_stale=(getattr(p, "code_intel_status", None) or "") == "stale",
+        code_intel_backends=_ci_backends(p.id) if bool(getattr(p, "code_intel_enabled", False)) else [],
         audit_mode=normalize_audit_mode(p.audit_mode),
         target_kind=normalize_target_kind(getattr(p, "target_kind", None)),
         custom_audit_mode_id=getattr(p, "custom_audit_mode_id", None),

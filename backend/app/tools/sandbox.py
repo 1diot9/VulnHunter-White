@@ -238,6 +238,8 @@ def block_dangerous_shell(command: str, project_id: int, *, workspace_root: Path
             raise SandboxError(f"禁止直接调用 {tool}；请使用 DecompileJava 工具（含索引与去重）")
     if re.search(r"(^|[;&|`$\s\\/])codegraph(\.cmd|\.exe|\.bat)?(\s|$)", lowered):
         raise SandboxError("禁止直接调用 codegraph；请使用 FindSymbol / FindCallers / FindCallees / TraceCalls")
+    if re.search(r"jar-analyzer-engine|jar.analyzer.engine", lowered):
+        raise SandboxError("禁止直接调用 jar-analyzer-engine；请使用 FindSymbol / FindCallers / FindCallees / TraceCalls")
     if _DISK_FORMAT.search(command or ""):
         raise SandboxError("命令包含禁止模式: format <盘符>")
     reason = unbounded_listing_reason(command)

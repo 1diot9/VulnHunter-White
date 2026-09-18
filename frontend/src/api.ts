@@ -20,6 +20,7 @@ export type Project = {
   code_intel_done?: boolean
   code_intel_error?: string
   code_intel_stale?: boolean
+  code_intel_backends?: string[]
   audit_mode: 'bounty' | 'full' | 'custom'
   target_kind: 'web' | 'library' | 'mixed'
   custom_audit_mode_id: number | null
@@ -518,6 +519,7 @@ export type Settings = {
   cli_tools_dir: string
   jadx_path: string
   codegraph_path: string
+  jar_analyzer_path?: string
   access_token_set: boolean
 }
 
@@ -713,6 +715,19 @@ export type CodegraphTest = {
   ok: boolean
   path: string
   version: string
+  latency_ms: number | null
+  error: string | null
+}
+
+export type JarAnalyzerProbeBody = {
+  jar_analyzer_path?: string | null
+}
+
+export type JarAnalyzerTest = {
+  ok: boolean
+  path: string
+  version: string
+  java: string
   latency_ms: number | null
   error: string | null
 }
@@ -1468,6 +1483,13 @@ export const api = {
     }),
   testCodegraph: (body: CodegraphProbeBody) =>
     request<CodegraphTest>('/api/settings/codegraph/test', {
+      method: 'POST',
+      timeoutMs: PROBE_TIMEOUT_MS,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  testJarAnalyzer: (body: JarAnalyzerProbeBody) =>
+    request<JarAnalyzerTest>('/api/settings/jar-analyzer/test', {
       method: 'POST',
       timeoutMs: PROBE_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },

@@ -10,7 +10,7 @@
 
 导入 GitHub 仓库或源码 zip，经多角色流水线完成挖掘、审核与可选互联网验证。
 
-**流水线概要**：Recon（代码地图、鉴权、历史漏洞、文件定权）完成后开始挖掘；创建时可勾选代码库（CodeGraph 源码图，默认关），开启后与 Recon 并列、都完成后才挖掘 → 启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描（至少一条）→ Reviewer（默认静态；可选靶场动态或局部 harness）→ 可选 Verifier（FOFA）与攻击链串联。
+**流水线概要**：Recon（代码地图、鉴权、历史漏洞、文件定权）完成后开始挖掘；创建时可勾选代码库（CodeGraph 源码图 + 可选 Jar Analyzer 业务 jar 图，默认关），开启后与 Recon 并列、地图 Agent 点名后端并构建完成后才挖掘 → 启发式 / 快速扫描 / 历史漏洞绕过 / 无约束扫描（至少一条）→ Reviewer（默认静态；可选靶场动态或局部 harness）→ 可选 Verifier（FOFA）与攻击链串联。
 
 **设计文档**（架构、阶段设计、容错机制、创新点）：[`docs/DESIGN.md`](docs/DESIGN.md)
 
@@ -474,7 +474,7 @@ npm run dev
 | 局部验证（L1/L2：沙箱跑 harness） | Docker + [第 4 步](#4-局部验证沙箱镜像l1l2-harness要用局部验证时必做) 构建的 `vulnhunter/sandbox:latest` | 退回静态，不因此判误报 |
 | 局部验证 L3 集成验证（起 loopback 服务并跑 `poc.py`，通过后升为动态证据） | Docker + [第 5 步](#5-集成验证沙箱镜像l3-integration要用-l3-集成验证时必做) 构建的 `vulnhunter/integration-sandbox:latest` | 无法自动跑 L3；可写 `env/env.json` 的 `local_service_url` 走本机 fallback |
 | 快速扫描（Semgrep → Sink 回推） | 本机 `semgrep` **或** Docker + `returntocorp/semgrep:latest`（`scripts\pull-semgrep.cmd` / `sh scripts/pull-semgrep.sh`） | 该路径无法跑 |
-| 代码库（调用图查询） | 创建项目时勾选；本机 `codegraph`，或设置页路径 / `VULNHUNTER_CODEGRAPH_PATH` | 未勾选则不建图、不占磁盘，挖掘只等侦察。勾选后构建阶段自动装到 `data/tools/codegraph`；仍失败则降级为 Read/Grep，不阻塞挖掘 |
+| 代码库（调用图查询） | 创建项目时勾选；本机 `codegraph` / `jar-analyzer-engine`，或设置页路径 / env | 未勾选则不建图、不占磁盘，挖掘只等侦察。勾选后由地图 Agent `MarkCodeIntel` 点名 CodeGraph 与/或 Jar Analyzer；缺失工具会自动装到 `data/tools/`；失败则降级为 Read/Grep，不阻塞挖掘 |
 | Verifier（FOFA 互联网复测） | 设置页 **FOFA Key**（或环境变量 `VULNHUNTER_FOFA_KEY`） | 验证轮会 skip |
 | 出站走代理（WebSearch / GitHub / FOFA） | 设置页 HTTP 代理，或 `.env` 里 `VULNHUNTER_HTTP_PROXY` | 直连；连不上时代理会自动改直连 |
 | Chat 走代理 | 设置页 Chat 代理，或 `VULNHUNTER_CHAT_PROXY` | Chat 默认直连，与工具代理分开 |
@@ -545,7 +545,7 @@ pytest
 | 审计范围 | 凡 Web 项目均可审计（不限语言） |
 | 项目与挖掘配置 | 创建时选择赏金（默认）/ 全量 / 自定义模式；勾选挖掘路径：启发式（默认开，可开轻量版只挖权重 100）、快速扫描（默认关）、历史漏洞绕过（默认关）、无约束扫描（默认关），至少开一条。每项目可单独选模型，不选则用设置页全局模型；可设 Token 用量上限；可粘贴或上传文本作为 Worker 额外人工提示。发现仓库页可填提示词优先按意图搜仓，留空则从公开 GHSA 筛，并排除演示/学习项目；可单条或一键移除候选。搜索默认 600 秒，超过 5 个时每多 1 个加 60 秒。GitHub 项目从暂停续跑时会先检查并同步上游最新代码（成功会在列表与详情提示已拉取的提交；失败则仍用当前快照）；zip 不受影响 |
 | 挖掘路径 | 须等 **Recon 完成**；若创建时勾选了代码库，还须等其首次构建结束（失败则降级继续）。**启发式**：按文件定权挖掘；权重 100 为用户可控入口（HTTP、WebSocket / RPC / MQ / 回调等），低权按角色回推、控面或薄扫。**快速扫描**：Semgrep → 代码筛 → Agent 精筛 → 按 Sink 回推；覆盖 SAST Sink，鉴权 / IDOR / 业务逻辑仍靠启发式。**历史漏洞绕过**：以历史漏洞文档为输入，每轮尝试绕过补丁或确认未修复洞仍可打。**无约束扫描**：固定 1 个 Worker，只注入代码地图与鉴权；始终走赏金闸门；Reviewer 判定前台洞达成 RCE 效果后结束该路径。各开启路径都结束后项目才 `completed` |
-| 代码库 | 创建时可选，默认关。开启后与 Recon 并列。CodeGraph 只索引 `src/` 源码；未安装则构建时自动装到 `data/tools/codegraph`。失败降级为 Read/Grep。源码变化标过期，由用户点重建。关闭会删除该项目 `src/.codegraph/`。Worker / Reviewer 可用调用图短查询；测试可打开图浏览器 |
+| 代码库 | 创建时可选，默认关。开启后与 Recon 并列。地图 Agent 点名后端后构建：CodeGraph 索引 `src/`；Jar Analyzer 仅对点名业务 jar 建字节码图。失败降级为 Read/Grep。源码变化标过期，由用户点重建。关闭会删除该项目索引。Worker / Reviewer 可用同一套调用图短查询（平台路由） |
 | 审计模式 | 赏金模式按可利用高危害类型收口（含存储型 XSS、1-click CSRF、有服务端机密危害的源码硬编码密钥等；普通 CSRF / 前端 AES 混淆 / 公开下发密钥不入库）；全量模式保留低危害项（CORS、反射 XSS、缺速率限制等）；自定义模式无赏金硬闸门，完全按提示词判定。无害/受限文件操作（只能读特定后缀或公开目录非敏感内容、只能上传无害文件）以及不可获取且不可预测的对象键（UUID / 文件名等；他人分享链接、邮件、预览 URL 不算可获取），挖掘与审核都丢弃，不进入漏洞列表。设置页可管理命名自定义提示词；项目选用时写入快照 |
 | 动态验证 | 创建时默认关闭（仅静态复核）。**靶场动态**：Reviewer 搭 Docker 靶场并跑 HTTP PoC（`poc.py -u`）。**局部验证**：按漏洞深度分 L1/L2（harness 沙箱，`evidence_level=harness`；语言为 Python/PHP/JS/Ruby/Go/Java/Bash/C，Rust/C++ 仅静态）与 L3 集成验证（integration 沙箱起 loopback 服务并跑 `poc.py`，通过后 `evidence_level=dynamic`）。靶场可用时 `ConfirmVuln` 系统再跑落盘 `poc.py`，退出码非 0 拒绝确认。PoC 由 Reviewer 收口；缺失或跑不通且需改写时才用 debug MCP。有 HTTP 面时 `poc.py` 须支持 `-u/--url`、`--proxy`（空则直连）、RCE 的 `-c/--cmd`。`harness.py` 与 `poc.py` 职责分离；输出默认英语，`--zh` 切中文 |
 | 互联网验证 | 可选 Verifier，默认关，可在项目设置开启。确认前台漏洞后用 FOFA 搜同款目标；先按报告和 PoC 理解利用本质，优先跑原 `poc.py`；没有可用 HTTP PoC 时按报告构造 payload，不自动跳过；失效时在同链上调整利用方式再测（默认每批 10、成功 3 即结束，最多 5 轮共 50 目标）；墙钟超时后该条直接 fail，不再新开轮；指纹按项目采集复用；破坏性操作需人工确认 |
@@ -553,7 +553,7 @@ pytest
 | 产出漏洞去重 | 项目详情「本项目漏洞」勾选后对照历史漏洞与最新源码：已公开或已修复分别标误报；日志在阶段日志「产出去重」 |
 | 容错与调度 | LLM 按端点冷却并换路续跑、超时 Conclude、死循环新开、阶段最多再试 2 次；模型商池各 Base URL 未禁用端点并发之和为全局 LLM 线程上限（单端点默认 6），新会话均匀分配、同一轮对话优先同模型（提高缓存命中）并尽量粘滞原端点、超出按到达顺序排队；设置页可禁用端点；项目暂停后释放名额、续跑再排队；同一端点发请求默认最少间隔 2 秒（可关），排队不计超时；429 / 额度用尽只冷却该端点，结束后重新参与分配 |
 | 历史漏洞 | 先 GHSA / GitHub Issues 爬虫落盘（第一阶段禁止 WebSearch），再 WebSearch 补漏；只收集不读源码。公开洞标 `patched`，未修复来自未关闭 Issues（`unpatched`） |
-| 设置与运维 | 手动清理 X 天前 SSE 实时日志；CLI 工具目录（默认 `tools/cli`）供 Reviewer `SearchTools` 检索后 Shell 执行；可配置 CodeGraph 路径 |
+| 设置与运维 | 手动清理 X 天前 SSE 实时日志；CLI 工具目录（默认 `tools/cli`）供 Reviewer `SearchTools` 检索后 Shell 执行；可配置 CodeGraph / Jar Analyzer 路径 |
 | 进度重置 | 可重置启发式 Worker 挖掘进度（保留漏洞产出与侦察文档），用于换模型重审；快速扫描 Sink 队列与历史漏洞绕过进度不重置 |
 
 ## 目录

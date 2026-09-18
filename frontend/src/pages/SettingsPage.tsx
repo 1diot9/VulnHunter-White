@@ -267,6 +267,10 @@ export default function SettingsPage() {
   const [codegraphTesting, setCodegraphTesting] = useState(false)
   const [codegraphOk, setCodegraphOk] = useState<boolean | null>(null)
   const [codegraphMsg, setCodegraphMsg] = useState('')
+  const [jarAnalyzerPath, setJarAnalyzerPath] = useState('')
+  const [jarAnalyzerTesting, setJarAnalyzerTesting] = useState(false)
+  const [jarAnalyzerOk, setJarAnalyzerOk] = useState<boolean | null>(null)
+  const [jarAnalyzerMsg, setJarAnalyzerMsg] = useState('')
   const [msg, setMsg] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -345,6 +349,7 @@ export default function SettingsPage() {
       setCliToolsDir(x.cli_tools_dir || 'tools/cli')
       setJadxPath(x.jadx_path || '')
       setCodegraphPath(x.codegraph_path || '')
+      setJarAnalyzerPath(x.jar_analyzer_path || '')
     })
   }, [])
 
@@ -597,6 +602,33 @@ export default function SettingsPage() {
     }
   }
 
+  async function testJarAnalyzer() {
+    setJarAnalyzerTesting(true)
+    setJarAnalyzerOk(null)
+    setJarAnalyzerMsg('')
+    try {
+      const body: { jar_analyzer_path?: string } = {}
+      if (jarAnalyzerPath.trim()) body.jar_analyzer_path = jarAnalyzerPath.trim()
+      const out = await api.testJarAnalyzer(body)
+      if (!out.ok) {
+        setJarAnalyzerOk(false)
+        setJarAnalyzerMsg(out.error || t('settings.jarAnalyzer.missing'))
+        return
+      }
+      setJarAnalyzerOk(true)
+      setJarAnalyzerMsg(
+        [out.path, out.version, out.java, out.latency_ms != null ? `${out.latency_ms}ms` : '']
+          .filter(Boolean)
+          .join(' · '),
+      )
+    } catch (e) {
+      setJarAnalyzerOk(false)
+      setJarAnalyzerMsg(formatApiError(e, t('settings.jarAnalyzer.timeout')))
+    } finally {
+      setJarAnalyzerTesting(false)
+    }
+  }
+
   async function save() {
     setMsg('')
     try {
@@ -615,6 +647,7 @@ export default function SettingsPage() {
         cli_tools_dir: cliToolsDir.trim() || 'tools/cli',
         jadx_path: jadxPath.trim(),
         codegraph_path: codegraphPath.trim(),
+        jar_analyzer_path: jarAnalyzerPath.trim(),
         llm_endpoints: endpoints.map((ep) => ({
           id: ep.id,
           base_url: ep.base_url.trim(),
@@ -1280,6 +1313,31 @@ export default function SettingsPage() {
             </div>
           ) : null}
           <div className="text-xs text-slate-500">{t('settings.codegraph.hint')}</div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>{t('settings.jarAnalyzer')}</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="min-w-[16rem] flex-1"
+              value={jarAnalyzerPath}
+              onChange={(e) => setJarAnalyzerPath(e.target.value)}
+              placeholder={t('settings.jarAnalyzer.placeholder')}
+            />
+            <Button type="button" variant="outline" disabled={jarAnalyzerTesting} onClick={testJarAnalyzer}>
+              {jarAnalyzerTesting ? t('settings.jadx.detecting') : t('settings.jadx.detect')}
+            </Button>
+          </div>
+          {jarAnalyzerMsg ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {jarAnalyzerOk != null ? (
+                <Badge variant={jarAnalyzerOk ? 'success' : 'destructive'}>
+                  {jarAnalyzerOk ? t('common.success') : t('common.fail')}
+                </Badge>
+              ) : null}
+              <span className={jarAnalyzerOk === false ? 'text-red-300' : 'text-slate-300'}>{jarAnalyzerMsg}</span>
+            </div>
+          ) : null}
+          <div className="text-xs text-slate-500">{t('settings.jarAnalyzer.hint')}</div>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={save}>{t('common.save')}</Button>

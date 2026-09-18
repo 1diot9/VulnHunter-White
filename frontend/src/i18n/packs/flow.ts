@@ -94,12 +94,12 @@ export const flowPack = {
       '导入后先跑侦察：代码地图、源码扩展名、历史漏洞、文件定权。启发式不等待定权全部结束。',
     'flow.preview.ciOff': '未开',
     'flow.preview.ciOnBody':
-      '与侦察并列。用 CodeGraph 给 src/ 建调用图，供 Worker / Reviewer 查关系。失败则降级继续用 Read/Grep。',
+      '与侦察并列。地图 Agent 点名 CodeGraph 与/或 Jar Analyzer 后建图，供 Worker / Reviewer 查关系。失败则降级继续用 Read/Grep。',
     'flow.preview.ciOffBody': '未开启。不建代码数据库，挖掘只等侦察完成，Worker / Reviewer 用 Read / Grep。',
-    'flow.preview.ciOnHint': '索引写在 src/.codegraph/，体积较大。源码变化只标过期，由用户点重建。',
+    'flow.preview.ciOnHint': '源码图在 src/.codegraph/；业务 jar 图在 workspace/code_intelligence/jars/。变化只标过期，由用户点重建。',
     'flow.preview.ciOffHint': '默认关闭，避免每个项目都建图占磁盘。勾选后与侦察并列，都完成后才开始挖掘。',
-    'flow.preview.srcOnly': '仅 src/',
-    'flow.preview.srcHint': '不索引 jar/class，留给后续 Jar Analyzer。',
+    'flow.preview.srcOnly': 'Agent 点名',
+    'flow.preview.srcHint': '地图 Agent 用 MarkCodeIntel 点名 CodeGraph（src/）与/或 Jar Analyzer（业务 jar）；jadx 仍只负责反编译。',
     'flow.preview.reviewManualDocker':
       '优先用你提供的靶场，不可达再回退 Docker。Reviewer 改 PoC 并复现；不要打回 Worker 改 PoC。',
     'flow.preview.reviewManualOnly':
@@ -394,12 +394,12 @@ export const flowPack = {
       'Recon first after import: code map, source extensions, historical vulns, file weighting. Heuristic does not wait for weighting to finish.',
     'flow.preview.ciOff': 'Off',
     'flow.preview.ciOnBody':
-      'Beside Recon. CodeGraph builds a call graph of src/ for Worker / Reviewer. Failures degrade to Read/Grep.',
+      'Beside Recon. After the map Agent names CodeGraph and/or Jar Analyzer, builds graphs for Worker / Reviewer. Failures degrade to Read/Grep.',
     'flow.preview.ciOffBody': 'Off. No code database; mining waits only for Recon. Worker / Reviewer use Read / Grep.',
-    'flow.preview.ciOnHint': 'Index lives in src/.codegraph/ and is large. Source changes mark stale; the user rebuilds.',
+    'flow.preview.ciOnHint': 'Source graph in src/.codegraph/; business-jar graphs under workspace/code_intelligence/jars/. Changes mark stale; user rebuilds.',
     'flow.preview.ciOffHint': 'Off by default to avoid a graph per project. When checked, it runs beside Recon; mining waits for both.',
-    'flow.preview.srcOnly': 'src/ only',
-    'flow.preview.srcHint': 'Does not index jar/class; leave that to Jar Analyzer later.',
+    'flow.preview.srcOnly': 'Agent choice',
+    'flow.preview.srcHint': 'Map Agent uses MarkCodeIntel for CodeGraph (src/) and/or Jar Analyzer (business jars); jadx still only decompiles.',
     'flow.preview.reviewManualDocker':
       'Prefer your lab; fall back to Docker if unreachable. Reviewer edits PoC to reproduce; do not bounce PoC to Worker.',
     'flow.preview.reviewManualOnly':

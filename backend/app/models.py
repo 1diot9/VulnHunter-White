@@ -52,6 +52,7 @@ class AppSettings(Base):
     cli_tools_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     jadx_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     codegraph_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    jar_analyzer_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # SHA-256 hex of the global access token. None = fall back to VULNHUNTER_ACCESS_TOKEN.
     access_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -512,6 +513,7 @@ def _ensure_columns() -> None:
             "cli_tools_dir": "VARCHAR(1024)",
             "jadx_path": "VARCHAR(1024)",
             "codegraph_path": "VARCHAR(1024)",
+            "jar_analyzer_path": "VARCHAR(1024)",
             "access_token_hash": "TEXT",
         },
         "file_weights": {

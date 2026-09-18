@@ -17,6 +17,8 @@ from ..schemas import (
     GithubTestOut,
     CodegraphProbeIn,
     CodegraphTestOut,
+    JarAnalyzerProbeIn,
+    JarAnalyzerTestOut,
     JadxProbeIn,
     JadxTestOut,
     AppUpdateApplyOut,
@@ -143,6 +145,8 @@ def update_settings(body: SettingsUpdate) -> SettingsOut:
             row.jadx_path = (body.jadx_path or "").strip() or None
         if body.codegraph_path is not None:
             row.codegraph_path = (body.codegraph_path or "").strip() or None
+        if body.jar_analyzer_path is not None:
+            row.jar_analyzer_path = (body.jar_analyzer_path or "").strip() or None
         db.commit()
         db.refresh(row)
         out = settings_out_from_row(row)
@@ -276,6 +280,14 @@ def probe_codegraph_test(body: CodegraphProbeIn) -> CodegraphTestOut:
 
     result = probe_codegraph(body.codegraph_path)
     return CodegraphTestOut(**result)
+
+
+@router.post("/jar-analyzer/test", response_model=JarAnalyzerTestOut)
+def probe_jar_analyzer_test(body: JarAnalyzerProbeIn) -> JarAnalyzerTestOut:
+    from ..code_intelligence.jar_cli import probe_jar_analyzer
+
+    result = probe_jar_analyzer(body.jar_analyzer_path)
+    return JarAnalyzerTestOut(**result)
 
 
 @router.post("/logs/purge", response_model=LiveLogPurgeOut)

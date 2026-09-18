@@ -163,9 +163,12 @@ class Settings(BaseSettings):
     jadx_path: str = ""
     # CodeGraph CLI；空则 PATH / data/tools/codegraph，缺失时构建阶段自动安装
     codegraph_path: str = ""
+    jar_analyzer_path: str = ""
     timeout_codegraph_install: int = 300
     timeout_codegraph_index: int = 1800
     timeout_codegraph_query: int = 30
+    timeout_jar_analyzer_install: int = 300
+    timeout_jar_analyzer_index: int = 1800
     decompile_max_jar_bytes: int = 80 * 1024 * 1024
     decompile_max_output_bytes: int = 500 * 1024 * 1024
     decompile_timeout_sec: int = 1800

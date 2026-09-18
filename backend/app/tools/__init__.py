@@ -31,6 +31,7 @@ PARALLEL_SAFE = frozenset(
         "ListBytecode",
         "DecompileJava",
         "MarkBusinessJar",
+        "MarkCodeIntel",
         "FindSymbol",
         "FindCallers",
         "FindCallees",
@@ -88,6 +89,7 @@ ROLE_ACL: dict[str, frozenset[str]] = {
             "ListBytecode",
             "DecompileJava",
             "MarkBusinessJar",
+            "MarkCodeIntel",
         }
     ),
     "recon_source_ext": frozenset(

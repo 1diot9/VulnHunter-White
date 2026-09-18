@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.code_intelligence.cli import extract_bundle, release_target
 from app.code_intelligence.query import callers, find_symbol, trace
-from app.code_intelligence.service import run_build, source_fingerprint, status_payload
+from app.code_intelligence.service import mark_code_intel, run_build, source_fingerprint, status_payload, write_metadata
 from app.services import pipeline
 from app.services.paths import src_dir
 from app.tools import ROLE_ACL, ToolContext, native_shell_tool, registry
@@ -18,11 +18,17 @@ def _ctx(project_id: int, role: str) -> ToolContext:
     return ToolContext(project_id=project_id, role=role, phase=role)
 
 
+def _request_codegraph(project_id: int) -> None:
+    write_metadata(project_id, {"requested_backends": ["codegraph"], "backends": {"codegraph": {"status": "pending"}}})
+
+
 def test_code_intel_tools_on_mining_and_reviewer_acl(tmp_env):
     for role in ("worker", "fast_worker", "bypass_worker", "unconstrained_worker", "reviewer"):
         for name in ("FindSymbol", "FindCallers", "FindCallees", "TraceCalls"):
             assert name in ROLE_ACL[role]
-    for role in ("recon", "fix", "verifier", "sink_triage", "reviewer_lab"):
+    assert "MarkCodeIntel" in ROLE_ACL["recon"]
+    assert "MarkCodeIntel" not in ROLE_ACL["worker"]
+    for role in ("fix", "verifier", "sink_triage", "reviewer_lab"):
         assert "FindSymbol" not in ROLE_ACL[role]
     names = {t["function"]["name"] for t in registry.openai_tools_for_role("fast_worker")}
     assert names == set(ROLE_ACL["fast_worker"])
@@ -30,6 +36,9 @@ def test_code_intel_tools_on_mining_and_reviewer_acl(tmp_env):
     worker_names = {t["function"]["name"] for t in registry.openai_tools_for_role("worker")}
     expected = {n for n in ROLE_ACL["worker"] if n not in {"Bash", "PowerShell"} or n == native}
     assert worker_names == expected
+    recon_names = {t["function"]["name"] for t in registry.openai_tools_for_role("recon")}
+    assert "MarkCodeIntel" in recon_names
+    assert "FindSymbol" not in recon_names
 
 
 def test_find_symbol_unavailable_without_index(tmp_env, project):
@@ -41,7 +50,17 @@ def test_find_symbol_unavailable_without_index(tmp_env, project):
     assert "Grep" in dispatched["error"]
 
 
+def test_build_waits_without_mark_code_intel(tmp_env, project, monkeypatch):
+    monkeypatch.setattr("app.code_intelligence.service.ensure_codegraph", lambda log=None: Path("fake-codegraph"))
+    status = run_build(project)
+    assert status == "pending"
+    payload = status_payload(project)
+    assert payload["done"] is False
+    assert payload["status"] == "pending"
+
+
 def test_build_degrades_without_cli(tmp_env, project, monkeypatch):
+    _request_codegraph(project)
     monkeypatch.setattr("app.code_intelligence.service.ensure_codegraph", lambda log=None: None)
     status = run_build(project)
     assert status == "degraded"
@@ -65,6 +84,7 @@ def _stub_codegraph_cli(monkeypatch, src: Path, captured: list[list[str]]) -> No
 
 
 def test_build_inits_when_codegraph_dir_exists_without_db(tmp_env, project, monkeypatch):
+    _request_codegraph(project)
     src = src_dir(project)
     (src / ".codegraph").mkdir(parents=True, exist_ok=True)
     (src / ".codegraph" / ".gitignore").write_text("*\n", encoding="utf-8")
@@ -76,6 +96,7 @@ def test_build_inits_when_codegraph_dir_exists_without_db(tmp_env, project, monk
 
 
 def test_build_inits_on_empty_src(tmp_env, project, monkeypatch):
+    _request_codegraph(project)
     src = src_dir(project)
     captured: list[list[str]] = []
     _stub_codegraph_cli(monkeypatch, src, captured)
@@ -85,6 +106,7 @@ def test_build_inits_on_empty_src(tmp_env, project, monkeypatch):
 
 
 def test_rebuild_inits_when_not_initialized(tmp_env, project, monkeypatch):
+    _request_codegraph(project)
     src = src_dir(project)
     (src / ".codegraph").mkdir(parents=True, exist_ok=True)
     captured: list[list[str]] = []
@@ -95,6 +117,7 @@ def test_rebuild_inits_when_not_initialized(tmp_env, project, monkeypatch):
 
 
 def test_rebuild_indexes_when_db_exists(tmp_env, project, monkeypatch):
+    _request_codegraph(project)
     src = src_dir(project)
     db_dir = src / ".codegraph"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -191,8 +214,17 @@ def test_code_intel_blocks_mining_until_build_settles(tmp_env, project):
 
 
 def test_find_symbol_compacts_cli_json(tmp_env, project, monkeypatch):
-    monkeypatch.setattr("app.code_intelligence.query.index_ready", lambda pid: True)
-    monkeypatch.setattr("app.code_intelligence.query.find_codegraph", lambda: Path("fake-codegraph"))
+    _request_codegraph(project)
+    src = src_dir(project)
+    (src / ".codegraph").mkdir(parents=True, exist_ok=True)
+    (src / ".codegraph" / "codegraph.db").write_bytes(b"stub")
+    with tmp_env["Session"]() as db:
+        proj = db.get(tmp_env["models"].Project, project)
+        proj.code_intel_enabled = True
+        proj.code_intel_status = "ready"
+        proj.code_intel_done = True
+        db.commit()
+    monkeypatch.setattr("app.code_intelligence.query_codegraph.find_codegraph", lambda: Path("fake-codegraph"))
 
     class Proc:
         returncode = 0
@@ -204,21 +236,31 @@ def test_find_symbol_compacts_cli_json(tmp_env, project, monkeypatch):
         )
         stderr = ""
 
-    monkeypatch.setattr("app.code_intelligence.query.run_codegraph", lambda *a, **k: Proc())
+    monkeypatch.setattr("app.code_intelligence.query_codegraph.run_codegraph", lambda *a, **k: Proc())
     out = find_symbol(project, "Foo")
     assert out["ok"] is True
     assert out["count"] == 2
     assert out["items"][0]["name"] == "Foo.bar"
     assert out["items"][0]["file"] == "src/Foo.java"
     assert out["items"][0]["line"] == 12
+    assert out["items"][0].get("backend") == "codegraph"
     callers_out = callers(project, "Foo.bar")
     assert callers_out["ok"] is True
     assert "callers" in callers_out
 
 
 def test_trace_compacts_explore_json(tmp_env, project, monkeypatch):
-    monkeypatch.setattr("app.code_intelligence.query.index_ready", lambda pid: True)
-    monkeypatch.setattr("app.code_intelligence.query.find_codegraph", lambda: Path("fake-codegraph"))
+    _request_codegraph(project)
+    src = src_dir(project)
+    (src / ".codegraph").mkdir(parents=True, exist_ok=True)
+    (src / ".codegraph" / "codegraph.db").write_bytes(b"stub")
+    with tmp_env["Session"]() as db:
+        proj = db.get(tmp_env["models"].Project, project)
+        proj.code_intel_enabled = True
+        proj.code_intel_status = "ready"
+        proj.code_intel_done = True
+        db.commit()
+    monkeypatch.setattr("app.code_intelligence.query_codegraph.find_codegraph", lambda: Path("fake-codegraph"))
 
     class Proc:
         returncode = 0
@@ -234,7 +276,7 @@ def test_trace_compacts_explore_json(tmp_env, project, monkeypatch):
         )
         stderr = ""
 
-    monkeypatch.setattr("app.code_intelligence.query.run_codegraph", lambda *a, **k: Proc())
+    monkeypatch.setattr("app.code_intelligence.query_codegraph.run_codegraph", lambda *a, **k: Proc())
     out = trace(project, "AdminController.run", "Runtime.exec")
     assert out["ok"] is True
     assert out["paths"]
@@ -261,6 +303,7 @@ def test_rebuild_api_starts_thread(tmp_env, project, monkeypatch):
         proj = db.get(models.Project, project)
         proj.code_intel_enabled = True
         db.commit()
+    write_metadata(project, {"requested_backends": ["codegraph"]})
 
     started: list[tuple[int, bool]] = []
     monkeypatch.setattr(
@@ -329,6 +372,7 @@ def _mark_code_intel_ready(tmp_env, project_id: int) -> None:
         proj.code_intel_done = True
         proj.code_intel_enabled = True
         db.commit()
+    write_metadata(project_id, {"requested_backends": ["codegraph"], "backends": {"codegraph": {"status": "ready"}}})
     db_dir = src_dir(project_id) / ".codegraph"
     db_dir.mkdir(parents=True, exist_ok=True)
     (db_dir / "codegraph.db").write_bytes(b"stub")
@@ -427,12 +471,17 @@ def test_patch_code_intel_only_when_paused(tmp_env, project, monkeypatch):
 def test_disable_code_intel_purges_index(tmp_env, project):
     from app.main import app
     from fastapi.testclient import TestClient
+    from app.code_intelligence.service import jars_index_dir
 
     models = tmp_env["models"]
     Session = tmp_env["Session"]
     db_dir = src_dir(project) / ".codegraph"
     db_dir.mkdir(parents=True, exist_ok=True)
     (db_dir / "codegraph.db").write_bytes(b"stub")
+    jars = jars_index_dir(project) / "abc123"
+    jars.mkdir(parents=True, exist_ok=True)
+    (jars / "jar-analyzer.db").write_bytes(b"stub")
+    write_metadata(project, {"requested_backends": ["codegraph", "jar_analyzer"]})
     with Session() as db:
         proj = db.get(models.Project, project)
         proj.status = "paused"
@@ -446,3 +495,134 @@ def test_disable_code_intel_purges_index(tmp_env, project):
         assert off.json()["code_intel_enabled"] is False
         assert off.json()["code_intel_status"] == "skipped"
     assert not (db_dir / "codegraph.db").exists()
+    assert not (jars / "jar-analyzer.db").exists()
+
+
+def test_mark_code_intel_tool_recon_only(tmp_env, project, monkeypatch):
+    models = tmp_env["models"]
+    Session = tmp_env["Session"]
+    with Session() as db:
+        proj = db.get(models.Project, project)
+        proj.code_intel_enabled = True
+        proj.code_intel_status = "pending"
+        db.commit()
+    monkeypatch.setattr(pipeline, "request_code_intel_after_choice", lambda *a, **k: None)
+    bad = registry.dispatch(_ctx(project, "worker"), "MarkCodeIntel", {"codegraph": True})
+    assert bad["ok"] is False
+    ok = registry.dispatch(
+        _ctx(project, "recon"),
+        "MarkCodeIntel",
+        {"codegraph": True, "jar_analyzer": False},
+    )
+    assert ok["ok"] is True
+    assert "codegraph" in ok["backends"]
+    from app.code_intelligence.service import requested_backends
+
+    assert requested_backends(project) == ["codegraph"]
+
+
+def test_jar_analyzer_none_degrades_but_codegraph_ready(tmp_env, project, monkeypatch):
+    from app.services.decompile_java import _write_business_jars_doc
+
+    write_metadata(
+        project,
+        {
+            "requested_backends": ["codegraph", "jar_analyzer"],
+            "backends": {
+                "codegraph": {"status": "pending"},
+                "jar_analyzer": {"status": "pending"},
+            },
+        },
+    )
+    _write_business_jars_doc(project, paths=[], complete=True, none=True, note="none")
+    src = src_dir(project)
+    captured: list[list[str]] = []
+    _stub_codegraph_cli(monkeypatch, src, captured)
+    status = run_build(project)
+    assert status == "ready"
+    from app.code_intelligence.service import read_metadata
+
+    meta = read_metadata(project)
+    backends = meta.get("backends") or {}
+    assert backends.get("codegraph", {}).get("status") == "ready"
+    assert backends.get("jar_analyzer", {}).get("status") == "degraded"
+    payload = status_payload(project)
+    assert payload["done"] is True
+
+
+def test_jar_analyzer_callers_sql(tmp_env, project):
+    import sqlite3
+
+    from app.code_intelligence.backends import jar_analyzer as ja
+
+    write_metadata(project, {"requested_backends": ["jar_analyzer"]})
+    with tmp_env["Session"]() as db:
+        proj = db.get(tmp_env["models"].Project, project)
+        proj.code_intel_enabled = True
+        proj.code_intel_status = "ready"
+        proj.code_intel_done = True
+        db.commit()
+    digest = "a" * 64
+    out_dir = ja.artifact_dir(project, digest)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "meta.json").write_text(
+        json.dumps({"source": "src/app.jar"}),
+        encoding="utf-8",
+    )
+    db_path = out_dir / "jar-analyzer.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE class_table (class_name TEXT);
+        CREATE TABLE method_table (class_name TEXT, method_name TEXT, line_number INTEGER);
+        CREATE TABLE method_call_table (
+            caller_class_name TEXT, caller_method_name TEXT,
+            callee_class_name TEXT, callee_method_name TEXT
+        );
+        INSERT INTO class_table VALUES ('com/example/AdminController');
+        INSERT INTO method_table VALUES ('com/example/AdminController', 'run', 10);
+        INSERT INTO method_call_table VALUES (
+            'com/example/AdminController', 'run',
+            'java/lang/Runtime', 'exec'
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+    out = callers(project, "Runtime.exec")
+    assert out["ok"] is True
+    assert out["count"] >= 1
+    assert any("AdminController" in (x.get("name") or "") for x in out["callers"])
+    assert out.get("backend") == "jar_analyzer" or any(
+        x.get("backend") == "jar_analyzer" for x in out["callers"]
+    )
+
+
+def test_shell_blocks_jar_analyzer(tmp_env, project):
+    try:
+        block_dangerous_shell("java -jar jar-analyzer-engine.jar --jar app.jar", project)
+        raise AssertionError("expected SandboxError")
+    except SandboxError as exc:
+        assert "FindSymbol" in str(exc)
+
+
+def test_recon_map_ready_needs_mark_code_intel(tmp_env, project, monkeypatch):
+    from app.tools.phase_recon import recon_map_ready
+    from app.services.paths import docs_dir
+
+    monkeypatch.setattr(pipeline, "request_code_intel_after_choice", lambda *a, **k: None)
+    docs = docs_dir(project)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "code-map.md").write_text("# map\n", encoding="utf-8")
+    (docs / "auth.md").write_text("# auth\n", encoding="utf-8")
+    with tmp_env["Session"]() as db:
+        proj = db.get(tmp_env["models"].Project, project)
+        proj.code_intel_enabled = True
+        db.commit()
+    assert recon_map_ready(project) is False
+    out = mark_code_intel(project, codegraph=True, jar_analyzer=False)
+    assert out["ok"] is True
+    from app.code_intelligence.service import code_intel_choice_ready
+
+    assert code_intel_choice_ready(project) is True
+    assert recon_map_ready(project) is True

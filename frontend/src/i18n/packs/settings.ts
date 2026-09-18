@@ -110,7 +110,13 @@ export const settingsPack = {
     'settings.codegraph': 'CodeGraph 路径',
     'settings.codegraph.placeholder': '留空则自动检测或在构建时安装',
     'settings.codegraph.hint':
-      '代码库阶段用此 CLI 给 src/ 建图。仅当项目勾选「代码库」时才会构建；未安装时会在该阶段自动装到 data/tools/codegraph。也可设环境变量 VULNHUNTER_CODEGRAPH_PATH。',
+      '代码库用此 CLI 给 src/ 建源码图。仅当项目勾选「代码库」且地图 Agent 点名 codegraph 后才构建；未安装时会自动装到 data/tools/codegraph。也可设 VULNHUNTER_CODEGRAPH_PATH。',
+    'settings.jarAnalyzer': 'Jar Analyzer Engine 路径',
+    'settings.jarAnalyzer.placeholder': '留空则自动检测或在构建时安装',
+    'settings.jarAnalyzer.hint':
+      '代码库用此 fat jar 给点名业务 jar 建字节码调用图。需本机 java（JAVA_HOME / PATH / VULNHUNTER_MCP_JAVA）。未安装时自动下载到 data/tools/jar-analyzer。也可设 VULNHUNTER_JAR_ANALYZER_PATH。',
+    'settings.jarAnalyzer.missing': '未找到 jar-analyzer-engine',
+    'settings.jarAnalyzer.timeout': 'Jar Analyzer 检测超时，请稍后重试。',
 
     'settings.log.title': '实时日志清理',
     'settings.log.hint':
@@ -364,7 +370,13 @@ export const settingsPack = {
     'settings.codegraph': 'CodeGraph path',
     'settings.codegraph.placeholder': 'Empty = auto-detect or install at build time',
     'settings.codegraph.hint':
-      'The code-intelligence phase uses this CLI to graph src/. It only builds when the project enables Code Intelligence; if missing it auto-installs to data/tools/codegraph in that phase. You can also set VULNHUNTER_CODEGRAPH_PATH.',
+      'Code intel uses this CLI to graph src/. Builds only after the project enables Code Intelligence and the map Agent names codegraph; if missing it auto-installs to data/tools/codegraph. You can also set VULNHUNTER_CODEGRAPH_PATH.',
+    'settings.jarAnalyzer': 'Jar Analyzer Engine path',
+    'settings.jarAnalyzer.placeholder': 'Empty = auto-detect or install at build time',
+    'settings.jarAnalyzer.hint':
+      'Code intel uses this fat jar to build bytecode call graphs for MarkBusinessJar business jars. Requires java (JAVA_HOME / PATH / VULNHUNTER_MCP_JAVA). Auto-downloads to data/tools/jar-analyzer if missing. You can also set VULNHUNTER_JAR_ANALYZER_PATH.',
+    'settings.jarAnalyzer.missing': 'jar-analyzer-engine not found',
+    'settings.jarAnalyzer.timeout': 'Jar Analyzer check timed out. Try again later.',
 
     'settings.log.title': 'Live log cleanup',
     'settings.log.hint':

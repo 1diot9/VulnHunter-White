@@ -618,6 +618,8 @@ def settings_out_from_row(row: AppSettings) -> SettingsOut:
         or (getattr(settings, "jadx_path", None) or "").strip(),
         codegraph_path=(getattr(row, "codegraph_path", None) or "").strip()
         or (getattr(settings, "codegraph_path", None) or "").strip(),
+        jar_analyzer_path=(getattr(row, "jar_analyzer_path", None) or "").strip()
+        or (getattr(settings, "jar_analyzer_path", None) or "").strip(),
         access_token_set=is_access_token_configured(row),
     )
 

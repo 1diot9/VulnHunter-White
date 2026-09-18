@@ -72,6 +72,7 @@ class SettingsOut(BaseModel):
     cli_tools_dir: str = "tools/cli"
     jadx_path: str = ""
     codegraph_path: str = ""
+    jar_analyzer_path: str = ""
     access_token_set: bool = False
 
 
@@ -111,6 +112,7 @@ class SettingsUpdate(BaseModel):
     cli_tools_dir: str | None = None
     jadx_path: str | None = None
     codegraph_path: str | None = None
+    jar_analyzer_path: str | None = None
 
 
 class AccessTokenUpdate(BaseModel):
@@ -214,6 +216,19 @@ class CodegraphTestOut(BaseModel):
     ok: bool
     path: str = ""
     version: str = ""
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class JarAnalyzerProbeIn(BaseModel):
+    jar_analyzer_path: str | None = None
+
+
+class JarAnalyzerTestOut(BaseModel):
+    ok: bool
+    path: str = ""
+    version: str = ""
+    java: str = ""
     latency_ms: int | None = None
     error: str | None = None
 
@@ -458,6 +473,7 @@ class ProjectOut(BaseModel):
     code_intel_done: bool = False
     code_intel_error: str = ""
     code_intel_stale: bool = False
+    code_intel_backends: list[str] = Field(default_factory=list)
     audit_mode: str = "bounty"
     target_kind: str = "web"
     custom_audit_mode_id: int | None = None

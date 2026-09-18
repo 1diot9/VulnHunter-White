@@ -19,7 +19,7 @@ export const componentsPack = {
     'comp.codeIntel.title': '代码库',
     'comp.codeIntel.build': '构建调用图',
     'comp.codeIntel.hint':
-      '与侦察并列。勾选后用 CodeGraph 给 src/ 建调用图，供 Worker / Reviewer 查符号与调用。索引写在 src/.codegraph/，多次构建覆盖同一目录。失败会降级，不阻塞审计。默认关闭以省磁盘；中途开启后挖掘会等这次构建结束。关闭会删除该项目索引。',
+      '与侦察并列。勾选后由地图 Agent 点名 CodeGraph（src/）与/或 Jar Analyzer（业务 jar）再建图，供 Worker / Reviewer 查询。失败会降级，不阻塞审计。默认关闭以省磁盘；关闭会删除该项目索引。',
     'comp.create.title': '创建项目',
     'comp.create.body':
       '导入 GitHub 仓库或源码 zip。可选择审计对象、赏金/全量/自定义模式、代码库阶段、挖掘路径与验证方式；项目模型、Token 上限与阶段提示在高级选项中。',
@@ -316,7 +316,7 @@ export const componentsPack = {
     'comp.codeIntel.title': 'Code intel',
     'comp.codeIntel.build': 'Build call graph',
     'comp.codeIntel.hint':
-      'Beside Recon. When checked, CodeGraph builds a call graph of src/ for Worker / Reviewer. Index lives in src/.codegraph/; rebuilds overwrite the same directory. Failures degrade and do not block the audit. Off by default to save disk; turning it on mid-run makes mining wait for this build. Turning it off deletes this project’s index.',
+      'Beside Recon. When checked, the map Agent names CodeGraph (src/) and/or Jar Analyzer (business jars) before build; Worker / Reviewer query the graphs. Failures degrade and do not block the audit. Off by default to save disk; turning it off deletes this project’s index.',
     'comp.create.title': 'Create project',
     'comp.create.body':
       'Import a GitHub repo or source zip. Choose audit target, bounty / full / custom mode, code intel, mining paths, and verification. Project model, token cap, and phase hints are under Advanced.',
