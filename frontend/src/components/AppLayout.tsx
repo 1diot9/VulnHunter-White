@@ -10,6 +10,8 @@ import { startVisibilityPoll } from '../lib/visibilityPoll'
 import { useAuth } from './AuthGate'
 import { AppUpdateBanner } from './AppUpdatePanel'
 import BrandLogo from './BrandLogo'
+import RepoGithubLink from './RepoGithubLink'
+import AppFooter from './AppFooter'
 
 export default function AppLayout() {
   const [consentCount, setConsentCount] = useState(0)
@@ -91,6 +93,7 @@ export default function AppLayout() {
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <LanguageSwitcher />
+            <RepoGithubLink />
             {required ? (
               <Button type="button" variant="ghost" size="sm" onClick={lock}>
                 {t('nav.logout')}
@@ -101,9 +104,10 @@ export default function AppLayout() {
         <AppUpdateBanner available={updateAvailable} version={updateVersion} sha={updateSha} />
         <Separator />
       </header>
-      <main className="mx-auto w-full max-w-7xl px-4 py-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <Outlet />
       </main>
+      <AppFooter />
     </div>
   )
 }

@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label'
 import { useI18n } from '@/i18n'
 import LanguageSwitcher from '@/i18n/LanguageSwitcher'
 import BrandLogo from './BrandLogo'
+import RepoGithubLink from './RepoGithubLink'
+import AppFooter from './AppFooter'
 
 type AuthState = {
   required: boolean
@@ -118,46 +120,50 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   if (required && !unlocked) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
-        <Card className="w-full max-w-md">
-          <CardContent className="space-y-4 p-6">
-            <div className="flex items-start justify-between gap-3">
+      <div className="flex min-h-screen flex-col bg-background text-foreground">
+        <header className="flex shrink-0 items-center justify-end gap-2 px-4 py-3">
+          <LanguageSwitcher />
+          <RepoGithubLink />
+        </header>
+        <main className="flex flex-1 items-center justify-center px-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="space-y-4 p-6">
               <BrandLogo className="text-lg font-semibold tracking-tight" />
-              <LanguageSwitcher />
-            </div>
-            <div className="flex items-center gap-2">
-              <LockIcon className="size-5 text-muted-foreground" />
-              <h1 className="text-lg font-semibold">{t('auth.title')}</h1>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {backendError || t('auth.body')}
-            </p>
-            {backendError ? (
-              <Button type="button" onClick={() => void checkAuth()}>
-                {t('common.retry')}
-              </Button>
-            ) : (
-              <form className="space-y-3" onSubmit={(e) => void onSubmit(e)}>
-                <div className="space-y-1.5">
-                  <Label htmlFor="access-token">{t('auth.token')}</Label>
-                  <Input
-                    id="access-token"
-                    type="password"
-                    autoFocus
-                    autoComplete="current-password"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    placeholder={t('auth.placeholder')}
-                  />
-                </div>
-                {error ? <div className="text-sm text-red-300">{error}</div> : null}
-                <Button type="submit" disabled={busy} className="w-full">
-                  {busy ? t('auth.checking') : t('auth.enter')}
+              <div className="flex items-center gap-2">
+                <LockIcon className="size-5 text-muted-foreground" />
+                <h1 className="text-lg font-semibold">{t('auth.title')}</h1>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {backendError || t('auth.body')}
+              </p>
+              {backendError ? (
+                <Button type="button" onClick={() => void checkAuth()}>
+                  {t('common.retry')}
                 </Button>
-              </form>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <form className="space-y-3" onSubmit={(e) => void onSubmit(e)}>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="access-token">{t('auth.token')}</Label>
+                    <Input
+                      id="access-token"
+                      type="password"
+                      autoFocus
+                      autoComplete="current-password"
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      placeholder={t('auth.placeholder')}
+                    />
+                  </div>
+                  {error ? <div className="text-sm text-red-300">{error}</div> : null}
+                  <Button type="submit" disabled={busy} className="w-full">
+                    {busy ? t('auth.checking') : t('auth.enter')}
+                  </Button>
+                </form>
+              )}
+            </CardContent>
+          </Card>
+        </main>
+        <AppFooter />
       </div>
     )
   }

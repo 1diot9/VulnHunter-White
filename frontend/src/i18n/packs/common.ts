@@ -27,7 +27,9 @@ export const commonPack = {
     'nav.containers': '容器管理',
     'nav.settings': '设置',
     'nav.updateBadge': '新',
+    'nav.github': 'GitHub 仓库',
     'nav.logout': '退出',
+    'footer.poweredByPrefix': 'Powered By ',
     'auth.title': '访问令牌',
     'auth.body':
       '输入访问令牌后才能查看数据或调用功能。令牌可在 .env 的 VULNHUNTER_ACCESS_TOKEN 中配置，也可在设置页修改。',
@@ -71,7 +73,9 @@ export const commonPack = {
     'nav.containers': 'Containers',
     'nav.settings': 'Settings',
     'nav.updateBadge': 'New',
+    'nav.github': 'GitHub repository',
     'nav.logout': 'Sign out',
+    'footer.poweredByPrefix': 'Powered By ',
     'auth.title': 'Access token',
     'auth.body':
       'Enter the access token to view data or call the API. Set VULNHUNTER_ACCESS_TOKEN in .env, or change it on the Settings page.',
