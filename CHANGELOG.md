@@ -10,6 +10,10 @@
 
 - 启动后的进程日志按本地日期写入 `data/logs/backend-YYYY-MM-DD.log` 与 `frontend-YYYY-MM-DD.log`，跨天自动切换，不再全部追加进同一文件。
 
+### 修复
+
+- pull 去掉源码基线后的版本时，旧库里残留的 `projects.source_baseline_status`（NOT NULL 且无默认值）不再挡住新建项目；启动时会丢掉这类 ORM 已删除的必填遗留列。
+
 ## V1.2.5 - 2026-09-15
 
 ### 新增

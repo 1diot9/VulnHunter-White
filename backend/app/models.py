@@ -465,6 +465,12 @@ REQUIRED_TABLES = (
 SQLITE_BUSY_TIMEOUT_MS = 30000
 _schema_lock = threading.Lock()
 
+# ORM 已删除、但旧库 create_all 仍可能留下的列。Mapped[str] + default= 在
+# SQLite 里是 NOT NULL 且没有库级 DEFAULT，当前模型 INSERT 不写这些列就会 500。
+_LEGACY_DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "projects": ("source_baseline_status",),
+}
+
 # Windows: use forward slashes so sqlite3 does not mis-parse drive paths.
 # NullPool: check_same_thread=False otherwise selects QueuePool(5+10). Nested
 # SessionLocal (stale-claim release, ensure_schema inspect+begin) then deadlocks
@@ -601,6 +607,55 @@ def _ensure_columns() -> None:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
+def _sql_ident(name: str) -> str:
+    if not name.isidentifier():
+        raise ValueError(f"invalid SQL identifier: {name!r}")
+    return name
+
+
+def _drop_legacy_columns() -> None:
+    """Drop leftover columns that the current ORM no longer maps.
+
+    Removing a required Python field does not change existing SQLite tables.
+    If that column was created as NOT NULL without a server default, later
+    INSERTs omit it and fail. Drop both known removals and any other unmapped
+    NOT NULL column that has no DEFAULT.
+    """
+    insp = inspect(engine)
+    insp.clear_cache()
+    tables = set(insp.get_table_names())
+    pending: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _queue(table: str, name: str) -> None:
+        key = (table, name)
+        if key not in seen:
+            seen.add(key)
+            pending.append(key)
+
+    for table, names in _LEGACY_DROPPED_COLUMNS.items():
+        if table not in tables:
+            continue
+        existing = {c["name"] for c in insp.get_columns(table)}
+        for name in names:
+            if name in existing:
+                _queue(table, name)
+    for table in Base.metadata.tables.values():
+        if table.name not in tables:
+            continue
+        mapped = {c.name for c in table.columns}
+        for col in insp.get_columns(table.name):
+            name = col["name"]
+            if name in mapped or col.get("nullable", True) or col.get("default") is not None:
+                continue
+            _queue(table.name, name)
+    if not pending:
+        return
+    with engine.begin() as conn:
+        for table, name in pending:
+            conn.execute(text(f"ALTER TABLE {_sql_ident(table)} DROP COLUMN {_sql_ident(name)}"))
+
+
 def _migrate_submission_tiers() -> None:
     """Fold legacy hardening/advisory_only/needs_more_evidence rows into value tiers."""
     insp = inspect(engine)
@@ -728,6 +783,7 @@ def ensure_schema() -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(bind=engine)
         _ensure_columns()
+        _drop_legacy_columns()
         _migrate_submission_tiers()
         _backfill_tracking_status()
         _backfill_verifier_status()
