@@ -400,7 +400,7 @@ sh stop.sh
 
 Windows kills by window title and frees last-recorded ports (plus defaults 16780 / 15173). Linux/macOS uses PID files + ports.
 
-Logs: `data/logs/backend.log`, `data/logs/frontend.log`. If ports never come up, start there.
+Logs: `data/logs/backend-YYYY-MM-DD.log`, `data/logs/frontend-YYYY-MM-DD.log` (one file per local day; rolls over at midnight). If ports never come up, start with today's files.
 
 After a successful start, open **http://127.0.0.1:15173**. API docs: http://127.0.0.1:16780/docs.
 

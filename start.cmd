@@ -198,7 +198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  if ($b -and $f) { exit 0 }; Start-Sleep -Milliseconds 500" ^
   "}; exit 1"
 if errorlevel 1 (
-  echo [VulnHunter] warn: ports not ready yet — check data\logs\backend.log / frontend.log
+  echo [VulnHunter] warn: ports not ready yet — check data\logs\backend-YYYY-MM-DD.log / frontend-YYYY-MM-DD.log
 ) else (
   echo [VulnHunter] ready.
 )

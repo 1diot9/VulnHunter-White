@@ -110,7 +110,7 @@ VulnHunter-White 的特点：
 | udecode/plate           | [GHSA-2q2r-jqh4-grp3](https://github.com/udecode/plate/security/advisories/GHSA-2q2r-jqh4-grp3) | 鉴权缺失     | 6.9      |
 | udecode/plate           | [GHSA-p8g2-cf33-p28j](https://github.com/udecode/plate/security/advisories/GHSA-p8g2-cf33-p28j) | DoS          | 6.5      |
 | udecode/plate           | [GHSA-r3c4-jjfg-3vvx](https://github.com/udecode/plate/security/advisories/GHSA-r3c4-jjfg-3vvx) | XSS          | 6.1      |
-| filebrowser/filebrowser | GHSA-448h-jr2h-3vhp                                          | DoS          | 6.5      |
+| filebrowser/filebrowser | [GHSA-448h-jr2h-3vhp](https://github.com/filebrowser/filebrowser/security/advisories/GHSA-448h-jr2h-3vhp)/CVE-2026-90928 | DoS          | 7.1      |
 | http4s/http4s           | [GHSA-gq9p-f254-h286](https://github.com/http4s/http4s/security/advisories/GHSA-gq9p-f254-h286) | DoS          | 7.5      |
 | http4s/http4s           | [GHSA-3q2f-8v8m-249p](https://github.com/http4s/http4s/security/advisories/GHSA-3q2f-8v8m-249p) | DoS          | 8.2      |
 | http4s/http4s           | [GHSA-3jm4-mm2v-96qj](https://github.com/http4s/http4s/security/advisories/GHSA-3jm4-mm2v-96qj) | DoS          | 7.5      |
@@ -121,12 +121,12 @@ VulnHunter-White 的特点：
 | getgrav/grav            | [GHSA-59qm-58v5-gvc5](https://github.com/getgrav/grav/security/advisories/GHSA-59qm-58v5-gvc5) | 沙箱逃逸     | 7.1      |
 | netty/netty             | [GHSA-q9pg-8h3j-8hvm](https://github.com/netty/netty/security/advisories/GHSA-q9pg-8h3j-8hvm) | HTTP路由绕过 | 6.5      |
 | YunaiV/ruoyi-vue-pro    | NCC-2026-08501                                               | XSS          | 6.9      |
+| jetty/jetty.project     | NCC-2026-08747                                               | DoS          | 8.2      |
+| avwo/whistle            | NCC-2026-08849                                               | 原型链污染   | 7.8      |
+| avwo/whistle            | NCC-2026-08910                                               | RCE          | 9.3      |
+| avwo/whistle            | NCC-2026-09065                                               | 任意文件写   | 9.3      |
+| alibaba/druid           | NCC-2026-09245                                               | XSS          | 6.0      |
 | firefly-iii/firefly-iii | [GHSA-3wcx-g7jc-h9vc](https://github.com/firefly-iii/firefly-iii/security/advisories/GHSA-3wcx-g7jc-h9vc) | 越权         | 7.1      |
-
-目前还有十多个处于Draft状态的未公开漏洞，后续公开后会补充。
-
-漏洞产出页面的产出日历：
-![image-20260827155754825](./assets/image-20260827155754825.png)
 
 
 
@@ -401,7 +401,7 @@ sh stop.sh
 
 Windows 按窗口标题结束进程，并释放上次记录的端口（以及默认 16780 / 15173）；Linux/macOS 按 PID 文件 + 端口结束。
 
-日志：`data/logs/backend.log`、`data/logs/frontend.log`。端口一直没起来时先看这两份文件。
+日志：`data/logs/backend-YYYY-MM-DD.log`、`data/logs/frontend-YYYY-MM-DD.log`（按本地日期分文件，跨天自动切换）。端口一直没起来时先看当天这两份文件。
 
 启动成功后浏览器打开 **http://127.0.0.1:15173** 。API 文档：http://127.0.0.1:16780/docs 。
 

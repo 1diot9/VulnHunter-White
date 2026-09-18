@@ -255,7 +255,7 @@ done
 if [ -n "$ready" ]; then
   echo "[VulnHunter] ready."
 else
-  echo "[VulnHunter] warn: ports not ready yet — check data/logs/backend.log / frontend.log"
+  echo "[VulnHunter] warn: ports not ready yet — check data/logs/backend-YYYY-MM-DD.log / frontend-YYYY-MM-DD.log"
 fi
 
 echo

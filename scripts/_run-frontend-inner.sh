@@ -11,9 +11,20 @@ export VULNHUNTER_PORT="${VULNHUNTER_PORT:-16780}"
 export VULNHUNTER_FRONTEND_PORT
 export VULNHUNTER_HOST
 
-cd "$ROOT/frontend"
-if ! command -v npm >/dev/null 2>&1; then
-  echo "[VulnHunter] npm not found" >>"$LOGDIR/frontend.log"
+ROTATOR="$ROOT/scripts/rotate_log.py"
+PY="$ROOT/backend/.venv/bin/python"
+if [ ! -x "$PY" ]; then
+  PY=$(command -v python3 || command -v python || true)
+fi
+if [ -z "$PY" ]; then
+  echo "[VulnHunter] python not found; cannot write data/logs" >&2
   exit 1
 fi
-exec npm run dev -- --host "$VULNHUNTER_HOST" --port "$VULNHUNTER_FRONTEND_PORT" --strictPort >>"$LOGDIR/frontend.log" 2>&1
+
+cd "$ROOT/frontend"
+if ! command -v npm >/dev/null 2>&1; then
+  printf '%s\n' "[VulnHunter] npm not found" | "$PY" "$ROTATOR" --dir "$LOGDIR" --prefix frontend
+  exit 1
+fi
+exec "$PY" "$ROTATOR" --dir "$LOGDIR" --prefix frontend -- \
+  npm run dev -- --host "$VULNHUNTER_HOST" --port "$VULNHUNTER_FRONTEND_PORT" --strictPort
