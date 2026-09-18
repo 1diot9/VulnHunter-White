@@ -35,6 +35,8 @@ _WIRE_ALIASES = {
     "openai-responses": "responses",
 }
 DEFAULT_ENDPOINT_INFLIGHT = 6
+DEFAULT_ENDPOINT_WEIGHT = 1.0
+MIN_ENDPOINT_WEIGHT = 0.01
 _METADATA_HOSTS = frozenset(
     {
         "metadata.google.internal",
@@ -172,6 +174,7 @@ class PoolEndpoint:
     model: str = ""
     max_inflight: int = DEFAULT_ENDPOINT_INFLIGHT
     wire_api: str = ""
+    weight: float = DEFAULT_ENDPOINT_WEIGHT
 
 
 def _parse_json(raw: str | None, default: Any) -> Any:
@@ -204,6 +207,19 @@ def _clamp_inflight(value: Any, *, default: int = DEFAULT_ENDPOINT_INFLIGHT) -> 
     except (TypeError, ValueError):
         n = default
     return max(1, n)
+
+
+def clamp_endpoint_weight(value: Any, *, default: float = DEFAULT_ENDPOINT_WEIGHT) -> float:
+    """Keep weight in (0, 1]; 1 is highest priority. Missing/invalid → 1."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        n = default
+    if n != n:  # NaN
+        n = default
+    if n <= 0:
+        n = MIN_ENDPOINT_WEIGHT
+    return round(min(DEFAULT_ENDPOINT_WEIGHT, n), 2)
 
 
 def endpoint_disabled(item: Any) -> bool:
@@ -257,6 +273,7 @@ def _normalize_endpoint_dicts(
                 "model": model,
                 "wire_api": stored_endpoint_wire(item),
                 "max_inflight": _clamp_inflight(item.get("max_inflight")),
+                "weight": clamp_endpoint_weight(item.get("weight")),
                 "disabled": endpoint_disabled(item),
             }
         )
@@ -272,6 +289,7 @@ def _normalize_endpoint_dicts(
                 "model": "",
                 "wire_api": "",
                 "max_inflight": _clamp_inflight(fallback_inflight),
+                "weight": DEFAULT_ENDPOINT_WEIGHT,
                 "disabled": False,
             }
         ]
@@ -283,6 +301,7 @@ def _normalize_endpoint_dicts(
             "model": "",
             "wire_api": "",
             "max_inflight": _clamp_inflight(fallback_inflight),
+            "weight": DEFAULT_ENDPOINT_WEIGHT,
             "disabled": False,
         }
     ]
@@ -330,6 +349,7 @@ def endpoints_for_api(row: AppSettings | None) -> list[LlmPoolEndpointOut]:
             model=str(ep.get("model") or "").strip(),
             wire_api=stored_endpoint_wire(ep),
             max_inflight=_clamp_inflight(ep.get("max_inflight")),
+            weight=clamp_endpoint_weight(ep.get("weight")),
             disabled=endpoint_disabled(ep),
         )
         for ep in load_pool_endpoints_raw(row)
@@ -374,6 +394,7 @@ def pool_endpoints_resolved(row: AppSettings | None = None) -> list[PoolEndpoint
                 api_key=key,
                 model=str(ep.get("model") or "").strip(),
                 max_inflight=_clamp_inflight(ep.get("max_inflight")),
+                weight=clamp_endpoint_weight(ep.get("weight")),
                 wire_api=ep_wire,
             )
         )
@@ -419,6 +440,7 @@ def merge_endpoints_update(
                 "model": (item.model or "").strip(),
                 "wire_api": ep_wire,
                 "max_inflight": _clamp_inflight(item.max_inflight),
+                "weight": clamp_endpoint_weight(item.weight),
                 "disabled": bool(item.disabled),
             }
         )
@@ -527,6 +549,7 @@ def providers_for_api(row: AppSettings | None) -> list[LlmProviderOut]:
                         model=str(ep.get("model") or "").strip(),
                         wire_api=stored_endpoint_wire(ep),
                         max_inflight=_clamp_inflight(ep.get("max_inflight")),
+                        weight=clamp_endpoint_weight(ep.get("weight")),
                         disabled=endpoint_disabled(ep),
                     )
                     for ep in eps

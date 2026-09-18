@@ -488,6 +488,7 @@ export type LlmPoolEndpoint = {
   model: string
   wire_api?: string
   max_inflight: number
+  weight?: number
   disabled: boolean
 }
 

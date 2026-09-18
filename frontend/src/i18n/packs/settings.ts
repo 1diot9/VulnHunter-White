@@ -4,7 +4,7 @@ export const settingsPack = {
     'llm.threadAria': 'LLM 线程占用',
     'llm.waiting': '排队 {n}',
     'llm.tooltip':
-      '所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL 并发之和；新会话按负载均匀分配到各端点，超出按到达顺序排队。同一端点发请求会按设置的最小间隔排队，排队不计超时。429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。可在设置页管理模型商池。',
+      '所有运行中项目的侦察、挖掘、审核等 LLM 会话合计占用。上限为各 Base URL 并发之和；新会话优先走高权重端点，同权重按负载均摊，超出按到达顺序排队。同一端点发请求会按设置的最小间隔排队，排队不计超时。429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。可在设置页管理模型商池。',
     'llm.unconfigured': '(未配置)',
     'llm.disabled': '已禁用',
     'llm.cooldown': '冷却 {time}',
@@ -46,7 +46,7 @@ export const settingsPack = {
     'settings.pool.btn.responses': 'Responses 端点',
     'settings.pool.btn.chat': '国产模型端点',
     'settings.pool.hint':
-      '可添加多个 Base URL 扩展并行线程；每个端点可单独指定接口协议与模型，协议留空则用上方全局协议。勾选「禁用」后该端点不参与分配，配置仍保留。新会话按负载均匀分配；同一轮对话优先沿用相同模型（提高缓存命中），同模型端点间仍均摊并尽量粘滞原 URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {limit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。',
+      '可添加多个 Base URL 扩展并行线程；每个端点可单独指定接口协议、模型与权重（默认 1 为最高）。勾选「禁用」后该端点不参与分配，配置仍保留。新会话优先走高权重端点，同权重按负载均摊；同一轮对话优先沿用相同模型（提高缓存命中），同模型同权端点间仍均摊并尽量粘滞原 URL；429 / 额度用尽只冷却该端点并换路，冷却结束后重新参与分配。合计上限 = 未禁用端点并发之和（当前 {limit}）。同一端点连续两次发请求至少间隔下方秒数，后来的请求按到达顺序排队；排队时间不计入阶段超时与 HTTP 读超时。',
     'settings.pool.interval': '请求间隔（秒）',
     'settings.pool.intervalTitle': '同一 Base URL 两次请求开始时间的最小间隔；0 表示不限制',
     'settings.pool.endpoint': '端点 {n}',
@@ -59,6 +59,9 @@ export const settingsPack = {
     'settings.pool.modelTitle': '该端点使用的模型；留空则用下方回退模型',
     'settings.pool.inflightTitle': '该端点最大并发',
     'settings.pool.inflightPlaceholder': '并发',
+    'settings.pool.weightTitle': '1 为最高；数值越大越优先分配。同权重端点仍按负载均摊',
+    'settings.pool.weightPlaceholder': '权重',
+    'settings.pool.weightValue': '权重 {n}',
     'settings.pool.filterModels': '筛选 {n} 个模型…',
     'settings.pool.selectFromList': '从清单选择（{filtered}/{total}）…',
     'settings.pool.listing': '拉取中…',
@@ -251,7 +254,7 @@ export const settingsPack = {
     'llm.threadAria': 'LLM thread usage',
     'llm.waiting': 'queued {n}',
     'llm.tooltip':
-      'Total LLM sessions across running projects (recon, mining, review, and more). The cap is the sum of each Base URL’s concurrency. New sessions are spread across endpoints; extras queue in arrival order. Requests to the same endpoint also queue by the configured minimum interval (queue time is not counted toward timeouts). 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Manage the provider pool on the Settings page.',
+      'Total LLM sessions across running projects (recon, mining, review, and more). The cap is the sum of each Base URL’s concurrency. New sessions prefer higher-weight endpoints and spread across equal weights; extras queue in arrival order. Requests to the same endpoint also queue by the configured minimum interval (queue time is not counted toward timeouts). 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Manage the provider pool on the Settings page.',
     'llm.unconfigured': '(not set)',
     'llm.disabled': 'Disabled',
     'llm.cooldown': 'cooldown {time}',
@@ -294,7 +297,7 @@ export const settingsPack = {
     'settings.pool.btn.responses': 'Responses endpoints',
     'settings.pool.btn.chat': 'Domestic model endpoints',
     'settings.pool.hint':
-      'Add multiple Base URLs to increase parallel threads. Each endpoint can set its own protocol and model; empty protocol follows the global setting above. Checking Disable keeps the config but excludes it from allocation. New sessions are load-balanced; a conversation prefers the same model (better cache hits) and still spreads across same-model URLs while sticking when possible. 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Total cap = sum of concurrency on enabled endpoints (currently {limit}). Consecutive requests to the same endpoint wait at least the interval below; later requests queue in arrival order. Queue time is not counted toward phase or HTTP read timeouts.',
+      'Add multiple Base URLs to increase parallel threads. Each endpoint can set its own protocol, model, and weight (1 is highest). Checking Disable keeps the config but excludes it from allocation. New sessions prefer higher-weight endpoints and load-balance among equal weights; a conversation prefers the same model (better cache hits) and still spreads across same-model, same-weight URLs while sticking when possible. 429 / quota exhaustion cools only that endpoint and fail over; it rejoins after cooldown. Total cap = sum of concurrency on enabled endpoints (currently {limit}). Consecutive requests to the same endpoint wait at least the interval below; later requests queue in arrival order. Queue time is not counted toward phase or HTTP read timeouts.',
     'settings.pool.interval': 'Request interval (sec)',
     'settings.pool.intervalTitle':
       'Minimum gap between the start of two requests to the same Base URL; 0 means no limit',
@@ -308,6 +311,9 @@ export const settingsPack = {
     'settings.pool.modelTitle': 'Model for this endpoint; empty uses the fallback model below',
     'settings.pool.inflightTitle': 'Max concurrency for this endpoint',
     'settings.pool.inflightPlaceholder': 'Concurrency',
+    'settings.pool.weightTitle': '1 is highest; larger values are allocated first. Equal weights still share load',
+    'settings.pool.weightPlaceholder': 'Weight',
+    'settings.pool.weightValue': 'weight {n}',
     'settings.pool.filterModels': 'Filter {n} models…',
     'settings.pool.selectFromList': 'Choose from list ({filtered}/{total})…',
     'settings.pool.listing': 'Fetching…',

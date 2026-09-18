@@ -178,6 +178,7 @@ type EndpointDraft = {
   model: string
   wire_api: EndpointWire
   max_inflight: number
+  weight: number
   disabled: boolean
 }
 
@@ -197,6 +198,13 @@ function wireApiLabel(wire: WireApi): string {
   return 'OpenAI Chat Completions'
 }
 
+function clampWeight(value: number | undefined | null): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 1
+  if (n <= 0) return 0.01
+  return Math.min(1, Math.round(n * 100) / 100)
+}
+
 function emptyEndpoint(id: string, model = ''): EndpointDraft {
   return {
     id,
@@ -206,6 +214,7 @@ function emptyEndpoint(id: string, model = ''): EndpointDraft {
     model,
     wire_api: '',
     max_inflight: 6,
+    weight: 1,
     disabled: false,
   }
 }
@@ -218,6 +227,7 @@ function draftFromApi(
     model?: string
     wire_api?: string
     max_inflight?: number
+    weight?: number
     disabled?: boolean
   },
   index: number,
@@ -230,6 +240,7 @@ function draftFromApi(
     model: ep.model || '',
     wire_api: parseEndpointWire(ep.wire_api),
     max_inflight: Math.max(1, ep.max_inflight || 6),
+    weight: clampWeight(ep.weight),
     disabled: !!ep.disabled,
   }
 }
@@ -384,6 +395,7 @@ export default function SettingsPage() {
       model: string
       wire_api: EndpointWire
       max_inflight: number
+      weight: number
       disabled: boolean
     }>,
   ) {
@@ -610,6 +622,7 @@ export default function SettingsPage() {
           model: ep.model.trim(),
           wire_api: ep.wire_api,
           max_inflight: Math.max(1, ep.max_inflight || 1),
+          weight: clampWeight(ep.weight),
           disabled: !!ep.disabled,
         })),
       }
@@ -631,6 +644,7 @@ export default function SettingsPage() {
             model: ep.model.trim(),
             wire_api: ep.wire_api,
             max_inflight: Math.max(1, ep.max_inflight || 1),
+            weight: clampWeight(ep.weight),
             disabled: !!ep.disabled,
           })),
         },
@@ -954,31 +968,55 @@ export default function SettingsPage() {
                       : 'https://api.openai.com/v1'
                   }
                 />
-                <div className="grid gap-2 sm:grid-cols-[1fr_minmax(8rem,1fr)_7rem]">
+                <div className="grid gap-2 sm:grid-cols-[1fr_minmax(8rem,1fr)_6.5rem_5.5rem]">
                   <Input
                     type="password"
+                    className="self-end"
                     value={ep.api_key}
                     onChange={(e) => updateEndpoint(ep.id, { api_key: e.target.value })}
                     placeholder={ep.api_key_set ? t('settings.pool.keySet') : 'sk-...'}
                   />
                   <Input
+                    className="self-end"
                     value={ep.model}
                     onChange={(e) => updateEndpoint(ep.id, { model: e.target.value })}
                     placeholder={defaultModel.trim() || t('settings.pool.modelName')}
                     title={t('settings.pool.modelTitle')}
                   />
-                  <Input
-                    type="number"
-                    min={1}
-                    value={ep.max_inflight}
-                    onChange={(e) =>
-                      updateEndpoint(ep.id, {
-                        max_inflight: Math.max(1, Number(e.target.value) || 1),
-                      })
-                    }
-                    title={t('settings.pool.inflightTitle')}
-                    placeholder={t('settings.pool.inflightPlaceholder')}
-                  />
+                  <div className="space-y-1">
+                    <Label className="text-xs font-normal text-muted-foreground">
+                      {t('settings.pool.inflightPlaceholder')}
+                    </Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={ep.max_inflight}
+                      onChange={(e) =>
+                        updateEndpoint(ep.id, {
+                          max_inflight: Math.max(1, Number(e.target.value) || 1),
+                        })
+                      }
+                      title={t('settings.pool.inflightTitle')}
+                      placeholder={t('settings.pool.inflightPlaceholder')}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs font-normal text-muted-foreground">
+                      {t('settings.pool.weightPlaceholder')}
+                    </Label>
+                    <Input
+                      type="number"
+                      min={0.01}
+                      max={1}
+                      step={0.1}
+                      value={ep.weight}
+                      onChange={(e) =>
+                        updateEndpoint(ep.id, { weight: clampWeight(Number(e.target.value)) })
+                      }
+                      title={t('settings.pool.weightTitle')}
+                      placeholder={t('settings.pool.weightPlaceholder')}
+                    />
+                  </div>
                 </div>
                 {models.length > 0 && probeEndpointId === ep.id ? (
                   <>
@@ -1044,6 +1082,8 @@ export default function SettingsPage() {
                   <span className="text-xs text-slate-500">
                     {ep.model.trim() || defaultModel.trim() || t('settings.pool.noModel')} ·{' '}
                     {t('settings.pool.concurrency', { n: ep.max_inflight })}
+                    {' · '}
+                    {t('settings.pool.weightValue', { n: ep.weight })}
                     {ep.disabled ? t('settings.pool.notAllocated') : ''}
                   </span>
                 </div>

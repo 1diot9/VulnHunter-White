@@ -373,6 +373,84 @@ def test_same_model_endpoints_still_spread_by_util():
         lim.release(h)
 
 
+def test_higher_weight_is_filled_before_lower_weight():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {
+                "id": "ep-a",
+                "base_url": "https://a.example/v1",
+                "api_key": "ka",
+                "max_inflight": 3,
+                "weight": 0.5,
+            },
+            {
+                "id": "ep-b",
+                "base_url": "https://b.example/v1",
+                "api_key": "kb",
+                "max_inflight": 3,
+                "weight": 1,
+            },
+        ]
+    )
+    handles = [lim.acquire() for _ in range(4)]
+    assert all(h is not None for h in handles)
+    assert [h.endpoint_id for h in handles[:3]] == ["ep-b", "ep-b", "ep-b"]
+    assert handles[3].endpoint_id == "ep-a"
+    for h in handles:
+        lim.release(h)
+
+
+def test_omitted_weight_defaults_to_highest():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {"id": "ep-a", "base_url": "https://a.example/v1", "api_key": "ka", "max_inflight": 2},
+            {
+                "id": "ep-b",
+                "base_url": "https://b.example/v1",
+                "api_key": "kb",
+                "max_inflight": 2,
+                "weight": 0.3,
+            },
+        ]
+    )
+    handles = [lim.acquire() for _ in range(2)]
+    assert all(h is not None and h.endpoint_id == "ep-a" for h in handles)
+    for h in handles:
+        lim.release(h)
+
+
+def test_prefer_model_still_beats_higher_weight_other_model():
+    lim = LlmThreadLimiter()
+    lim.refresh_pool(
+        [
+            {
+                "id": "ep-a",
+                "base_url": "https://a.example/v1",
+                "api_key": "ka",
+                "model": "model-a",
+                "max_inflight": 4,
+                "weight": 0.4,
+            },
+            {
+                "id": "ep-b",
+                "base_url": "https://b.example/v1",
+                "api_key": "kb",
+                "model": "model-b",
+                "max_inflight": 4,
+                "weight": 1,
+            },
+        ]
+    )
+    occupied = lim.acquire(prefer_model="model-a")
+    assert occupied is not None and occupied.endpoint_id == "ep-a"
+    h = lim.acquire(prefer_model="model-a")
+    assert h is not None and h.endpoint_id == "ep-a"
+    lim.release(occupied)
+    lim.release(h)
+
+
 def test_empty_endpoint_model_matches_prefer_model():
     lim = LlmThreadLimiter()
     lim.refresh_pool(

@@ -492,6 +492,25 @@ def test_merge_endpoints_keeps_wire_when_omitted():
     assert merged[0]["api_key"] == "sk-old"
 
 
+def test_merge_endpoints_clamps_weight():
+    from app.schemas import LlmPoolEndpointIn
+    from app.services.llm_settings import clamp_endpoint_weight, merge_endpoints_update
+
+    assert clamp_endpoint_weight(None) == 1.0
+    assert clamp_endpoint_weight(2) == 1.0
+    assert clamp_endpoint_weight(0) == 0.01
+    assert clamp_endpoint_weight(0.5) == 0.5
+    merged = merge_endpoints_update(
+        [],
+        [
+            LlmPoolEndpointIn(id="ep-1", base_url="https://a.example/v1", api_key="sk", weight=0.25),
+            LlmPoolEndpointIn(id="ep-2", base_url="https://b.example/v1", api_key="sk"),
+        ],
+    )
+    assert merged[0]["weight"] == 0.25
+    assert merged[1]["weight"] == 1.0
+
+
 def test_merge_endpoints_rejects_unknown_wire():
     from app.schemas import LlmPoolEndpointIn
     from app.services.llm_settings import merge_endpoints_update

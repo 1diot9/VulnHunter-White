@@ -33,6 +33,7 @@ class LlmPoolEndpointIn(BaseModel):
     model: str = ""
     wire_api: str | None = None
     max_inflight: int = 6
+    weight: float = 1.0
     disabled: bool = False
 
 
@@ -43,6 +44,7 @@ class LlmPoolEndpointOut(BaseModel):
     model: str = ""
     wire_api: str = ""
     max_inflight: int = 6
+    weight: float = 1.0
     disabled: bool = False
 
 

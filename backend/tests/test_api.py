@@ -23,6 +23,7 @@ def test_health_and_settings(tmp_env):
         assert "fix_concurrency" not in body
         assert "llm_thread_limit" in body
         assert body["llm_thread_limit"] == 6
+        assert all(ep.get("weight") == 1.0 for ep in body["llm_endpoints"])
         assert body["llm_min_request_interval_sec"] == 0.0
         assert body["http_proxy"] == ""
         assert body["chat_proxy"] == ""
@@ -120,7 +121,9 @@ def test_llm_endpoints_pool_save_and_read(tmp_env):
         assert body["llm_endpoints"][0]["base_url"] == "https://pool-a.example/v1"
         assert body["llm_endpoints"][0]["api_key_set"] is True
         assert body["llm_endpoints"][0]["max_inflight"] == 2
+        assert body["llm_endpoints"][0]["weight"] == 1.0
         assert body["llm_endpoints"][1]["max_inflight"] == 4
+        assert body["llm_endpoints"][1]["weight"] == 1.0
         assert body["default_base_url"] == "https://pool-a.example/v1"
         assert llm_thread_limiter.current_limit() == 6
 
@@ -333,6 +336,47 @@ def test_llm_endpoint_disabled_skips_pool(tmp_env):
         )
         assert rejected.status_code == 400
         assert "未禁用" in rejected.json()["detail"]
+
+
+def test_llm_endpoint_weight_roundtrip_and_clamp(tmp_env):
+    from app.main import app
+    from app.services.llm_settings import pool_endpoints_resolved
+
+    with TestClient(app) as client:
+        upd = client.put(
+            "/api/settings",
+            json={
+                "default_model": "gpt-pool",
+                "llm_endpoints": [
+                    {
+                        "id": "ep-1",
+                        "base_url": "https://pool-a.example/v1",
+                        "api_key": "sk-a",
+                        "max_inflight": 2,
+                        "weight": 0.5,
+                    },
+                    {
+                        "id": "ep-2",
+                        "base_url": "https://pool-b.example/v1",
+                        "api_key": "sk-b",
+                        "max_inflight": 2,
+                        "weight": 2,
+                    },
+                    {
+                        "id": "ep-3",
+                        "base_url": "https://pool-c.example/v1",
+                        "api_key": "sk-c",
+                        "max_inflight": 2,
+                        "weight": 0,
+                    },
+                ],
+            },
+        )
+        assert upd.status_code == 200, upd.text
+        weights = {ep["id"]: ep["weight"] for ep in upd.json()["llm_endpoints"]}
+        assert weights == {"ep-1": 0.5, "ep-2": 1.0, "ep-3": 0.01}
+        pool = {ep.id: ep.weight for ep in pool_endpoints_resolved()}
+        assert pool == {"ep-1": 0.5, "ep-2": 1.0, "ep-3": 0.01}
 
 
 def test_llm_thread_usage_api(tmp_env):

@@ -2,10 +2,10 @@
 
 Each AgentLoop occupies one slot on one Base URL while it is actively running.
 Pause releases the slot so other sessions can proceed; resume re-acquires
-(preferring the same model for prefix-cache hits, then sticky to the last
-endpoint when loads are equal). Capacity is the sum of per-endpoint
-max_inflight. On 429/quota the session can rebind to another healthy endpoint
-without releasing the global wait queue.
+(preferring the same model for prefix-cache hits, then higher-weight endpoints,
+then sticky to the last endpoint when loads are equal). Capacity is the sum of
+per-endpoint max_inflight. On 429/quota the session can rebind to another
+healthy endpoint without releasing the global wait queue.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from ..config import settings
 from .llm_gate import llm_gate
 
 DEFAULT_LLM_THREAD_LIMIT = 6
+_DEFAULT_ENDPOINT_WEIGHT = 1.0
 _ANON_ENDPOINT_ID = "_anon"
 
 
@@ -39,6 +40,7 @@ class _EndpointBucket:
     used: int = 0
     model: str = ""
     wire_api: str = ""
+    weight: float = _DEFAULT_ENDPOINT_WEIGHT
 
 
 def _read_pool_from_settings() -> list[dict[str, Any]]:
@@ -55,6 +57,7 @@ def _read_pool_from_settings() -> list[dict[str, Any]]:
                     "model": ep.model,
                     "wire_api": ep.wire_api,
                     "max_inflight": ep.max_inflight,
+                    "weight": ep.weight,
                 }
                 for ep in pool
             ]
@@ -192,6 +195,7 @@ class LlmThreadLimiter:
                             "model": str(getattr(ep, "model", "") or ""),
                             "wire_api": str(getattr(ep, "wire_api", "") or ""),
                             "max_inflight": int(getattr(ep, "max_inflight", DEFAULT_LLM_THREAD_LIMIT) or DEFAULT_LLM_THREAD_LIMIT),
+                            "weight": getattr(ep, "weight", None),
                             "disabled": bool(getattr(ep, "disabled", False)),
                         }
                     )
@@ -211,6 +215,12 @@ class LlmThreadLimiter:
                 if not eid:
                     continue
                 cap = max(1, int(item.get("max_inflight") or DEFAULT_LLM_THREAD_LIMIT))
+                try:
+                    from .llm_settings import clamp_endpoint_weight
+
+                    weight = clamp_endpoint_weight(item.get("weight"))
+                except Exception:  # noqa: BLE001
+                    weight = _DEFAULT_ENDPOINT_WEIGHT
                 # Preserve api_key/base_url/model from resolved pool when available
                 key = str(item.get("api_key") or "")
                 url = str(item.get("base_url") or "")
@@ -226,6 +236,8 @@ class LlmThreadLimiter:
                                 url = url or pe.base_url
                                 model = model or pe.model
                                 wire = wire or pe.wire_api
+                                if item.get("weight") is None:
+                                    weight = pe.weight
                                 break
                     except Exception:  # noqa: BLE001
                         pass
@@ -238,6 +250,7 @@ class LlmThreadLimiter:
                     used=used,
                     model=model,
                     wire_api=wire,
+                    weight=weight,
                 )
                 new_order.append(eid)
             if not new_buckets:
@@ -329,20 +342,21 @@ class LlmThreadLimiter:
     def _pick_endpoint_locked(
         self, *, prefer: str | None = None, prefer_model: str | None = None
     ) -> str | None:
-        """Pick a healthy endpoint with remaining capacity, spreading load evenly.
+        """Pick a healthy endpoint with remaining capacity.
 
         Same-conversation ``prefer_model`` ranks matching endpoints first so
         prompt-prefix cache can hit; an empty endpoint model is compatible.
-        Among those, chooses the lowest utilization (used/cap), then the lowest
-        inflight count. ``prefer`` is a tie-breaker only: a sticky first endpoint
-        is not filled to capacity before other same-model pools are used. Quota /
-        429 / 5xx only skip an endpoint while its cooldown is active; after that
-        it re-enters the pool.
+        Among those, higher ``weight`` (1 is highest) wins, then the lowest
+        utilization (used/cap), then the lowest inflight count. ``prefer`` is a
+        tie-breaker only: a sticky first endpoint is not filled to capacity
+        before other same-model, same-weight pools are used. Quota / 429 / 5xx
+        only skip an endpoint while its cooldown is active; after that it
+        re-enters the pool.
         """
         want = (prefer_model or "").strip()
         now = time.time()
         best_id: str | None = None
-        best_key: tuple[int, float, int, int, int] | None = None
+        best_key: tuple[int, float, float, int, int, int] | None = None
         for idx, eid in enumerate(self._order):
             b = self._buckets[eid]
             if b.used >= b.cap:
@@ -353,7 +367,7 @@ class LlmThreadLimiter:
             model_mismatch = 0 if (not want or not ep_model or ep_model == want) else 1
             util = b.used / b.cap
             sticky = 0 if (prefer and eid == prefer) else 1
-            key = (model_mismatch, util, b.used, sticky, idx)
+            key = (model_mismatch, -b.weight, util, b.used, sticky, idx)
             if best_key is None or key < best_key:
                 best_key = key
                 best_id = eid
