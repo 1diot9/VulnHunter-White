@@ -723,6 +723,7 @@ export type GithubDiscoverSearch = {
   warning: string | null
   limit: number
   prompt?: string | null
+  timed_out?: boolean
 }
 
 export type GithubDiscoverDismissAll = {

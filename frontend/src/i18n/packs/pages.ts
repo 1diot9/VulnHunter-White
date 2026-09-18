@@ -36,8 +36,11 @@ export const pagesPack = {
     'vulns.emptySearch': '无匹配漏洞',
     'vulns.empty': '暂无数据',
     'discover.subtitle':
-      '可填写提示词，由模型优先按你的意图搜索 GitHub 仓库；留空则仍从公开 Advisory 里挑近一年有提交、Star ≥ 1000 的仓。关键词粗分 Web 应用 / 组件库 / 混合后再由模型复核。结果会累积，再次搜索只追加；移除后不会再进入候选。',
+      '可填写提示词，由模型优先按你的意图搜索 GitHub 仓库；留空则仍从公开 Advisory 里挑近一年有提交、Star ≥ 1000 的仓。会排除官方演示、示例工程和学习用项目。关键词粗分 Web 应用 / 组件库 / 混合后再由模型复核。结果会累积，再次搜索只追加；移除后不会再进入候选。',
     'discover.limit': '每次搜索数量',
+    'discover.timeoutHint': '本次限时 {sec} 秒。超过 5 个时每多 1 个加 60 秒；超时后已找到的仓库仍会保留。',
+    'discover.timeout':
+      '搜索超时（限时 {sec} 秒）。已找到的仓库仍会保留在列表中。可减少每次搜索数量后再试。',
     'discover.prompt': '用户提示词',
     'discover.promptHint': '搜索时作为最高优先级意图。例如语言、产品形态、漏洞面；留空则走公开 Advisory。',
     'discover.promptPlaceholder': '例如：找 Java 自托管 CMS，或有文件上传的 PHP 站点',
@@ -222,8 +225,12 @@ export const pagesPack = {
     'vulns.emptySearch': 'No matching findings',
     'vulns.empty': 'No data',
     'discover.subtitle':
-      'Optional prompt: the model searches GitHub using your intent first. Leave empty to keep picking from public Advisories (commits in the last year, Star ≥ 1000). Keyword-split as Web app / library / mixed, then a model reviews. Results accumulate; dismissed repos will not reappear.',
+      'Optional prompt: the model searches GitHub using your intent first. Leave empty to keep picking from public Advisories (commits in the last year, Star ≥ 1000). Official demos, sample apps, and learning projects are skipped. Keyword-split as Web app / library / mixed, then a model reviews. Results accumulate; dismissed repos will not reappear.',
     'discover.limit': 'Repos per search',
+    'discover.timeoutHint':
+      'This search waits up to {sec}s. Each repo beyond 5 adds 60s. Repos found before a timeout stay in the list.',
+    'discover.timeout':
+      'Search timed out ({sec}s). Repos already found stay in the list. Try searching for fewer repos.',
     'discover.prompt': 'Search prompt',
     'discover.promptHint':
       'Highest-priority intent for search: language, product shape, attack surface. Leave empty to use public Advisories.',

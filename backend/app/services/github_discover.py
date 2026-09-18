@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -45,6 +46,9 @@ GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
 GITHUB_SEARCH_Q_MAX = 256
 GITHUB_SEARCH_PER_PAGE = 30
 PROMPT_POOL_FACTOR = 4
+SEARCH_TIMEOUT_BASE_SEC = 600
+SEARCH_TIMEOUT_EXTRA_SEC = 60
+SEARCH_TIMEOUT_RETURN_GRACE_SEC = 45
 # Owner logins whose repos must never appear in discovery search or lists.
 BLOCKED_OWNERS = frozenset({"cirosantilli"})
 
@@ -61,13 +65,8 @@ SKIP_REASON_LABELS = {
     "low_stars": f"Star 不足 {MIN_STARS}",
     "fetch_failed": "无法读取仓库元数据",
     "blocked_owner": "黑名单用户",
+    "demo": "演示或学习项目",
 }
-
-STATUS_ELIGIBLE = "eligible"
-STATUS_SKIPPED = "skipped"
-STATUS_IMPORTED = "imported"
-STATUS_DISMISSED = "dismissed"
-LISTABLE_STATUSES = (STATUS_ELIGIBLE, STATUS_IMPORTED)
 
 _OWNER_REPO_RE = re.compile(
     r"(?:github\.com[/:]|api\.github\.com/repos/)(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)",
@@ -193,6 +192,81 @@ _REASON_MAX = 500
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 _KIND_JSON_RE = re.compile(r"\{[^{}]*\"target_kind\"[^{}]*\}", re.I | re.S)
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.S)
+_DEMO_NAME_TOKENS = frozenset(
+    {
+        "demo",
+        "demos",
+        "demonstration",
+        "example",
+        "examples",
+        "sample",
+        "samples",
+        "tutorial",
+        "tutorials",
+        "playground",
+        "workshop",
+        "homework",
+        "bootcamp",
+        "kata",
+        "katas",
+        "exercise",
+        "exercises",
+        "howto",
+        "walkthrough",
+        "helloworld",
+        "gettingstarted",
+    }
+)
+_DEMO_NAME_AFFIXES = (
+    "-demo",
+    "-demos",
+    "-example",
+    "-examples",
+    "-sample",
+    "-samples",
+    "-tutorial",
+    "-tutorials",
+    "-playground",
+    "-workshop",
+    "-homework",
+    "demo-",
+    "example-",
+    "examples-",
+    "sample-",
+    "samples-",
+    "tutorial-",
+)
+_DEMO_NAME_MARKERS = (
+    "hello-world",
+    "hello_world",
+    "getting-started",
+    "getting_started",
+)
+_DEMO_TOPICS = frozenset(
+    {
+        "tutorial",
+        "tutorials",
+        "learning",
+        "education",
+        "course",
+        "demo",
+        "sample",
+        "examples",
+        "playground",
+        "workshop",
+        "homework",
+        "bootcamp",
+    }
+)
+_DEMO_DESC_RE = re.compile(
+    r"(official\s+demo|sample\s+app(?:lication)?|demo\s+app(?:lication)?|"
+    r"demo\s+project|example\s+project|sample\s+project|"
+    r"for\s+educat(?:ion|ional)\b|educational\s+purposes?|"
+    r"learning\s+(?:project|repo|repository)|tutorial\s+project|"
+    r"this\s+(?:repo(?:sitory)?|project)\s+is\s+a\s+(?:demo|tutorial|sample)|"
+    r"官方演示|演示项目|教学项目|示例项目|学习用项目|教程项目)",
+    re.I,
+)
 
 
 def clamp_search_limit(raw: Any) -> int:
@@ -205,6 +279,86 @@ def clamp_search_limit(raw: Any) -> int:
 
 def clamp_user_prompt(raw: Any) -> str:
     return str(raw or "").strip()[:MAX_USER_PROMPT_LEN]
+
+
+def search_timeout_sec(limit: int | None = None) -> int:
+    """Wall-clock budget for one discovery search. 600s base; +60s per repo over 5."""
+    n = clamp_search_limit(limit)
+    extra = max(0, n - DEFAULT_SEARCH_LIMIT) * SEARCH_TIMEOUT_EXTRA_SEC
+    return SEARCH_TIMEOUT_BASE_SEC + extra
+
+
+def search_timeout_message(limit: int | None = None, *, budget_sec: int | None = None) -> str:
+    sec = int(budget_sec if budget_sec is not None else search_timeout_sec(limit))
+    return (
+        f"搜索超时（限时 {sec} 秒）。已找到的仓库仍会保留在列表中。"
+        "可减少每次搜索数量后再试。"
+    )
+
+
+class _SearchDeadline:
+    def __init__(self, limit: int):
+        self.limit = clamp_search_limit(limit)
+        self.budget_sec = search_timeout_sec(self.limit)
+        grace = min(SEARCH_TIMEOUT_RETURN_GRACE_SEC, max(5, self.budget_sec // 20))
+        self._deadline = time.monotonic() + max(1.0, self.budget_sec - grace)
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self._deadline
+
+    def timeout_error(self) -> str:
+        return search_timeout_message(self.limit, budget_sec=self.budget_sec)
+
+
+def _make_search_deadline(limit: int) -> _SearchDeadline:
+    return _SearchDeadline(limit)
+
+
+def _repo_short_name(full_name: str = "", repo: dict[str, Any] | None = None) -> str:
+    text = str(full_name or "").strip().strip("/")
+    if "/" in text:
+        return text.rsplit("/", 1)[-1].lower().removesuffix(".git")
+    if repo:
+        name = str(repo.get("name") or "").strip()
+        if name:
+            return name.lower().removesuffix(".git")
+    return text.lower().removesuffix(".git")
+
+
+def _name_looks_like_demo(name: str) -> bool:
+    raw = (name or "").strip().lower()
+    if not raw:
+        return False
+    compact = raw.replace("-", "").replace("_", "").replace(".", "")
+    if compact in _DEMO_NAME_TOKENS:
+        return True
+    if any(marker in raw for marker in _DEMO_NAME_MARKERS):
+        return True
+    if any(raw.endswith(affix) or raw.startswith(affix) for affix in _DEMO_NAME_AFFIXES):
+        return True
+    tokens = [tok for tok in re.split(r"[-_.]+", raw) if tok]
+    return any(tok in _DEMO_NAME_TOKENS for tok in tokens)
+
+
+def demo_skip_reason(
+    repo: dict[str, Any] | None = None,
+    *,
+    full_name: str = "",
+    topics: list[str] | None = None,
+) -> str | None:
+    """Return 'demo' when the repo looks like an official demo / tutorial / learning project."""
+    payload = repo if isinstance(repo, dict) else {}
+    name = _repo_short_name(full_name or str(payload.get("full_name") or ""), payload)
+    if _name_looks_like_demo(name):
+        return "demo"
+    topic_list = topics if topics is not None else _topics_from_repo(payload)
+    for topic in topic_list:
+        if str(topic or "").lower().strip() in _DEMO_TOPICS:
+            return "demo"
+    desc = str(payload.get("description") or "")
+    if desc and _DEMO_DESC_RE.search(desc):
+        return "demo"
+    return None
 
 
 def repo_owner(full_name: str | None) -> str:
@@ -635,7 +789,7 @@ def _repo_skip_reason(
     stars = int(repo.get("stargazers_count") or 0)
     if stars < MIN_STARS:
         return "low_stars"
-    return None
+    return demo_skip_reason(repo, full_name=full_name)
 
 
 def _fallback_search_queries(prompt: str) -> list[str]:
@@ -951,6 +1105,19 @@ def _store_eligible_from_repo(
         )
         return row, STATUS_SKIPPED
     topics = extra_topics if extra_topics else _topics_from_repo(repo)
+    demo = demo_skip_reason(repo, full_name=full_name, topics=topics)
+    if demo:
+        row = _store_from_repo(
+            db,
+            repo=repo,
+            full_name=full_name,
+            status=STATUS_SKIPPED,
+            skip_reason=demo,
+            target_kind_reason=_skip_reason_label(demo),
+            ghsa_id=ghsa_id,
+            ghsa_url=ghsa_url,
+        )
+        return row, STATUS_SKIPPED
     description = str(repo.get("description") or "") or None
     language = str(repo.get("language") or "") or None
     kind, reason = resolve_discovered_target_kind(
@@ -1056,22 +1223,30 @@ def _search_fail(
     error: str,
     scanned_advisories: int = 0,
     scanned_repos: int = 0,
+    skipped_seen: int = 0,
     pages: int = 0,
     authenticated: bool,
     warning: str | None,
     prompt: str | None = None,
+    added: list[GithubCandidate] | None = None,
+    timed_out: bool = False,
+    limit: int | None = None,
 ) -> dict[str, Any]:
+    rows = added or []
     return {
         "ok": False,
         "error": error,
-        "added": 0,
-        "items": [],
+        "added": len(rows),
+        "items": [candidate_to_dict(row) for row in rows],
         "scanned_advisories": scanned_advisories,
         "scanned_repos": scanned_repos,
+        "skipped_seen": skipped_seen,
         "pages": pages,
         "authenticated": authenticated,
         "warning": warning,
         "prompt": prompt,
+        "timed_out": timed_out,
+        "limit": clamp_search_limit(limit) if limit is not None else DEFAULT_SEARCH_LIMIT,
     }
 
 
@@ -1100,7 +1275,35 @@ def _search_ok(
         "warning": warning,
         "limit": limit,
         "prompt": prompt,
+        "timed_out": False,
     }
+
+
+def _timeout_result(
+    deadline: _SearchDeadline,
+    *,
+    added: list[GithubCandidate],
+    scanned_advisories: int = 0,
+    scanned_repos: int = 0,
+    skipped_seen: int = 0,
+    pages: int = 0,
+    authenticated: bool,
+    warning: str | None,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    return _search_fail(
+        error=deadline.timeout_error(),
+        added=added,
+        timed_out=True,
+        scanned_advisories=scanned_advisories,
+        scanned_repos=scanned_repos,
+        skipped_seen=skipped_seen,
+        pages=pages,
+        authenticated=authenticated,
+        warning=warning,
+        prompt=prompt,
+        limit=deadline.limit,
+    )
 
 
 def _search_github_repos(
@@ -1162,6 +1365,19 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
     warning: str | None = None
     if not authenticated:
         warning = "未配置 GitHub PAT，匿名额度较低；建议在设置页配置后再搜索"
+    deadline = _make_search_deadline(want)
+
+    def timed_out() -> dict[str, Any]:
+        return _timeout_result(
+            deadline,
+            added=added,
+            scanned_advisories=scanned_advisories,
+            scanned_repos=scanned_repos,
+            skipped_seen=skipped_seen,
+            pages=pages,
+            authenticated=authenticated,
+            warning=warning,
+        )
 
     limiter = _GitHubRateLimiter()
     with SessionLocal() as db:
@@ -1171,12 +1387,18 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
         }
         imported_names = _imported_full_names(db)
         seen_names |= imported_names
+        if deadline.expired():
+            return timed_out()
 
         try:
             with http_client(timeout=45.0) as client:
                 for batch in _iter_ghsa_pages(client, limiter, max_pages=MAX_GHSA_PAGES):
+                    if deadline.expired():
+                        return timed_out()
                     pages += 1
                     for adv in batch:
+                        if deadline.expired():
+                            return timed_out()
                         if len(added) >= want:
                             break
                         scanned_advisories += 1
@@ -1250,6 +1472,22 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
                         topics = _topics_from_repo(repo)
                         if not topics:
                             topics = _fetch_topics(client, limiter, full_name)
+                        if topics:
+                            repo = {**repo, "topics": topics}
+                            skip = _repo_skip_reason(repo, cutoff, full_name=full_name)
+                            if skip:
+                                _store_from_repo(
+                                    db,
+                                    repo=repo,
+                                    full_name=full_name,
+                                    status=STATUS_SKIPPED,
+                                    skip_reason=skip,
+                                    target_kind_reason=_skip_reason_label(skip),
+                                    ghsa_id=ghsa_id,
+                                    ghsa_url=ghsa_url,
+                                )
+                                db.commit()
+                                continue
                         row, status = _store_eligible_from_repo(
                             db,
                             repo=repo,
@@ -1268,22 +1506,28 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
             db.rollback()
             return _search_fail(
                 error=str(exc),
+                added=added,
                 scanned_advisories=scanned_advisories,
                 scanned_repos=scanned_repos,
+                skipped_seen=skipped_seen,
                 pages=pages,
                 authenticated=authenticated,
                 warning=warning,
+                limit=want,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("github discover search failed")
             db.rollback()
             return _search_fail(
                 error=str(exc),
+                added=added,
                 scanned_advisories=scanned_advisories,
                 scanned_repos=scanned_repos,
+                skipped_seen=skipped_seen,
                 pages=pages,
                 authenticated=authenticated,
                 warning=warning,
+                limit=want,
             )
 
         return _search_ok(
@@ -1310,6 +1554,19 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
     warning: str | None = None
     if not authenticated:
         warning = "未配置 GitHub PAT，匿名额度较低；建议在设置页配置后再搜索"
+    deadline = _make_search_deadline(want)
+
+    def timed_out() -> dict[str, Any]:
+        return _timeout_result(
+            deadline,
+            added=added,
+            scanned_repos=scanned_repos,
+            skipped_seen=skipped_seen,
+            pages=pages,
+            authenticated=authenticated,
+            warning=warning,
+            prompt=prompt,
+        )
 
     queries = [
         fit_search_query(q, cutoff_date=cutoff_date)
@@ -1318,6 +1575,8 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
     queries = [q for q in queries if q]
     if not queries:
         queries = [fit_search_query("", cutoff_date=cutoff_date)]
+    if deadline.expired():
+        return timed_out()
 
     search_limiter = _GitHubRateLimiter(window_seconds=60.0)
     rest_limiter = _GitHubRateLimiter()
@@ -1336,11 +1595,15 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
         try:
             with http_client(timeout=45.0) as client:
                 for query in queries:
+                    if deadline.expired():
+                        return timed_out()
                     if len(pool) >= pool_cap:
                         break
                     pages += 1
                     hits = _search_github_repos(client, search_limiter, query)
                     for repo in hits:
+                        if deadline.expired():
+                            return timed_out()
                         full_name = str(repo.get("full_name") or "").strip()
                         if not full_name:
                             continue
@@ -1365,13 +1628,28 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
                         topics = _topics_from_repo(repo)
                         if not topics:
                             topics = _fetch_topics(client, rest_limiter, full_name)
-                            if topics:
-                                repo = {**repo, "topics": topics}
+                        if topics:
+                            repo = {**repo, "topics": topics}
+                            skip = _repo_skip_reason(repo, cutoff, full_name=full_name)
+                            if skip:
+                                seen_names.add(key)
+                                _store_from_repo(
+                                    db,
+                                    repo=repo,
+                                    full_name=full_name,
+                                    status=STATUS_SKIPPED,
+                                    skip_reason=skip,
+                                    target_kind_reason=_skip_reason_label(skip),
+                                )
+                                db.commit()
+                                continue
                         pool.append(repo)
                         pool_names.add(key)
                         if len(pool) >= pool_cap:
                             break
 
+                if deadline.expired():
+                    return timed_out()
                 keep_names = match_repos_to_prompt(prompt, pool, limit=want)
                 by_key = {
                     str(r.get("full_name") or "").lower(): r
@@ -1379,6 +1657,8 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
                     if r.get("full_name")
                 }
                 for name in keep_names:
+                    if deadline.expired():
+                        return timed_out()
                     if len(added) >= want:
                         break
                     repo = by_key.get(name.lower())
@@ -1402,22 +1682,28 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
             db.rollback()
             return _search_fail(
                 error=str(exc),
+                added=added,
                 scanned_repos=scanned_repos,
+                skipped_seen=skipped_seen,
                 pages=pages,
                 authenticated=authenticated,
                 warning=warning,
                 prompt=prompt,
+                limit=want,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("github discover prompt search failed")
             db.rollback()
             return _search_fail(
                 error=str(exc),
+                added=added,
                 scanned_repos=scanned_repos,
+                skipped_seen=skipped_seen,
                 pages=pages,
                 authenticated=authenticated,
                 warning=warning,
                 prompt=prompt,
+                limit=want,
             )
 
         if warning is None and not added:

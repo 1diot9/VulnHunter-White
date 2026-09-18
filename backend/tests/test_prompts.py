@@ -993,9 +993,11 @@ def test_discover_search_prompt_exists():
     search = load_prompt("discover-search.md")
     assert "queries" in search
     assert "最高优先级" in search
+    assert "demo" in search
     match = load_prompt("discover-match.md")
     assert "keep" in match
     assert "最高优先级" in match
+    assert "演示" in match
 
 
 def test_vuln_dedup_prompt_checks_latest_source():

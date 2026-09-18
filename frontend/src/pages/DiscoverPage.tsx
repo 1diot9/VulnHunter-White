@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2Icon, PlusIcon, RefreshCwIcon, StarIcon, Trash2Icon } from 'lucide-react'
-import { api, formatApiError, type GithubCandidate } from '../api'
+import { api, clampDiscoverLimit, discoverSearchTimeoutSec, formatApiError, isTimeoutError, type GithubCandidate } from '../api'
 import { CreateProjectDialog } from '../components/CreateProjectDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,15 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { formatDateTime, formatTargetKind, type TargetKind } from '@/lib/utils'
 import { useI18n } from '@/i18n'
+import {
+  getDiscoverSearchJob,
+  isDiscoverSearchRunning,
+  readDiscoverStatus,
+  startDiscoverSearch,
+  subscribeDiscoverSearch,
+  writeDiscoverStatus,
+  type DiscoverSearchOutcome,
+} from '../lib/discoverSearch'
 import { readJsonCache, writeJsonCache } from '../lib/listCache'
 
 const DEFAULT_LIMIT = 5
@@ -123,20 +132,22 @@ export default function DiscoverPage() {
   const { t } = useI18n()
   const cached = readJsonCache<{ items: GithubCandidate[]; total: number }>(DISCOVER_CACHE_KEY)
   const cachedPrompt = readJsonCache<string>(DISCOVER_PROMPT_KEY)
+  const cachedStatus = readDiscoverStatus()
   const [items, setItems] = useState<GithubCandidate[]>(cached?.items ?? [])
   const [total, setTotal] = useState(cached?.total ?? 0)
-  const [limit, setLimit] = useState(DEFAULT_LIMIT)
+  const [limit, setLimit] = useState(cachedStatus.limit || DEFAULT_LIMIT)
   const [prompt, setPrompt] = useState(typeof cachedPrompt === 'string' ? cachedPrompt : '')
   const [loading, setLoading] = useState(!cached)
-  const [searching, setSearching] = useState(false)
+  const [searching, setSearching] = useState(isDiscoverSearchRunning() || cachedStatus.searching)
   const [dismissingId, setDismissingId] = useState<number | null>(null)
   const [dismissingAll, setDismissingAll] = useState(false)
-  const [error, setError] = useState('')
-  const [warning, setWarning] = useState('')
-  const [lastAdded, setLastAdded] = useState<number | null>(null)
+  const [error, setError] = useState(cachedStatus.error)
+  const [warning, setWarning] = useState(cachedStatus.warning)
+  const [lastAdded, setLastAdded] = useState<number | null>(cachedStatus.lastAdded)
   const [createOpen, setCreateOpen] = useState(false)
   const [prefillUrl, setPrefillUrl] = useState('')
   const [prefillKind, setPrefillKind] = useState<TargetKind | undefined>(undefined)
+  const timeoutSec = discoverSearchTimeoutSec(limit)
 
   const { pending, created } = useMemo(() => {
     const pending: GithubCandidate[] = []
@@ -156,34 +167,97 @@ export default function DiscoverPage() {
         setItems(data.items)
         setTotal(data.total)
         writeJsonCache(DISCOVER_CACHE_KEY, { items: data.items, total: data.total })
-        setError('')
       })
-      .catch((e) => setError(formatApiError(e)))
+      .catch((e) => {
+        const msg = formatApiError(e)
+        setError(msg)
+        writeDiscoverStatus({ error: msg })
+      })
       .finally(() => {
         if (showLoading) setLoading(false)
       })
   }, [])
 
+  const applySearchOutcome = useCallback(
+    async (outcome: DiscoverSearchOutcome, searchLimit: number) => {
+      const timeoutMsg = t('discover.timeout', { sec: discoverSearchTimeoutSec(searchLimit) })
+      let nextError = ''
+      let nextWarning = ''
+      let nextAdded: number | null = null
+      if (outcome.error != null) {
+        nextError = isTimeoutError(outcome.error) ? timeoutMsg : formatApiError(outcome.error, timeoutMsg)
+      } else if (outcome.result) {
+        nextAdded = outcome.result.added
+        if (outcome.result.timed_out || outcome.result.error) {
+          nextError = outcome.result.error || timeoutMsg
+        } else if (outcome.result.warning) {
+          nextWarning = outcome.result.warning
+        }
+      }
+      setError(nextError)
+      setWarning(nextWarning)
+      setLastAdded(nextAdded)
+      writeDiscoverStatus({
+        error: nextError,
+        warning: nextWarning,
+        lastAdded: nextAdded,
+        searching: false,
+        limit: searchLimit,
+      })
+      await load(false)
+    },
+    [load, t],
+  )
+
   useEffect(() => {
     void load(true)
   }, [load])
 
+  useEffect(() => {
+    return subscribeDiscoverSearch(() => {
+      setSearching(isDiscoverSearchRunning())
+    })
+  }, [])
+
+  useEffect(() => {
+    const current = getDiscoverSearchJob()
+    if (!current) {
+      if (!isDiscoverSearchRunning()) {
+        writeDiscoverStatus({ searching: false })
+        setSearching(false)
+      }
+      return
+    }
+    setSearching(true)
+    let cancelled = false
+    void current.promise.then(async (outcome) => {
+      if (cancelled) return
+      await applySearchOutcome(outcome, current.limit)
+      if (!cancelled) setSearching(isDiscoverSearchRunning())
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [applySearchOutcome])
+
   async function onSearch() {
+    if (isDiscoverSearchRunning()) return
+    const n = clampDiscoverLimit(limit)
+    setLimit(n)
     setSearching(true)
     setError('')
     setWarning('')
     setLastAdded(null)
-    try {
-      const n = Math.max(1, Math.min(20, Number(limit) || DEFAULT_LIMIT))
-      const result = await api.searchDiscoveries(n, prompt)
-      setLastAdded(result.added)
-      if (result.warning) setWarning(result.warning)
-      await load(false)
-    } catch (e) {
-      setError(formatApiError(e))
-    } finally {
-      setSearching(false)
-    }
+    writeDiscoverStatus({
+      error: '',
+      warning: '',
+      lastAdded: null,
+      searching: true,
+      limit: n,
+    })
+    const outcome = await startDiscoverSearch(n, prompt)
+    await applySearchOutcome(outcome, n)
+    setSearching(isDiscoverSearchRunning())
   }
 
   function openCreate(c: GithubCandidate) {
@@ -267,26 +341,33 @@ export default function DiscoverPage() {
             {prompt.length}/{PROMPT_MAX}
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
-            <Label htmlFor="discover-limit" className="text-xs text-muted-foreground">
-              {t('discover.limit')}
-            </Label>
-            <Input
-              id="discover-limit"
-              type="number"
-              min={1}
-              max={20}
-              className="w-24"
-              value={limit}
-              disabled={searching}
-              onChange={(e) => setLimit(Number(e.target.value) || DEFAULT_LIMIT)}
-            />
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="discover-limit" className="text-xs text-muted-foreground">
+                {t('discover.limit')}
+              </Label>
+              <Input
+                id="discover-limit"
+                type="number"
+                min={1}
+                max={20}
+                className="w-24"
+                value={limit}
+                disabled={searching}
+                onChange={(e) => {
+                  const next = clampDiscoverLimit(Number(e.target.value) || DEFAULT_LIMIT)
+                  setLimit(next)
+                  writeDiscoverStatus({ limit: next })
+                }}
+              />
+            </div>
+            <Button disabled={searching || dismissingAll} onClick={() => void onSearch()} className="gap-2">
+              {searching ? <Loader2Icon className="size-4 animate-spin" /> : <RefreshCwIcon className="size-4" />}
+              {searching ? t('discover.searching') : t('discover.search')}
+            </Button>
           </div>
-          <Button disabled={searching || dismissingAll} onClick={() => void onSearch()} className="gap-2">
-            {searching ? <Loader2Icon className="size-4 animate-spin" /> : <RefreshCwIcon className="size-4" />}
-            {searching ? t('discover.searching') : t('discover.search')}
-          </Button>
+          <p className="text-xs text-muted-foreground">{t('discover.timeoutHint', { sec: timeoutSec })}</p>
         </div>
       </div>
 

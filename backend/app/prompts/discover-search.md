@@ -8,6 +8,7 @@
 - 最多 3 条 `queries`；每条尽量短：主题关键词，必要时加 `language:` 或 `topic:`。
 - 不要写 `fork:` / `archived:` / `is:` / `AND` / `OR` / `NOT`；`stars` 与 `pushed` 由系统补上。
 - 不要用布尔组合。信息不足时用用户原文里的关键词。
+- 不要主动加上 demo / tutorial / example / sample / learning 等词；系统会排除官方演示、示例工程和学习用项目。
 
 ## 输出
 

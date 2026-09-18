@@ -999,6 +999,7 @@ class GithubDiscoverSearchOut(BaseModel):
     warning: str | None = None
     limit: int = 5
     prompt: str | None = None
+    timed_out: bool = False
 
 
 class GithubDiscoverDismissAllOut(BaseModel):
