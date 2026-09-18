@@ -2,6 +2,8 @@
 
 [中文](README.md) | **English**
 
+Repository: [https://github.com/1diot9/VulnHunter-White](https://github.com/1diot9/VulnHunter-White)
+
 Special thanks to [DeepAudit](https://github.com/lintsinghua/DeepAudit) and [AutoCVE](https://github.com/larlarua/AutoCVE) for many ideas, especially in early development.
 
 LLM-based white-box vulnerability mining agent. Four mining paths (heuristic, fast-scan sink backtrace, historical-vuln bypass, unconstrained) plus Docker lab / local harness / static verify, with optional Internet reproduction and attack-chain stitching.
@@ -43,6 +45,7 @@ On Windows use `start.cmd` / `stop.cmd` at the repo root; on **Linux / macOS** u
 - [Capability overview](#capability-overview)
 - [Repository layout](#repository-layout)
 - [Design document](#design-document)
+- [License](#license)
 
 ## Features
 
@@ -162,8 +165,8 @@ On Linux / macOS use `python3 --version` for the first line. On Windows, `python
 ### 1. Get the source
 
 ```bat
-git clone <this-repo-URL>
-cd VulnHunter
+git clone https://github.com/1diot9/VulnHunter-White.git
+cd VulnHunter-White
 ```
 
 ### 2. Backend Python deps (`start.cmd` / `start.sh` do this on first run)
@@ -560,3 +563,9 @@ Phase details, tool ACL, fault tolerance, and scoring: [`docs/DESIGN.md`](docs/D
 ## Design document
 
 [`docs/DESIGN.md`](docs/DESIGN.md) (Chinese) covers features and UI, white-box agent design, per-phase tools and orchestration, fault recovery, novelty (weighted queues, historical-vuln bypass, multi-layer verify, etc.), mining results and known gaps, and scoring rules.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 [1diot9](https://github.com/1diot9)

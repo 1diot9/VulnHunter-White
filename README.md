@@ -2,6 +2,8 @@
 
 **中文** | [English](README_EN.md)
 
+仓库：[https://github.com/1diot9/VulnHunter-White](https://github.com/1diot9/VulnHunter-White)
+
 特别感谢 [DeepAudit](https://github.com/lintsinghua/DeepAudit) 和 [AutoCVE](https://github.com/larlarua/AutoCVE) 这两个项目，给本项目提供了很多思路，尤其是前期开发时。
 
 基于 LLM 的白盒漏洞挖掘 Agent。四条挖掘路径（启发式、快速扫描 Sink 回溯、历史漏洞绕过、无约束）+ Docker 靶场 / 局部 harness / 静态验证，支持互联网复现与攻击链串联。
@@ -43,6 +45,7 @@ Windows 用根目录 `start.cmd` / `stop.cmd`；**Linux / macOS** 用 `sh start.
 - [能力概览](#能力概览)
 - [仓库目录](#目录)
 - [设计文档](#设计文档)
+- [许可证](#许可证)
 
 ## 功能简介
 
@@ -130,7 +133,7 @@ VulnHunter-White 的特点：
 
 
 
-其他师傅的反馈：
+其他师傅的成果反馈：
 
 | Github主页                   | 仓库名称     | 漏洞编号            | 漏洞类型     | CVSS |
 | ---------------------------- | ------------ | ------------------- | ------------ | ---- |
@@ -172,8 +175,8 @@ Linux / macOS 把第一行换成 `python3 --version`。Windows 上 `python` 应�
 ### 1. 拿到源码
 
 ```bat
-git clone <本仓库 URL>
-cd VulnHunter
+git clone https://github.com/1diot9/VulnHunter-White.git
+cd VulnHunter-White
 ```
 
 ### 2. 后端 Python 依赖（`start.cmd` / `start.sh` 首次会做）
@@ -570,4 +573,10 @@ pytest
 ## 设计文档
 
 [`docs/DESIGN.md`](docs/DESIGN.md) 包含：功能与界面说明、白盒 Agent 设计要点、各阶段工具与编排策略、容错恢复、创新点（定权排队、历史漏洞绕过、多层验证等）、挖掘成果与已知不足、漏洞评级规则。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。
+
+Copyright 2026 [1diot9](https://github.com/1diot9)
 
