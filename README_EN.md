@@ -54,7 +54,7 @@ VulnHunter-White:
 - Optional **FOFA Internet verification** and **human-in-the-loop** confirmation
 - Optional **attack-chain stitching** after mining and review
 - Project detail can dedupe selected findings against historical vulns and current source (already public or already fixed)
-- Settings can configure an **LLM provider pool**; each project can cap token usage; **discover repos** from public GHSA
+- Settings can configure an **LLM provider pool**; each project can cap token usage; **discover repos** by prompt or public GHSA
 - Findings include a **findings calendar**, Chinese reports / Advisory / CVE JSON
 
 Create-project page: start an audit from a GitHub URL or a zip upload; you can set a max token budget.
@@ -95,7 +95,7 @@ Settings: Chat Completions / OpenAI Responses / Anthropic Messages, custom minin
 
 ![Settings](assets/1787235801542-2f2bbf74-a406-4b01-9873-4ea0ca2114ef.png)
 
-Discover-repos page: filter public GHSA for auditable repositories; already-created vs creatable are listed separately.
+Discover-repos page: optional prompt-first GitHub search, or public GHSA filtering; already-created vs creatable are listed separately, with per-item or one-click remove.
 
 ## Showcase
 
@@ -530,7 +530,7 @@ Phase details, tool ACL, fault tolerance, and scoring: [`docs/DESIGN.md`](docs/D
 | Area | Content |
 | --- | --- |
 | Audit scope | Any web project (language-agnostic) |
-| Project and mining config | At create time pick bounty (default) / full / custom. Enable mining paths: heuristic (on by default; lite mode only weight-100 files), fast scan (off), historical-vuln bypass (off), unconstrained (off); at least one. Each project can pick a model or inherit Settings; optional token cap; optional pasted/uploaded Worker hint. Discover-repos filters public GHSA. GitHub projects sync upstream on resume from pause (list/detail show the fetched commit on success; on failure the current snapshot is kept); zip projects are unchanged |
+| Project and mining config | At create time pick bounty (default) / full / custom. Enable mining paths: heuristic (on by default; lite mode only weight-100 files), fast scan (off), historical-vuln bypass (off), unconstrained (off); at least one. Each project can pick a model or inherit Settings; optional token cap; optional pasted/uploaded Worker hint. Discover-repos can take a user prompt and search GitHub by that intent first, or fall back to public GHSA; candidates can be removed one-by-one or all at once. GitHub projects sync upstream on resume from pause (list/detail show the fetched commit on success; on failure the current snapshot is kept); zip projects are unchanged |
 | Mining paths | Wait for **Recon done**; if Code Intelligence is enabled, also wait for its first build (failure degrades and continues). **Heuristic**: mine by file weight; weight 100 is a user-controlled entry (HTTP, WebSocket / RPC / MQ / callbacks, etc.); lower weights backtrace, control-plane, or thin-scan by role. **Fast scan**: Semgrep → code filter → agent triage → sink backtrace; SAST sinks, while auth / IDOR / business logic still rely on heuristic. **Historical-vuln bypass**: each round tries to bypass a patch or confirm an unpatched issue still works. **Unconstrained**: one Worker, only code map + auth injected; always bounty gates; path ends after Reviewer marks a frontend finding with RCE effect. The project is `completed` only when every enabled path has finished |
 | Code Intelligence | Optional at create, off by default. When on, parallel with Recon. CodeGraph indexes `src/` only; if missing, build installs to `data/tools/codegraph`. Failure degrades to Read/Grep. Source changes mark stale; the user rebuilds. Turning it off deletes that project’s `src/.codegraph/`. Worker / Reviewer get short call-graph queries; tests can open the graph UI |
 | Audit modes | Bounty keeps exploitable high-impact types (stored XSS, 1-click CSRF, hardcoded secrets with server-side impact, etc.; ordinary CSRF / frontend AES obfuscation / publicly shipped keys are dropped). Full keeps lower-impact items (CORS, reflected XSS, missing rate limits, etc.). Custom has no bounty hard gates — prompts only. Harmless/restricted file ops (read-only specific extensions or public non-sensitive dirs, harmless uploads) and unguessable object keys (UUIDs / filenames; share links, email, preview URLs do not count as obtainable) are dropped in mining and review. Settings manage named custom prompts; selecting one snapshots the text onto the project |

@@ -8,12 +8,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { formatDateTime, formatTargetKind, type TargetKind } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { readJsonCache, writeJsonCache } from '../lib/listCache'
 
 const DEFAULT_LIMIT = 5
 const DISCOVER_CACHE_KEY = 'vh:discoveries'
+const DISCOVER_PROMPT_KEY = 'vh:discover-prompt'
+const PROMPT_MAX = 2000
 
 function kindBadgeClass(kind: string): string {
   if (kind === 'library') return 'border-sky-500/40 bg-sky-500/10 text-sky-200'
@@ -119,12 +122,15 @@ function CandidateCard({
 export default function DiscoverPage() {
   const { t } = useI18n()
   const cached = readJsonCache<{ items: GithubCandidate[]; total: number }>(DISCOVER_CACHE_KEY)
+  const cachedPrompt = readJsonCache<string>(DISCOVER_PROMPT_KEY)
   const [items, setItems] = useState<GithubCandidate[]>(cached?.items ?? [])
   const [total, setTotal] = useState(cached?.total ?? 0)
   const [limit, setLimit] = useState(DEFAULT_LIMIT)
+  const [prompt, setPrompt] = useState(typeof cachedPrompt === 'string' ? cachedPrompt : '')
   const [loading, setLoading] = useState(!cached)
   const [searching, setSearching] = useState(false)
   const [dismissingId, setDismissingId] = useState<number | null>(null)
+  const [dismissingAll, setDismissingAll] = useState(false)
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
   const [lastAdded, setLastAdded] = useState<number | null>(null)
@@ -169,7 +175,7 @@ export default function DiscoverPage() {
     setLastAdded(null)
     try {
       const n = Math.max(1, Math.min(20, Number(limit) || DEFAULT_LIMIT))
-      const result = await api.searchDiscoveries(n)
+      const result = await api.searchDiscoveries(n, prompt)
       setLastAdded(result.added)
       if (result.warning) setWarning(result.warning)
       await load(false)
@@ -188,7 +194,7 @@ export default function DiscoverPage() {
   }
 
   async function onDismiss(c: GithubCandidate) {
-    if (dismissingId != null) return
+    if (dismissingId != null || dismissingAll) return
     setDismissingId(c.id)
     setError('')
     try {
@@ -201,6 +207,21 @@ export default function DiscoverPage() {
     }
   }
 
+  async function onDismissAll() {
+    if (dismissingAll || searching || pending.length === 0) return
+    if (!window.confirm(t('discover.dismissAllConfirm', { n: pending.length }))) return
+    setDismissingAll(true)
+    setError('')
+    try {
+      await api.dismissAllDiscoveries()
+      await load(false)
+    } catch (e) {
+      setError(formatApiError(e))
+    } finally {
+      setDismissingAll(false)
+    }
+  }
+
   function renderList(list: GithubCandidate[], imported: boolean) {
     return (
       <div className="grid gap-3">
@@ -209,8 +230,8 @@ export default function DiscoverPage() {
             key={c.id}
             candidate={c}
             imported={imported}
-            busy={dismissingId === c.id}
-            searching={searching}
+            busy={dismissingAll || dismissingId === c.id}
+            searching={searching || dismissingAll}
             onCreate={openCreate}
             onDismiss={(item) => void onDismiss(item)}
           />
@@ -221,10 +242,30 @@ export default function DiscoverPage() {
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="space-y-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold">{t('nav.discover')}</h1>
           <p className="mt-1 text-sm text-slate-400">{t('discover.subtitle')}</p>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="discover-prompt">{t('discover.prompt')}</Label>
+          <p className="text-xs leading-relaxed text-muted-foreground">{t('discover.promptHint')}</p>
+          <Textarea
+            id="discover-prompt"
+            rows={3}
+            maxLength={PROMPT_MAX}
+            value={prompt}
+            disabled={searching}
+            placeholder={t('discover.promptPlaceholder')}
+            onChange={(e) => {
+              const next = e.target.value
+              setPrompt(next)
+              writeJsonCache(DISCOVER_PROMPT_KEY, next)
+            }}
+          />
+          <p className="text-xs text-muted-foreground">
+            {prompt.length}/{PROMPT_MAX}
+          </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
@@ -242,7 +283,7 @@ export default function DiscoverPage() {
               onChange={(e) => setLimit(Number(e.target.value) || DEFAULT_LIMIT)}
             />
           </div>
-          <Button disabled={searching} onClick={() => void onSearch()} className="gap-2">
+          <Button disabled={searching || dismissingAll} onClick={() => void onSearch()} className="gap-2">
             {searching ? <Loader2Icon className="size-4 animate-spin" /> : <RefreshCwIcon className="size-4" />}
             {searching ? t('discover.searching') : t('discover.search')}
           </Button>
@@ -291,11 +332,26 @@ export default function DiscoverPage() {
       ) : (
         <div className="space-y-8">
           <section className="space-y-3" aria-labelledby="discover-pending-heading">
-            <div className="flex items-baseline gap-2">
-              <h2 id="discover-pending-heading" className="text-sm font-medium text-slate-200">
-                {t('discover.pending')}
-              </h2>
-              <span className="text-xs text-muted-foreground">{pending.length}</span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-baseline gap-2">
+                <h2 id="discover-pending-heading" className="text-sm font-medium text-slate-200">
+                  {t('discover.pending')}
+                </h2>
+                <span className="text-xs text-muted-foreground">{pending.length}</span>
+              </div>
+              {pending.length > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 text-muted-foreground hover:text-destructive"
+                  disabled={searching || dismissingAll}
+                  title={t('discover.dismissAllTip')}
+                  onClick={() => void onDismissAll()}
+                >
+                  {dismissingAll ? <Loader2Icon className="size-4 animate-spin" /> : <Trash2Icon className="size-4" />}
+                  {t('discover.dismissAll')}
+                </Button>
+              ) : null}
             </div>
             {pending.length === 0 ? (
               <Card>

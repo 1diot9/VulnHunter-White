@@ -722,6 +722,11 @@ export type GithubDiscoverSearch = {
   authenticated: boolean
   warning: string | null
   limit: number
+  prompt?: string | null
+}
+
+export type GithubDiscoverDismissAll = {
+  dismissed: number
 }
 
 const ACCESS_TOKEN_KEY = 'vulnhunter_access_token'
@@ -924,15 +929,17 @@ export const api = {
     const s = params.toString()
     return request<GithubCandidateList>(`/api/discoveries${s ? `?${s}` : ''}`)
   },
-  searchDiscoveries: (limit = 5) =>
+  searchDiscoveries: (limit = 5, prompt = '') =>
     request<GithubDiscoverSearch>('/api/discoveries/search', {
       method: 'POST',
       timeoutMs: DISCOVER_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit }),
+      body: JSON.stringify({ limit, prompt: prompt.trim() || undefined }),
     }),
   dismissDiscovery: (id: number) =>
     request<GithubCandidate>(`/api/discoveries/${id}`, { method: 'DELETE' }),
+  dismissAllDiscoveries: () =>
+    request<GithubDiscoverDismissAll>('/api/discoveries/dismiss-all', { method: 'POST' }),
   createGithub: (
     source_url: string,
     name = '',

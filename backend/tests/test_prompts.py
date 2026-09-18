@@ -989,6 +989,15 @@ def test_discover_target_kind_prompt_exists():
     assert "一轮" in text
 
 
+def test_discover_search_prompt_exists():
+    search = load_prompt("discover-search.md")
+    assert "queries" in search
+    assert "最高优先级" in search
+    match = load_prompt("discover-match.md")
+    assert "keep" in match
+    assert "最高优先级" in match
+
+
 def test_vuln_dedup_prompt_checks_latest_source():
     text = load_prompt("vuln_dedup.md")
     assert "source_status" in text

@@ -26,6 +26,7 @@ from .ghsa_service import (
     _has_github_token,
     github_get,
 )
+from .github_issues import GITHUB_SEARCH_MAX_OPERATORS, github_search_operator_count
 from .http_client import http_client
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,26 @@ MAX_GHSA_PAGES = 10
 GHSA_PER_PAGE = 100
 ACTIVE_WITHIN_DAYS = 365
 MIN_STARS = 1000
+MAX_USER_PROMPT_LEN = 2000
+MAX_PROMPT_QUERIES = 3
+GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
+GITHUB_SEARCH_Q_MAX = 256
+GITHUB_SEARCH_PER_PAGE = 30
+PROMPT_POOL_FACTOR = 4
+
+STATUS_ELIGIBLE = "eligible"
+STATUS_SKIPPED = "skipped"
+STATUS_IMPORTED = "imported"
+STATUS_DISMISSED = "dismissed"
+LISTABLE_STATUSES = (STATUS_ELIGIBLE, STATUS_IMPORTED)
+SKIP_REASON_LABELS = {
+    "private": "私有仓库",
+    "archived": "已归档",
+    "fork": "Fork 仓库",
+    "inactive": "近一年无提交",
+    "low_stars": f"Star 不足 {MIN_STARS}",
+    "fetch_failed": "无法读取仓库元数据",
+}
 
 STATUS_ELIGIBLE = "eligible"
 STATUS_SKIPPED = "skipped"
@@ -162,10 +183,12 @@ _LIBRARY_TOPICS = frozenset(
 )
 _LLM_CLASSIFY_TIMEOUT = 20.0
 _LLM_CLASSIFY_MAX_TOKENS = 256
+_LLM_SEARCH_MAX_TOKENS = 512
 _LLM_CLASSIFY_MAX_ROUNDS = 1
 _REASON_MAX = 500
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 _KIND_JSON_RE = re.compile(r"\{[^{}]*\"target_kind\"[^{}]*\}", re.I | re.S)
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.S)
 
 
 def clamp_search_limit(raw: Any) -> int:
@@ -174,6 +197,10 @@ def clamp_search_limit(raw: Any) -> int:
     except (TypeError, ValueError):
         n = DEFAULT_SEARCH_LIMIT
     return max(MIN_SEARCH_LIMIT, min(MAX_SEARCH_LIMIT, n))
+
+
+def clamp_user_prompt(raw: Any) -> str:
+    return str(raw or "").strip()[:MAX_USER_PROMPT_LEN]
 
 
 def parse_owner_repo(*candidates: Any) -> str | None:
@@ -274,6 +301,25 @@ def _clip_reason(text: str) -> str:
     return (text or "").strip()[:_REASON_MAX]
 
 
+def _parse_json_object(raw: str | None) -> dict[str, Any] | None:
+    body = (raw or "").strip()
+    if not body:
+        return None
+    body = _JSON_FENCE_RE.sub("", body).strip()
+    candidates = [body]
+    match = _JSON_OBJECT_RE.search(body)
+    if match:
+        candidates.append(match.group(0))
+    for chunk in candidates:
+        try:
+            data = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 def _parse_target_kind_llm_payload(raw: str | None) -> dict[str, Any] | None:
     body = (raw or "").strip()
     if not body:
@@ -315,8 +361,13 @@ def _choice_content(data: dict[str, Any]) -> str:
     return str(content or "").strip()
 
 
-def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
-    """One-shot JSON classification (max 1 round, thinking disabled)."""
+def _ask_target_kind_llm(
+    *,
+    system: str,
+    user: str,
+    max_tokens: int = _LLM_CLASSIFY_MAX_TOKENS,
+) -> str | None:
+    """One-shot JSON call (max 1 round, thinking disabled)."""
     from ..agent.anthropic_compat import (
         anthropic_headers,
         anthropic_message_to_openai,
@@ -367,6 +418,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                         break
             anthropic = is_anthropic_wire(llm.wire_api)
             responses = is_responses_wire(llm.wire_api)
+            token_cap = max(32, int(max_tokens or _LLM_CLASSIFY_MAX_TOKENS))
             if anthropic:
                 url = anthropic_url(llm.base_url)
                 headers = anthropic_headers(llm.api_key)
@@ -374,7 +426,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     model=llm.model,
                     messages=list(messages),
                     temperature=sampling_temperature(llm.model, settings.temperature),
-                    max_tokens=_LLM_CLASSIFY_MAX_TOKENS,
+                    max_tokens=token_cap,
                 )
             elif responses:
                 url = responses_url(llm.base_url)
@@ -383,7 +435,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                     model=llm.model,
                     messages=list(messages),
                     temperature=sampling_temperature(llm.model, settings.temperature),
-                    max_output_tokens=_LLM_CLASSIFY_MAX_TOKENS,
+                    max_output_tokens=token_cap,
                 )
             else:
                 url = llm.base_url.rstrip("/") + "/chat/completions"
@@ -394,7 +446,7 @@ def _ask_target_kind_llm(*, system: str, user: str) -> str | None:
                 body = {
                     "model": llm.model,
                     "messages": messages,
-                    "max_tokens": _LLM_CLASSIFY_MAX_TOKENS,
+                    "max_tokens": token_cap,
                 }
                 prepare_chat_body(body, llm.model, temperature=settings.temperature)
             apply_disable_thinking(body, llm.model, anthropic=anthropic, responses=responses)
@@ -515,6 +567,140 @@ def _parse_github_datetime(raw: Any) -> datetime | None:
         return dt.astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _skip_reason_label(reason: str) -> str:
+    return SKIP_REASON_LABELS.get(reason, reason)
+
+
+def _repo_skip_reason(repo: dict[str, Any], cutoff: datetime) -> str | None:
+    if repo.get("private"):
+        return "private"
+    if repo.get("archived"):
+        return "archived"
+    if repo.get("fork"):
+        return "fork"
+    pushed_at = _parse_github_datetime(repo.get("pushed_at"))
+    if pushed_at is None or pushed_at < cutoff:
+        return "inactive"
+    stars = int(repo.get("stargazers_count") or 0)
+    if stars < MIN_STARS:
+        return "low_stars"
+    return None
+
+
+def _fallback_search_queries(prompt: str) -> list[str]:
+    text = re.sub(r"\s+", " ", (prompt or "").strip())
+    if not text:
+        return []
+    return [text[:120]]
+
+
+def _string_list(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    out: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def plan_github_search_queries(prompt: str) -> list[str]:
+    """Turn the user prompt into GitHub repo search `q` strings."""
+    try:
+        system = load_prompt("discover-search.md").strip()
+    except FileNotFoundError:
+        return _fallback_search_queries(prompt)
+    raw = _ask_target_kind_llm(
+        system=system,
+        user=f"用户提示词：\n{prompt}",
+        max_tokens=_LLM_SEARCH_MAX_TOKENS,
+    )
+    payload = _parse_json_object(raw)
+    queries = _string_list(payload.get("queries") if payload else None)[:MAX_PROMPT_QUERIES]
+    return queries or _fallback_search_queries(prompt)
+
+
+def fit_search_query(query: str, *, cutoff_date: str) -> str:
+    raw = re.sub(r"\s+", " ", (query or "").strip())
+    raw = re.sub(r"\b(?:AND|OR|NOT)\b", " ", raw, flags=re.I)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    qualifiers: list[str] = []
+    lower = raw.lower()
+    if "stars:" not in lower:
+        qualifiers.append(f"stars:>={MIN_STARS}")
+    if "pushed:" not in lower:
+        qualifiers.append(f"pushed:>={cutoff_date}")
+
+    def join(user: str) -> str:
+        parts = [part for part in (user, *qualifiers) if part]
+        return " ".join(parts)[:GITHUB_SEARCH_Q_MAX]
+
+    if not raw:
+        return join("")
+    tokens = [tok for tok in raw.split() if tok]
+    while tokens:
+        q = join(" ".join(tokens))
+        if github_search_operator_count(q) <= GITHUB_SEARCH_MAX_OPERATORS:
+            return q
+        tokens.pop()
+    return join("")
+
+
+def match_repos_to_prompt(
+    prompt: str,
+    repos: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[str]:
+    """Ask the model which search hits match the user prompt. Falls back to original order."""
+    want = clamp_search_limit(limit)
+    names = [str(r.get("full_name") or "") for r in repos if r.get("full_name")]
+    if not names:
+        return []
+    try:
+        system = load_prompt("discover-match.md").strip()
+    except FileNotFoundError:
+        return names[:want]
+    lines: list[str] = []
+    for i, repo in enumerate(repos, 1):
+        name = str(repo.get("full_name") or "")
+        if not name:
+            continue
+        desc = str(repo.get("description") or "").replace("\n", " ")[:160]
+        lang = str(repo.get("language") or "") or "-"
+        stars = int(repo.get("stargazers_count") or 0)
+        lines.append(f"{i}. {name} | {lang} | {stars}★ | {desc or '无描述'}")
+    raw = _ask_target_kind_llm(
+        system=system,
+        user="\n".join(
+            [
+                f"用户提示词：\n{prompt}",
+                f"最多保留 {want} 个。",
+                "候选：",
+                *lines,
+            ]
+        ),
+        max_tokens=_LLM_SEARCH_MAX_TOKENS,
+    )
+    payload = _parse_json_object(raw)
+    if payload is None:
+        return names[:want]
+    allowed = {name.lower(): name for name in names}
+    keep: list[str] = []
+    for item in _string_list(payload.get("keep")):
+        real = allowed.get(item.lower())
+        if real and real not in keep:
+            keep.append(real)
+        if len(keep) >= want:
+            break
+    return keep
 
 
 def _imported_full_names(db) -> set[str]:
@@ -641,6 +827,78 @@ def _store_candidate(
     return existing
 
 
+def _store_from_repo(
+    db,
+    *,
+    repo: dict[str, Any],
+    full_name: str,
+    status: str,
+    skip_reason: str | None = None,
+    target_kind: str = DEFAULT_TARGET_KIND,
+    target_kind_reason: str = "",
+    ghsa_id: str | None = None,
+    ghsa_url: str | None = None,
+    project_id: int | None = None,
+) -> GithubCandidate:
+    return _store_candidate(
+        db,
+        full_name=str(repo.get("full_name") or full_name),
+        html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
+        description=str(repo.get("description") or "") or None,
+        language=str(repo.get("language") or "") or None,
+        stars=int(repo.get("stargazers_count") or 0),
+        pushed_at=_parse_github_datetime(repo.get("pushed_at")),
+        target_kind=target_kind,
+        target_kind_reason=target_kind_reason,
+        ghsa_id=ghsa_id,
+        ghsa_url=ghsa_url,
+        status=status,
+        skip_reason=skip_reason,
+        project_id=project_id,
+    )
+
+
+def _topics_from_repo(repo: dict[str, Any]) -> list[str]:
+    topics = repo.get("topics")
+    if isinstance(topics, list):
+        return [str(t) for t in topics if t]
+    return []
+
+
+def _store_eligible_from_repo(
+    db,
+    *,
+    repo: dict[str, Any],
+    full_name: str,
+    ghsa_id: str | None = None,
+    ghsa_url: str | None = None,
+    extra_topics: list[str] | None = None,
+) -> tuple[GithubCandidate, str]:
+    topics = extra_topics if extra_topics else _topics_from_repo(repo)
+    description = str(repo.get("description") or "") or None
+    language = str(repo.get("language") or "") or None
+    kind, reason = resolve_discovered_target_kind(
+        description=description,
+        topics=topics,
+        full_name=str(repo.get("full_name") or full_name),
+        language=language,
+    )
+    project_id = _project_id_for_full_name(db, full_name)
+    status = STATUS_IMPORTED if project_id else STATUS_ELIGIBLE
+    row = _store_from_repo(
+        db,
+        repo=repo,
+        full_name=full_name,
+        status=status,
+        target_kind=kind,
+        target_kind_reason=reason,
+        ghsa_id=ghsa_id,
+        ghsa_url=ghsa_url,
+        project_id=project_id,
+    )
+    return row, status
+
+
 def _fetch_repo(
     client: httpx.Client,
     limiter: _GitHubRateLimiter,
@@ -717,8 +975,106 @@ def _iter_ghsa_pages(
             break
 
 
-def search_candidates(*, limit: int = DEFAULT_SEARCH_LIMIT) -> dict[str, Any]:
+def _search_fail(
+    *,
+    error: str,
+    scanned_advisories: int = 0,
+    scanned_repos: int = 0,
+    pages: int = 0,
+    authenticated: bool,
+    warning: str | None,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": error,
+        "added": 0,
+        "items": [],
+        "scanned_advisories": scanned_advisories,
+        "scanned_repos": scanned_repos,
+        "pages": pages,
+        "authenticated": authenticated,
+        "warning": warning,
+        "prompt": prompt,
+    }
+
+
+def _search_ok(
+    added: list[GithubCandidate],
+    *,
+    scanned_advisories: int = 0,
+    scanned_repos: int = 0,
+    skipped_seen: int = 0,
+    pages: int = 0,
+    authenticated: bool,
+    warning: str | None,
+    limit: int,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "error": None,
+        "added": len(added),
+        "items": [candidate_to_dict(row) for row in added],
+        "scanned_advisories": scanned_advisories,
+        "scanned_repos": scanned_repos,
+        "skipped_seen": skipped_seen,
+        "pages": pages,
+        "authenticated": authenticated,
+        "warning": warning,
+        "limit": limit,
+        "prompt": prompt,
+    }
+
+
+def _search_github_repos(
+    client: httpx.Client,
+    limiter: _GitHubRateLimiter,
+    query: str,
+    *,
+    per_page: int = GITHUB_SEARCH_PER_PAGE,
+) -> list[dict[str, Any]]:
+    r = github_get(
+        GITHUB_SEARCH_REPOS,
+        params={
+            "q": query,
+            "sort": "stars",
+            "order": "desc",
+            "per_page": max(1, min(100, int(per_page))),
+        },
+        client=client,
+        limiter=limiter,
+    )
+    if r.status_code == 401:
+        raise PermissionError("GitHub API 401：请在设置页配置 GitHub PAT")
+    if r.status_code >= 400:
+        logger.warning(
+            "github repo search HTTP %s: %s",
+            r.status_code,
+            (r.text or "")[:240],
+        )
+        return []
+    data = r.json()
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def search_candidates(
+    *,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    prompt: str | None = None,
+) -> dict[str, Any]:
     """Find up to `limit` new eligible repos and persist them. Returns search summary."""
+    want = clamp_search_limit(limit)
+    user_prompt = clamp_user_prompt(prompt)
+    if user_prompt:
+        return _search_candidates_by_prompt(prompt=user_prompt, limit=want)
+    return _search_candidates_from_ghsa(limit=want)
+
+
+def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
     want = clamp_search_limit(limit)
     cutoff = datetime.now(timezone.utc) - timedelta(days=ACTIVE_WITHIN_DAYS)
     authenticated = _has_github_token()
@@ -773,7 +1129,7 @@ def search_candidates(*, limit: int = DEFAULT_SEARCH_LIMIT) -> dict[str, Any]:
                                 stars=0,
                                 pushed_at=None,
                                 target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason="无法读取仓库元数据",
+                                target_kind_reason=_skip_reason_label("fetch_failed"),
                                 ghsa_id=ghsa_id,
                                 ghsa_url=ghsa_url,
                                 status=STATUS_SKIPPED,
@@ -782,127 +1138,31 @@ def search_candidates(*, limit: int = DEFAULT_SEARCH_LIMIT) -> dict[str, Any]:
                             db.commit()
                             continue
 
-                        if repo.get("private"):
-                            _store_candidate(
+                        skip = _repo_skip_reason(repo, cutoff)
+                        if skip:
+                            _store_from_repo(
                                 db,
+                                repo=repo,
                                 full_name=full_name,
-                                html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                                description=str(repo.get("description") or "") or None,
-                                language=str(repo.get("language") or "") or None,
-                                stars=int(repo.get("stargazers_count") or 0),
-                                pushed_at=_parse_github_datetime(repo.get("pushed_at")),
-                                target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason="私有仓库",
+                                status=STATUS_SKIPPED,
+                                skip_reason=skip,
+                                target_kind_reason=_skip_reason_label(skip),
                                 ghsa_id=ghsa_id,
                                 ghsa_url=ghsa_url,
-                                status=STATUS_SKIPPED,
-                                skip_reason="private",
-                            )
-                            db.commit()
-                            continue
-                        if repo.get("archived"):
-                            _store_candidate(
-                                db,
-                                full_name=full_name,
-                                html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                                description=str(repo.get("description") or "") or None,
-                                language=str(repo.get("language") or "") or None,
-                                stars=int(repo.get("stargazers_count") or 0),
-                                pushed_at=_parse_github_datetime(repo.get("pushed_at")),
-                                target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason="已归档",
-                                ghsa_id=ghsa_id,
-                                ghsa_url=ghsa_url,
-                                status=STATUS_SKIPPED,
-                                skip_reason="archived",
-                            )
-                            db.commit()
-                            continue
-                        if repo.get("fork"):
-                            _store_candidate(
-                                db,
-                                full_name=full_name,
-                                html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                                description=str(repo.get("description") or "") or None,
-                                language=str(repo.get("language") or "") or None,
-                                stars=int(repo.get("stargazers_count") or 0),
-                                pushed_at=_parse_github_datetime(repo.get("pushed_at")),
-                                target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason="Fork 仓库",
-                                ghsa_id=ghsa_id,
-                                ghsa_url=ghsa_url,
-                                status=STATUS_SKIPPED,
-                                skip_reason="fork",
                             )
                             db.commit()
                             continue
 
-                        pushed_at = _parse_github_datetime(repo.get("pushed_at"))
-                        stars = int(repo.get("stargazers_count") or 0)
-                        if pushed_at is None or pushed_at < cutoff:
-                            _store_candidate(
-                                db,
-                                full_name=full_name,
-                                html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                                description=str(repo.get("description") or "") or None,
-                                language=str(repo.get("language") or "") or None,
-                                stars=stars,
-                                pushed_at=pushed_at,
-                                target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason="近一年无提交",
-                                ghsa_id=ghsa_id,
-                                ghsa_url=ghsa_url,
-                                status=STATUS_SKIPPED,
-                                skip_reason="inactive",
-                            )
-                            db.commit()
-                            continue
-                        if stars < MIN_STARS:
-                            _store_candidate(
-                                db,
-                                full_name=full_name,
-                                html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                                description=str(repo.get("description") or "") or None,
-                                language=str(repo.get("language") or "") or None,
-                                stars=stars,
-                                pushed_at=pushed_at,
-                                target_kind=DEFAULT_TARGET_KIND,
-                                target_kind_reason=f"Star 不足 {MIN_STARS}",
-                                ghsa_id=ghsa_id,
-                                ghsa_url=ghsa_url,
-                                status=STATUS_SKIPPED,
-                                skip_reason="low_stars",
-                            )
-                            db.commit()
-                            continue
-
-                        topics = repo.get("topics") if isinstance(repo.get("topics"), list) else None
+                        topics = _topics_from_repo(repo)
                         if not topics:
                             topics = _fetch_topics(client, limiter, full_name)
-                        description = str(repo.get("description") or "") or None
-                        language = str(repo.get("language") or "") or None
-                        kind, reason = resolve_discovered_target_kind(
-                            description=description,
-                            topics=[str(t) for t in (topics or [])],
-                            full_name=full_name,
-                            language=language,
-                        )
-                        project_id = _project_id_for_full_name(db, full_name)
-                        status = STATUS_IMPORTED if project_id else STATUS_ELIGIBLE
-                        row = _store_candidate(
+                        row, status = _store_eligible_from_repo(
                             db,
-                            full_name=str(repo.get("full_name") or full_name),
-                            html_url=str(repo.get("html_url") or f"https://github.com/{full_name}"),
-                            description=description,
-                            language=language,
-                            stars=stars,
-                            pushed_at=pushed_at,
-                            target_kind=kind,
-                            target_kind_reason=reason,
+                            repo=repo,
+                            full_name=full_name,
                             ghsa_id=ghsa_id,
                             ghsa_url=ghsa_url,
-                            status=status,
-                            project_id=project_id,
+                            extra_topics=topics,
                         )
                         db.commit()
                         db.refresh(row)
@@ -912,46 +1172,170 @@ def search_candidates(*, limit: int = DEFAULT_SEARCH_LIMIT) -> dict[str, Any]:
                         break
         except PermissionError as exc:
             db.rollback()
-            return {
-                "ok": False,
-                "error": str(exc),
-                "added": 0,
-                "items": [],
-                "scanned_advisories": scanned_advisories,
-                "scanned_repos": scanned_repos,
-                "pages": pages,
-                "authenticated": authenticated,
-                "warning": warning,
-            }
+            return _search_fail(
+                error=str(exc),
+                scanned_advisories=scanned_advisories,
+                scanned_repos=scanned_repos,
+                pages=pages,
+                authenticated=authenticated,
+                warning=warning,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("github discover search failed")
             db.rollback()
-            return {
-                "ok": False,
-                "error": str(exc),
-                "added": 0,
-                "items": [],
-                "scanned_advisories": scanned_advisories,
-                "scanned_repos": scanned_repos,
-                "pages": pages,
-                "authenticated": authenticated,
-                "warning": warning,
-            }
+            return _search_fail(
+                error=str(exc),
+                scanned_advisories=scanned_advisories,
+                scanned_repos=scanned_repos,
+                pages=pages,
+                authenticated=authenticated,
+                warning=warning,
+            )
 
-        items = [candidate_to_dict(row) for row in added]
-        return {
-            "ok": True,
-            "error": None,
-            "added": len(added),
-            "items": items,
-            "scanned_advisories": scanned_advisories,
-            "scanned_repos": scanned_repos,
-            "skipped_seen": skipped_seen,
-            "pages": pages,
-            "authenticated": authenticated,
-            "warning": warning,
-            "limit": want,
+        return _search_ok(
+            added,
+            scanned_advisories=scanned_advisories,
+            scanned_repos=scanned_repos,
+            skipped_seen=skipped_seen,
+            pages=pages,
+            authenticated=authenticated,
+            warning=warning,
+            limit=want,
+        )
+
+
+def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
+    want = clamp_search_limit(limit)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ACTIVE_WITHIN_DAYS)
+    cutoff_date = cutoff.strftime("%Y-%m-%d")
+    authenticated = _has_github_token()
+    added: list[GithubCandidate] = []
+    scanned_repos = 0
+    skipped_seen = 0
+    pages = 0
+    warning: str | None = None
+    if not authenticated:
+        warning = "未配置 GitHub PAT，匿名额度较低；建议在设置页配置后再搜索"
+
+    queries = [
+        fit_search_query(q, cutoff_date=cutoff_date)
+        for q in plan_github_search_queries(prompt)
+    ]
+    queries = [q for q in queries if q]
+    if not queries:
+        queries = [fit_search_query("", cutoff_date=cutoff_date)]
+
+    search_limiter = _GitHubRateLimiter(window_seconds=60.0)
+    rest_limiter = _GitHubRateLimiter()
+    pool: list[dict[str, Any]] = []
+    pool_names: set[str] = set()
+    pool_cap = max(want * PROMPT_POOL_FACTOR, want)
+
+    with SessionLocal() as db:
+        seen_names = {
+            row.full_name.lower()
+            for row in db.query(GithubCandidate.full_name).all()
         }
+        imported_names = _imported_full_names(db)
+        seen_names |= imported_names
+
+        try:
+            with http_client(timeout=45.0) as client:
+                for query in queries:
+                    if len(pool) >= pool_cap:
+                        break
+                    pages += 1
+                    hits = _search_github_repos(client, search_limiter, query)
+                    for repo in hits:
+                        full_name = str(repo.get("full_name") or "").strip()
+                        if not full_name:
+                            continue
+                        key = full_name.lower()
+                        if key in seen_names or key in pool_names:
+                            skipped_seen += 1
+                            continue
+                        scanned_repos += 1
+                        skip = _repo_skip_reason(repo, cutoff)
+                        if skip:
+                            seen_names.add(key)
+                            _store_from_repo(
+                                db,
+                                repo=repo,
+                                full_name=full_name,
+                                status=STATUS_SKIPPED,
+                                skip_reason=skip,
+                                target_kind_reason=_skip_reason_label(skip),
+                            )
+                            db.commit()
+                            continue
+                        topics = _topics_from_repo(repo)
+                        if not topics:
+                            topics = _fetch_topics(client, rest_limiter, full_name)
+                            if topics:
+                                repo = {**repo, "topics": topics}
+                        pool.append(repo)
+                        pool_names.add(key)
+                        if len(pool) >= pool_cap:
+                            break
+
+                keep_names = match_repos_to_prompt(prompt, pool, limit=want)
+                by_key = {
+                    str(r.get("full_name") or "").lower(): r
+                    for r in pool
+                    if r.get("full_name")
+                }
+                for name in keep_names:
+                    if len(added) >= want:
+                        break
+                    repo = by_key.get(name.lower())
+                    if repo is None:
+                        continue
+                    full_name = str(repo.get("full_name") or name)
+                    row, status = _store_eligible_from_repo(
+                        db,
+                        repo=repo,
+                        full_name=full_name,
+                        extra_topics=_topics_from_repo(repo),
+                    )
+                    db.commit()
+                    db.refresh(row)
+                    seen_names.add(full_name.lower())
+                    if status == STATUS_ELIGIBLE:
+                        added.append(row)
+        except PermissionError as exc:
+            db.rollback()
+            return _search_fail(
+                error=str(exc),
+                scanned_repos=scanned_repos,
+                pages=pages,
+                authenticated=authenticated,
+                warning=warning,
+                prompt=prompt,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("github discover prompt search failed")
+            db.rollback()
+            return _search_fail(
+                error=str(exc),
+                scanned_repos=scanned_repos,
+                pages=pages,
+                authenticated=authenticated,
+                warning=warning,
+                prompt=prompt,
+            )
+
+        if warning is None and not added:
+            warning = "未找到符合提示词且尚未收录的仓库"
+        return _search_ok(
+            added,
+            scanned_repos=scanned_repos,
+            skipped_seen=skipped_seen,
+            pages=pages,
+            authenticated=authenticated,
+            warning=warning,
+            limit=want,
+            prompt=prompt,
+        )
 
 
 def candidate_to_dict(row: GithubCandidate) -> dict[str, Any]:
@@ -1009,10 +1393,38 @@ def dismiss_candidate(candidate_id: int) -> dict[str, Any] | None:
             return None
         if row.status == STATUS_DISMISSED:
             return candidate_to_dict(row)
-        row.status = STATUS_DISMISSED
-        row.skip_reason = "dismissed"
-        row.project_id = None
-        row.updated_at = utcnow()
+        _mark_dismissed(row)
         db.commit()
         db.refresh(row)
         return candidate_to_dict(row)
+
+
+def dismiss_listable_candidates(
+    *,
+    statuses: tuple[str, ...] = (STATUS_ELIGIBLE,),
+) -> dict[str, Any]:
+    """Dismiss currently listed candidates (default: pending/eligible only)."""
+    wanted = tuple(s for s in statuses if s)
+    if not wanted:
+        wanted = (STATUS_ELIGIBLE,)
+    with SessionLocal() as db:
+        rows = (
+            db.query(GithubCandidate)
+            .filter(GithubCandidate.status.in_(wanted))
+            .all()
+        )
+        dismissed = 0
+        for row in rows:
+            if row.status == STATUS_DISMISSED:
+                continue
+            _mark_dismissed(row)
+            dismissed += 1
+        db.commit()
+        return {"dismissed": dismissed}
+
+
+def _mark_dismissed(row: GithubCandidate) -> None:
+    row.status = STATUS_DISMISSED
+    row.skip_reason = "dismissed"
+    row.project_id = None
+    row.updated_at = utcnow()

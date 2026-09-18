@@ -983,6 +983,7 @@ class GithubCandidateListOut(BaseModel):
 
 class GithubDiscoverSearchIn(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
+    prompt: str | None = Field(default=None, max_length=2000)
 
 
 class GithubDiscoverSearchOut(BaseModel):
@@ -997,3 +998,8 @@ class GithubDiscoverSearchOut(BaseModel):
     authenticated: bool = False
     warning: str | None = None
     limit: int = 5
+    prompt: str | None = None
+
+
+class GithubDiscoverDismissAllOut(BaseModel):
+    dismissed: int = 0
