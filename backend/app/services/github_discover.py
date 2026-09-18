@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import func, or_
 
 from ..models import GithubCandidate, Project, SessionLocal, utcnow
 from ..prompts import load_prompt
@@ -44,6 +45,8 @@ GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
 GITHUB_SEARCH_Q_MAX = 256
 GITHUB_SEARCH_PER_PAGE = 30
 PROMPT_POOL_FACTOR = 4
+# Owner logins whose repos must never appear in discovery search or lists.
+BLOCKED_OWNERS = frozenset({"cirosantilli"})
 
 STATUS_ELIGIBLE = "eligible"
 STATUS_SKIPPED = "skipped"
@@ -57,6 +60,7 @@ SKIP_REASON_LABELS = {
     "inactive": "近一年无提交",
     "low_stars": f"Star 不足 {MIN_STARS}",
     "fetch_failed": "无法读取仓库元数据",
+    "blocked_owner": "黑名单用户",
 }
 
 STATUS_ELIGIBLE = "eligible"
@@ -201,6 +205,44 @@ def clamp_search_limit(raw: Any) -> int:
 
 def clamp_user_prompt(raw: Any) -> str:
     return str(raw or "").strip()[:MAX_USER_PROMPT_LEN]
+
+
+def repo_owner(full_name: str | None) -> str:
+    text = str(full_name or "").strip().strip("/")
+    if not text:
+        return ""
+    return text.split("/", 1)[0].lower()
+
+
+def is_blocked_owner(*, full_name: str | None = None, owner: str | None = None) -> bool:
+    login = str(owner or "").strip().lower() or repo_owner(full_name)
+    return bool(login) and login in BLOCKED_OWNERS
+
+
+def is_blocked_repo(repo: dict[str, Any] | None, full_name: str = "") -> bool:
+    if is_blocked_owner(full_name=full_name):
+        return True
+    if not repo:
+        return False
+    if is_blocked_owner(full_name=str(repo.get("full_name") or "")):
+        return True
+    raw_owner = repo.get("owner")
+    if isinstance(raw_owner, dict):
+        return is_blocked_owner(owner=str(raw_owner.get("login") or ""))
+    if isinstance(raw_owner, str):
+        return is_blocked_owner(owner=raw_owner)
+    return False
+
+
+def _blocked_owner_query_filter():
+    if not BLOCKED_OWNERS:
+        return None
+    return or_(
+        *[
+            func.lower(GithubCandidate.full_name).like(f"{owner}/%")
+            for owner in sorted(BLOCKED_OWNERS)
+        ]
+    )
 
 
 def parse_owner_repo(*candidates: Any) -> str | None:
@@ -573,7 +615,14 @@ def _skip_reason_label(reason: str) -> str:
     return SKIP_REASON_LABELS.get(reason, reason)
 
 
-def _repo_skip_reason(repo: dict[str, Any], cutoff: datetime) -> str | None:
+def _repo_skip_reason(
+    repo: dict[str, Any],
+    cutoff: datetime,
+    *,
+    full_name: str = "",
+) -> str | None:
+    if is_blocked_repo(repo, full_name):
+        return "blocked_owner"
     if repo.get("private"):
         return "private"
     if repo.get("archived"):
@@ -627,16 +676,31 @@ def plan_github_search_queries(prompt: str) -> list[str]:
     return queries or _fallback_search_queries(prompt)
 
 
+def _strip_blocked_user_qualifiers(raw: str) -> str:
+    tokens: list[str] = []
+    for tok in (raw or "").split():
+        m = re.fullmatch(r"-?user:([\w.-]+)", tok, re.I)
+        if m and m.group(1).lower() in BLOCKED_OWNERS:
+            continue
+        tokens.append(tok)
+    return " ".join(tokens)
+
+
 def fit_search_query(query: str, *, cutoff_date: str) -> str:
     raw = re.sub(r"\s+", " ", (query or "").strip())
     raw = re.sub(r"\b(?:AND|OR|NOT)\b", " ", raw, flags=re.I)
     raw = re.sub(r"\s+", " ", raw).strip()
+    raw = _strip_blocked_user_qualifiers(raw)
     qualifiers: list[str] = []
     lower = raw.lower()
     if "stars:" not in lower:
         qualifiers.append(f"stars:>={MIN_STARS}")
     if "pushed:" not in lower:
         qualifiers.append(f"pushed:>={cutoff_date}")
+    for owner in sorted(BLOCKED_OWNERS):
+        flag = f"-user:{owner}"
+        if flag.lower() not in lower:
+            qualifiers.append(flag)
 
     def join(user: str) -> str:
         parts = [part for part in (user, *qualifiers) if part]
@@ -874,6 +938,18 @@ def _store_eligible_from_repo(
     ghsa_url: str | None = None,
     extra_topics: list[str] | None = None,
 ) -> tuple[GithubCandidate, str]:
+    if is_blocked_repo(repo, full_name):
+        row = _store_from_repo(
+            db,
+            repo=repo,
+            full_name=full_name,
+            status=STATUS_SKIPPED,
+            skip_reason="blocked_owner",
+            target_kind_reason=_skip_reason_label("blocked_owner"),
+            ghsa_id=ghsa_id,
+            ghsa_url=ghsa_url,
+        )
+        return row, STATUS_SKIPPED
     topics = extra_topics if extra_topics else _topics_from_repo(repo)
     description = str(repo.get("description") or "") or None
     language = str(repo.get("language") or "") or None
@@ -1114,11 +1190,29 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
                             skipped_seen += 1
                             continue
                         seen_names.add(key)
+                        ghsa_id = str(adv.get("ghsa_id") or "").strip() or None
+                        ghsa_url = str(adv.get("html_url") or "").strip() or None
+                        if is_blocked_owner(full_name=full_name):
+                            _store_candidate(
+                                db,
+                                full_name=full_name,
+                                html_url=f"https://github.com/{full_name}",
+                                description=None,
+                                language=None,
+                                stars=0,
+                                pushed_at=None,
+                                target_kind=DEFAULT_TARGET_KIND,
+                                target_kind_reason=_skip_reason_label("blocked_owner"),
+                                ghsa_id=ghsa_id,
+                                ghsa_url=ghsa_url,
+                                status=STATUS_SKIPPED,
+                                skip_reason="blocked_owner",
+                            )
+                            db.commit()
+                            continue
                         scanned_repos += 1
 
                         repo, err = _fetch_repo(client, limiter, full_name)
-                        ghsa_id = str(adv.get("ghsa_id") or "").strip() or None
-                        ghsa_url = str(adv.get("html_url") or "").strip() or None
                         if repo is None:
                             _store_candidate(
                                 db,
@@ -1138,7 +1232,7 @@ def _search_candidates_from_ghsa(*, limit: int) -> dict[str, Any]:
                             db.commit()
                             continue
 
-                        skip = _repo_skip_reason(repo, cutoff)
+                        skip = _repo_skip_reason(repo, cutoff, full_name=full_name)
                         if skip:
                             _store_from_repo(
                                 db,
@@ -1255,7 +1349,7 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
                             skipped_seen += 1
                             continue
                         scanned_repos += 1
-                        skip = _repo_skip_reason(repo, cutoff)
+                        skip = _repo_skip_reason(repo, cutoff, full_name=full_name)
                         if skip:
                             seen_names.add(key)
                             _store_from_repo(
@@ -1291,6 +1385,8 @@ def _search_candidates_by_prompt(*, prompt: str, limit: int) -> dict[str, Any]:
                     if repo is None:
                         continue
                     full_name = str(repo.get("full_name") or name)
+                    if is_blocked_owner(full_name=full_name):
+                        continue
                     row, status = _store_eligible_from_repo(
                         db,
                         repo=repo,
@@ -1375,6 +1471,9 @@ def list_candidates(
             .filter(GithubCandidate.status.in_(LISTABLE_STATUSES))
             .order_by(GithubCandidate.discovered_at.desc(), GithubCandidate.id.desc())
         )
+        blocked = _blocked_owner_query_filter()
+        if blocked is not None:
+            q = q.filter(~blocked)
         total = q.count()
         rows = q.offset(offset).limit(limit).all()
         return {
