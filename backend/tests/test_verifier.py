@@ -17,6 +17,7 @@ from app.services.verifier import (
     format_verifier_report,
     internet_test_block_reason,
     load_project_fofa_cache,
+    merge_fofa_samples,
     merge_verifier_targets,
     pending_verifier_count,
     save_project_fofa_cache,
@@ -695,6 +696,40 @@ def test_merge_verifier_targets_keeps_untested():
     assert "| 未测 | c.example |" in md
 
 
+def test_merge_verifier_targets_collapses_same_ip_different_ports():
+    rows = merge_verifier_targets(
+        fofa_sample=[
+            {"host": "a.example:80", "ip": "1.1.1.1", "port": "80", "protocol": "http"},
+            {"host": "a.example:8080", "ip": "1.1.1.1", "port": "8080", "protocol": "http"},
+            {"host": "b.example:443", "ip": "1.1.1.1", "port": "443", "protocol": "https"},
+            {"host": "c.example:80", "ip": "2.2.2.2", "port": "80", "protocol": "http"},
+        ],
+        submitted=[
+            {"host": "a.example:8080", "status": "success", "note": "同 IP 另一端口"},
+            {"host": "http://c.example", "status": "fail"},
+        ],
+    )
+    assert len(rows) == 2
+    by_ip = {r["ip"]: r for r in rows}
+    assert by_ip["1.1.1.1"]["status"] == "success"
+    assert by_ip["2.2.2.2"]["status"] == "fail"
+
+
+def test_merge_fofa_samples_skips_same_ip_new_port():
+    existing = [
+        {"host": "a.example", "ip": "1.1.1.1", "port": "80"},
+        {"host": "b.example", "ip": "2.2.2.2", "port": "443"},
+    ]
+    incoming = [
+        {"host": "a.example:8080", "ip": "1.1.1.1", "port": "8080"},
+        {"host": "cdn.example", "ip": "2.2.2.2", "port": "8443"},
+        {"host": "c.example", "ip": "3.3.3.3", "port": "80"},
+    ]
+    merged, new_rows = merge_fofa_samples(existing, incoming)
+    assert [row["ip"] for row in merged] == ["1.1.1.1", "2.2.2.2", "3.3.3.3"]
+    assert [row["host"] for row in new_rows] == ["c.example"]
+
+
 def test_finish_verifier_lists_untested_fofa_hosts(tmp_env, project, monkeypatch):
     vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
 
@@ -930,6 +965,99 @@ def test_finish_verifier_success_requires_three_targets(tmp_env, project):
     )
     assert out["ok"] is False
     assert "3 个" in out["error"]
+
+
+def test_finish_verifier_same_ip_does_not_count_as_three_successes(tmp_env, project):
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    out = registry.dispatch(
+        _ctx(project, "verifier", vuln_id=vuln_id),
+        "FinishVerifier",
+        {
+            "verdict": "success",
+            "verified_url": "http://1.1.1.1:80/api/x",
+            "poc": "GET /api/x HTTP/1.1\nHost: 1.1.1.1\n\n",
+            "response": "HTTP/1.1 200 OK\n\nsecret",
+            "fofa_query": 'title="demo"',
+            "targets": [
+                {"host": "http://1.1.1.1:80", "ip": "1.1.1.1", "status": "success"},
+                {"host": "http://1.1.1.1:8080", "ip": "1.1.1.1", "status": "success"},
+                {"host": "http://hit.example:443", "ip": "1.1.1.1", "status": "success"},
+            ],
+            "notes": "三个端口都打通，但其实是同一 IP",
+        },
+    )
+    assert out["ok"] is False
+    assert "不同 IP" in out["error"]
+
+
+def test_fofa_search_drops_same_ip_different_ports(tmp_env, project, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": False,
+                "size": 4,
+                "results": [
+                    ["a.example:80", "1.1.1.1", "80", "A", "example.com", "Org", "http"],
+                    ["a.example:8080", "1.1.1.1", "8080", "A-alt", "example.com", "Org", "http"],
+                    ["b.example:443", "2.2.2.2", "443", "B", "example.com", "Org", "https"],
+                    ["cdn.example:8443", "2.2.2.2", "8443", "B-cdn", "example.com", "Org", "https"],
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    out = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert out["ok"] is True
+    ips = [row["ip"] for row in out["sample"]]
+    assert ips == ["1.1.1.1", "2.2.2.2"]
+    assert out["returned"] == 2
+    assert "同 IP" in (out.get("guidance") or "")
+    cache = load_project_fofa_cache(project)
+    assert cache is not None
+    assert [row["ip"] for row in cache["sample"]] == ["1.1.1.1", "2.2.2.2"]
+
+
+def test_fofa_search_expand_skips_same_ip_new_port(tmp_env, project, monkeypatch):
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = dict(request.url.params).get("page") or "1"
+        pages.append(page)
+        if page == "1":
+            results = [
+                ["host1.example", "1.1.1.1", "80", "A", "example.com", "Org", "http"],
+                ["host2.example", "1.1.1.2", "443", "B", "example.com", "Org", "https"],
+            ]
+        else:
+            results = [
+                ["host1.example:8080", "1.1.1.1", "8080", "A-dup", "example.com", "Org", "http"],
+                ["host3.example", "1.1.1.3", "80", "C", "example.com", "Org", "http"],
+            ]
+        return httpx.Response(200, json={"error": False, "size": 10, "results": results})
+
+    monkeypatch.setattr(
+        "app.services.fofa.http_client",
+        lambda timeout=30.0: httpx.Client(transport=httpx.MockTransport(handler), timeout=timeout),
+    )
+    monkeypatch.setattr("app.services.fofa.resolve_fofa_key", lambda: "test-key")
+    vuln_id, _ = _submit_and_confirm(project, enable_verifier=True)
+    ctx = _ctx(project, "verifier", vuln_id=vuln_id)
+    first = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"'})
+    assert first["ok"] is True
+    expanded = registry.dispatch(ctx, "FofaSearch", {"query": 'title="demo"', "expand": True})
+    assert expanded["ok"] is True
+    assert pages == ["1", "2"]
+    ips = [row["ip"] for row in expanded["sample"]]
+    assert ips == ["1.1.1.1", "1.1.1.2", "1.1.1.3"]
+    new_ips = [row["ip"] for row in expanded.get("new_sample") or []]
+    assert new_ips == ["1.1.1.3"]
 
 
 def test_finish_verifier_fail_requires_expand_when_first_batch_short(tmp_env, project, monkeypatch):

@@ -895,6 +895,8 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "FinishVerifier" in text
     assert "10" in text
     assert "3 个" in text
+    assert "不同 IP" in text
+    assert "同 IP" in text
     assert "expand" in text
     assert "poc" in text
     assert "response" in text
@@ -919,6 +921,8 @@ def test_verifier_prompt_requires_fofa_and_three_successes():
     assert "未测" in initial
     assert "共享" in initial
     assert "3 个" in initial
+    assert "不同 IP" in initial
+    assert "同 IP" in initial
     assert "expand=true" in initial
     assert "5 轮" in initial
     assert "50" in initial

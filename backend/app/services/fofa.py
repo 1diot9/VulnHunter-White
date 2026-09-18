@@ -244,7 +244,8 @@ def search(
             "失效则同链调整利用方式；凑满 3 个成功即 "
             "FinishVerifier(verdict=success, verified_url=..., poc=..., response=..., "
             "fofa_query=本次语法, targets=全部样本)。"
-            "targets 里已测标 success/fail，达 3 个成功后其余标 untested；"
+            "targets 里已测标 success/fail，达 3 个不同 IP 成功后其余标 untested；"
+            "同 IP 不同端口视为同一目标，不要拿来凑成功数。"
             f"当前这批测完仍不足 3 个则保留成功的，FofaSearch(expand=true) 再搜下一页"
             f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。"
         ),

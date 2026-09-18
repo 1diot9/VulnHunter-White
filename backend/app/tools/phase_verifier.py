@@ -36,6 +36,7 @@ from ..services.verifier import (
     save_project_fofa_cache,
     seed_fofa_state,
     target_status_counts,
+    unique_fofa_rows,
     verifier_report_path,
     verifier_report_rel,
 )
@@ -92,7 +93,7 @@ def _expand_fofa_search(ctx, cache: dict[str, Any], args: dict[str, Any]) -> dic
             guidance=(
                 f"本项目已搜满 {FOFA_MAX_PAGES} 轮 FOFA 目标（每轮 {FOFA_DEFAULT_SIZE} 个，"
                 f"最多 {FOFA_MAX_TARGETS} 个），不要再搜。"
-                f"按现有样本复测：凑满 {VERIFIER_SUCCESS_MIN} 个成功即 FinishVerifier(success)；"
+                f"按现有样本复测：凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即 FinishVerifier(success)；"
                 f"全部测完仍不足则 fail。"
             ),
         )
@@ -124,8 +125,8 @@ def _expand_fofa_search(ctx, cache: dict[str, Any], args: dict[str, Any]) -> dic
     if new_rows:
         extra = (
             f"已补搜第 {next_page}/{FOFA_MAX_PAGES} 轮，新增 {len(new_rows)} 个目标"
-            f"（去重后并入共享缓存，共 {len(merged)} 条）。保留此前成功的，只测这些新 host。"
-            f"凑满 {VERIFIER_SUCCESS_MIN} 个成功即 FinishVerifier(success)。"
+            f"（去重后并入共享缓存，共 {len(merged)} 条）。同 IP 不同端口已去掉。保留此前成功的，只测这些新 IP。"
+            f"凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即 FinishVerifier(success)。"
         )
         if pages_left > 0:
             extra += (
@@ -140,7 +141,7 @@ def _expand_fofa_search(ctx, cache: dict[str, Any], args: dict[str, Any]) -> dic
             f"按现有结果：已满 {VERIFIER_SUCCESS_MIN} 个成功则 success，否则 fail。"
         )
     else:
-        extra = "本轮补搜没有新的去重目标。"
+        extra = "本轮补搜没有新的去重目标（同 IP 不同端口不算新目标）。"
         if pages_left > 0:
             extra += (
                 f"可再 FofaSearch(expand=true) 翻下一页（还可补搜 {pages_left} 轮）；"
@@ -174,7 +175,7 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
         return _expand_fofa_search(ctx, cache, args)
     if fofa_cache_has_targets(cache):
         extra = (
-            f"直接按这些目标复测；凑满 {VERIFIER_SUCCESS_MIN} 个成功即可 FinishVerifier(success)，其余 untested。"
+            f"直接按这些目标复测；凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即可 FinishVerifier(success)，其余 untested。"
             + fofa_expand_hint(cache)
         )
         return _cached_fofa_payload(
@@ -232,7 +233,11 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
         out["guidance"] = f"{guidance} {extra}".strip()
         out["attempts"] = saved["attempts"]
         return out
-    sample = list(out.get("sample") or [])
+    raw_sample = list(out.get("sample") or [])
+    sample = unique_fofa_rows(raw_sample)
+    dropped = max(0, len(raw_sample) - len(sample))
+    out["sample"] = sample
+    out["returned"] = len(sample)
     saved = save_project_fofa_cache(
         ctx.project_id,
         query=str(out.get("query") or query),
@@ -248,9 +253,12 @@ def _fofa_search(ctx, args: dict[str, Any]) -> dict[str, Any]:
     if sample:
         extra = (
             "已写入项目共享缓存 docs/fofa-targets.json，后续漏洞直接复用，不要为换语法再搜。"
-            f"FinishVerifier.targets 必须覆盖这些样本。凑满 {VERIFIER_SUCCESS_MIN} 个成功即可结束，其余 untested。"
+            "样本已按 IP 去重，同 IP 不同端口视为同一目标，不要拿来凑成功数。"
+            f"FinishVerifier.targets 必须覆盖这些样本。凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即可结束，其余 untested。"
             f"{fofa_expand_hint(saved)} success 必须带 fofa_query。"
         )
+        if dropped:
+            extra = f"本批去掉 {dropped} 条同 IP 重复后剩 {len(sample)} 条。" + extra
     else:
         left = max(0, FOFA_MAX_ATTEMPTS - int(saved.get("attempts") or 0))
         extra = (
@@ -374,7 +382,7 @@ def _finish_verifier(ctx, args: dict[str, Any]) -> dict[str, Any]:
                 f"已搜满 {FOFA_MAX_PAGES} 轮仍不足 {VERIFIER_SUCCESS_MIN} 个成功，应 verdict=fail，不要标 success。"
             )
         return call_fail(
-            f"success 须至少 {VERIFIER_SUCCESS_MIN} 个目标复测成功（当前 {success_n} 个）。{hint}"
+            f"success 须至少 {VERIFIER_SUCCESS_MIN} 个不同 IP 的目标复测成功（当前 {success_n} 个）。同 IP 不同端口只算 1 个。{hint}"
         )
     if verdict == "fail":
         if success_n >= VERIFIER_SUCCESS_MIN:
@@ -450,13 +458,14 @@ def register_verifier_tools() -> None:
             name="FofaSearch",
             description=(
                 "只读 FOFA 测绘：用 FOFA 语法圈定同款前台系统，返回命中总量与样本"
-                f"（host/ip/port/title/domain/org）。每批 {FOFA_DEFAULT_SIZE} 条。"
+                f"（host/ip/port/title/domain/org）。每批 {FOFA_DEFAULT_SIZE} 条，按 IP 去重："
+                "同 IP 不同端口只保留一条，复测必须打不同 IP。"
                 "优先用 docs/app-fingerprints.json 的项目共享指纹。"
                 "title/app 与默认页 body 特征各试一条，有命中就停，不要在同一方向反复改写。"
                 f"有命中后写入共享缓存给全部漏洞复用；0 条可改写语法再搜，最多 {FOFA_MAX_ATTEMPTS} 次。"
                 "若本项目已有命中，默认立即返回缓存、不再请求 FOFA。"
-                f"当前这批测完仍不足 {VERIFIER_SUCCESS_MIN} 个成功时，传 expand=true 按同一语法翻页补搜 "
-                f"{FOFA_DEFAULT_SIZE} 个新目标（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。只查 FOFA，不碰目标。"
+                f"当前这批测完仍不足 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功时，传 expand=true 按同一语法翻页补搜 "
+                f"{FOFA_DEFAULT_SIZE} 个新 IP（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。只查 FOFA，不碰目标。"
             ),
             parameters={
                 "type": "object",
@@ -473,9 +482,9 @@ def register_verifier_tools() -> None:
                     "expand": {
                         "type": "boolean",
                         "description": (
-                            f"当前这批测完仍不足 {VERIFIER_SUCCESS_MIN} 个成功时为 true，"
-                            f"按已冻结语法再搜 {FOFA_DEFAULT_SIZE} 个新目标；不要改写语法。"
-                            f"最多 {FOFA_MAX_PAGES} 轮。"
+                            f"当前这批测完仍不足 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功时为 true，"
+                            f"按已冻结语法再搜 {FOFA_DEFAULT_SIZE} 个新 IP；不要改写语法。"
+                            f"最多 {FOFA_MAX_PAGES} 轮。同 IP 不同端口不会作为新目标返回。"
                         ),
                         "default": False,
                     },
@@ -515,13 +524,13 @@ def register_verifier_tools() -> None:
         ToolSpec(
             name="FinishVerifier",
             description=(
-                f"提交互联网验证结论并结束本轮。至少 {VERIFIER_SUCCESS_MIN} 个 FOFA 目标按本条利用链复测成功才 verdict=success"
-                "（优先原 PoC，失效时须同链调整利用方式后再判）；"
+                f"提交互联网验证结论并结束本轮。至少 {VERIFIER_SUCCESS_MIN} 个不同 IP 的 FOFA 目标按本条利用链复测成功才 verdict=success"
+                "（优先原 PoC，失效时须同链调整利用方式后再判；同 IP 不同端口只算 1 个目标）；"
                 f"当前这批测完仍不足则保留成功的、FofaSearch(expand=true) 再搜下一轮"
                 f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）；"
                 f"{FOFA_MAX_PAGES} 轮都测完仍不足=fail；无样本=no_targets；无 key/网络不可用=skipped。"
                 "success/fail 必须用 targets 列出共享 FOFA 的全部结果，并标注 success|fail|untested；"
-                f"success 时 targets 里至少 {VERIFIER_SUCCESS_MIN} 条 success，并带 verified_url、poc、response、fofa_query。"
+                f"success 时 targets 里至少 {VERIFIER_SUCCESS_MIN} 条不同 IP 的 success，并带 verified_url、poc、response、fofa_query。"
                 "凑满成功数后其余可标 untested，不要为了填表继续打。"
                 "可能产生危害的漏洞须先 AskUser；用户同意前禁止 success；不要用 skipped 代替询问。"
             ),
@@ -549,7 +558,8 @@ def register_verifier_tools() -> None:
                         "type": "array",
                         "description": (
                             "FofaSearch 返回的全部目标。每项 host 必填，status 为 success|fail|untested。"
-                            f"success 须至少 {VERIFIER_SUCCESS_MIN} 条 success；达线后其余可标 untested。"
+                            f"success 须至少 {VERIFIER_SUCCESS_MIN} 条不同 IP 的 success；同 IP 不同端口只算 1 个。"
+                            "达线后其余可标 untested。"
                         ),
                         "items": {
                             "type": "object",

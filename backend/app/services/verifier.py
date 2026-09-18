@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from ..models import Project, SessionLocal, Vuln
 from ..vuln_types import normalize_vuln_type
@@ -183,6 +185,91 @@ def target_key(raw: Any) -> str:
     return s
 
 
+def normalize_target_ip(raw: Any) -> str:
+    """Canonical IP string, or empty if not an address. Same IP / different port collapses here."""
+    s = str(raw or "").strip().strip("[]")
+    if not s:
+        return ""
+    try:
+        return str(ipaddress.ip_address(s))
+    except ValueError:
+        return ""
+
+
+def _url_hostname_port(raw: Any) -> tuple[str, str]:
+    s = str(raw or "").strip().split()[0] if str(raw or "").strip() else ""
+    if not s:
+        return "", ""
+    if "://" not in s:
+        s = "http://" + s.lstrip("/")
+    try:
+        parsed = urlparse(s)
+    except ValueError:
+        return "", ""
+    host = (parsed.hostname or "").strip().lower()
+    port = str(parsed.port) if parsed.port is not None else ""
+    return host, port
+
+
+def target_ip_of(raw: Any) -> str:
+    """Prefer FOFA `ip`; otherwise parse an IP from host/url (including host:port)."""
+    if isinstance(raw, dict):
+        ip = normalize_target_ip(raw.get("ip"))
+        if ip:
+            return ip
+        host = raw.get("host") or raw.get("url") or ""
+    else:
+        host = raw
+    hostname, _port = _url_hostname_port(host)
+    return normalize_target_ip(hostname)
+
+
+def target_hostname_of(raw: Any) -> str:
+    if isinstance(raw, dict):
+        host = raw.get("host") or raw.get("url") or raw.get("ip") or ""
+    else:
+        host = raw
+    hostname, _port = _url_hostname_port(host)
+    return hostname
+
+
+def fofa_row_key(raw: Any) -> str:
+    """Identity for a FOFA hit: IP first (same IP ≠ distinct target), else hostname without port."""
+    ip = target_ip_of(raw)
+    if ip:
+        return f"ip:{ip}"
+    host = target_hostname_of(raw)
+    return f"host:{host}" if host else ""
+
+
+def _bind_target_aliases(
+    ip_to_key: dict[str, str],
+    host_to_key: dict[str, str],
+    raw: Any,
+    key: str,
+) -> None:
+    ip = target_ip_of(raw)
+    host = target_hostname_of(raw)
+    if ip and ip not in ip_to_key:
+        ip_to_key[ip] = key
+    if host and host not in host_to_key:
+        host_to_key[host] = key
+
+
+def _lookup_target_key(
+    ip_to_key: dict[str, str],
+    host_to_key: dict[str, str],
+    raw: Any,
+) -> str:
+    ip = target_ip_of(raw)
+    if ip and ip in ip_to_key:
+        return ip_to_key[ip]
+    host = target_hostname_of(raw)
+    if host and host in host_to_key:
+        return host_to_key[host]
+    return ""
+
+
 def normalize_target_status(raw: Any) -> str:
     key = str(raw or "").strip().lower()
     return _TARGET_STATUS_ALIASES.get(key, "") or "untested"
@@ -219,33 +306,41 @@ def merge_verifier_targets(
     submitted: list[Any] | None = None,
     verified_url: str = "",
 ) -> list[dict[str, str]]:
-    """Keep every FOFA hit; overlay LLM statuses; mark verified_url as success."""
+    """Keep FOFA hits unique by IP; overlay LLM statuses; mark verified_url as success.
+
+    Same IP / different port (or different hostname on the same IP) is one target.
+    """
     by_key: dict[str, dict[str, str]] = {}
     order: list[str] = []
+    ip_to_key: dict[str, str] = {}
+    host_to_key: dict[str, str] = {}
 
     def _put(row: dict[str, str], *, overlay: bool) -> None:
-        key = target_key(row.get("host")) or target_key(row.get("ip"))
+        found = _lookup_target_key(ip_to_key, host_to_key, row)
+        if found:
+            _bind_target_aliases(ip_to_key, host_to_key, row, found)
+            if not overlay:
+                return
+            cur = by_key[found]
+            for field in ("ip", "port", "title", "protocol"):
+                if row.get(field) and not cur.get(field):
+                    cur[field] = row[field]
+            if row.get("host"):
+                if not cur.get("host"):
+                    cur["host"] = row["host"]
+                elif "://" in row["host"] and "://" not in (cur.get("host") or ""):
+                    cur["host"] = row["host"]
+            if row.get("status"):
+                cur["status"] = row["status"]
+            if row.get("note"):
+                cur["note"] = row["note"]
+            return
+        key = fofa_row_key(row)
         if not key:
             return
-        if key not in by_key:
-            by_key[key] = row
-            order.append(key)
-            return
-        if not overlay:
-            return
-        cur = by_key[key]
-        for field in ("ip", "port", "title", "protocol"):
-            if row.get(field) and not cur.get(field):
-                cur[field] = row[field]
-        if row.get("host"):
-            if not cur.get("host"):
-                cur["host"] = row["host"]
-            elif "://" in row["host"] and "://" not in (cur.get("host") or ""):
-                cur["host"] = row["host"]
-        if row.get("status"):
-            cur["status"] = row["status"]
-        if row.get("note"):
-            cur["note"] = row["note"]
+        by_key[key] = row
+        order.append(key)
+        _bind_target_aliases(ip_to_key, host_to_key, row, key)
 
     for item in fofa_sample or []:
         row = _target_row(item, default_status="untested")
@@ -256,51 +351,67 @@ def merge_verifier_targets(
         if row:
             _put(row, overlay=True)
     if verified_url:
-        vkey = target_key(verified_url)
-        if vkey:
-            matched = False
-            vhost = vkey.split(":")[0]
+        found = _lookup_target_key(ip_to_key, host_to_key, verified_url)
+        if not found:
+            v_ip = target_ip_of(verified_url)
+            v_host = target_hostname_of(verified_url)
             for key, row in by_key.items():
-                if key == vkey or key.split(":")[0] == vhost:
-                    row["status"] = "success"
-                    if not row.get("note"):
-                        row["note"] = "复测成功"
-                    matched = True
-            if not matched:
-                row = _target_row({"host": verified_url, "status": "success", "note": "复测成功"})
-                if row:
-                    _put(row, overlay=True)
+                if (v_ip and target_ip_of(row) == v_ip) or (
+                    v_host and target_hostname_of(row) == v_host
+                ):
+                    found = key
+                    break
+        if found:
+            row = by_key[found]
+            row["status"] = "success"
+            if not row.get("note"):
+                row["note"] = "复测成功"
+        else:
+            row = _target_row({"host": verified_url, "status": "success", "note": "复测成功"})
+            if row:
+                _put(row, overlay=True)
     return [by_key[k] for k in order]
-
-
-def fofa_row_key(raw: Any) -> str:
-    if isinstance(raw, dict):
-        return target_key(raw.get("host")) or target_key(raw.get("ip"))
-    return target_key(raw)
 
 
 def merge_fofa_samples(
     existing: list[Any] | None,
     incoming: list[Any] | None,
 ) -> tuple[list[Any], list[Any]]:
-    """Append FOFA hits that are not already in the shared sample. Returns (merged, new_rows)."""
+    """Append FOFA hits with a new IP. Same IP / different port is dropped.
+
+    Returns (merged, new_rows).
+    """
     by_key: dict[str, Any] = {}
     order: list[str] = []
-    for item in existing or []:
+    ip_to_key: dict[str, str] = {}
+    host_to_key: dict[str, str] = {}
+
+    def _add(item: Any, *, track_new: bool) -> bool:
+        found = _lookup_target_key(ip_to_key, host_to_key, item)
+        if found:
+            _bind_target_aliases(ip_to_key, host_to_key, item, found)
+            return False
         key = fofa_row_key(item)
-        if not key or key in by_key:
-            continue
+        if not key:
+            return False
         by_key[key] = item
         order.append(key)
+        _bind_target_aliases(ip_to_key, host_to_key, item, key)
+        return track_new
+
+    for item in existing or []:
+        _add(item, track_new=False)
     new_rows: list[Any] = []
     for item in incoming or []:
-        key = fofa_row_key(item)
-        if not key or key in by_key:
-            continue
-        by_key[key] = item
-        order.append(key)
-        new_rows.append(item)
+        if _add(item, track_new=True):
+            new_rows.append(item)
     return [by_key[k] for k in order], new_rows
+
+
+def unique_fofa_rows(rows: list[Any] | None) -> list[Any]:
+    """Keep the first FOFA hit per IP (or per hostname if IP is missing)."""
+    merged, _ = merge_fofa_samples([], rows)
+    return merged
 
 
 def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
@@ -317,6 +428,7 @@ def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
     sample = data.get("sample")
     if not isinstance(sample, list):
         sample = []
+    sample = unique_fofa_rows(sample)
     query = str(data.get("query") or "").strip()
     try:
         size = int(data.get("size") or 0)
@@ -339,7 +451,7 @@ def load_project_fofa_cache(project_id: int) -> dict[str, Any] | None:
     return {
         "query": query,
         "size": size,
-        "returned": int(data.get("returned") or len(sample)),
+        "returned": len(sample),
         "sample": sample,
         "attempts": max(attempts, len(attempted)),
         "attempt_queries": [str(q).strip() for q in attempted if str(q).strip()],
@@ -419,7 +531,7 @@ def save_project_fofa_cache(
     ``expanded`` is kept for callers; the stored flag is derived from page (>= FOFA_MAX_PAGES).
     """
     del expanded
-    rows = list(sample or [])
+    rows = unique_fofa_rows(sample or [])
     existing = load_project_fofa_cache(project_id) or {}
     queries = list(attempt_queries if attempt_queries is not None else existing.get("attempt_queries") or [])
     q = str(query or "").strip()
@@ -457,22 +569,24 @@ def seed_fofa_state(state: dict[str, Any], project_id: int) -> None:
         return
     if not str(state.get("fofa_query") or "").strip() and cache.get("query"):
         state["fofa_query"] = cache["query"]
-    cached_sample = list(cache.get("sample") or [])
-    current = list(state.get("fofa_targets") or [])
+    cached_sample = unique_fofa_rows(list(cache.get("sample") or []))
+    current = unique_fofa_rows(list(state.get("fofa_targets") or []))
     if not current or len(cached_sample) > len(current):
         state["fofa_targets"] = cached_sample
         state["fofa_cached"] = True
+    else:
+        state["fofa_targets"] = current
 
 
 def resolve_fofa_sample(project_id: int, state: dict[str, Any] | None = None) -> tuple[str, list[Any]]:
     state = state or {}
     query = str(state.get("fofa_query") or "").strip()
-    sample = list(state.get("fofa_targets") or [])
+    sample = unique_fofa_rows(list(state.get("fofa_targets") or []))
     cache = load_project_fofa_cache(project_id)
     if cache:
         if not query:
             query = str(cache.get("query") or "").strip()
-        cache_sample = list(cache.get("sample") or [])
+        cache_sample = unique_fofa_rows(list(cache.get("sample") or []))
         if not sample or len(cache_sample) > len(sample):
             sample = cache_sample
     return query, sample
@@ -484,12 +598,14 @@ def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
         n = (cache or {}).get("returned") or len((cache or {}).get("sample") or [])
         sample_json = json.dumps((cache or {}).get("sample") or [], ensure_ascii=False)
         extra = (
-            f"凑满 {VERIFIER_SUCCESS_MIN} 个成功即可 FinishVerifier(verdict=success)，其余标 untested。"
+            f"凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即可 FinishVerifier(verdict=success)，其余标 untested。"
             + fofa_expand_hint(cache)
         )
         return (
-            f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条）。不要为换语法再搜。"
-            f"直接用下列目标复测本条（先理解报告+PoC 利用本质，优先原 PoC，失效则同链调整利用方式）：\n{sample_json}\n{extra}"
+            f"本项目已有共享 FOFA 结果（语法 `{query}`，{n} 条，已按 IP 去重）。不要为换语法再搜。"
+            f"直接用下列目标复测本条（先理解报告+PoC 利用本质，优先原 PoC，失效则同链调整利用方式）。"
+            "同 IP 不同端口视为同一目标，不要拿来凑成功数：\n"
+            f"{sample_json}\n{extra}"
         )
     if fofa_search_exhausted(cache):
         tried = "；".join((cache or {}).get("attempt_queries") or []) or "（未记录）"
@@ -504,7 +620,8 @@ def format_shared_fofa_hint(cache: dict[str, Any] | None) -> str:
         f"0 条或占位语句时可改写语法再搜（title/app 与默认页 body 特征各试一条，有命中就停，不要在同一方向反复改），"
         f"最多共 {FOFA_MAX_ATTEMPTS} 次（还剩 {left} 次）。"
         "有样本后写入 docs/fofa-targets.json，后续漏洞直接复用。"
-        f"首批默认 {FOFA_DEFAULT_SIZE} 个，凑满 {VERIFIER_SUCCESS_MIN} 个成功即结束；"
+        "命中按 IP 去重（同 IP 不同端口视为同一目标）。"
+        f"首批默认 {FOFA_DEFAULT_SIZE} 个，凑满 {VERIFIER_SUCCESS_MIN} 个不同 IP 成功即结束；"
         f"不足则保留成功的，FofaSearch(expand=true) 再搜下一轮"
         f"（最多 {FOFA_MAX_PAGES} 轮 / {FOFA_MAX_TARGETS} 个目标）。"
     )
