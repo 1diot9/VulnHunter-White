@@ -38,13 +38,31 @@
 | vuejs/devtools                    | NCC-2026-09876                                               | 未授权访问              | 8.7      |
 | 蓝凌EKP                           | NCC-2026-10030                                               | 信息泄露                | 6.9      |
 | 蓝凌EKP                           | NCC-2026-10032                                               | 认证绕过                | 6.9      |
-| xorbitsai/inference               | NCC-2026-10126                                               | 认证绕过+RCE            | 9.3      |
+| xorbitsai/inference               | NCC-2026-10126/[GHSA-2hj6-h88x-mv4j](https://github.com/xorbitsai/inference/security/advisories/GHSA-2hj6-h88x-mv4j)/CVE-2026-49950 | 认证绕过+RCE            | 9.3      |
 | firefly-iii/firefly-iii           | [GHSA-3wcx-g7jc-h9vc](https://github.com/firefly-iii/firefly-iii/security/advisories/GHSA-3wcx-g7jc-h9vc) | 越权                    | 7.1      |
 | vllm-project/vllm                 | [GHSA-5fj9-pfhr-6j48](https://github.com/vllm-project/vllm/security/advisories/GHSA-5fj9-pfhr-6j48)/CVE-2026-105759 | DoS                     | 5.9      |
-| librenms/librenms                 | [GHSA-ffjc-4fr5-47c6](https://github.com/librenms/librenms/security/advisories/GHSA-ffjc-4fr5-47c6) | XSS                     | Low      |
+| librenms/librenms                 | [GHSA-ffjc-4fr5-47c6](https://github.com/librenms/librenms/security/advisories/GHSA-ffjc-4fr5-47c6)/[CVE-2026-109352](https://nvd.nist.gov/vuln/detail/CVE-2026-109352) | XSS                     | Low      |
 | AsyncHttpClient/async-http-client | [GHSA-qjr7-w8pj-pmv9](https://github.com/AsyncHttpClient/async-http-client/security/advisories/GHSA-qjr7-w8pj-pmv9) | 会话固定                | 4.0      |
 | AsyncHttpClient/async-http-client | [GHSA-2jwh-9rmr-j4xf](https://github.com/AsyncHttpClient/async-http-client/security/advisories/GHSA-2jwh-9rmr-j4xf)/[CVE-2026-107228](https://github.com/advisories/GHSA-2jwh-9rmr-j4xf) | 认证不当                | 6.8      |
 | Orange-OpenSource/hurl            | [GHSA-r4v8-53wq-5hp2](https://github.com/Orange-OpenSource/hurl/security/advisories/GHSA-r4v8-53wq-5hp2) | DoS                     | 8.7      |
+| Orange-OpenSource/hurl            | [GHSA-r6qp-p8c3-3x64](https://github.com/Orange-OpenSource/hurl/security/advisories/GHSA-r6qp-p8c3-3x64) | XSS                     | 4.8      |
+| MervinPraison/PraisonAI           | [GHSA-9426-q567-pc36](https://github.com/MervinPraison/PraisonAI/security/advisories/GHSA-9426-q567-pc36) | 多个漏洞                | 9.8      |
+| Budibase/budibase                 | [GHSA-w7m4-jhq6-jmrg](https://github.com/Budibase/budibase/security/advisories/GHSA-w7m4-jhq6-jmrg) | SSTI                    | 7.6      |
+| Budibase/budibase                 | [GHSA-p7c8-m379-jf3x](https://github.com/Budibase/budibase/security/advisories/GHSA-p7c8-m379-jf3x) | RCE                     | 9.9      |
+| Budibase/budibase                 | [GHSA-m2pm-g733-7vqw](https://github.com/Budibase/budibase/security/advisories/GHSA-m2pm-g733-7vqw) | SQL注入                 | 8.1      |
+| Budibase/budibase                 | [GHSA-jm6f-xhr9-26ff](https://github.com/Budibase/budibase/security/advisories/GHSA-jm6f-xhr9-26ff) | 越权                    | 7.1      |
+| Budibase/budibase                 | [GHSA-23m9-j429-7v25](https://github.com/Budibase/budibase/security/advisories/GHSA-23m9-j429-7v25) | SSTI                    | 8.3      |
+| JiHong88/suneditor                | [GHSA-wxhr-f7jg-wphq](https://github.com/JiHong88/suneditor/security/advisories/GHSA-wxhr-f7jg-wphq) | XSS                     | 8.6      |
+| JiHong88/suneditor                | [GHSA-6pm3-2q9w-2926](https://github.com/JiHong88/suneditor/security/advisories/GHSA-6pm3-2q9w-2926) | XSS                     | 6.3      |
+| JiHong88/suneditor                | [GHSA-v4jx-8pj6-w4w8](https://github.com/JiHong88/suneditor/security/advisories/GHSA-v4jx-8pj6-w4w8) | XSS                     | 9.3      |
+| kyverno/kyverno                   | [GHSA-m8p2-qqmx-j53x](https://github.com/kyverno/kyverno/security/advisories/GHSA-m8p2-qqmx-j53x) | DoS                     | 6.2      |
+| kyverno/kyverno                   | [GHSA-hg5v-hwm3-956r](https://github.com/kyverno/kyverno/security/advisories/GHSA-hg5v-hwm3-956r) | 认证绕过                | 8.5      |
+| kyverno/kyverno                   | [GHSA-qc9c-3fgf-cgq8](https://github.com/kyverno/kyverno/security/advisories/GHSA-qc9c-3fgf-cgq8) | 认证绕过                | 7.7      |
+| kyverno/kyverno                   | [GHSA-h3pm-q9ww-f439](https://github.com/kyverno/kyverno/security/advisories/GHSA-h3pm-q9ww-f439) | 验证绕过                | 7.7      |
+| kyverno/kyverno                   | [GHSA-8mrj-27wr-599g](https://github.com/kyverno/kyverno/security/advisories/GHSA-8mrj-27wr-599g) | DoS                     | 7.7      |
+| kyverno/kyverno                   | [GHSA-338x-hgrv-626h](https://github.com/kyverno/kyverno/security/advisories/GHSA-338x-hgrv-626h) | DoS                     | 7.7      |
+
+
 
 
 
