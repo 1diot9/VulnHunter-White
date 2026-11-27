@@ -143,6 +143,7 @@ VulnHunter-White 的特点：
 | AsyncHttpClient/async-http-client | [GHSA-qjr7-w8pj-pmv9](https://github.com/AsyncHttpClient/async-http-client/security/advisories/GHSA-qjr7-w8pj-pmv9) | 会话固定     | 4.0      |
 | AsyncHttpClient/async-http-client | [GHSA-2jwh-9rmr-j4xf](https://github.com/AsyncHttpClient/async-http-client/security/advisories/GHSA-2jwh-9rmr-j4xf) | 认证不当     | 6.8      |
 
+完整漏洞成果清单详见 [CVELIST.md](./CVELIST.md)。
 
 
 其他师傅的成果反馈：
