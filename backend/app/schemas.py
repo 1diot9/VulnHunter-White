@@ -276,6 +276,12 @@ class AppUpdateApplyOut(BaseModel):
     old_sha: str = ""
     new_sha: str = ""
     pulled: bool = False
+    overwrite_files: list[str] = []
+    confirmation_token: str = ""
+
+
+class AppUpdateApplyIn(BaseModel):
+    confirmation_token: str = ""
 
 
 MANUAL_LAB_PROMPT_MAX = 20000

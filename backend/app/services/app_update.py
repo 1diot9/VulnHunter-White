@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import re
 import subprocess
@@ -101,7 +102,7 @@ def check_for_update() -> AppUpdateStatus:
         return _with_runtime_flags(status)
 
 
-def apply_update() -> dict[str, Any]:
+def apply_update(confirmation_token: str = "") -> dict[str, Any]:
     global _applying, _restarting
     with _APPLY_LOCK:
         if _applying or _restarting:
@@ -121,7 +122,7 @@ def apply_update() -> dict[str, Any]:
             return _apply_fail("docker")
         if not status.git_available:
             return _apply_fail(status.apply_blocked_reason or "not_git", status.last_error)
-        if status.dirty:
+        if status.dirty and _development_mode():
             return _apply_fail("dirty")
         if not status.update_available:
             return _apply_fail(status.apply_blocked_reason or "no_update")
@@ -129,7 +130,7 @@ def apply_update() -> dict[str, Any]:
             return _apply_fail(status.apply_blocked_reason or "check_failed", status.last_error)
 
         old_sha = status.current_sha
-        pulled = _fast_forward(status)
+        pulled = _fast_forward(status, confirmation_token)
         if pulled.get("ok") is not True:
             return {
                 "ok": False,
@@ -139,6 +140,8 @@ def apply_update() -> dict[str, Any]:
                 "old_sha": old_sha,
                 "new_sha": str(pulled.get("new_sha") or old_sha),
                 "pulled": False,
+                "overwrite_files": pulled.get("overwrite_files", []),
+                "confirmation_token": pulled.get("confirmation_token", ""),
             }
         new_sha = str(pulled.get("new_sha") or "")
         dep_error = _install_changed_deps(old_sha, new_sha)
@@ -284,7 +287,7 @@ def _probe() -> AppUpdateStatus:
     if status.docker_runtime:
         status.apply_blocked_reason = "docker"
         return _block_apply(status)
-    if dirty:
+    if dirty and _development_mode():
         status.apply_blocked_reason = "dirty"
         return _block_apply(status)
     if not status.update_available:
@@ -307,8 +310,13 @@ def _is_git_work_tree(repo: Path) -> bool:
 def _is_dirty(repo: Path) -> bool:
     proc = _git(["status", "--porcelain=v1", "-uno"], cwd=repo, timeout=20)
     if proc.returncode != 0:
-        return False
+        return True
     return bool((proc.stdout or "").strip())
+
+
+def _development_mode() -> bool:
+    # Unknown values fail closed instead of silently allowing overwrites.
+    return str(settings.app_update_mode).strip().lower() != "user"
 
 
 def _rev_parse(repo: Path, ref: str) -> str:
@@ -417,7 +425,49 @@ def _github_owner_repo(url: str) -> str:
         return ""
 
 
-def _fast_forward(status: AppUpdateStatus) -> dict[str, Any]:
+def _overwrite_candidates(repo: Path, head: str, target: str) -> tuple[list[str], str]:
+    """Find local changes whose paths overlap the incoming tree changes."""
+    diff = _git(["diff", "--name-only", "--no-renames", "-z", head, target], cwd=repo, timeout=30)
+    state = _git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=repo, timeout=30)
+    index = _git(["diff", "--cached", "--binary", "HEAD"], cwd=repo, timeout=30)
+    if diff.returncode or state.returncode or index.returncode:
+        raise RuntimeError("无法检查本地改动，已停止更新")
+    incoming = [p for p in (diff.stdout or "").split("\0") if p]
+    entries = (state.stdout or "").split("\0")
+    groups: list[list[str]] = []
+    i = 0
+    while i < len(entries) and entries[i]:
+        entry = entries[i]
+        if len(entry) < 4:
+            raise RuntimeError("无法解析 Git 工作区状态")
+        group = [entry[3:]]
+        if "R" in entry[:2] or "C" in entry[:2]:
+            i += 1
+            if i >= len(entries) or not entries[i]:
+                raise RuntimeError("无法解析 Git 重命名状态")
+            group.append(entries[i])
+        groups.append(group)
+        i += 1
+    def overlaps(a: str, b: str) -> bool:
+        return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+    paths = sorted({p for group in groups if any(overlaps(p, q) for p in group for q in incoming) for p in group})
+    digest = hashlib.sha256()
+    for value in (head, target, state.stdout or "", index.stdout or "", *paths):
+        digest.update(value.encode("utf-8", errors="surrogatepass"))
+        digest.update(b"\0")
+    for name in paths:
+        path = repo / name
+        if path.is_symlink():
+            digest.update(os.readlink(path).encode("utf-8", errors="surrogatepass"))
+        elif path.is_file():
+            with path.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    digest.update(chunk)
+    return paths, digest.hexdigest()
+
+
+def _fast_forward(status: AppUpdateStatus, confirmation_token: str = "") -> dict[str, Any]:
     from .ingest import _GIT_FETCH_TIMEOUT
 
     repo = ROOT_DIR
@@ -446,12 +496,20 @@ def _fast_forward(status: AppUpdateStatus) -> dict[str, Any]:
         if _is_ancestor(repo, fetch_head, head):
             return {"ok": False, "reason": "ahead", "error": "本地提交比上游新，未执行快进"}
         return {"ok": False, "reason": "diverged", "error": "本地与上游已分叉，无法快进"}
-    merged = _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo, timeout=120)
+    if not _development_mode():
+        paths, token = _overwrite_candidates(repo, head, fetch_head)
+        if paths and confirmation_token != token:
+            return {"ok": False, "reason": "overwrite_confirmation", "overwrite_files": paths, "confirmation_token": token}
+        if paths:
+            saved = _git(["-c", "user.name=VulnHunter", "-c", "user.email=vulnhunter@localhost", "stash", "push", "--include-untracked", "-m", "VulnHunter update backup", "--", *[f":(literal){p}" for p in paths]], cwd=repo, timeout=120)
+            if saved.returncode != 0:
+                return {"ok": False, "reason": "check_failed", "error": (saved.stderr or saved.stdout or "无法备份本地文件").strip()}
+    merged = _git(["merge", "--ff-only", "--no-overwrite-ignore", "FETCH_HEAD"], cwd=repo, timeout=120)
     if merged.returncode != 0:
         return {
             "ok": False,
             "reason": "check_failed",
-            "error": (merged.stderr or merged.stdout or "git merge 失败").strip(),
+            "error": (merged.stderr or merged.stdout or "git merge 失败").strip() + ("；已备份的修改保存在 git stash 中" if not _development_mode() and paths else ""),
             "new_sha": head,
         }
     return {"ok": True, "new_sha": _rev_parse(repo, "HEAD") or fetch_head}

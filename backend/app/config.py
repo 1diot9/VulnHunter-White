@@ -182,6 +182,7 @@ class Settings(BaseSettings):
     # VULNHUNTER_APP_UPDATE_CHECK=0 to disable the background poll (API still works).
     app_update_check: bool = True
     app_update_interval_sec: int = 3600
+    app_update_mode: str = "user"  # user or development
 
     # Debug MCP directories (relative to repo root; env can override)
     mcp_java: str = "tools/mcp/java-debug"

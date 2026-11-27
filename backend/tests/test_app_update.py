@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import subprocess
 
 from fastapi.testclient import TestClient
 
@@ -60,6 +61,8 @@ def _git_router(commands: list[list[str]], *, dirty: str = "", head: list[str] |
             return _GitProc()
         if args[:2] == ["diff", "--name-only"]:
             return _GitProc(stdout="README.md\n")
+        if args[:2] == ["diff", "--cached"]:
+            return _GitProc()
         raise AssertionError(args)
 
     return fake_git
@@ -103,6 +106,7 @@ def test_check_blocks_dirty_and_docker(tmp_env, tmp_path, monkeypatch):
     reset_app_update_state()
     (tmp_path / "CHANGELOG.md").write_text("## V1.2.6 - 2026-09-18\n", encoding="utf-8")
     monkeypatch.setattr(mod, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(mod.settings, "app_update_mode", "development")
     monkeypatch.setattr(mod, "_remote_changelog_version", lambda url, sha: "")
 
     monkeypatch.setattr(mod, "is_docker_runtime", lambda: False)
@@ -112,6 +116,9 @@ def test_check_blocks_dirty_and_docker(tmp_env, tmp_path, monkeypatch):
     assert dirty.dirty is True
     assert dirty.can_apply is False
     assert dirty.apply_blocked_reason == "dirty"
+
+    monkeypatch.setattr(mod.settings, "app_update_mode", "user")
+    assert check_for_update().can_apply is True
 
     reset_app_update_state()
     monkeypatch.setattr(mod, "is_docker_runtime", lambda: True)
@@ -212,3 +219,50 @@ def test_start_checker_respects_disable(tmp_env, monkeypatch):
     assert mod._poll_thread is None
     payload = status_to_out(mod.AppUpdateStatus(current_sha=OLD))
     assert payload["current_sha_short"] == "aaaaaaa"
+
+
+def test_user_mode_confirms_and_backs_up_only_overlapping_changes(tmp_path, monkeypatch):
+    from app.services import app_update as mod
+
+    source = tmp_path / "source"
+    repo = tmp_path / "install"
+    source.mkdir()
+
+    def git(path, *args):
+        result = subprocess.run(["git", *args], cwd=path, text=True, encoding="utf-8", capture_output=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    git(source, "init")
+    git(source, "config", "user.email", "test@example.invalid")
+    git(source, "config", "user.name", "Test")
+    (source / "changed.txt").write_text("old", encoding="utf-8")
+    (source / "local.txt").write_text("old", encoding="utf-8")
+    git(source, "add", ".")
+    git(source, "commit", "-m", "base")
+    git(tmp_path, "clone", str(source), str(repo))
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+    (source / "changed.txt").write_text("upstream", encoding="utf-8")
+    (source / "new.txt").write_text("upstream new", encoding="utf-8")
+    git(source, "add", ".")
+    git(source, "commit", "-m", "update")
+    (repo / "changed.txt").write_text("mine", encoding="utf-8")
+    (repo / "local.txt").write_text("keep", encoding="utf-8")
+    (repo / "new.txt").write_text("local new", encoding="utf-8")
+    monkeypatch.setattr(mod, "ROOT_DIR", repo)
+    monkeypatch.setattr(mod.settings, "app_update_mode", "user")
+    monkeypatch.setattr(mod, "_resolve_remote", lambda _: {"fetch_url": str(source), "ref": "HEAD"})
+    status = mod.AppUpdateStatus(remote_ref="HEAD")
+    first = mod._fast_forward(status)
+    assert first["reason"] == "overwrite_confirmation"
+    assert first["overwrite_files"] == ["changed.txt", "new.txt"]
+    (repo / "changed.txt").write_text("changed again", encoding="utf-8")
+    second = mod._fast_forward(status, first["confirmation_token"])
+    assert second["reason"] == "overwrite_confirmation"
+    result = mod._fast_forward(status, second["confirmation_token"])
+    assert result["ok"] is True
+    assert (repo / "changed.txt").read_text(encoding="utf-8") == "upstream"
+    assert (repo / "local.txt").read_text(encoding="utf-8") == "keep"
+    assert git(repo, "show", "stash@{0}:changed.txt") == "changed again"
+    assert git(repo, "show", "stash@{0}^3:new.txt") == "local new"

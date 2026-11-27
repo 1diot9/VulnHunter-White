@@ -22,6 +22,7 @@ from ..schemas import (
     JadxProbeIn,
     JadxTestOut,
     AppUpdateApplyOut,
+    AppUpdateApplyIn,
     AppUpdateStatusOut,
     LiveLogPurgeIn,
     LiveLogPurgeOut,
@@ -314,7 +315,7 @@ def check_app_update() -> AppUpdateStatusOut:
 
 
 @router.post("/app-update/apply", response_model=AppUpdateApplyOut)
-def apply_app_update() -> AppUpdateApplyOut:
+def apply_app_update(body: AppUpdateApplyIn | None = None) -> AppUpdateApplyOut:
     from ..services.app_update import apply_update
 
-    return AppUpdateApplyOut(**apply_update())
+    return AppUpdateApplyOut(**apply_update(body.confirmation_token if body else ""))

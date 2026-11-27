@@ -119,6 +119,7 @@ export function AppUpdateCard() {
   const [applying, setApplying] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [overwrite, setOverwrite] = useState<{ files: string[]; token: string } | null>(null)
   const [msg, setMsg] = useState('')
   const [ok, setOk] = useState<boolean | null>(null)
 
@@ -179,13 +180,18 @@ export function AppUpdateCard() {
     }
   }
 
-  async function applyNow() {
+  async function applyNow(token = '') {
     setConfirmOpen(false)
+    setOverwrite(null)
     setApplying(true)
     setMsg('')
     setOk(null)
     try {
-      const out = await api.applyAppUpdate()
+      const out = await api.applyAppUpdate(token)
+      if (out.reason === 'overwrite_confirmation') {
+        setOverwrite({ files: out.overwrite_files, token: out.confirmation_token })
+        return
+      }
       if (out.ok && out.restarting) {
         setRestarting(true)
         return
@@ -283,6 +289,30 @@ export function AppUpdateCard() {
             <Button disabled={applying} onClick={() => void applyNow()}>
               {applying ? t('settings.update.applying') : t('settings.update.confirm')}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!overwrite} onOpenChange={(open) => { if (!open && !applying) setOverwrite(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('settings.update.overwriteTitle')}</DialogTitle>
+            <DialogDescription>{t('settings.update.overwriteBody', { count: overwrite?.files.length ?? 0 })}</DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-48 overflow-auto rounded border border-border p-3 text-sm text-amber-200">
+            {overwrite?.files.slice(0, 5).map((path) => <li className="break-all" key={path}>{path}</li>)}
+          </ul>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              const blob = new Blob([(overwrite?.files ?? []).join('\n') + '\n'], { type: 'text/plain;charset=utf-8' })
+              const url = URL.createObjectURL(blob)
+              const link = document.createElement('a')
+              link.href = url
+              link.download = 'vulnhunter-update-files.txt'
+              link.click()
+              URL.revokeObjectURL(url)
+            }}>{t('settings.update.downloadFiles')}</Button>
+            <Button variant="outline" onClick={() => setOverwrite(null)}>{t('common.cancel')}</Button>
+            <Button disabled={applying} onClick={() => void applyNow(overwrite?.token ?? '')}>{t('settings.update.overwriteConfirm')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

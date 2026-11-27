@@ -604,6 +604,8 @@ export type AppUpdateApply = {
   old_sha: string
   new_sha: string
   pulled: boolean
+  overwrite_files: string[]
+  confirmation_token: string
 }
 
 export type DockerContainer = {
@@ -1509,10 +1511,12 @@ export const api = {
       method: 'POST',
       timeoutMs: PROBE_TIMEOUT_MS,
     }),
-    applyAppUpdate: () =>
+    applyAppUpdate: (confirmationToken = '') =>
     request<AppUpdateApply>('/api/settings/app-update/apply', {
       method: 'POST',
       timeoutMs: 360_000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation_token: confirmationToken }),
     }),
   listContainers: (runningOnly = false) =>
     request<DockerContainer[]>(`/api/docker/containers${runningOnly ? '?running_only=true' : ''}`, {
